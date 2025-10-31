@@ -1,0 +1,300 @@
+/**
+ * Filesystem Storage Implementation
+ * Stores files in local filesystem (current/default behavior)
+ */
+
+import fs from 'fs/promises';
+import path from 'path';
+import type { IStorage, StorageFile, ProjectMetadata } from './types.js';
+
+export class FilesystemStorage implements IStorage {
+  private baseDir: string;
+
+  constructor(baseDir: string) {
+    this.baseDir = baseDir;
+  }
+
+  async initialize(): Promise<void> {
+    // Ensure base directory exists
+    await fs.mkdir(this.baseDir, { recursive: true });
+  }
+
+  /**
+   * Get the base path for a user
+   */
+  private getUserPath(userId: string): string {
+    return path.join(this.baseDir, userId);
+  }
+
+  /**
+   * Get the full path for a project
+   */
+  private getProjectPath(userId: string, projectId: string): string {
+    return path.join(this.baseDir, userId, projectId);
+  }
+
+  /**
+   * Get the full path for a file
+   */
+  getFilePath(userId: string, projectId: string, filePath: string): string {
+    return path.join(this.getProjectPath(userId, projectId), filePath);
+  }
+
+  /**
+   * Get metadata file path
+   */
+  private getMetadataPath(userId: string, projectId: string): string {
+    return path.join(this.getProjectPath(userId, projectId), '.metadata.json');
+  }
+
+  async writeFile(
+    userId: string,
+    projectId: string,
+    filePath: string,
+    content: string | Buffer
+  ): Promise<void> {
+    const fullPath = this.getFilePath(userId, projectId, filePath);
+    const dirname = path.dirname(fullPath);
+
+    // Ensure directory exists
+    await fs.mkdir(dirname, { recursive: true });
+
+    // Write file
+    await fs.writeFile(fullPath, content, typeof content === 'string' ? 'utf-8' : undefined);
+
+    // Update project metadata
+    await this.touchProjectMetadata(userId, projectId);
+  }
+
+  async readFile(userId: string, projectId: string, filePath: string): Promise<string> {
+    const fullPath = this.getFilePath(userId, projectId, filePath);
+    return await fs.readFile(fullPath, 'utf-8');
+  }
+
+  async readFileBuffer(userId: string, projectId: string, filePath: string): Promise<Buffer> {
+    const fullPath = this.getFilePath(userId, projectId, filePath);
+    return await fs.readFile(fullPath);
+  }
+
+  async fileExists(userId: string, projectId: string, filePath: string): Promise<boolean> {
+    const fullPath = this.getFilePath(userId, projectId, filePath);
+
+    try {
+      await fs.access(fullPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async deleteFile(userId: string, projectId: string, filePath: string): Promise<void> {
+    const fullPath = this.getFilePath(userId, projectId, filePath);
+    await fs.unlink(fullPath);
+
+    // Update project metadata
+    await this.touchProjectMetadata(userId, projectId);
+  }
+
+  async listFiles(userId: string, projectId: string, prefix: string = ''): Promise<StorageFile[]> {
+    const basePath = this.getFilePath(userId, projectId, prefix);
+    const files: StorageFile[] = [];
+
+    async function walk(dir: string, baseDir: string): Promise<void> {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+
+        for (const entry of entries) {
+          // Skip metadata file
+          if (entry.name === '.metadata.json') {
+            continue;
+          }
+
+          const fullPath = path.join(dir, entry.name);
+          const relativePath = path.relative(baseDir, fullPath);
+
+          if (entry.isDirectory()) {
+            // Recursively walk subdirectories
+            await walk(fullPath, baseDir);
+          } else {
+            const stats = await fs.stat(fullPath);
+            files.push({
+              path: relativePath,
+              name: entry.name,
+              size: stats.size,
+              lastModified: stats.mtime,
+              isDirectory: false,
+            });
+          }
+        }
+      } catch (error: any) {
+        // Directory doesn't exist or not accessible
+        if (error.code !== 'ENOENT') {
+          throw error;
+        }
+      }
+    }
+
+    const projectPath = this.getProjectPath(userId, projectId);
+    await walk(basePath, projectPath);
+    return files;
+  }
+
+  async createProject(userId: string, projectId: string): Promise<void> {
+    const projectPath = this.getProjectPath(userId, projectId);
+    await fs.mkdir(projectPath, { recursive: true });
+
+    // Create project metadata
+    const metadata: ProjectMetadata = {
+      id: projectId,
+      name: projectId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      published: false,
+    };
+
+    await this.updateProjectMetadata(userId, projectId, metadata);
+  }
+
+  async deleteProject(userId: string, projectId: string): Promise<void> {
+    const projectPath = this.getProjectPath(userId, projectId);
+    await fs.rm(projectPath, { recursive: true, force: true });
+  }
+
+  async projectExists(userId: string, projectId: string): Promise<boolean> {
+    const projectPath = this.getProjectPath(userId, projectId);
+
+    try {
+      await fs.access(projectPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async listProjects(userId: string): Promise<string[]> {
+    const userPath = this.getUserPath(userId);
+
+    try {
+      await fs.mkdir(userPath, { recursive: true });
+      const entries = await fs.readdir(userPath, { withFileTypes: true });
+
+      return entries
+        .filter((entry) => entry.isDirectory() && entry.name !== 'uploads')
+        .map((entry) => entry.name);
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async renameProject(
+    userId: string,
+    oldProjectId: string,
+    newProjectId: string
+  ): Promise<void> {
+    const oldPath = this.getProjectPath(userId, oldProjectId);
+    const newPath = this.getProjectPath(userId, newProjectId);
+
+    await fs.rename(oldPath, newPath);
+
+    // Update metadata
+    const metadata = await this.getProjectMetadata(userId, newProjectId);
+    if (metadata) {
+      metadata.id = newProjectId;
+      metadata.name = newProjectId;
+      await this.updateProjectMetadata(userId, newProjectId, metadata);
+    }
+  }
+
+  async getProjectMetadata(
+    userId: string,
+    projectId: string
+  ): Promise<ProjectMetadata | null> {
+    const metadataPath = this.getMetadataPath(userId, projectId);
+
+    try {
+      const content = await fs.readFile(metadataPath, 'utf-8');
+      const metadata = JSON.parse(content);
+
+      // Parse dates
+      metadata.createdAt = new Date(metadata.createdAt);
+      metadata.updatedAt = new Date(metadata.updatedAt);
+
+      return metadata;
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // Metadata file doesn't exist, create default
+        const defaultMetadata: ProjectMetadata = {
+          id: projectId,
+          name: projectId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          published: false,
+        };
+        return defaultMetadata;
+      }
+      throw error;
+    }
+  }
+
+  async updateProjectMetadata(
+    userId: string,
+    projectId: string,
+    metadata: Partial<ProjectMetadata>
+  ): Promise<void> {
+    const metadataPath = this.getMetadataPath(userId, projectId);
+
+    // Get existing metadata or create new
+    let existing = await this.getProjectMetadata(userId, projectId);
+    if (!existing) {
+      existing = {
+        id: projectId,
+        name: projectId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        published: false,
+      };
+    }
+
+    // Merge with new metadata
+    const updated = {
+      ...existing,
+      ...metadata,
+      updatedAt: new Date(),
+    };
+
+    // Ensure project directory exists
+    const projectPath = this.getProjectPath(userId, projectId);
+    await fs.mkdir(projectPath, { recursive: true });
+
+    // Write metadata
+    await fs.writeFile(metadataPath, JSON.stringify(updated, null, 2), 'utf-8');
+  }
+
+  /**
+   * Touch project metadata (update updatedAt timestamp)
+   */
+  private async touchProjectMetadata(userId: string, projectId: string): Promise<void> {
+    try {
+      await this.updateProjectMetadata(userId, projectId, {});
+    } catch (error) {
+      // Ignore errors when touching metadata
+    }
+  }
+
+  async uploadFile(userId: string, fileName: string, content: Buffer): Promise<string> {
+    const uploadsPath = path.join(this.baseDir, userId, 'uploads');
+    await fs.mkdir(uploadsPath, { recursive: true });
+
+    const filePath = path.join(uploadsPath, fileName);
+    await fs.writeFile(filePath, content);
+
+    return filePath;
+  }
+
+  getUploadsPath(userId: string): string {
+    return path.join(this.baseDir, userId, 'uploads');
+  }
+}
