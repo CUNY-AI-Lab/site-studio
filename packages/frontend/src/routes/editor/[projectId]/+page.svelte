@@ -5,22 +5,26 @@
 	import CodeView from '$lib/components/CodeView.svelte';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
-	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-	import { Eye, Code2, ChevronDown, LayoutDashboard } from 'lucide-svelte';
+	import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose } from 'lucide-svelte';
 	import { fetchProjects, type Project } from '$lib/api/projects';
+	import { Pane } from 'paneforge';
 
 	let previewComponent: Preview;
+	let chatPane: ReturnType<typeof Pane>;
 
 	// Get projectId from URL params
 	let projectId = $derived($page.params.projectId);
 	let currentFile = $state('');
 	let fileContent = $state('');
 	let files = $state([]);
-	let activeTab = $state<'preview' | 'code'>('preview');
 	let allProjects = $state<Project[]>([]);
+
+	// Panel collapse state
+	let isChatCollapsed = $state(false);
+	let isCodeCollapsed = $state(true); // Start collapsed
 
 	onMount(async () => {
 		await loadFiles();
@@ -128,89 +132,132 @@
 		}
 	}
 
+	function toggleChatPane() {
+		console.log('toggleChatPane called', { chatPane, isChatCollapsed });
+		if (!chatPane) return;
+		if (isChatCollapsed) {
+			chatPane.expand();
+		} else {
+			chatPane.collapse();
+		}
+	}
+
+	function toggleCodePane() {
+		isCodeCollapsed = !isCodeCollapsed;
+	}
+
 </script>
 
 <div class="app">
+	<!-- Toggle buttons for collapsed panels -->
+	{#if isChatCollapsed}
+		<button class="panel-toggle panel-toggle-left" onclick={toggleChatPane} title="Show Chat">
+			<PanelLeftClose size={20} />
+		</button>
+	{/if}
+	{#if isCodeCollapsed}
+		<button class="panel-toggle panel-toggle-right" onclick={toggleCodePane} title="Show Code Editor">
+			<Code2 size={20} />
+		</button>
+	{/if}
+
 	<Resizable.PaneGroup direction="horizontal" class="main-layout">
-			<!-- Left: Agent Chat Sidebar -->
-			<Resizable.Pane defaultSize={30} minSize={20} maxSize={50}>
-				<aside class="chat-sidebar">
-					<div class="chat-header">
-						<div class="header-top">
-							<h1 class="logo">🎨 Site Studio</h1>
-							<Button variant="ghost" size="sm" onclick={() => goto('/')}>
-								<LayoutDashboard size={18} />
-							</Button>
-						</div>
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger asChild>
-								{#snippet child({ props })}
-									<button {...props} class="project-selector">
-										<span class="project-name">{projectId}</span>
-										<ChevronDown size={16} class="chevron" />
-									</button>
-								{/snippet}
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Content align="start" class="project-menu">
-								{#if allProjects.length > 0}
-									{#each allProjects as project (project.id)}
-										<DropdownMenu.Item
-											onclick={() => goto(`/editor/${project.id}`)}
-											class={project.id === projectId ? 'active-project' : ''}
-										>
-											{project.name}
-											{#if project.id === projectId}
-												<span class="current-indicator">•</span>
-											{/if}
-										</DropdownMenu.Item>
-									{/each}
-								{:else}
-									<DropdownMenu.Item disabled>No other projects</DropdownMenu.Item>
-								{/if}
-							</DropdownMenu.Content>
-						</DropdownMenu.Root>
+		<!-- Left: Agent Chat Sidebar (collapsible) -->
+		<Resizable.Pane
+			bind:this={chatPane}
+			defaultSize={25}
+			minSize={15}
+			maxSize={40}
+			collapsible={true}
+			onCollapse={() => (isChatCollapsed = true)}
+			onExpand={() => (isChatCollapsed = false)}
+		>
+			<aside class="chat-sidebar">
+				<div class="chat-header">
+					<div class="header-top">
+						<h1 class="logo">🎨 Site Studio</h1>
+						<Button variant="ghost" size="sm" onclick={() => goto('/')}>
+							<LayoutDashboard size={18} />
+						</Button>
 					</div>
-					<div class="chat-wrapper">
-						<AgentChat {projectId} onUpdate={onAgentUpdate} />
-					</div>
-				</aside>
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger asChild>
+							{#snippet child({ props })}
+								<button {...props} class="project-selector">
+									<span class="project-name">{projectId}</span>
+									<ChevronDown size={16} class="chevron" />
+								</button>
+							{/snippet}
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Content align="start" class="project-menu">
+							{#if allProjects.length > 0}
+								{#each allProjects as project (project.id)}
+									<DropdownMenu.Item
+										onclick={() => goto(`/editor/${project.id}`)}
+										class={project.id === projectId ? 'active-project' : ''}
+									>
+										{project.name}
+										{#if project.id === projectId}
+											<span class="current-indicator">•</span>
+										{/if}
+									</DropdownMenu.Item>
+								{/each}
+							{:else}
+								<DropdownMenu.Item disabled>No other projects</DropdownMenu.Item>
+							{/if}
+						</DropdownMenu.Content>
+					</DropdownMenu.Root>
+				</div>
+				<div class="chat-wrapper">
+					<AgentChat {projectId} onUpdate={onAgentUpdate} />
+				</div>
+			</aside>
+		</Resizable.Pane>
+
+		<Resizable.Handle withHandle />
+
+		<!-- Center: Preview (always visible) -->
+		<Resizable.Pane defaultSize={75} minSize={30}>
+			<main class="preview-area">
+				<Preview bind:this={previewComponent} {projectId} />
+			</main>
+		</Resizable.Pane>
+	</Resizable.PaneGroup>
+
+	<!-- Right: Code Editor Overlay with paneforge resize -->
+	<div class="overlay-container" class:visible={!isCodeCollapsed}>
+		<Resizable.PaneGroup direction="horizontal" class="overlay-panes">
+			<!-- Invisible spacer pane -->
+			<Resizable.Pane defaultSize={60} minSize={0} maxSize={100}>
+				<div class="spacer"></div>
 			</Resizable.Pane>
 
 			<Resizable.Handle withHandle />
 
-			<!-- Right: Content Area with Tabs -->
-			<Resizable.Pane defaultSize={70}>
-				<main class="content-area">
-					<Tabs.Root value={activeTab} onValueChange={(v) => (activeTab = v)} class="tabs-container">
-						<Tabs.List class="tab-bar">
-							<Tabs.Trigger value="preview" class="tab-trigger">
-								<Eye size={20} />
-							</Tabs.Trigger>
-							<Tabs.Trigger value="code" class="tab-trigger">
-								<Code2 size={20} />
-							</Tabs.Trigger>
-						</Tabs.List>
-
-						<Tabs.Content value="preview" class="tab-content">
-							<Preview bind:this={previewComponent} {projectId} />
-						</Tabs.Content>
-
-						<Tabs.Content value="code" class="tab-content">
-							<CodeView
-								{projectId}
-								{files}
-								{currentFile}
-								{fileContent}
-								{isSaving}
-								onFileSelect={onFileSelect}
-								onEditorChange={onEditorChange}
-								onRefreshFiles={loadFiles}
-							/>
-						</Tabs.Content>
-					</Tabs.Root>
-				</main>
+			<!-- Code editor pane -->
+			<Resizable.Pane
+				defaultSize={40}
+				minSize={25}
+				maxSize={80}
+			>
+				<aside class="code-panel">
+					<button class="close-editor-button" onclick={toggleCodePane} title="Close Editor">
+						<PanelRightClose size={20} />
+					</button>
+					<CodeView
+						{projectId}
+						{files}
+						{currentFile}
+						{fileContent}
+						{isSaving}
+						onFileSelect={onFileSelect}
+						onEditorChange={onEditorChange}
+						onRefreshFiles={loadFiles}
+					/>
+				</aside>
 			</Resizable.Pane>
-	</Resizable.PaneGroup>
+		</Resizable.PaneGroup>
+	</div>
 </div>
 
 <style>
@@ -218,10 +265,43 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
+		position: relative;
 	}
 
 	:global(.main-layout) {
 		height: 100vh;
+	}
+
+	/* Panel Toggle Buttons */
+	.panel-toggle {
+		position: fixed;
+		top: 50%;
+		transform: translateY(-50%);
+		background: var(--color-bg-secondary);
+		border: 1px solid var(--color-border);
+		padding: 0.75rem;
+		border-radius: 0.5rem;
+		cursor: pointer;
+		z-index: 50;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.2s;
+		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+	}
+
+	.panel-toggle:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-primary);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	}
+
+	.panel-toggle-left {
+		left: 1rem;
+	}
+
+	.panel-toggle-right {
+		right: 1rem;
 	}
 
 	/* Left Chat Sidebar */
@@ -302,38 +382,70 @@
 		font-size: 1.25rem;
 	}
 
-	/* Right Content Area (~70%) */
-	.content-area {
-		flex: 1;
+	/* Center Preview Area */
+	.preview-area {
+		height: 100%;
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		background: var(--color-bg);
 	}
 
-	:global(.tabs-container) {
+	/* Overlay Container */
+	.overlay-container {
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: 100vw;
+		pointer-events: none;
+		transform: translateX(100%);
+		transition: transform 0.3s ease-out;
+		z-index: 100;
+	}
+
+	.overlay-container.visible {
+		transform: translateX(0);
+	}
+
+	:global(.overlay-panes) {
+		height: 100vh;
+		pointer-events: auto;
+	}
+
+	.spacer {
+		height: 100%;
+		background: transparent;
+		pointer-events: none;
+	}
+
+	.code-panel {
+		height: 100%;
+		background: var(--color-bg);
+		box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
 		display: flex;
 		flex-direction: column;
-		height: 100%;
+		position: relative;
 	}
 
-	:global(.tab-bar) {
-		display: flex;
-		gap: 0.25rem;
-		padding: 0.75rem 1rem;
+	.close-editor-button {
+		position: absolute;
+		top: 0.5rem;
+		right: 1rem;
 		background: var(--color-bg-secondary);
-		border-bottom: 1px solid var(--color-border);
-	}
-
-	:global(.tab-content) {
-		flex: 1;
-		overflow: hidden;
-	}
-
-	/* Content area */
-	.content-area {
-		height: 100%;
+		border: 1px solid var(--color-border);
+		padding: 0.5rem;
+		border-radius: 0.375rem;
+		cursor: pointer;
+		z-index: 10;
 		display: flex;
-		flex-direction: column;
-		overflow: hidden;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.15s;
+	}
+
+	.close-editor-button:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-primary);
 	}
 </style>
