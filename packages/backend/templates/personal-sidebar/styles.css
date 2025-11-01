@@ -144,6 +144,80 @@ p {
     font-size: 1rem;
 }
 
+/* Smooth scrolling for anchor links */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Publications Section */
+.publication {
+    padding: 1.5rem;
+    background: #f8fafc;
+    border-radius: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-left: 4px solid #059669;
+}
+
+.publication h4 {
+    color: #0f172a;
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+}
+
+.pub-meta {
+    color: #059669;
+    font-style: italic;
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.pub-authors {
+    color: #64748b;
+    font-size: 0.95rem;
+    margin-bottom: 0;
+}
+
+/* Teaching Section */
+.course {
+    padding: 1.5rem;
+    background: #f8fafc;
+    border-radius: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.course h3 {
+    color: #0f172a;
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+}
+
+.course p {
+    color: #64748b;
+    margin: 0;
+    font-size: 1rem;
+}
+
+/* Contact Section */
+#contact p {
+    font-size: 1rem;
+}
+
+.social-links {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+.social-links a {
+    color: #059669;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.social-links a:hover {
+    text-decoration: underline;
+}
+
 @media (max-width: 1024px) {
     .layout {
         grid-template-columns: 1fr;
