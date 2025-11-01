@@ -1026,7 +1026,34 @@ app.use('/preview/:id', (req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+// Serve frontend build (static) if present
+try {
+  const FRONTEND_BUILD_DIR = path.join(__dirname, '../../frontend/build');
+  await fs.access(FRONTEND_BUILD_DIR);
+
+  // Static assets
+  app.use(express.static(FRONTEND_BUILD_DIR, {
+    setHeaders: (res, filePath) => {
+      // Cache assets more aggressively; HTML gets default
+      if (/\.(css|js|png|jpg|jpeg|gif|svg|woff2?|ttf|eot)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=600');
+      }
+    },
+  }));
+
+  // SPA fallback (avoid capturing API and preview routes)
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/preview')) return next();
+    res.sendFile(path.join(FRONTEND_BUILD_DIR, 'index.html'));
+  });
+  console.log('🪄 Serving frontend from', FRONTEND_BUILD_DIR);
+} catch (e) {
+  console.log('ℹ️ Frontend build not found; API-only mode');
+}
+
+app.listen(PORT as number, '0.0.0.0', () => {
   console.log(`🎨 Site Studio backend running on http://localhost:${PORT}`);
   console.log(`🔒 Sandboxed projects directory: ${SANDBOXES_DIR}`);
   console.log(`🛡️  Multi-user isolation enabled`);

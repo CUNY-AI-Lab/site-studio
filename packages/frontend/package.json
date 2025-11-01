@@ -10,6 +10,7 @@
   },
   "devDependencies": {
     "@internationalized/date": "^3.10.0",
+    "@sveltejs/adapter-static": "^3.0.0",
     "@lucide/svelte": "^0.544.0",
     "@sveltejs/adapter-auto": "^3.0.0",
     "@sveltejs/kit": "^2.0.0",
