@@ -13,7 +13,6 @@ import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.j
 import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
-import { generateThumbnail } from './services/thumbnail.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType } from './services/file-converter.js';
 
@@ -179,11 +178,7 @@ app.post('/api/projects', async (req, res) => {
       await storage.writeFile(userId, sanitized, 'index.html', starterHtml);
     }
 
-    // Generate initial thumbnail in background (force = true for new projects)
-    const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
-    const previewUrl = `${baseUrl}/preview/${sanitized}/index.html`;
-    generateThumbnail(storage, userId, sanitized, previewUrl, true)
-      .catch(err => console.error('Failed to generate initial thumbnail:', err));
+    // Initial thumbnail will be generated client-side after first preview render
 
     res.json({
       id: sanitized,
@@ -344,7 +339,8 @@ app.post('/api/projects/:id/unpublish', async (req, res) => {
  * POST /api/projects/:id/thumbnail
  * Generate a thumbnail for the project
  */
-app.post('/api/projects/:id/thumbnail', async (req, res) => {
+// Accept a client-generated thumbnail image and store it
+app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res) => {
   try {
     const userId = (req as any).user.id;
     const { id } = req.params;
@@ -355,20 +351,30 @@ app.post('/api/projects/:id/thumbnail', async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Generate the preview URL
-    const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
-    const previewUrl = `${baseUrl}/preview/${id}/index.html`;
+    // Expect a PNG image uploaded as field name "image"
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image uploaded' });
+    }
+    const mime = req.file.mimetype || '';
+    if (mime !== 'image/png') {
+      return res.status(400).json({ error: 'Only image/png is supported' });
+    }
 
-    // Generate thumbnail (force = true for manual generation)
-    await generateThumbnail(storage, userId, id, previewUrl, true);
+    // Write thumbnail to project storage
+    await storage.writeFile(userId, id, '.thumbnail.png', req.file.buffer);
+
+    // Update metadata with thumbnail URL
+    await storage.updateProjectMetadata(userId, id, {
+      thumbnailUrl: `/api/projects/${id}/thumbnail`,
+    });
 
     res.json({
       success: true,
       thumbnailUrl: `/api/projects/${id}/thumbnail`,
     });
   } catch (error: any) {
-    console.error('Thumbnail generation error:', error);
-    res.status(500).json({ error: 'Failed to generate thumbnail' });
+    console.error('Thumbnail upload error:', error);
+    res.status(500).json({ error: 'Failed to save thumbnail' });
   }
 });
 
@@ -554,15 +560,7 @@ app.post('/api/projects/:id/file', async (req, res) => {
     // Write the file
     await storage.writeFile(userId, id, filePath, content);
 
-    // Trigger thumbnail generation asynchronously after saving HTML files
-    if (filePath.endsWith('.html')) {
-      const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
-      const previewUrl = `${baseUrl}/preview/${id}/index.html`;
-
-      // Generate thumbnail in background (respects 1-minute throttle)
-      generateThumbnail(storage, userId, id, previewUrl, false)
-        .catch(err => console.error('Background thumbnail generation failed:', err));
-    }
+    // Client will capture and upload a thumbnail after preview refresh
 
     res.json({
       success: true,

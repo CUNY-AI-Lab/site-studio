@@ -207,6 +207,26 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 }
 
 /**
+ * Upload a generated thumbnail image (PNG) for a project
+ */
+export async function uploadThumbnail(projectId: string, blob: Blob): Promise<void> {
+    const form = new FormData();
+    form.append('image', blob, 'thumbnail.png');
+
+    const response = await fetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+    });
+
+    if (!response.ok) {
+        // Non-fatal for UX; throw so callers can optionally handle
+        const error = await response.json().catch(() => ({ error: 'Failed to upload thumbnail' }));
+        throw new Error(error.error || 'Failed to upload thumbnail');
+    }
+}
+
+/**
  * Publish a project to make it publicly accessible
  */
 export async function publishProject(projectId: string): Promise<{ url: string }> {
