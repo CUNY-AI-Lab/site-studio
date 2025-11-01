@@ -176,7 +176,7 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<h1 class="logo">🎨 Site Studio</h1>
-						<Button variant="ghost" size="sm" onclick={() => goto('/')}>
+						<Button variant="ghost" size="sm" href="/">
 							<LayoutDashboard size={18} />
 						</Button>
 					</div>
