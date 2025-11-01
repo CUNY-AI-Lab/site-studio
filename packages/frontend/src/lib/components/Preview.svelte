@@ -15,6 +15,7 @@
     let lastCaptureAt = 0;
     const CAPTURE_THROTTLE_MS = 60_000; // 1 minute
     let capturing = false;
+    let forceNextCapture = false;
 
     // Dual iframe swap technique to prevent white flash
     export function refresh() {
@@ -31,9 +32,9 @@
         }
     }
 
-    async function tryCaptureAndUpload() {
+    async function tryCaptureAndUpload(ignoreThrottle = false) {
         const now = Date.now();
-        if (capturing || now - lastCaptureAt < CAPTURE_THROTTLE_MS) return;
+        if (capturing || (!ignoreThrottle && now - lastCaptureAt < CAPTURE_THROTTLE_MS)) return;
 
         // Choose the visible iframe after any swap
         const activeIframe = showIframe1 ? iframe1 : iframe2;
@@ -77,8 +78,17 @@
         // Attempt a thumbnail capture after each load
         // Delay slightly to allow layout and fonts to settle
         setTimeout(() => {
-            tryCaptureAndUpload();
+            const ignore = forceNextCapture;
+            forceNextCapture = false;
+            tryCaptureAndUpload(ignore);
         }, 200);
+    }
+
+    // Helper: request an immediate thumbnail capture on next load
+    // This forces bypassing the throttle once
+    export function requestThumbnailCapture() {
+        forceNextCapture = true;
+        refresh();
     }
 </script>
 

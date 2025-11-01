@@ -8,7 +8,7 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-	import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose } from 'lucide-svelte';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, RefreshCw } from 'lucide-svelte';
 	import { fetchProjects, type Project } from '$lib/api/projects';
 	import { Pane } from 'paneforge';
 
@@ -147,9 +147,15 @@
 		}
 	}
 
-	function toggleCodePane() {
-		isCodeCollapsed = !isCodeCollapsed;
-	}
+    function toggleCodePane() {
+        isCodeCollapsed = !isCodeCollapsed;
+    }
+
+    function refreshThumbnailNow() {
+        if (!previewComponent) return;
+        // Ask preview to force a thumbnail capture on next load
+        previewComponent.requestThumbnailCapture();
+    }
 
 </script>
 
@@ -181,10 +187,13 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<h1 class="logo">🎨 Site Studio</h1>
-						<Button variant="ghost" size="sm" href="/">
-							<LayoutDashboard size={18} />
-						</Button>
-					</div>
+                    <Button variant="ghost" size="sm" href="/">
+                        <LayoutDashboard size={18} />
+                    </Button>
+                    <Button variant="ghost" size="sm" onclick={refreshThumbnailNow} title="Refresh Thumbnail">
+                        <RefreshCw size={18} />
+                    </Button>
+                </div>
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger asChild>
 							{#snippet child({ props })}
