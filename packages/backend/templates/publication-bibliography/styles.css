@@ -1,0 +1,227 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, 'Times New Roman', Times, serif;
+    line-height: 1.8;
+    color: #1a202c;
+    background: #ffffff;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+header {
+    background: #f7fafc;
+    padding: 3rem 0;
+    border-bottom: 3px solid #2d3748;
+    margin-bottom: 3rem;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    color: #1a202c;
+}
+
+.affiliation {
+    font-size: 1.125rem;
+    color: #4a5568;
+    margin-bottom: 0.5rem;
+}
+
+.contact {
+    font-size: 1rem;
+    color: #718096;
+}
+
+.toc {
+    background: #edf2f7;
+    padding: 2rem;
+    margin-bottom: 3rem;
+    border-left: 4px solid #4a5568;
+}
+
+.toc h3 {
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    color: #2d3748;
+}
+
+.toc ul {
+    list-style: none;
+    margin: 0;
+}
+
+.toc li {
+    margin-bottom: 0.5rem;
+}
+
+.toc a {
+    color: #2d3748;
+    text-decoration: none;
+    font-weight: 600;
+    border-bottom: 2px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.toc a:hover {
+    border-bottom-color: #2d3748;
+}
+
+section {
+    margin-bottom: 4rem;
+}
+
+h2 {
+    font-size: 2rem;
+    color: #1a202c;
+    margin-bottom: 2rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid #e2e8f0;
+    font-weight: 700;
+}
+
+h3 {
+    font-size: 1.5rem;
+    color: #4a5568;
+    margin-bottom: 1.5rem;
+    margin-top: 2rem;
+    font-weight: 600;
+}
+
+.year-group {
+    margin-bottom: 2.5rem;
+}
+
+.year-group h3 {
+    color: #2d3748;
+    font-size: 1.25rem;
+    margin-bottom: 1rem;
+    margin-top: 0;
+}
+
+.citation {
+    margin-bottom: 1.5rem;
+    padding-left: 2rem;
+    text-indent: -2rem;
+}
+
+.bibentry {
+    font-size: 1rem;
+    line-height: 1.8;
+    color: #2d3748;
+    margin: 0;
+}
+
+.bibentry em {
+    font-style: italic;
+}
+
+.doi {
+    color: #3182ce;
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s;
+}
+
+.doi:hover {
+    border-bottom-color: #3182ce;
+}
+
+.note {
+    background: #fffbeb;
+    border: 2px solid #fbbf24;
+    padding: 2rem;
+    margin-top: 3rem;
+    border-radius: 0.5rem;
+}
+
+.note p {
+    margin: 0;
+    color: #78350f;
+}
+
+.note strong {
+    color: #92400e;
+}
+
+footer {
+    background: #2d3748;
+    color: white;
+    padding: 2rem 0;
+    text-align: center;
+    margin-top: 4rem;
+}
+
+footer p {
+    margin: 0;
+}
+
+footer a {
+    color: white;
+    text-decoration: underline;
+}
+
+footer a:hover {
+    opacity: 0.8;
+}
+
+@media print {
+    header {
+        background: white;
+        border-bottom: 2px solid black;
+    }
+
+    .toc {
+        display: none;
+    }
+
+    .citation {
+        page-break-inside: avoid;
+    }
+
+    .doi {
+        color: black;
+    }
+
+    footer {
+        background: white;
+        color: black;
+        border-top: 1px solid black;
+    }
+}
+
+@media (max-width: 768px) {
+    .container {
+        padding: 0 1rem;
+    }
+
+    header h1 {
+        font-size: 1.75rem;
+    }
+
+    .affiliation {
+        font-size: 1rem;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+    }
+
+    .citation {
+        padding-left: 0;
+        text-indent: 0;
+    }
+
+    .toc {
+        padding: 1.5rem;
+    }
+}

@@ -1,0 +1,226 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, 'Times New Roman', Times, serif;
+    line-height: 1.7;
+    color: #2d3748;
+    background: #f7fafc;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+}
+
+header {
+    background: #2c5282;
+    color: white;
+    padding: 3rem 0;
+    text-align: center;
+}
+
+header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.subtitle {
+    font-size: 1.125rem;
+    margin-bottom: 0.5rem;
+    opacity: 0.95;
+}
+
+.instructor {
+    font-size: 1rem;
+    opacity: 0.9;
+}
+
+nav {
+    background: #2d3748;
+    padding: 0;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+nav .container {
+    display: flex;
+    gap: 0;
+    padding: 0;
+}
+
+nav a {
+    color: white;
+    text-decoration: none;
+    padding: 1rem 1.5rem;
+    transition: background 0.2s;
+    border-right: 1px solid #4a5568;
+}
+
+nav a:hover {
+    background: #4a5568;
+}
+
+main {
+    background: white;
+    margin: 2rem auto;
+    padding: 3rem 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+section {
+    margin-bottom: 3rem;
+}
+
+h2 {
+    font-size: 2rem;
+    color: #2c5282;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 3px solid #2c5282;
+}
+
+h3 {
+    font-size: 1.5rem;
+    color: #2d3748;
+    margin: 2rem 0 1rem 0;
+}
+
+p {
+    margin-bottom: 1rem;
+}
+
+ul {
+    margin-left: 2rem;
+    margin-bottom: 1rem;
+}
+
+ul li {
+    margin-bottom: 0.5rem;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+}
+
+table tr {
+    border-bottom: 1px solid #e2e8f0;
+}
+
+table td {
+    padding: 0.75rem;
+}
+
+table td:first-child {
+    font-weight: 600;
+}
+
+table td:last-child {
+    text-align: right;
+    color: #2c5282;
+    font-weight: 600;
+}
+
+.week {
+    background: #f7fafc;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    border-left: 4px solid #2c5282;
+}
+
+.week h3 {
+    font-size: 1.25rem;
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #2c5282;
+}
+
+.week p {
+    margin-bottom: 0.5rem;
+    line-height: 1.6;
+}
+
+.due {
+    color: #c53030;
+    font-weight: 600;
+}
+
+.assignment {
+    background: #edf2f7;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+    border-radius: 0.5rem;
+}
+
+.assignment h3 {
+    margin-top: 0;
+    color: #2c5282;
+}
+
+section#resources ul {
+    list-style: none;
+    margin-left: 0;
+}
+
+section#resources li {
+    margin-bottom: 1rem;
+}
+
+section#resources a {
+    color: #2c5282;
+    text-decoration: none;
+    font-weight: 600;
+    border-bottom: 2px solid transparent;
+    transition: border-color 0.2s;
+}
+
+section#resources a:hover {
+    border-bottom-color: #2c5282;
+}
+
+footer {
+    background: #2d3748;
+    color: white;
+    padding: 2rem 0;
+    text-align: center;
+}
+
+footer p {
+    margin: 0;
+    opacity: 0.9;
+}
+
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 1.75rem;
+    }
+
+    nav .container {
+        flex-wrap: wrap;
+    }
+
+    nav a {
+        flex: 1 1 50%;
+        text-align: center;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+    }
+
+    .week {
+        padding: 1rem;
+    }
+
+    .assignment {
+        padding: 1.5rem;
+    }
+}

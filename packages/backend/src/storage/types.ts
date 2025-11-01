@@ -18,6 +18,9 @@ export interface ProjectMetadata {
   updatedAt: Date;
   published: boolean;
   publishedUrl?: string;
+  publishedAt?: string;
+  unpublishedAt?: string;
+  thumbnailUrl?: string;
 }
 
 /**

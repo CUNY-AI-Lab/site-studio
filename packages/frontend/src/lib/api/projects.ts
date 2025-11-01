@@ -3,6 +3,9 @@ const API_BASE = '/api';
 export interface Project {
 	id: string;
 	name: string;
+	published?: boolean;
+	publishedUrl?: string;
+	thumbnailUrl?: string;
 }
 
 export interface ProjectFile {
@@ -31,14 +34,14 @@ export async function fetchProjects(): Promise<Project[]> {
 /**
  * Create a new project
  */
-export async function createProject(name: string): Promise<Project> {
+export async function createProject(name: string, template?: string): Promise<Project> {
 	const response = await fetch(`${API_BASE}/projects`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
 		},
 		credentials: 'include',
-		body: JSON.stringify({ name }),
+		body: JSON.stringify({ name, template }),
 	});
 
 	if (!response.ok) {
@@ -187,4 +190,36 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 	a.click();
 	document.body.removeChild(a);
 	window.URL.revokeObjectURL(url);
+}
+
+/**
+ * Publish a project to make it publicly accessible
+ */
+export async function publishProject(projectId: string): Promise<{ url: string }> {
+	const response = await fetch(`${API_BASE}/projects/${projectId}/publish`, {
+		method: 'POST',
+		credentials: 'include',
+	});
+
+	if (!response.ok) {
+		const error = await response.json().catch(() => ({ error: 'Failed to publish project' }));
+		throw new Error(error.error || 'Failed to publish project');
+	}
+
+	return response.json();
+}
+
+/**
+ * Unpublish a project to make it private again
+ */
+export async function unpublishProject(projectId: string): Promise<void> {
+	const response = await fetch(`${API_BASE}/projects/${projectId}/unpublish`, {
+		method: 'POST',
+		credentials: 'include',
+	});
+
+	if (!response.ok) {
+		const error = await response.json().catch(() => ({ error: 'Failed to unpublish project' }));
+		throw new Error(error.error || 'Failed to unpublish project');
+	}
 }

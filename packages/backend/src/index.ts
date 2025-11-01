@@ -11,8 +11,11 @@ import multer from 'multer';
 import { runSiteAgent } from './agent.js';
 import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.js';
 import { getSandboxManager } from './sandbox/manager.js';
-import { getUserProjectPath, getUserUploadsPath } from './sandbox/config.js';
+import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
+import { generateThumbnail } from './services/thumbnail.js';
+import { applyTemplate, isValidTemplate, type TemplateId } from './templates.js';
+import { generateFilePrompt, isSupportedFileType } from './services/file-converter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,24 +56,9 @@ if (process.env.STORAGE_TYPE !== 'r2') {
 const sandboxManager = getSandboxManager();
 
 // Configure multer for file uploads
-// Use memory storage for R2, disk storage for filesystem
+// Use memory storage - files will be written to project via storage abstraction
 const upload = multer({
-  storage: process.env.STORAGE_TYPE === 'r2'
-    ? multer.memoryStorage()
-    : multer.diskStorage({
-        destination: async (req, file, cb) => {
-          const authReq = req as AuthenticatedRequest;
-          const userId = authReq.user.id;
-          const uploadsPath = getUserUploadsPath(userId);
-          await fs.mkdir(uploadsPath, { recursive: true });
-          cb(null, uploadsPath);
-        },
-        filename: (req, file, cb) => {
-          // Sanitize filename
-          const sanitized = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-          cb(null, `${Date.now()}-${sanitized}`);
-        },
-      }),
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB limit
   },
@@ -103,6 +91,7 @@ app.get('/api/projects', async (req, res) => {
           name: metadata?.name || id,
           published: metadata?.published || false,
           publishedUrl: metadata?.publishedUrl,
+          thumbnailUrl: metadata?.thumbnailUrl,
         };
       })
     );
@@ -121,10 +110,16 @@ app.post('/api/projects', async (req, res) => {
   try {
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.user.id;
-    const { name } = req.body;
+    const { name, template } = req.body;
 
     if (!name || typeof name !== 'string') {
       res.status(400).json({ error: 'Project name is required' });
+      return;
+    }
+
+    // Validate template if provided
+    if (template && !isValidTemplate(template)) {
+      res.status(400).json({ error: 'Invalid template ID' });
       return;
     }
 
@@ -140,108 +135,41 @@ app.post('/api/projects', async (req, res) => {
     // Create project
     await storage.createProject(userId, sanitized);
 
-    // Create a starter index.html file
-    const starterHtml = `<!DOCTYPE html>
+    // Apply template if provided
+    if (template) {
+      await applyTemplate(storage, userId, sanitized, template as TemplateId);
+    } else {
+      // No template - create default starter file
+      const starterHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${name}</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            font-family: system-ui, sans-serif;
             padding: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
         }
-
-        .container {
-            background: white;
-            border-radius: 16px;
-            padding: 3rem 2rem;
-            max-width: 600px;
-            width: 100%;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            text-align: center;
-        }
-
-        h1 {
-            font-size: 2.5rem;
-            color: #333;
-            margin-bottom: 1rem;
-        }
-
-        .subtitle {
-            font-size: 1.25rem;
-            color: #666;
-            margin-bottom: 2rem;
-        }
-
-        .section {
-            margin-top: 2rem;
-            padding-top: 2rem;
-            border-top: 2px solid #f0f0f0;
-        }
-
-        .section h2 {
-            font-size: 1.5rem;
-            color: #667eea;
-            margin-bottom: 1rem;
-        }
-
-        .prompts {
-            text-align: left;
-            background: #f8f9fa;
-            padding: 1.5rem;
-            border-radius: 8px;
-            margin-top: 1rem;
-        }
-
-        .prompts li {
-            margin: 0.75rem 0;
-            color: #555;
-            line-height: 1.6;
-        }
-
-        .icon {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }
+        h1 { color: #2563eb; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="icon">🎨</div>
-        <h1>${name}</h1>
-        <p class="subtitle">Welcome to your new project!</p>
-
-        <div class="section">
-            <h2>Getting Started</h2>
-            <p style="color: #666; margin-bottom: 1rem;">
-                Start chatting with the AI in the sidebar to build your website.
-                Try one of these examples:
-            </p>
-            <ul class="prompts">
-                <li>"Create an academic profile page with my bio, research interests, and contact info"</li>
-                <li>"Build a course site with syllabus, schedule, and weekly readings"</li>
-                <li>"Make a collaborative project space for my study group or research team"</li>
-                <li>"Design a digital portfolio showcasing my academic work and publications"</li>
-            </ul>
-        </div>
-    </div>
+    <h1>${name}</h1>
+    <p>Welcome to your new project! Use the AI chat to build your site.</p>
 </body>
 </html>`;
+      await storage.writeFile(userId, sanitized, 'index.html', starterHtml);
+    }
 
-    await storage.writeFile(userId, sanitized, 'index.html', starterHtml);
+    // Generate initial thumbnail in background (force = true for new projects)
+    const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+    const previewUrl = `${baseUrl}/preview/${sanitized}/index.html`;
+    generateThumbnail(storage, userId, sanitized, previewUrl, true)
+      .catch(err => console.error('Failed to generate initial thumbnail:', err));
 
     res.json({
       id: sanitized,
@@ -328,6 +256,143 @@ app.delete('/api/projects/:id', async (req, res) => {
 });
 
 /**
+ * POST /api/projects/:id/publish
+ * Publish a project to make it publicly accessible
+ */
+app.post('/api/projects/:id/publish', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+
+    // Check if project exists
+    const exists = await storage.projectExists(userId, id);
+    if (!exists) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Get current metadata
+    const metadata = await storage.getProjectMetadata(userId, id);
+
+    // Generate public URL
+    // Format: https://site-studio-publisher.{subdomain}.workers.dev/{userId}/{projectId}/
+    const workerSubdomain = process.env.WORKER_SUBDOMAIN || 'your-subdomain';
+    const publicUrl = `https://site-studio-publisher.${workerSubdomain}.workers.dev/${userId}/${id}/`;
+
+    // Update metadata
+    await storage.updateProjectMetadata(userId, id, {
+      published: true,
+      publishedUrl: publicUrl,
+      publishedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      message: 'Project published successfully',
+      url: publicUrl,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/projects/:id/unpublish
+ * Unpublish a project to make it private again
+ */
+app.post('/api/projects/:id/unpublish', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+
+    // Check if project exists
+    const exists = await storage.projectExists(userId, id);
+    if (!exists) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Update metadata
+    await storage.updateProjectMetadata(userId, id, {
+      published: false,
+      publishedUrl: undefined,
+      unpublishedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      message: 'Project unpublished successfully',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/projects/:id/thumbnail
+ * Generate a thumbnail for the project
+ */
+app.post('/api/projects/:id/thumbnail', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+
+    // Check if project exists
+    const exists = await storage.projectExists(userId, id);
+    if (!exists) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Generate the preview URL
+    const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+    const previewUrl = `${baseUrl}/preview/${id}/index.html`;
+
+    // Generate thumbnail (force = true for manual generation)
+    await generateThumbnail(storage, userId, id, previewUrl, true);
+
+    res.json({
+      success: true,
+      thumbnailUrl: `/api/projects/${id}/thumbnail`,
+    });
+  } catch (error: any) {
+    console.error('Thumbnail generation error:', error);
+    res.status(500).json({ error: 'Failed to generate thumbnail' });
+  }
+});
+
+/**
+ * GET /api/projects/:id/thumbnail
+ * Retrieve the thumbnail for a project
+ */
+app.get('/api/projects/:id/thumbnail', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+
+    // Check if project exists
+    const exists = await storage.projectExists(userId, id);
+    if (!exists) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Check if thumbnail exists
+    const thumbnailExists = await storage.fileExists(userId, id, '.thumbnail.png');
+    if (!thumbnailExists) {
+      return res.status(404).json({ error: 'Thumbnail not found' });
+    }
+
+    // Read thumbnail
+    const thumbnailBuffer = await storage.readFileBuffer(userId, id, '.thumbnail.png');
+
+    // Send with appropriate headers
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(thumbnailBuffer);
+  } catch (error: any) {
+    console.error('Thumbnail retrieval error:', error);
+    res.status(500).json({ error: 'Failed to retrieve thumbnail' });
+  }
+});
+
+/**
  * GET /api/projects/:id/files
  * List files in a user's project
  */
@@ -338,6 +403,12 @@ app.get('/api/projects/:id/files', async (req, res) => {
 
     // Get flat list of files from storage
     const flatFiles = await storage.listFiles(userId, id);
+
+    // Filter out internal files (.thumbnail.png)
+    const visibleFiles = flatFiles.filter(file => {
+      const fileName = file.name || file.path.split('/').pop();
+      return fileName !== '.thumbnail.png';
+    });
 
     // Convert flat list to tree structure
     function buildTree(files: any[]): any[] {
@@ -394,7 +465,7 @@ app.get('/api/projects/:id/files', async (req, res) => {
       return treeToArray(tree);
     }
 
-    const files = buildTree(flatFiles);
+    const files = buildTree(visibleFiles);
 
     res.json({ files });
   } catch (error: any) {
@@ -410,15 +481,18 @@ app.get('/api/projects/:id/file', async (req, res) => {
   try {
     const userId = (req as any).user.id;
     const { id } = req.params;
-    const filePath = req.query.path as string;
+    let filePath = req.query.path as string;
 
     if (!filePath) {
       res.status(400).json({ error: 'File path is required' });
       return;
     }
 
+    // Strip leading slashes
+    filePath = filePath.replace(/^\/+/, '');
+
     // Security: basic path validation (prevent directory traversal)
-    if (filePath.includes('..') || filePath.startsWith('/')) {
+    if (filePath.includes('..')) {
       res.status(403).json({ error: 'Invalid file path' });
       return;
     }
@@ -442,7 +516,7 @@ app.post('/api/projects/:id/file', async (req, res) => {
   try {
     const userId = (req as any).user.id;
     const { id } = req.params;
-    const { path: filePath, content } = req.body;
+    let { path: filePath, content } = req.body;
 
     if (!filePath || typeof filePath !== 'string') {
       res.status(400).json({ error: 'File path is required' });
@@ -454,14 +528,27 @@ app.post('/api/projects/:id/file', async (req, res) => {
       return;
     }
 
+    // Strip leading slashes
+    filePath = filePath.replace(/^\/+/, '');
+
     // Security: basic path validation (prevent directory traversal)
-    if (filePath.includes('..') || filePath.startsWith('/')) {
+    if (filePath.includes('..')) {
       res.status(403).json({ error: 'Invalid file path' });
       return;
     }
 
     // Write the file
     await storage.writeFile(userId, id, filePath, content);
+
+    // Trigger thumbnail generation asynchronously after saving HTML files
+    if (filePath.endsWith('.html')) {
+      const baseUrl = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+      const previewUrl = `${baseUrl}/preview/${id}/index.html`;
+
+      // Generate thumbnail in background (respects 1-minute throttle)
+      generateThumbnail(storage, userId, id, previewUrl, false)
+        .catch(err => console.error('Background thumbnail generation failed:', err));
+    }
 
     res.json({
       success: true,
@@ -481,35 +568,39 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
   try {
     const authReq = req as AuthenticatedRequest;
     const userId = authReq.user.id;
+    const { id: projectId } = req.params;
 
     if (!req.file) {
       res.status(400).json({ error: 'No file uploaded' });
       return;
     }
 
-    // For R2 storage, upload from memory buffer
-    if (process.env.STORAGE_TYPE === 'r2' && req.file.buffer) {
-      const sanitized = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const filename = `${Date.now()}-${sanitized}`;
-      await storage.uploadFile(userId, filename, req.file.buffer);
+    // Sanitize filename (preserve dots for extensions)
+    const sanitized = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-      res.json({
-        success: true,
-        filename: filename,
-        path: filename,
-        size: req.file.size,
-        message: 'File uploaded successfully',
-      });
-    } else {
-      // File is stored in user's uploads directory (filesystem)
-      res.json({
-        success: true,
-        filename: req.file.filename,
-        path: req.file.filename,
-        size: req.file.size,
-        message: 'File uploaded successfully',
-      });
+    // Find available filename (add (1), (2), etc. on conflict)
+    let filename = sanitized;
+    let counter = 1;
+
+    // Check if file exists, if so try with (1), (2), etc.
+    while (await storage.fileExists(userId, projectId, filename)) {
+      const ext = path.extname(sanitized);
+      const base = path.basename(sanitized, ext);
+      filename = `${base} (${counter})${ext}`;
+      counter++;
     }
+
+    // Write file directly to project using storage abstraction
+    // This works for both filesystem and R2 storage
+    await storage.writeFile(userId, projectId, filename, req.file.buffer);
+
+    res.json({
+      success: true,
+      filename: filename,
+      path: filename,
+      size: req.file.size,
+      message: 'File uploaded successfully',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -523,15 +614,18 @@ app.get('/api/projects/:id/download', async (req, res) => {
   try {
     const userId = (req as any).user.id;
     const { id } = req.params;
-    const filePath = req.query.path as string;
+    let filePath = req.query.path as string;
 
     if (!filePath) {
       res.status(400).json({ error: 'File path is required' });
       return;
     }
 
+    // Strip leading slashes
+    filePath = filePath.replace(/^\/+/, '');
+
     // Security: basic path validation (prevent directory traversal)
-    if (filePath.includes('..') || filePath.startsWith('/')) {
+    if (filePath.includes('..')) {
       res.status(403).json({ error: 'Invalid file path' });
       return;
     }
@@ -551,6 +645,111 @@ app.get('/api/projects/:id/download', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).json({ error: error.message });
     }
+  }
+});
+
+/**
+ * DELETE /api/projects/:id/files?path=...
+ * Delete a specific file from a user's project
+ */
+app.delete('/api/projects/:id/files', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+    let filePath = req.query.path as string;
+
+    if (!filePath) {
+      res.status(400).json({ error: 'File path is required' });
+      return;
+    }
+
+    // Strip leading slashes
+    filePath = filePath.replace(/^\/+/, '');
+
+    // Security: basic path validation (prevent directory traversal)
+    if (filePath.includes('..')) {
+      res.status(403).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    // Prevent deleting certain protected files
+    if (filePath === '.thumbnail.png' || filePath === '.metadata.json') {
+      res.status(403).json({ error: 'Cannot delete protected files' });
+      return;
+    }
+
+    // Delete the file
+    await storage.deleteFile(userId, id, filePath);
+
+    res.json({
+      success: true,
+      message: 'File deleted successfully',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PUT /api/projects/:id/files/rename
+ * Rename a file in a user's project
+ */
+app.put('/api/projects/:id/files/rename', async (req, res) => {
+  try {
+    const userId = (req as any).user.id;
+    const { id } = req.params;
+    let { oldPath, newPath } = req.body;
+
+    if (!oldPath || !newPath) {
+      res.status(400).json({ error: 'oldPath and newPath are required' });
+      return;
+    }
+
+    // Strip leading slashes
+    oldPath = oldPath.replace(/^\/+/, '');
+    newPath = newPath.replace(/^\/+/, '');
+
+    // Security: basic path validation (prevent directory traversal)
+    if (oldPath.includes('..') || newPath.includes('..')) {
+      res.status(403).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    // Prevent renaming certain protected files
+    if (oldPath === '.thumbnail.png' || oldPath === '.metadata.json') {
+      res.status(403).json({ error: 'Cannot rename protected files' });
+      return;
+    }
+
+    // Check if old file exists
+    if (!(await storage.fileExists(userId, id, oldPath))) {
+      res.status(404).json({ error: 'File not found' });
+      return;
+    }
+
+    // Check if new file path already exists
+    if (await storage.fileExists(userId, id, newPath)) {
+      res.status(409).json({ error: 'A file with that name already exists' });
+      return;
+    }
+
+    // Read the old file
+    const buffer = await storage.readFileBuffer(userId, id, oldPath);
+
+    // Write to new location
+    await storage.writeFile(userId, id, newPath, buffer);
+
+    // Delete old file
+    await storage.deleteFile(userId, id, oldPath);
+
+    res.json({
+      success: true,
+      oldPath,
+      newPath,
+      message: 'File renamed successfully',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -582,22 +781,26 @@ app.post('/api/query', async (req, res) => {
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
 
-    // Handle uploaded file if present - inject content into prompt
+    // Handle uploaded file if present - pass path to agent
     let enhancedPrompt = prompt;
 
     if (uploadedFile) {
-      const uploadsPath = getUserUploadsPath(userId);
-      const filePath = path.join(uploadsPath, uploadedFile);
+      // File is now stored directly in the project directory
+      const filePath = path.join(projectPath, uploadedFile);
 
       try {
-        // Read file content
-        const fileContent = await fs.readFile(filePath, 'utf-8');
+        // Check if file type is supported
+        if (!isSupportedFileType(uploadedFile)) {
+          throw new Error('Unsupported file type');
+        }
 
-        // Inject file content into prompt
-        enhancedPrompt = `${prompt}\n\n<uploaded_file name="${uploadedFile}">\n${fileContent}\n</uploaded_file>`;
-      } catch (error) {
-        console.error('Error reading uploaded file:', error);
-        // Fall back to original prompt
+        // Generate prompt with file path (agent will use Read tool)
+        enhancedPrompt = generateFilePrompt(prompt, uploadedFile, filePath);
+      } catch (error: any) {
+        console.error('Error processing uploaded file:', error);
+        // Return error to user
+        res.status(400).json({ error: error.message });
+        return;
       }
     }
 
@@ -720,9 +923,24 @@ app.post('/api/query/approve', async (req, res) => {
 /**
  * Serve project files for preview
  * Only serves files from the authenticated user's project
+ * Supports internal auth for thumbnail generation
  */
-app.use('/preview/:id', authenticateUser, async (req, res, next) => {
-  const authReq = req as AuthenticatedRequest;
+app.use('/preview/:id', (req, res, next) => {
+  // Check for internal auth header (for thumbnail generation)
+  const internalAuthToken = req.headers['x-internal-auth'] as string;
+  const internalUserId = req.headers['x-user-id'] as string;
+  const expectedToken = process.env.INTERNAL_AUTH_TOKEN || 'internal-secret-token';
+
+  if (internalAuthToken === expectedToken && internalUserId) {
+    // Internal request from thumbnail service
+    (req as any).user = { id: internalUserId };
+    next();
+  } else {
+    // Regular user request - require authentication
+    authenticateUser(req, res, next);
+  }
+}, async (req, res, next) => {
+  const authReq = req as unknown as AuthenticatedRequest;
   const userId = authReq.user.id;
   const projectId = req.params.id;
 

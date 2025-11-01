@@ -1,0 +1,155 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, 'Times New Roman', serif;
+    line-height: 1.7;
+    color: #1e293b;
+    background: #ffffff;
+}
+
+.hero {
+    background: #0f172a;
+    color: white;
+    padding: 5rem 2rem;
+    text-align: center;
+}
+
+.hero-content h1 {
+    font-size: 3.5rem;
+    font-weight: 400;
+    margin-bottom: 0.75rem;
+    letter-spacing: -1px;
+}
+
+.hero-content p {
+    font-size: 1.5rem;
+    opacity: 0.9;
+    font-weight: 300;
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 4rem 2rem;
+}
+
+.feature {
+    margin-bottom: 5rem;
+}
+
+.feature-image {
+    margin-bottom: 2rem;
+}
+
+.feature-image img {
+    width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+}
+
+.category {
+    display: inline-block;
+    text-transform: uppercase;
+    font-size: 0.875rem;
+    letter-spacing: 1.5px;
+    color: #dc2626;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.feature-content h2 {
+    font-size: 2.5rem;
+    line-height: 1.3;
+    margin-bottom: 1.5rem;
+    color: #0f172a;
+    font-weight: 400;
+}
+
+.excerpt {
+    font-size: 1.375rem;
+    line-height: 1.8;
+    color: #475569;
+    margin-bottom: 1.5rem;
+}
+
+.meta {
+    font-size: 1rem;
+    color: #64748b;
+    font-style: italic;
+}
+
+.works-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 3rem;
+}
+
+.work-item img {
+    width: 100%;
+    height: 250px;
+    object-fit: cover;
+    border-radius: 0.5rem;
+    margin-bottom: 1.25rem;
+}
+
+.work-content h3 {
+    font-size: 1.5rem;
+    line-height: 1.4;
+    margin-bottom: 0.75rem;
+    color: #0f172a;
+    font-weight: 400;
+}
+
+.work-content p {
+    font-size: 1.125rem;
+    color: #64748b;
+    line-height: 1.7;
+}
+
+footer {
+    text-align: center;
+    padding: 3rem 2rem 4rem;
+    border-top: 1px solid #e2e8f0;
+    margin-top: 3rem;
+}
+
+footer a {
+    color: #0f172a;
+    text-decoration: none;
+    font-weight: 600;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0 1rem;
+    font-size: 1.125rem;
+}
+
+footer a:hover {
+    color: #dc2626;
+}
+
+@media (max-width: 768px) {
+    .hero-content h1 {
+        font-size: 2.5rem;
+    }
+
+    .hero-content p {
+        font-size: 1.25rem;
+    }
+
+    .feature-content h2 {
+        font-size: 2rem;
+    }
+
+    .excerpt {
+        font-size: 1.125rem;
+    }
+
+    .works-grid {
+        grid-template-columns: 1fr;
+        gap: 2.5rem;
+    }
+}

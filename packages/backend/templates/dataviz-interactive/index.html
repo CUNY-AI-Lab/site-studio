@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC Subway Ridership Explorer</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>NYC Subway Ridership Explorer</h1>
+            <p class="subtitle">Interactive data exploration of MTA subway usage patterns</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="controls-panel">
+            <div class="control-group">
+                <label for="lineSelect">Select Subway Line:</label>
+                <select id="lineSelect">
+                    <option value="all">All Lines</option>
+                    <option value="1">1 Train</option>
+                    <option value="2">2 Train</option>
+                    <option value="3">3 Train</option>
+                    <option value="4">4 Train</option>
+                    <option value="5">5 Train</option>
+                    <option value="6">6 Train</option>
+                    <option value="7">7 Train</option>
+                    <option value="A">A Train</option>
+                    <option value="L">L Train</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="timeSelect">Time Period:</label>
+                <select id="timeSelect">
+                    <option value="year">Past Year</option>
+                    <option value="month">Past Month</option>
+                    <option value="week">Past Week</option>
+                    <option value="day">By Day of Week</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="metricSelect">Metric:</label>
+                <select id="metricSelect">
+                    <option value="ridership">Total Ridership</option>
+                    <option value="weekday">Weekday Average</option>
+                    <option value="weekend">Weekend Average</option>
+                    <option value="peak">Peak Hour Usage</option>
+                </select>
+            </div>
+
+            <button id="updateBtn" class="update-btn">Update Visualization</button>
+        </div>
+
+        <div class="viz-container">
+            <div class="chart-wrapper">
+                <h2 id="chartTitle">Total Ridership - Past Year - All Lines</h2>
+                <canvas id="mainChart"></canvas>
+            </div>
+        </div>
+
+        <div class="stats-row">
+            <div class="stat-box">
+                <div class="stat-label">Total Rides</div>
+                <div class="stat-value" id="totalRides">1,245,382,920</div>
+                <div class="stat-change">+8.2% vs 2022</div>
+            </div>
+
+            <div class="stat-box">
+                <div class="stat-label">Daily Average</div>
+                <div class="stat-value" id="dailyAvg">3,411,187</div>
+                <div class="stat-change">365 days</div>
+            </div>
+
+            <div class="stat-box">
+                <div class="stat-label">Peak Day</div>
+                <div class="stat-value" id="peakDay">4,892,341</div>
+                <div class="stat-change">October 12, 2023</div>
+            </div>
+
+            <div class="stat-box">
+                <div class="stat-label">Recovery Rate</div>
+                <div class="stat-value" id="recoveryRate">68%</div>
+                <div class="stat-change">vs Pre-COVID (2019)</div>
+            </div>
+        </div>
+
+        <div class="secondary-charts">
+            <div class="chart-box">
+                <h3>Ridership by Hour of Day</h3>
+                <canvas id="hourlyChart"></canvas>
+            </div>
+
+            <div class="chart-box">
+                <h3>Top 10 Busiest Stations</h3>
+                <canvas id="stationsChart"></canvas>
+            </div>
+        </div>
+
+        <div class="data-table-container">
+            <h2>Detailed Data</h2>
+            <div class="table-controls">
+                <input type="text" id="searchTable" placeholder="Search stations or lines...">
+                <button id="downloadCSV">Download CSV</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="dataTable">
+                    <thead>
+                        <tr>
+                            <th>Station</th>
+                            <th>Line</th>
+                            <th>Daily Avg</th>
+                            <th>Weekday Avg</th>
+                            <th>Weekend Avg</th>
+                            <th>Change vs 2022</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Times Sq-42 St</td>
+                            <td>1,2,3,N,Q,R,W,7</td>
+                            <td>178,452</td>
+                            <td>203,891</td>
+                            <td>124,783</td>
+                            <td class="positive">+12.3%</td>
+                        </tr>
+                        <tr>
+                            <td>Grand Central-42 St</td>
+                            <td>4,5,6,7,S</td>
+                            <td>156,329</td>
+                            <td>189,456</td>
+                            <td>98,234</td>
+                            <td class="positive">+9.8%</td>
+                        </tr>
+                        <tr>
+                            <td>34 St-Herald Sq</td>
+                            <td>B,D,F,M,N,Q,R,W</td>
+                            <td>142,876</td>
+                            <td>167,234</td>
+                            <td>95,678</td>
+                            <td class="positive">+11.2%</td>
+                        </tr>
+                        <tr>
+                            <td>14 St-Union Sq</td>
+                            <td>4,5,6,L,N,Q,R,W</td>
+                            <td>128,934</td>
+                            <td>145,234</td>
+                            <td>98,765</td>
+                            <td class="positive">+8.7%</td>
+                        </tr>
+                        <tr>
+                            <td>Fulton St</td>
+                            <td>2,3,4,5,A,C,J,Z</td>
+                            <td>118,456</td>
+                            <td>156,789</td>
+                            <td>45,234</td>
+                            <td class="positive">+15.4%</td>
+                        </tr>
+                        <tr>
+                            <td>59 St-Columbus Circle</td>
+                            <td>1,A,B,C,D</td>
+                            <td>98,234</td>
+                            <td>112,456</td>
+                            <td>72,345</td>
+                            <td class="positive">+7.3%</td>
+                        </tr>
+                        <tr>
+                            <td>Atlantic Av-Barclays Ctr</td>
+                            <td>2,3,4,5,B,D,N,Q,R</td>
+                            <td>89,567</td>
+                            <td>98,765</td>
+                            <td>72,456</td>
+                            <td class="positive">+10.1%</td>
+                        </tr>
+                        <tr>
+                            <td>86 St</td>
+                            <td>4,5,6</td>
+                            <td>76,234</td>
+                            <td>82,345</td>
+                            <td>65,432</td>
+                            <td class="positive">+5.2%</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h2>About This Data</h2>
+            <p>
+                Data is sourced from MTA automated fare collection systems and turnstile counts.
+                Numbers represent total entries through subway turnstiles and do not include
+                bus-to-subway transfers or free transfers between lines.
+            </p>
+            <p>
+                <strong>Last Updated:</strong> January 15, 2024<br>
+                <strong>Data Range:</strong> January 1, 2023 - December 31, 2023<br>
+                <strong>Methodology:</strong> <a href="#">View detailed methodology</a>
+            </p>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>NYC Subway Ridership Explorer | Data: MTA | Visualization by Taylor Kim | <a href="#">API Access</a></p>
+        </div>
+    </footer>
+
+    <script>
+        // Main Chart
+        const ctx1 = document.getElementById('mainChart').getContext('2d');
+        const mainChart = new Chart(ctx1, {
+            type: 'line',
+            data: {
+                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                datasets: [{
+                    label: 'Total Ridership',
+                    data: [95000000, 92000000, 102000000, 105000000, 108000000, 110000000, 98000000, 102000000, 115000000, 118000000, 112000000, 108000000],
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.parsed.y.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Hourly Chart
+        const ctx2 = document.getElementById('hourlyChart').getContext('2d');
+        new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: ['12am', '3am', '6am', '9am', '12pm', '3pm', '6pm', '9pm'],
+                datasets: [{
+                    label: 'Average Riders',
+                    data: [45000, 15000, 95000, 185000, 125000, 98000, 165000, 98000],
+                    backgroundColor: 'rgba(16, 185, 129, 0.8)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Stations Chart
+        const ctx3 = document.getElementById('stationsChart').getContext('2d');
+        new Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels: ['Times Sq', 'Grand Central', '34 St Herald', '14 St Union', 'Fulton St', 'Penn Station', 'Canal St', 'Atlantic Ave', '59 St Columbus', 'Lexington/59'],
+                datasets: [{
+                    label: 'Daily Average',
+                    data: [178452, 156329, 142876, 128934, 118456, 108234, 98567, 89567, 89234, 87654],
+                    backgroundColor: 'rgba(139, 92, 246, 0.8)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Interactive controls
+        document.getElementById('updateBtn').addEventListener('click', function() {
+            const line = document.getElementById('lineSelect').value;
+            const time = document.getElementById('timeSelect').value;
+            const metric = document.getElementById('metricSelect').value;
+
+            document.getElementById('chartTitle').textContent =
+                `${metric.charAt(0).toUpperCase() + metric.slice(1)} - ${time.charAt(0).toUpperCase() + time.slice(1)} - ${line === 'all' ? 'All Lines' : line + ' Train'}`;
+
+            // In a real application, this would fetch new data
+            mainChart.update();
+        });
+
+        // Table search
+        document.getElementById('searchTable').addEventListener('input', function(e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const rows = document.querySelectorAll('#dataTable tbody tr');
+
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(searchTerm) ? '' : 'none';
+            });
+        });
+
+        // CSV download (mock)
+        document.getElementById('downloadCSV').addEventListener('click', function() {
+            alert('In a real application, this would download a CSV file of the current data.');
+        });
+    </script>
+</body>
+</html>

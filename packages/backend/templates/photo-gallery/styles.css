@@ -1,0 +1,243 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, 'Times New Roman', Times, serif;
+    line-height: 1.7;
+    color: #1a202c;
+    background: #0f0f0f;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+.container-narrow {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+header {
+    background: #1a1a1a;
+    color: white;
+    padding: 4rem 0;
+    text-align: center;
+    border-bottom: 1px solid #333;
+}
+
+header h1 {
+    font-size: 3.5rem;
+    font-weight: 400;
+    margin-bottom: 1rem;
+    letter-spacing: 0.02em;
+}
+
+.subtitle {
+    font-size: 1.25rem;
+    color: #a0a0a0;
+    margin-bottom: 1rem;
+    font-style: italic;
+}
+
+.byline {
+    font-size: 1rem;
+    color: #808080;
+}
+
+main {
+    background: #0f0f0f;
+}
+
+.intro {
+    background: #1a1a1a;
+    padding: 4rem 0;
+    color: white;
+}
+
+.intro p {
+    font-size: 1.25rem;
+    line-height: 1.9;
+    color: #d0d0d0;
+    text-align: center;
+}
+
+.gallery {
+    padding: 3rem 0;
+}
+
+.gallery-item {
+    margin-bottom: 3rem;
+    background: #1a1a1a;
+}
+
+.gallery-item img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.gallery-item.large {
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 4rem;
+}
+
+.gallery-item.wide {
+    max-width: 100%;
+    margin-bottom: 4rem;
+}
+
+.gallery-item:not(.large):not(.wide) {
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.caption {
+    background: #1a1a1a;
+    padding: 2rem;
+    border-top: 1px solid #333;
+}
+
+.caption-text {
+    color: #c0c0c0;
+    font-size: 1rem;
+    line-height: 1.7;
+    font-style: italic;
+    margin: 0;
+}
+
+.artist-note {
+    background: #1a1a1a;
+    padding: 5rem 0;
+    margin: 4rem 0;
+    border-top: 1px solid #333;
+    border-bottom: 1px solid #333;
+}
+
+.artist-note h2 {
+    font-size: 2rem;
+    color: white;
+    margin-bottom: 2rem;
+    font-weight: 400;
+    text-align: center;
+}
+
+.artist-note p {
+    color: #d0d0d0;
+    font-size: 1.125rem;
+    line-height: 1.9;
+    margin-bottom: 1.5rem;
+}
+
+.signature {
+    text-align: right;
+    font-style: italic;
+    color: #a0a0a0;
+    margin-top: 2rem;
+}
+
+.about {
+    background: #0f0f0f;
+    padding: 4rem 0;
+}
+
+.about h2 {
+    font-size: 1.75rem;
+    color: white;
+    margin-bottom: 2rem;
+    font-weight: 400;
+    text-align: center;
+}
+
+.about p {
+    color: #c0c0c0;
+    font-size: 1rem;
+    line-height: 1.8;
+    margin-bottom: 1rem;
+}
+
+.contact {
+    text-align: center;
+    margin-top: 2rem;
+}
+
+.about a {
+    color: #888;
+    text-decoration: underline;
+}
+
+.about a:hover {
+    color: #fff;
+}
+
+footer {
+    background: #1a1a1a;
+    color: #808080;
+    padding: 2rem 0;
+    text-align: center;
+    border-top: 1px solid #333;
+}
+
+footer p {
+    margin: 0;
+    font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2rem;
+    }
+
+    .subtitle {
+        font-size: 1rem;
+    }
+
+    .intro p {
+        font-size: 1rem;
+    }
+
+    .caption {
+        padding: 1.5rem;
+    }
+
+    .artist-note {
+        padding: 3rem 0;
+    }
+
+    .artist-note p {
+        font-size: 1rem;
+    }
+}
+
+@media print {
+    body {
+        background: white;
+    }
+
+    header,
+    .intro,
+    .artist-note,
+    .about {
+        background: white;
+        color: black;
+    }
+
+    .caption {
+        background: white;
+    }
+
+    .caption-text,
+    .intro p,
+    .artist-note p,
+    .about p {
+        color: #333;
+    }
+}

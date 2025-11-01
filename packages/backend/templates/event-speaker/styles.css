@@ -1,0 +1,374 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.6;
+    color: #1e293b;
+    background: #f1f5f9;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 2rem;
+}
+
+header {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    padding: 4rem 0;
+    text-align: center;
+}
+
+header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+    margin-bottom: 1rem;
+}
+
+.tagline {
+    font-size: 1.25rem;
+    margin-bottom: 2rem;
+    opacity: 0.95;
+}
+
+.event-info {
+    display: flex;
+    gap: 3rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    font-size: 1.125rem;
+    margin-bottom: 2rem;
+}
+
+.register-btn {
+    display: inline-block;
+    background: white;
+    color: #6366f1;
+    padding: 1rem 2.5rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.125rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.register-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+}
+
+main {
+    padding: 4rem 0;
+}
+
+.intro {
+    background: white;
+    padding: 3rem;
+    border-radius: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    margin-bottom: 4rem;
+    text-align: center;
+}
+
+.intro h2 {
+    font-size: 2rem;
+    color: #0f172a;
+    margin-bottom: 1.5rem;
+    font-weight: 700;
+}
+
+.intro p {
+    font-size: 1.125rem;
+    line-height: 1.8;
+    color: #475569;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.speakers {
+    margin-bottom: 4rem;
+}
+
+.speakers > h2 {
+    font-size: 2.5rem;
+    color: #0f172a;
+    margin-bottom: 3rem;
+    font-weight: 800;
+    text-align: center;
+}
+
+.speaker-card {
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.speaker-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+}
+
+.keynote-speaker {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 3rem;
+    padding: 3rem;
+    margin-bottom: 3rem;
+    border: 3px solid #6366f1;
+}
+
+.keynote-badge {
+    display: inline-block;
+    background: #6366f1;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 2rem;
+    font-size: 0.875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1rem;
+}
+
+.speaker-photo {
+    width: 100%;
+    height: auto;
+    border-radius: 0.5rem;
+}
+
+.keynote-speaker .speaker-photo {
+    width: 300px;
+    height: 300px;
+    object-fit: cover;
+}
+
+.speaker-info h3 {
+    font-size: 1.75rem;
+    color: #0f172a;
+    margin-bottom: 0.5rem;
+    font-weight: 700;
+}
+
+.title {
+    color: #64748b;
+    margin-bottom: 1rem;
+    font-size: 0.95rem;
+}
+
+.talk-title {
+    font-size: 1.125rem;
+    color: #6366f1;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    font-style: italic;
+}
+
+.bio {
+    color: #475569;
+    line-height: 1.7;
+    margin-bottom: 1rem;
+}
+
+.session-time {
+    color: #059669;
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.speaker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 2rem;
+}
+
+.speaker-grid .speaker-card {
+    padding: 2rem;
+}
+
+.speaker-grid .speaker-photo {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin: 0 auto 1.5rem auto;
+    display: block;
+}
+
+.speaker-grid .speaker-info h3 {
+    font-size: 1.25rem;
+    text-align: center;
+}
+
+.speaker-grid .title {
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+.speaker-grid .talk-title {
+    font-size: 1rem;
+}
+
+.speaker-grid .bio {
+    font-size: 0.95rem;
+}
+
+.schedule-overview {
+    background: white;
+    padding: 3rem;
+    border-radius: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    margin-bottom: 4rem;
+}
+
+.schedule-overview h2 {
+    font-size: 2rem;
+    color: #0f172a;
+    margin-bottom: 2rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 3rem;
+}
+
+.schedule-day h3 {
+    font-size: 1.5rem;
+    color: #6366f1;
+    margin-bottom: 1.5rem;
+    font-weight: 700;
+}
+
+.schedule-day ul {
+    list-style: none;
+}
+
+.schedule-day li {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #e2e8f0;
+    color: #475569;
+}
+
+.schedule-day li:last-child {
+    border-bottom: none;
+}
+
+.info-section {
+    margin-bottom: 4rem;
+}
+
+.info-section h2 {
+    font-size: 2rem;
+    color: #0f172a;
+    margin-bottom: 2rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 2rem;
+}
+
+.info-card {
+    background: white;
+    padding: 2.5rem;
+    border-radius: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    text-align: center;
+}
+
+.info-card h3 {
+    font-size: 1.25rem;
+    color: #6366f1;
+    margin-bottom: 1rem;
+    font-weight: 700;
+}
+
+.info-card p {
+    color: #475569;
+    margin-bottom: 1.5rem;
+    line-height: 1.7;
+}
+
+.link-btn {
+    display: inline-block;
+    color: #6366f1;
+    text-decoration: none;
+    font-weight: 600;
+    border-bottom: 2px solid #6366f1;
+    transition: opacity 0.2s;
+}
+
+.link-btn:hover {
+    opacity: 0.7;
+}
+
+footer {
+    background: #0f172a;
+    color: white;
+    padding: 2rem 0;
+    text-align: center;
+}
+
+footer p {
+    margin: 0;
+}
+
+@media (max-width: 1024px) {
+    .keynote-speaker {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+    }
+
+    .keynote-speaker .speaker-photo {
+        width: 100%;
+        max-width: 300px;
+        margin: 0 auto;
+    }
+}
+
+@media (max-width: 768px) {
+    header h1 {
+        font-size: 2rem;
+    }
+
+    .tagline {
+        font-size: 1rem;
+    }
+
+    .event-info {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .intro {
+        padding: 2rem;
+    }
+
+    .intro p {
+        font-size: 1rem;
+    }
+
+    .keynote-speaker {
+        padding: 2rem;
+    }
+
+    .speaker-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .schedule-overview {
+        padding: 2rem;
+    }
+}

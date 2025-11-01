@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Folder, File, Download, Upload } from 'lucide-svelte';
+	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 
 	interface FileNode {
 		name: string;
@@ -74,6 +74,59 @@
 			alert('Failed to download file');
 		}
 	}
+
+	async function handleDelete(filePath: string) {
+		const filename = filePath.split('/').pop();
+		if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
+
+		try {
+			const response = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`, {
+				method: 'DELETE'
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || 'Delete failed');
+			}
+
+			// Refresh file list
+			onRefresh();
+		} catch (error: any) {
+			console.error('Error deleting file:', error);
+			alert(`Failed to delete file: ${error.message}`);
+		}
+	}
+
+	async function handleRename(filePath: string) {
+		const filename = filePath.split('/').pop() || '';
+		const newName = prompt('Enter new filename:', filename);
+
+		if (!newName || newName === filename) return;
+
+		try {
+			// Reconstruct the path with the new filename
+			const pathParts = filePath.split('/');
+			pathParts[pathParts.length - 1] = newName;
+			const newPath = pathParts.join('/');
+
+			const response = await fetch(`/api/projects/${projectId}/files/rename`, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ oldPath: filePath, newPath })
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || 'Rename failed');
+			}
+
+			// Refresh file list
+			onRefresh();
+		} catch (error: any) {
+			console.error('Error renaming file:', error);
+			alert(`Failed to rename file: ${error.message}`);
+		}
+	}
 </script>
 
 <div class="file-tree">
@@ -99,13 +152,13 @@
 		<p class="empty-state">No files yet. Ask the agent to create some!</p>
 	{:else}
 		{#each files as file}
-			{@render FileTreeNode({ file, onSelect, onDownload: handleDownload })}
+			{@render FileTreeNode({ file, onSelect, onDownload: handleDownload, onRename: handleRename, onDelete: handleDelete })}
 		{/each}
 	{/if}
 </div>
 
 <!-- Recursive tree node component -->
-{#snippet FileTreeNode({ file, onSelect, onDownload }: { file: FileNode, onSelect: (path: string) => void, onDownload: (path: string) => void })}
+{#snippet FileTreeNode({ file, onSelect, onDownload, onRename, onDelete }: { file: FileNode, onSelect: (path: string) => void, onDownload: (path: string) => void, onRename: (path: string) => void, onDelete: (path: string) => void })}
 	<div class="tree-node">
 		{#if file.type === 'directory'}
 			<details open>
@@ -115,7 +168,7 @@
 				</summary>
 				<div class="tree-children">
 					{#each file.children || [] as child}
-						{@render FileTreeNode({ file: child, onSelect, onDownload })}
+						{@render FileTreeNode({ file: child, onSelect, onDownload, onRename, onDelete })}
 					{/each}
 				</div>
 			</details>
@@ -129,17 +182,41 @@
 					<File size={16} class="icon" />
 					<span class="file-name">{file.name}</span>
 				</button>
-				<button
-					class="download-button"
-					onclick={(e) => {
-						e.stopPropagation();
-						onDownload(file.path);
-					}}
-					type="button"
-					title="Download file"
-				>
-					<Download size={14} />
-				</button>
+				<div class="file-actions">
+					<button
+						class="action-button"
+						onclick={(e) => {
+							e.stopPropagation();
+							onRename(file.path);
+						}}
+						type="button"
+						title="Rename file"
+					>
+						<Edit3 size={14} />
+					</button>
+					<button
+						class="action-button"
+						onclick={(e) => {
+							e.stopPropagation();
+							onDownload(file.path);
+						}}
+						type="button"
+						title="Download file"
+					>
+						<Download size={14} />
+					</button>
+					<button
+						class="action-button delete-button"
+						onclick={(e) => {
+							e.stopPropagation();
+							onDelete(file.path);
+						}}
+						type="button"
+						title="Delete file"
+					>
+						<Trash2 size={14} />
+					</button>
+				</div>
 			</div>
 		{/if}
 	</div>
@@ -248,7 +325,19 @@
 		white-space: nowrap;
 	}
 
-	.download-button {
+	.file-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.125rem;
+		opacity: 0;
+		transition: opacity 0.15s;
+	}
+
+	.file-row:hover .file-actions {
+		opacity: 1;
+	}
+
+	.action-button {
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -259,16 +348,15 @@
 		border-radius: 4px;
 		cursor: pointer;
 		transition: all 0.15s;
-		opacity: 0;
 	}
 
-	.file-row:hover .download-button {
-		opacity: 1;
-	}
-
-	.download-button:hover {
+	.action-button:hover {
 		background: var(--color-bg-tertiary);
 		color: var(--color-accent);
+	}
+
+	.action-button.delete-button:hover {
+		color: #ef4444;
 	}
 
 	:global(.file-tree .icon) {

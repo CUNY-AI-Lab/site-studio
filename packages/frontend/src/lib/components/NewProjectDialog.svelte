@@ -6,11 +6,25 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import {
-		BookOpen,
-		Presentation,
-		Folder,
 		User,
-		MessageSquare
+		UserCircle,
+		Contact,
+		FileText,
+		GraduationCap,
+		Award,
+		Grid,
+		Image,
+		Presentation,
+		BookOpen,
+		BookMarked,
+		Library,
+		Calendar,
+		Users,
+		Camera,
+		Link,
+		BarChart3,
+		PieChart,
+		Minimize2
 	} from 'lucide-svelte';
 
 	interface Props {
@@ -21,50 +35,216 @@
 
 	let { open = $bindable(), onOpenChange, onSuccess }: Props = $props();
 
-	const templates = [
+	const templateCategories = [
 		{
-			id: 'research-portfolio',
-			title: 'Research Portfolio',
-			description: 'Academic profile with publications, CV, and contact',
-			icon: BookOpen,
-			gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-			prompt: 'Create a research portfolio website with sections for publications, CV, research interests, and contact information. Use a clean, professional academic design.'
+			name: 'Personal Pages',
+			description: 'Simple landing pages and profiles',
+			templates: [
+				{
+					id: 'personal-minimal',
+					title: 'Minimal',
+					description: 'Clean, centered landing page',
+					icon: User
+				},
+				{
+					id: 'personal-bold',
+					title: 'Bold',
+					description: 'Vibrant page with featured work',
+					icon: UserCircle
+				},
+				{
+					id: 'personal-sidebar',
+					title: 'Sidebar',
+					description: 'Sidebar navigation layout',
+					icon: Contact
+				}
+			]
 		},
 		{
-			id: 'course-website',
-			title: 'Course Website',
-			description: 'Syllabus, assignments, readings, and materials',
-			icon: Presentation,
-			gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-			prompt: 'Create a course website with sections for syllabus, weekly schedule, assignments, readings, and contact information. Make it easy for students to navigate.'
+			name: 'CV & Resume',
+			description: 'Academic and professional CVs',
+			templates: [
+				{
+					id: 'cv-classic',
+					title: 'Classic',
+					description: 'Traditional academic CV',
+					icon: FileText
+				},
+				{
+					id: 'cv-modern',
+					title: 'Modern',
+					description: 'Contemporary CV with sidebar',
+					icon: GraduationCap
+				},
+				{
+					id: 'cv-timeline',
+					title: 'Timeline',
+					description: 'Visual timeline format',
+					icon: Award
+				}
+			]
 		},
 		{
-			id: 'project-showcase',
-			title: 'Project Showcase',
-			description: 'Document and share your work',
-			icon: Folder,
-			gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-			prompt: 'Create a project showcase website to display my work, with a portfolio grid, project detail pages, and an about section.'
+			name: 'Portfolio',
+			description: 'Showcase your work and projects',
+			templates: [
+				{
+					id: 'portfolio-grid',
+					title: 'Grid',
+					description: 'Project grid showcase',
+					icon: Grid
+				},
+				{
+					id: 'portfolio-magazine',
+					title: 'Magazine',
+					description: 'Editorial style portfolio',
+					icon: BookOpen
+				},
+				{
+					id: 'portfolio-showcase',
+					title: 'Showcase',
+					description: 'Featured work display',
+					icon: Image
+				}
+			]
 		},
 		{
-			id: 'personal-site',
-			title: 'Personal Site',
-			description: 'Professional web presence',
-			icon: User,
-			gradient: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
-			prompt: 'Create a personal website with sections for about me, experience, skills, projects, and contact information. Use a modern, clean design.'
+			name: 'Course Sites',
+			description: 'Syllabi, schedules, and materials',
+			templates: [
+				{
+					id: 'course-traditional',
+					title: 'Traditional',
+					description: 'Classic syllabus layout',
+					icon: Presentation
+				},
+				{
+					id: 'course-modern',
+					title: 'Modern',
+					description: 'Contemporary course site',
+					icon: BookOpen
+				}
+			]
 		},
 		{
-			id: 'custom',
-			title: 'Describe Custom',
-			description: 'Tell the agent what to build',
-			icon: MessageSquare,
-			gradient: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
-			prompt: null
+			name: 'Publications',
+			description: 'Research papers and articles',
+			templates: [
+				{
+					id: 'publication-bibliography',
+					title: 'Bibliography',
+					description: 'Traditional citation format',
+					icon: BookMarked
+				},
+				{
+					id: 'publication-featured',
+					title: 'Featured',
+					description: 'Showcase key publications',
+					icon: Library
+				}
+			]
+		},
+		{
+			name: 'Events',
+			description: 'Conferences, workshops, symposia',
+			templates: [
+				{
+					id: 'event-schedule',
+					title: 'Schedule',
+					description: 'Conference schedule',
+					icon: Calendar
+				},
+				{
+					id: 'event-speaker',
+					title: 'Speakers',
+					description: 'Speaker/presenter focused',
+					icon: Users
+				}
+			]
+		},
+		{
+			name: 'Photo Essays',
+			description: 'Visual storytelling with images',
+			templates: [
+				{
+					id: 'photo-gallery',
+					title: 'Gallery',
+					description: 'Image gallery layout',
+					icon: Camera
+				},
+				{
+					id: 'photo-narrative',
+					title: 'Narrative',
+					description: 'Scrolling photo story',
+					icon: Image
+				}
+			]
+		},
+		{
+			name: 'Resources',
+			description: 'Curated links and collections',
+			templates: [
+				{
+					id: 'resource-categorized',
+					title: 'Categorized',
+					description: 'Organized by categories',
+					icon: Link
+				},
+				{
+					id: 'resource-grid',
+					title: 'Grid',
+					description: 'Card grid layout',
+					icon: Grid
+				}
+			]
+		},
+		{
+			name: 'Data Visualization',
+			description: 'Charts, graphs, and interactive data',
+			templates: [
+				{
+					id: 'dataviz-dashboard',
+					title: 'Dashboard',
+					description: 'Chart dashboard',
+					icon: BarChart3
+				},
+				{
+					id: 'dataviz-narrative',
+					title: 'Narrative',
+					description: 'Scrolling data story',
+					icon: PieChart
+				},
+				{
+					id: 'dataviz-interactive',
+					title: 'Interactive',
+					description: 'Interactive explorer',
+					icon: BarChart3
+				}
+			]
+		},
+		{
+			name: 'Start Fresh',
+			description: 'Blank canvas',
+			templates: [
+				{
+					id: 'blank',
+					title: 'Blank Canvas',
+					description: 'Start from scratch',
+					icon: Minimize2
+				}
+			]
 		}
 	];
 
-	let selectedTemplate = $state<typeof templates[0] | null>(null);
+	type Template = {
+		id: string;
+		title: string;
+		description: string;
+		icon: any;
+		categoryName: string;
+	};
+
+	let selectedTemplate = $state<Template | null>(null);
 	let projectName = $state('');
 	let isCreating = $state(false);
 
@@ -79,13 +259,8 @@
 			const random = Math.random().toString(36).substring(2, 7);
 			const name = projectName.trim() || `${selectedTemplate.id}-${timestamp}${random}`;
 
-			// Create the project
-			const project = await createProject(name);
-
-			// Store template prompt in localStorage for the agent
-			if (selectedTemplate.prompt) {
-				localStorage.setItem('templatePrompt', selectedTemplate.prompt);
-			}
+			// Create the project with template
+			const project = await createProject(name, selectedTemplate.id);
 
 			// Navigate to the editor
 			goto(`/editor/${project.id}`);
@@ -101,8 +276,11 @@
 		}
 	}
 
-	function selectTemplate(template: typeof templates[0]) {
-		selectedTemplate = template;
+	function selectTemplate(template: any, categoryName: string) {
+		selectedTemplate = {
+			...template,
+			categoryName
+		};
 		// Auto-suggest project name based on template
 		if (!projectName) {
 			const timestamp = Date.now().toString(36).substring(0, 4);
@@ -112,40 +290,54 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={onOpenChange}>
-	<Dialog.Content class="max-w-4xl max-h-[90vh] overflow-y-auto !bg-white dark:!bg-gray-900">
+	<Dialog.Content class="max-w-6xl max-h-[90vh] overflow-y-auto !bg-white dark:!bg-gray-900">
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
-				Choose a template to get started, or describe your own project.
+				Choose a starting template — you can customize it to create anything you want using the AI assistant.
 			</Dialog.Description>
 		</Dialog.Header>
 
 		{#if !selectedTemplate}
-			<div class="templates-grid">
-				{#each templates as template (template.id)}
-					<button
-						class="template-card"
-						style="background: {template.gradient}"
-						onclick={() => selectTemplate(template)}
-					>
-						<div class="template-icon">
-							<svelte:component this={template.icon} size={32} />
+			<div class="categories-container">
+				{#each templateCategories as category}
+					<div class="category-section">
+						<div class="category-header">
+							<h3 class="category-title">{category.name}</h3>
+							<p class="category-description">{category.description}</p>
 						</div>
-						<h3 class="template-title">{template.title}</h3>
-						<p class="template-description">{template.description}</p>
-					</button>
+						<div class="templates-grid">
+							{#each category.templates as template (template.id)}
+								<button
+									class="template-card"
+									onclick={() => selectTemplate(template, category.name)}
+								>
+									<div class="template-preview">
+										<img src="/template-previews/{template.id}.png" alt="{template.title} preview" />
+										<div class="template-overlay">
+											<div class="template-icon">
+												<svelte:component this={template.icon} size={20} />
+											</div>
+										</div>
+									</div>
+									<div class="template-info">
+										<h4 class="template-title">{template.title}</h4>
+										<p class="template-description">{template.description}</p>
+									</div>
+								</button>
+							{/each}
+						</div>
+					</div>
 				{/each}
 			</div>
 		{:else}
 			<div class="selected-template">
 				<div class="selected-header">
-					<div
-						class="selected-icon"
-						style="background: {selectedTemplate.gradient}"
-					>
-						<svelte:component this={selectedTemplate.icon} size={24} />
+					<div class="selected-preview">
+						<img src="/template-previews/{selectedTemplate.id}.png" alt="{selectedTemplate.title} preview" />
 					</div>
-					<div>
+					<div class="selected-info">
+						<div class="selected-category">{selectedTemplate.categoryName}</div>
 						<h4 class="selected-title">{selectedTemplate.title}</h4>
 						<p class="selected-description">{selectedTemplate.description}</p>
 					</div>
@@ -183,48 +375,118 @@
 </Dialog.Root>
 
 <style>
+	.categories-container {
+		display: flex;
+		flex-direction: column;
+		gap: 3rem;
+		padding: 1.5rem 0;
+	}
+
+	.category-section {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.category-header {
+		border-bottom: 2px solid hsl(var(--border));
+		padding-bottom: 0.75rem;
+	}
+
+	.category-title {
+		font-size: 1.125rem;
+		font-weight: 700;
+		margin: 0 0 0.25rem;
+		color: hsl(var(--foreground));
+	}
+
+	.category-description {
+		font-size: 0.875rem;
+		color: hsl(var(--muted-foreground));
+		margin: 0;
+	}
+
 	.templates-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
 		gap: 1rem;
-		padding: 1rem 0;
 	}
 
 	.template-card {
-		padding: 1.5rem;
-		border-radius: 0.5rem;
-		border: none;
+		background: white;
+		border-radius: 0.625rem;
+		border: 1.5px solid hsl(var(--border));
 		cursor: pointer;
-		text-align: center;
-		color: white;
-		transition: transform 0.2s, box-shadow 0.2s;
+		transition: all 0.2s;
 		display: flex;
 		flex-direction: column;
-		align-items: center;
-		gap: 0.75rem;
+		overflow: hidden;
+		text-align: left;
+		padding: 0;
 	}
 
 	.template-card:hover {
 		transform: translateY(-2px);
-		box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+		border-color: hsl(var(--primary));
 	}
 
-	.template-icon {
+	.template-preview {
+		position: relative;
+		width: 100%;
+		aspect-ratio: 4 / 3;
+		overflow: hidden;
+		background: hsl(var(--muted) / 0.3);
+	}
+
+	.template-preview img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+
+	.template-overlay {
+		position: absolute;
+		top: 0.5rem;
+		right: 0.5rem;
+		width: 2rem;
+		height: 2rem;
+		background: white;
+		border-radius: 0.375rem;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+		opacity: 0;
+		transition: opacity 0.2s;
+	}
+
+	.template-card:hover .template-overlay {
+		opacity: 1;
+	}
+
+	.template-icon {
+		color: hsl(var(--primary));
+	}
+
+	.template-info {
+		padding: 0.875rem;
+		flex: 1;
 	}
 
 	.template-title {
-		font-size: 1rem;
+		font-size: 0.875rem;
 		font-weight: 600;
-		margin: 0;
+		margin: 0 0 0.25rem;
+		color: hsl(var(--foreground));
 	}
 
 	.template-description {
-		font-size: 0.875rem;
-		opacity: 0.9;
+		font-size: 0.75rem;
+		color: hsl(var(--muted-foreground));
 		margin: 0;
+		line-height: 1.4;
 	}
 
 	.selected-template {
@@ -243,15 +505,34 @@
 		border-radius: 0.5rem;
 	}
 
-	.selected-icon {
-		width: 48px;
-		height: 48px;
+	.selected-preview {
+		width: 140px;
+		height: 90px;
 		border-radius: 0.5rem;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		color: white;
+		overflow: hidden;
 		flex-shrink: 0;
+		background: white;
+		border: 1px solid hsl(var(--border));
+	}
+
+	.selected-preview img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+
+	.selected-info {
+		flex: 1;
+	}
+
+	.selected-category {
+		font-size: 0.75rem;
+		color: hsl(var(--primary));
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		margin-bottom: 0.25rem;
 	}
 
 	.selected-title {

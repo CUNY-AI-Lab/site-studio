@@ -1,0 +1,147 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Georgia, 'Times New Roman', serif;
+    line-height: 1.6;
+    color: #1e293b;
+    background: #ffffff;
+    padding: 2rem;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    background: white;
+}
+
+header {
+    text-align: center;
+    padding-bottom: 2rem;
+    border-bottom: 2px solid #0f172a;
+    margin-bottom: 2.5rem;
+}
+
+h1 {
+    font-size: 2.25rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: #0f172a;
+}
+
+.affiliation {
+    font-size: 1.125rem;
+    color: #475569;
+    margin-bottom: 0.5rem;
+}
+
+.contact {
+    font-size: 1rem;
+    color: #64748b;
+}
+
+section {
+    margin-bottom: 2.5rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 1.25rem;
+    color: #0f172a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 0.5rem;
+}
+
+.entry {
+    margin-bottom: 1.5rem;
+}
+
+.entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.25rem;
+}
+
+.degree, .position {
+    font-weight: 600;
+    color: #0f172a;
+    font-size: 1.05rem;
+}
+
+.year {
+    color: #64748b;
+    font-style: italic;
+    font-size: 0.95rem;
+}
+
+.institution {
+    color: #475569;
+    font-size: 1rem;
+    margin-bottom: 0.25rem;
+}
+
+.detail {
+    color: #64748b;
+    font-size: 0.95rem;
+    font-style: italic;
+}
+
+.publication {
+    margin-bottom: 1.25rem;
+}
+
+.citation {
+    color: #334155;
+    font-size: 1rem;
+    line-height: 1.7;
+}
+
+.awards {
+    list-style-position: inside;
+    color: #334155;
+}
+
+.awards li {
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+}
+
+@media (max-width: 640px) {
+    body {
+        padding: 1rem;
+    }
+
+    h1 {
+        font-size: 1.75rem;
+    }
+
+    h2 {
+        font-size: 1.25rem;
+    }
+
+    .entry-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .year {
+        margin-top: 0.25rem;
+    }
+}
+
+@media print {
+    body {
+        padding: 0;
+    }
+
+    section {
+        page-break-inside: avoid;
+    }
+}

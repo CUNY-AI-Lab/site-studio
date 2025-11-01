@@ -1,0 +1,39 @@
+# Cloudflare Worker configuration for Site Studio Publisher
+#
+# This worker serves published sites from R2 storage
+# Deploy with: npx wrangler deploy
+
+name = "site-studio-publisher"
+main = "index.ts"
+compatibility_date = "2024-01-01"
+
+# Workers.dev subdomain (free)
+# Your sites will be available at:
+# https://site-studio-publisher.{your-subdomain}.workers.dev/{userId}/{projectId}/
+workers_dev = true
+
+# R2 bucket binding
+# The bucket must be created in your Cloudflare account first
+[[r2_buckets]]
+binding = "SITE_STUDIO_BUCKET"
+bucket_name = "site-studio"
+
+# Optional: Custom domain (requires Cloudflare zone)
+# Uncomment and configure if you have a custom domain
+# routes = [
+#   { pattern = "*.yoursite.com/*", zone_name = "yoursite.com" }
+# ]
+
+# Environment variables (optional)
+# [vars]
+# PUBLIC_DOMAIN = "yoursite.com"
+
+# Development configuration
+[env.development]
+name = "site-studio-publisher-dev"
+workers_dev = true
+
+# Production configuration
+[env.production]
+name = "site-studio-publisher"
+workers_dev = true

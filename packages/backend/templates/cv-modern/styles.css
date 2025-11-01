@@ -1,0 +1,172 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.6;
+    color: #1e293b;
+    background: #f8fafc;
+}
+
+.container {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    max-width: 1200px;
+    margin: 0 auto;
+    background: white;
+    min-height: 100vh;
+}
+
+.sidebar {
+    background: #1e293b;
+    color: white;
+    padding: 3rem 2rem;
+}
+
+.profile {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    margin-bottom: 1.5rem;
+}
+
+.sidebar h1 {
+    font-size: 1.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.title {
+    font-size: 1rem;
+    line-height: 1.5;
+    color: #94a3b8;
+    margin-bottom: 2rem;
+}
+
+.contact, .skills {
+    margin-bottom: 2rem;
+}
+
+.sidebar h3 {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #94a3b8;
+    margin-bottom: 0.75rem;
+}
+
+.contact p {
+    font-size: 0.95rem;
+    margin-bottom: 0.5rem;
+    color: #cbd5e1;
+}
+
+.skills ul {
+    list-style: none;
+}
+
+.skills li {
+    padding: 0.5rem 0;
+    color: #cbd5e1;
+    font-size: 0.95rem;
+}
+
+.content {
+    padding: 3rem 2.5rem;
+}
+
+section {
+    margin-bottom: 3rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    color: #0f172a;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 3px solid #2563eb;
+}
+
+.item {
+    margin-bottom: 1.75rem;
+}
+
+.item h3 {
+    font-size: 1.125rem;
+    color: #0f172a;
+    margin-bottom: 0.25rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+}
+
+.year {
+    font-size: 0.95rem;
+    font-weight: 400;
+    color: #64748b;
+}
+
+.org {
+    color: #2563eb;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.item p {
+    color: #475569;
+    line-height: 1.7;
+}
+
+.item ul {
+    margin-left: 1.25rem;
+    color: #475569;
+}
+
+.item li {
+    margin-bottom: 0.25rem;
+}
+
+.pub-title {
+    font-weight: 600;
+    color: #0f172a;
+    margin-bottom: 0.25rem;
+}
+
+.pub-venue {
+    color: #64748b;
+    font-size: 0.95rem;
+}
+
+.awards-list {
+    list-style-position: inside;
+    color: #334155;
+}
+
+.awards-list li {
+    margin-bottom: 0.75rem;
+}
+
+@media (max-width: 768px) {
+    .container {
+        grid-template-columns: 1fr;
+    }
+
+    .sidebar {
+        padding: 2rem 1.5rem;
+    }
+
+    .content {
+        padding: 2rem 1.5rem;
+    }
+
+    .item h3 {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .year {
+        margin-top: 0.25rem;
+    }
+}

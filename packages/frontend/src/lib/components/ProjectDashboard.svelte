@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { fetchProjects, type Project } from '$lib/api/projects';
+	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { MoreVertical, Plus, FolderOpen } from 'lucide-svelte';
+	import { MoreVertical, Plus, FolderOpen, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
 
 	let projects = $state<Project[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let publishingProjectId = $state<string | null>(null);
 
 	let showNewProjectDialog = $state(false);
 	let showRenameDialog = $state(false);
@@ -50,6 +51,46 @@
 	function handleDeleteProject(project: Project) {
 		selectedProject = project;
 		showDeleteDialog = true;
+	}
+
+	async function handlePublishProject(project: Project) {
+		try {
+			publishingProjectId = project.id;
+			const result = await publishProject(project.id);
+
+			// Update the project in the list
+			projects = projects.map(p =>
+				p.id === project.id
+					? { ...p, published: true, publishedUrl: result.url }
+					: p
+			);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to publish project');
+		} finally {
+			publishingProjectId = null;
+		}
+	}
+
+	async function handleUnpublishProject(project: Project) {
+		try {
+			publishingProjectId = project.id;
+			await unpublishProject(project.id);
+
+			// Update the project in the list
+			projects = projects.map(p =>
+				p.id === project.id
+					? { ...p, published: false, publishedUrl: undefined }
+					: p
+			);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to unpublish project');
+		} finally {
+			publishingProjectId = null;
+		}
+	}
+
+	function openPublishedSite(url: string) {
+		window.open(url, '_blank');
 	}
 </script>
 
@@ -105,8 +146,20 @@
 			{#each projects as project (project.id)}
 				<div class="project-card">
 					<button class="project-card-button" onclick={() => openProject(project.id)}>
-						<div class="project-icon">🎨</div>
+						{#if project.thumbnailUrl}
+							<div class="project-thumbnail">
+								<img src={project.thumbnailUrl} alt={project.name} />
+							</div>
+						{:else}
+							<div class="project-icon">🎨</div>
+						{/if}
 						<h3 class="project-name">{project.name}</h3>
+						{#if project.published}
+							<div class="published-badge">
+								<Globe size={14} />
+								<span>Published</span>
+							</div>
+						{/if}
 					</button>
 					<DropdownMenu.Root>
 						<DropdownMenu.Trigger asChild>
@@ -118,10 +171,31 @@
 						</DropdownMenu.Trigger>
 						<DropdownMenu.Content>
 							<DropdownMenu.Item onclick={() => openProject(project.id)}>Open</DropdownMenu.Item>
+							{#if project.published && project.publishedUrl}
+								<DropdownMenu.Item onclick={() => openPublishedSite(project.publishedUrl!)}>
+									<ExternalLink size={14} />
+									<span>View Published Site</span>
+								</DropdownMenu.Item>
+								<DropdownMenu.Item
+									onclick={() => handleUnpublishProject(project)}
+									disabled={publishingProjectId === project.id}
+								>
+									<GlobeLock size={14} />
+									<span>{publishingProjectId === project.id ? 'Unpublishing...' : 'Unpublish'}</span>
+								</DropdownMenu.Item>
+							{:else}
+								<DropdownMenu.Item
+									onclick={() => handlePublishProject(project)}
+									disabled={publishingProjectId === project.id}
+								>
+									<Globe size={14} />
+									<span>{publishingProjectId === project.id ? 'Publishing...' : 'Publish'}</span>
+								</DropdownMenu.Item>
+							{/if}
+							<DropdownMenu.Separator />
 							<DropdownMenu.Item onclick={() => handleRenameProject(project)}>
 								Rename
 							</DropdownMenu.Item>
-							<DropdownMenu.Separator />
 							<DropdownMenu.Item
 								onclick={() => handleDeleteProject(project)}
 								class="text-destructive"
@@ -209,19 +283,38 @@
 
 	.project-card-button {
 		width: 100%;
-		padding: 2rem 1.5rem;
+		padding: 0;
 		background: none;
 		border: none;
 		cursor: pointer;
-		text-align: left;
+		text-align: center;
 		display: flex;
 		flex-direction: column;
-		align-items: center;
-		gap: 1rem;
+		align-items: stretch;
 	}
 
 	.project-icon {
 		font-size: 3rem;
+		padding: 3rem 1.5rem 1rem;
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		height: 180px;
+		background: linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.5) 100%);
+	}
+
+	.project-thumbnail {
+		width: 100%;
+		height: 180px;
+		overflow: hidden;
+		background: hsl(var(--muted));
+	}
+
+	.project-thumbnail img {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
 	}
 
 	.project-name {
@@ -230,11 +323,26 @@
 		color: hsl(var(--foreground));
 		margin: 0;
 		word-break: break-word;
+		padding: 1rem 1.5rem 0.5rem;
 	}
 
 	.project-card :global(.project-menu-button) {
 		position: absolute;
 		top: 0.5rem;
 		right: 0.5rem;
+	}
+
+	.published-badge {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.25rem;
+		padding: 0.25rem 0.75rem;
+		background: hsl(var(--primary) / 0.1);
+		color: hsl(var(--primary));
+		border-radius: 1rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		margin: 0.5rem 1.5rem 1rem;
 	}
 </style>

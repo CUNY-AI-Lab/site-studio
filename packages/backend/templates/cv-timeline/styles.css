@@ -1,0 +1,174 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.6;
+    color: #1e293b;
+    background: #f8fafc;
+}
+
+.header {
+    background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);
+    color: white;
+    padding: 3rem 2rem;
+    text-align: center;
+}
+
+.header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+.subtitle {
+    font-size: 1.25rem;
+    margin-bottom: 0.75rem;
+    opacity: 0.95;
+}
+
+.contact {
+    font-size: 1rem;
+    opacity: 0.9;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 3rem 2rem;
+    background: white;
+}
+
+h2 {
+    font-size: 1.75rem;
+    color: #0f172a;
+    margin-bottom: 2rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 3px solid #0891b2;
+}
+
+.timeline {
+    position: relative;
+    padding-left: 2.5rem;
+    margin-bottom: 4rem;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    left: 0.5rem;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: #cbd5e1;
+}
+
+.timeline-item {
+    position: relative;
+    margin-bottom: 2.5rem;
+}
+
+.timeline-marker {
+    position: absolute;
+    left: -2.0rem;
+    top: 0.25rem;
+    width: 1rem;
+    height: 1rem;
+    background: #0891b2;
+    border-radius: 50%;
+    border: 3px solid white;
+    box-shadow: 0 0 0 3px #cbd5e1;
+}
+
+.timeline-content {
+    background: #f8fafc;
+    padding: 1.5rem;
+    border-radius: 0.75rem;
+    border-left: 4px solid #0891b2;
+}
+
+.timeline-year {
+    display: inline-block;
+    background: #0891b2;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+}
+
+.timeline-content h3 {
+    font-size: 1.25rem;
+    color: #0f172a;
+    margin-bottom: 0.5rem;
+}
+
+.org {
+    color: #0891b2;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.timeline-content p:last-child {
+    color: #475569;
+    line-height: 1.7;
+}
+
+.highlights {
+    margin-bottom: 3rem;
+}
+
+.highlight-item {
+    margin-bottom: 1.5rem;
+    padding: 1.25rem;
+    background: #f8fafc;
+    border-radius: 0.5rem;
+    border-left: 4px solid #cbd5e1;
+}
+
+.pub-title {
+    font-weight: 600;
+    color: #0f172a;
+    margin-bottom: 0.5rem;
+    font-size: 1.05rem;
+}
+
+.pub-venue {
+    color: #64748b;
+    font-size: 0.95rem;
+}
+
+.highlight-item p {
+    color: #475569;
+    line-height: 1.7;
+}
+
+.highlight-item strong {
+    color: #0891b2;
+}
+
+@media (max-width: 640px) {
+    .header h1 {
+        font-size: 2rem;
+    }
+
+    .subtitle {
+        font-size: 1.125rem;
+    }
+
+    .container {
+        padding: 2rem 1rem;
+    }
+
+    .timeline {
+        padding-left: 2rem;
+    }
+
+    .timeline-marker {
+        left: -1.6rem;
+    }
+}

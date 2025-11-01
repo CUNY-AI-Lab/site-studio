@@ -51,25 +51,6 @@
 	let currentStatus = $state<string>(''); // For showing contextual status
 	let attachedFile = $state<File | null>(null); // Track attached file
 	let isUploading = $state(false); // Track upload state
-	let templatePromptSent = $state(false); // Track if template prompt was sent
-
-	// Check for template prompt and send when projectId is available
-	$effect(() => {
-		// Only run when projectId becomes available and we haven't sent the template prompt yet
-		if (projectId && !templatePromptSent) {
-			const templatePrompt = localStorage.getItem('templatePrompt');
-			if (templatePrompt && messages.length === 0) {
-				// Auto-send template prompt
-				input = templatePrompt;
-				localStorage.removeItem('templatePrompt'); // Remove after using
-				templatePromptSent = true; // Mark as sent
-				sendMessage();
-			} else {
-				// No template prompt, just mark as checked
-				templatePromptSent = true;
-			}
-		}
-	});
 
 	async function uploadFile(file: File): Promise<string> {
 		const formData = new FormData();

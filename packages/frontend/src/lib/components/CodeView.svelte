@@ -1,6 +1,7 @@
 <script lang="ts">
 	import FileTree from './FileTree.svelte';
 	import Editor from './Editor.svelte';
+	import * as Resizable from '$lib/components/ui/resizable';
 	import { RefreshCw } from 'lucide-svelte';
 
 	let {
@@ -25,24 +26,39 @@
 </script>
 
 <div class="code-view">
-	<aside class="file-panel">
-		<div class="panel-header">
-			<span class="label">FILES</span>
-			<button onclick={onRefreshFiles} class="icon-button" title="Refresh files">
-				<RefreshCw size={16} />
-			</button>
-		</div>
-		<div class="file-tree-container">
-			<FileTree {files} {projectId} onSelect={onFileSelect} onRefresh={onRefreshFiles} />
-		</div>
-	</aside>
+	<Resizable.PaneGroup direction="horizontal">
+		<!-- File Tree Panel (resizable) -->
+		<Resizable.Pane
+			defaultSize={25}
+			minSize={15}
+			maxSize={50}
+			collapsible={true}
+		>
+			<aside class="file-panel">
+				<div class="panel-header">
+					<span class="label">FILES</span>
+					<button onclick={onRefreshFiles} class="icon-button" title="Refresh files">
+						<RefreshCw size={16} />
+					</button>
+				</div>
+				<div class="file-tree-container">
+					<FileTree {files} {projectId} onSelect={onFileSelect} onRefresh={onRefreshFiles} />
+				</div>
+			</aside>
+		</Resizable.Pane>
 
-	<div class="editor-panel">
-		{#if isSaving}
-			<div class="save-indicator">Saving...</div>
-		{/if}
-		<Editor {currentFile} content={fileContent} onChange={onEditorChange} />
-	</div>
+		<Resizable.Handle withHandle />
+
+		<!-- Editor Panel -->
+		<Resizable.Pane defaultSize={75} minSize={40}>
+			<div class="editor-panel">
+				{#if isSaving}
+					<div class="save-indicator">Saving...</div>
+				{/if}
+				<Editor {currentFile} content={fileContent} onChange={onEditorChange} />
+			</div>
+		</Resizable.Pane>
+	</Resizable.PaneGroup>
 </div>
 
 <style>
@@ -53,7 +69,7 @@
 	}
 
 	.file-panel {
-		width: 250px;
+		height: 100%;
 		border-right: 1px solid var(--color-border);
 		display: flex;
 		flex-direction: column;
@@ -96,7 +112,7 @@
 	}
 
 	.editor-panel {
-		flex: 1;
+		height: 100%;
 		position: relative;
 		overflow: hidden;
 	}
