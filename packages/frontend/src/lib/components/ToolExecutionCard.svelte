@@ -59,7 +59,16 @@
 	}
 
 	function formatInput(input: Record<string, any>): string {
-		if (input.file_path) return input.file_path;
+		if (input.file_path) {
+			// Show only filename, not full path
+			const parts = input.file_path.split('/');
+			return parts[parts.length - 1];
+		}
+		if (input.path) {
+			// Show only filename for 'path' parameter too
+			const parts = input.path.split('/');
+			return parts[parts.length - 1];
+		}
 		if (input.directory_path) return input.directory_path;
 		if (input.template) return `Template: ${input.template}`;
 		if (input.page_name) return input.page_name;

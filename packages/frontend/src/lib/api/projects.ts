@@ -8,6 +8,20 @@ export interface Project {
 	thumbnailUrl?: string;
 }
 
+export interface TemplateMetadata {
+	id: string;
+	title: string;
+	description: string;
+	icon: string;
+	categoryName: string;
+}
+
+export interface TemplateCategory {
+	name: string;
+	description: string;
+	templates: TemplateMetadata[];
+}
+
 export interface ProjectFile {
 	name: string;
 	path: string;
@@ -222,4 +236,19 @@ export async function unpublishProject(projectId: string): Promise<void> {
 		const error = await response.json().catch(() => ({ error: 'Failed to unpublish project' }));
 		throw new Error(error.error || 'Failed to unpublish project');
 	}
+}
+
+/**
+ * Fetch all template categories with metadata
+ * This endpoint doesn't require authentication
+ */
+export async function fetchTemplateCategories(): Promise<TemplateCategory[]> {
+	const response = await fetch(`${API_BASE}/templates`);
+
+	if (!response.ok) {
+		throw new Error('Failed to fetch templates');
+	}
+
+	const data = await response.json();
+	return data.categories;
 }

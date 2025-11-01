@@ -1,0 +1,131 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.6;
+    color: #1e293b;
+    background: #f8fafc;
+}
+
+.header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 4rem 2rem;
+    text-align: center;
+}
+
+.header h1 {
+    font-size: 3rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+}
+
+.subtitle {
+    font-size: 1.25rem;
+    opacity: 0.95;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.timeline-container {
+    max-width: 1400px;
+    margin: 3rem auto;
+    padding: 0 2rem;
+    background: white;
+    border-radius: 1rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+}
+
+/* Override TimelineJS default styles for better appearance */
+#timeline-embed {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Customize timeline navigation */
+:global(.tl-timeline) {
+    border-radius: 0.5rem;
+}
+
+:global(.tl-timenav) {
+    background-color: #f1f5f9 !important;
+}
+
+:global(.tl-timemarker) {
+    border-radius: 0.25rem !important;
+}
+
+:global(.tl-timemarker .tl-timemarker-content-container .tl-timemarker-content .tl-timemarker-text h2.tl-headline) {
+    font-weight: 600 !important;
+}
+
+:global(.tl-slide-content-container) {
+    padding: 2rem !important;
+}
+
+:global(.tl-text-content) {
+    font-size: 1.125rem !important;
+    line-height: 1.8 !important;
+}
+
+.footer {
+    text-align: center;
+    padding: 2rem;
+    color: #64748b;
+    font-size: 0.875rem;
+}
+
+.footer a {
+    color: #667eea;
+    text-decoration: none;
+}
+
+.footer a:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 1024px) {
+    .header h1 {
+        font-size: 2.5rem;
+    }
+
+    .subtitle {
+        font-size: 1.125rem;
+    }
+
+    .timeline-container {
+        margin: 2rem auto;
+        padding: 0 1rem;
+    }
+
+    #timeline-embed {
+        height: 500px !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .header {
+        padding: 3rem 1.5rem;
+    }
+
+    .header h1 {
+        font-size: 2rem;
+    }
+
+    .subtitle {
+        font-size: 1rem;
+    }
+
+    .timeline-container {
+        margin: 1.5rem auto;
+        padding: 0 0.5rem;
+    }
+
+    #timeline-embed {
+        height: 450px !important;
+    }
+}

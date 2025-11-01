@@ -80,11 +80,17 @@ export class R2Storage implements IStorage {
     const key = this.getKey(userId, projectId, filePath);
     const contentType = lookup(filePath) || 'application/octet-stream';
 
+    const body = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
+    console.log(`[R2] Writing ${key}, content type: ${typeof content}, isBuffer: ${Buffer.isBuffer(content)}, body isBuffer: ${Buffer.isBuffer(body)}`);
+    if (Buffer.isBuffer(body)) {
+      console.log(`[R2] First 4 bytes: ${body.slice(0, 4).toString('hex')}`);
+    }
+
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucketName,
         Key: key,
-        Body: typeof content === 'string' ? Buffer.from(content, 'utf-8') : content,
+        Body: body,
         ContentType: contentType,
         CacheControl: 'public, max-age=3600',
       })
@@ -413,5 +419,39 @@ export class R2Storage implements IStorage {
   getUploadsPath(userId: string): string | null {
     // R2 doesn't have filesystem paths
     return null;
+  }
+
+  async findProjectOwner(projectId: string): Promise<string | null> {
+    try {
+      // List all user prefixes in projects/
+      const response = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucketName,
+          Prefix: 'projects/',
+          Delimiter: '/',
+        })
+      );
+
+      if (!response.CommonPrefixes) {
+        return null;
+      }
+
+      // Check each user to see if they own this project
+      for (const prefix of response.CommonPrefixes) {
+        // Extract userId from prefix: projects/user_xxx/
+        const userId = prefix.Prefix!.split('/')[1];
+
+        // Check if this user has the project
+        const exists = await this.projectExists(userId, projectId);
+        if (exists) {
+          return userId;
+        }
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error('Error finding project owner:', error);
+      return null;
+    }
   }
 }

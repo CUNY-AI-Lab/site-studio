@@ -1,31 +1,12 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { createProject } from '$lib/api/projects';
+	import { createProject, fetchTemplateCategories, type TemplateCategory, type TemplateMetadata } from '$lib/api/projects';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import {
-		User,
-		UserCircle,
-		Contact,
-		FileText,
-		GraduationCap,
-		Award,
-		Grid,
-		Image,
-		Presentation,
-		BookOpen,
-		BookMarked,
-		Library,
-		Calendar,
-		Users,
-		Camera,
-		Link,
-		BarChart3,
-		PieChart,
-		Minimize2
-	} from 'lucide-svelte';
+	import * as LucideIcons from 'lucide-svelte';
 
 	interface Props {
 		open: boolean;
@@ -35,218 +16,49 @@
 
 	let { open = $bindable(), onOpenChange, onSuccess }: Props = $props();
 
-	const templateCategories = [
-		{
-			name: 'Personal Pages',
-			description: 'Simple landing pages and profiles',
-			templates: [
-				{
-					id: 'personal-minimal',
-					title: 'Minimal',
-					description: 'Clean, centered landing page',
-					icon: User
-				},
-				{
-					id: 'personal-bold',
-					title: 'Bold',
-					description: 'Vibrant page with featured work',
-					icon: UserCircle
-				},
-				{
-					id: 'personal-sidebar',
-					title: 'Sidebar',
-					description: 'Sidebar navigation layout',
-					icon: Contact
-				}
-			]
-		},
-		{
-			name: 'CV & Resume',
-			description: 'Academic and professional CVs',
-			templates: [
-				{
-					id: 'cv-classic',
-					title: 'Classic',
-					description: 'Traditional academic CV',
-					icon: FileText
-				},
-				{
-					id: 'cv-modern',
-					title: 'Modern',
-					description: 'Contemporary CV with sidebar',
-					icon: GraduationCap
-				},
-				{
-					id: 'cv-timeline',
-					title: 'Timeline',
-					description: 'Visual timeline format',
-					icon: Award
-				}
-			]
-		},
-		{
-			name: 'Portfolio',
-			description: 'Showcase your work and projects',
-			templates: [
-				{
-					id: 'portfolio-grid',
-					title: 'Grid',
-					description: 'Project grid showcase',
-					icon: Grid
-				},
-				{
-					id: 'portfolio-magazine',
-					title: 'Magazine',
-					description: 'Editorial style portfolio',
-					icon: BookOpen
-				},
-				{
-					id: 'portfolio-showcase',
-					title: 'Showcase',
-					description: 'Featured work display',
-					icon: Image
-				}
-			]
-		},
-		{
-			name: 'Course Sites',
-			description: 'Syllabi, schedules, and materials',
-			templates: [
-				{
-					id: 'course-traditional',
-					title: 'Traditional',
-					description: 'Classic syllabus layout',
-					icon: Presentation
-				},
-				{
-					id: 'course-modern',
-					title: 'Modern',
-					description: 'Contemporary course site',
-					icon: BookOpen
-				}
-			]
-		},
-		{
-			name: 'Publications',
-			description: 'Research papers and articles',
-			templates: [
-				{
-					id: 'publication-bibliography',
-					title: 'Bibliography',
-					description: 'Traditional citation format',
-					icon: BookMarked
-				},
-				{
-					id: 'publication-featured',
-					title: 'Featured',
-					description: 'Showcase key publications',
-					icon: Library
-				}
-			]
-		},
-		{
-			name: 'Events',
-			description: 'Conferences, workshops, symposia',
-			templates: [
-				{
-					id: 'event-schedule',
-					title: 'Schedule',
-					description: 'Conference schedule',
-					icon: Calendar
-				},
-				{
-					id: 'event-speaker',
-					title: 'Speakers',
-					description: 'Speaker/presenter focused',
-					icon: Users
-				}
-			]
-		},
-		{
-			name: 'Photo Essays',
-			description: 'Visual storytelling with images',
-			templates: [
-				{
-					id: 'photo-gallery',
-					title: 'Gallery',
-					description: 'Image gallery layout',
-					icon: Camera
-				},
-				{
-					id: 'photo-narrative',
-					title: 'Narrative',
-					description: 'Scrolling photo story',
-					icon: Image
-				}
-			]
-		},
-		{
-			name: 'Resources',
-			description: 'Curated links and collections',
-			templates: [
-				{
-					id: 'resource-categorized',
-					title: 'Categorized',
-					description: 'Organized by categories',
-					icon: Link
-				},
-				{
-					id: 'resource-grid',
-					title: 'Grid',
-					description: 'Card grid layout',
-					icon: Grid
-				}
-			]
-		},
-		{
-			name: 'Data Visualization',
-			description: 'Charts, graphs, and interactive data',
-			templates: [
-				{
-					id: 'dataviz-dashboard',
-					title: 'Dashboard',
-					description: 'Chart dashboard',
-					icon: BarChart3
-				},
-				{
-					id: 'dataviz-narrative',
-					title: 'Narrative',
-					description: 'Scrolling data story',
-					icon: PieChart
-				},
-				{
-					id: 'dataviz-interactive',
-					title: 'Interactive',
-					description: 'Interactive explorer',
-					icon: BarChart3
-				}
-			]
-		},
-		{
-			name: 'Start Fresh',
-			description: 'Blank canvas',
-			templates: [
-				{
-					id: 'blank',
-					title: 'Blank Canvas',
-					description: 'Start from scratch',
-					icon: Minimize2
-				}
-			]
-		}
-	];
-
-	type Template = {
-		id: string;
-		title: string;
-		description: string;
-		icon: any;
-		categoryName: string;
+	// Map of icon name strings to Lucide components
+	const iconMap: Record<string, any> = {
+		User: LucideIcons.User,
+		UserCircle: LucideIcons.UserCircle,
+		Contact: LucideIcons.Contact,
+		SquareUser: LucideIcons.SquareUser,
+		FileText: LucideIcons.FileText,
+		GraduationCap: LucideIcons.GraduationCap,
+		Award: LucideIcons.Award,
+		ScrollText: LucideIcons.ScrollText,
+		Grid: LucideIcons.Grid,
+		Image: LucideIcons.Image,
+		Frame: LucideIcons.Frame,
+		Presentation: LucideIcons.Presentation,
+		BookOpen: LucideIcons.BookOpen,
+		BookMarked: LucideIcons.BookMarked,
+		Library: LucideIcons.Library,
+		Calendar: LucideIcons.Calendar,
+		Users: LucideIcons.Users,
+		Camera: LucideIcons.Camera,
+		Link: LucideIcons.Link,
+		BarChart3: LucideIcons.BarChart3,
+		PieChart: LucideIcons.PieChart,
+		Minimize2: LucideIcons.Minimize2,
+		Clock: LucideIcons.Clock
 	};
 
-	let selectedTemplate = $state<Template | null>(null);
+	// Fetch template categories from API
+	let templateCategories = $state<TemplateCategory[]>([]);
+	let isLoadingTemplates = $state(true);
+	let selectedTemplate = $state<TemplateMetadata | null>(null);
 	let projectName = $state('');
 	let isCreating = $state(false);
+
+	onMount(async () => {
+		try {
+			templateCategories = await fetchTemplateCategories();
+		} catch (error) {
+			console.error('Failed to load templates:', error);
+		} finally {
+			isLoadingTemplates = false;
+		}
+	});
 
 	async function handleCreate() {
 		if (!selectedTemplate || isCreating) return;
@@ -276,16 +88,18 @@
 		}
 	}
 
-	function selectTemplate(template: any, categoryName: string) {
-		selectedTemplate = {
-			...template,
-			categoryName
-		};
+	function selectTemplate(template: TemplateMetadata) {
+		selectedTemplate = template;
 		// Auto-suggest project name based on template
 		if (!projectName) {
 			const timestamp = Date.now().toString(36).substring(0, 4);
 			projectName = `${template.id}-${timestamp}`;
 		}
+	}
+
+	// Get the Lucide icon component for an icon name
+	function getIcon(iconName: string) {
+		return iconMap[iconName] || LucideIcons.FileText;
 	}
 </script>
 
@@ -299,37 +113,43 @@
 		</Dialog.Header>
 
 		{#if !selectedTemplate}
-			<div class="categories-container">
-				{#each templateCategories as category}
-					<div class="category-section">
-						<div class="category-header">
-							<h3 class="category-title">{category.name}</h3>
-							<p class="category-description">{category.description}</p>
-						</div>
-						<div class="templates-grid">
-							{#each category.templates as template (template.id)}
-								<button
-									class="template-card"
-									onclick={() => selectTemplate(template, category.name)}
-								>
-									<div class="template-preview">
-										<img src="/template-previews/{template.id}.png" alt="{template.title} preview" />
-										<div class="template-overlay">
-											<div class="template-icon">
-												<svelte:component this={template.icon} size={20} />
+			{#if isLoadingTemplates}
+				<div class="loading-container">
+					<p>Loading templates...</p>
+				</div>
+			{:else}
+				<div class="categories-container">
+					{#each templateCategories as category}
+						<div class="category-section">
+							<div class="category-header">
+								<h3 class="category-title">{category.name}</h3>
+								<p class="category-description">{category.description}</p>
+							</div>
+							<div class="templates-grid">
+								{#each category.templates as template (template.id)}
+									<button
+										class="template-card"
+										onclick={() => selectTemplate(template)}
+									>
+										<div class="template-preview">
+											<img src="/template-previews/{template.id}.png" alt="{template.title} preview" />
+											<div class="template-overlay">
+												<div class="template-icon">
+													<svelte:component this={getIcon(template.icon)} size={20} />
+												</div>
 											</div>
 										</div>
-									</div>
-									<div class="template-info">
-										<h4 class="template-title">{template.title}</h4>
-										<p class="template-description">{template.description}</p>
-									</div>
-								</button>
-							{/each}
+										<div class="template-info">
+											<h4 class="template-title">{template.title}</h4>
+											<p class="template-description">{template.description}</p>
+										</div>
+									</button>
+								{/each}
+							</div>
 						</div>
-					</div>
-				{/each}
-			</div>
+					{/each}
+				</div>
+			{/if}
 		{:else}
 			<div class="selected-template">
 				<div class="selected-header">
@@ -375,6 +195,14 @@
 </Dialog.Root>
 
 <style>
+	.loading-container {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		padding: 4rem 2rem;
+		color: hsl(var(--muted-foreground));
+	}
+
 	.categories-container {
 		display: flex;
 		flex-direction: column;

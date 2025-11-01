@@ -14,7 +14,7 @@ import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
 import { generateThumbnail } from './services/thumbnail.js';
-import { applyTemplate, isValidTemplate, type TemplateId } from './templates.js';
+import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType } from './services/file-converter.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -38,7 +38,21 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
-// Apply authentication to all API routes
+/**
+ * GET /api/templates
+ * Get all template categories with metadata
+ * Public endpoint (no auth required)
+ */
+app.get('/api/templates', (req, res) => {
+  try {
+    const categories = getTemplateCategories();
+    res.json({ categories });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Apply authentication to all other API routes
 app.use('/api', authenticateUser);
 
 // Initialize storage (filesystem or R2)
@@ -592,6 +606,7 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
 
     // Write file directly to project using storage abstraction
     // This works for both filesystem and R2 storage
+    console.log(`[Upload] Uploading ${filename}, buffer type: ${typeof req.file.buffer}, isBuffer: ${Buffer.isBuffer(req.file.buffer)}, first bytes: ${req.file.buffer.slice(0, 4).toString('hex')}`);
     await storage.writeFile(userId, projectId, filename, req.file.buffer);
 
     res.json({
@@ -786,16 +801,14 @@ app.post('/api/query', async (req, res) => {
 
     if (uploadedFile) {
       // File is now stored directly in the project directory
-      const filePath = path.join(projectPath, uploadedFile);
-
       try {
         // Check if file type is supported
         if (!isSupportedFileType(uploadedFile)) {
           throw new Error('Unsupported file type');
         }
 
-        // Generate prompt with file path (agent will use Read tool)
-        enhancedPrompt = generateFilePrompt(prompt, uploadedFile, filePath);
+        // Generate prompt with filename (agent needs relative path, not absolute)
+        enhancedPrompt = generateFilePrompt(prompt, uploadedFile, uploadedFile);
       } catch (error: any) {
         console.error('Error processing uploaded file:', error);
         // Return error to user
@@ -941,12 +954,18 @@ app.use('/preview/:id', (req, res, next) => {
   }
 }, async (req, res, next) => {
   const authReq = req as unknown as AuthenticatedRequest;
-  const userId = authReq.user.id;
   const projectId = req.params.id;
 
   if (process.env.STORAGE_TYPE === 'r2') {
     // For R2, serve files manually
     try {
+      // Find the project owner
+      const ownerId = await storage.findProjectOwner(projectId);
+      if (!ownerId) {
+        res.status(404).send('Project not found');
+        return;
+      }
+
       let filePath = req.path.slice(1); // Remove leading slash
 
       // Default to index.html for directory requests
@@ -960,7 +979,7 @@ app.use('/preview/:id', (req, res, next) => {
         return;
       }
 
-      const buffer = await storage.readFileBuffer(userId, projectId, filePath);
+      const buffer = await storage.readFileBuffer(ownerId, projectId, filePath);
 
       // Set content type based on file extension
       const ext = path.extname(filePath).toLowerCase();
@@ -991,7 +1010,14 @@ app.use('/preview/:id', (req, res, next) => {
     }
   } else {
     // For filesystem, use express.static
-    const projectPath = getProjectPath(userId, projectId);
+    // Find the project owner
+    const ownerId = await storage.findProjectOwner(projectId);
+    if (!ownerId) {
+      res.status(404).send('Project not found');
+      return;
+    }
+
+    const projectPath = getProjectPath(ownerId, projectId);
     express.static(projectPath, {
       setHeaders: (res) => {
         // Allow preview iframe to load

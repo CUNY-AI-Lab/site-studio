@@ -297,4 +297,26 @@ export class FilesystemStorage implements IStorage {
   getUploadsPath(userId: string): string {
     return path.join(this.baseDir, userId, 'uploads');
   }
+
+  async findProjectOwner(projectId: string): Promise<string | null> {
+    try {
+      // List all user directories
+      const entries = await fs.readdir(this.baseDir, { withFileTypes: true });
+      const userDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('user_'));
+
+      // Check each user to see if they own this project
+      for (const userDir of userDirs) {
+        const userId = userDir.name;
+        const exists = await this.projectExists(userId, projectId);
+        if (exists) {
+          return userId;
+        }
+      }
+
+      return null;
+    } catch (error: any) {
+      console.error('Error finding project owner:', error);
+      return null;
+    }
+  }
 }

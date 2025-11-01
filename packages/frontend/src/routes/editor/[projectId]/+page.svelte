@@ -25,6 +25,11 @@
 	// Panel collapse state
 	let isChatCollapsed = $state(false);
 	let isCodeCollapsed = $state(true); // Start collapsed
+	let isDragging = $state(false);
+
+	function handleDragChange(dragging: boolean) {
+		isDragging = dragging;
+	}
 
 	onMount(async () => {
 		await loadFiles();
@@ -225,14 +230,14 @@
 	</Resizable.PaneGroup>
 
 	<!-- Right: Code Editor Overlay with paneforge resize -->
-	<div class="overlay-container" class:visible={!isCodeCollapsed}>
+	<div class="overlay-container" class:visible={!isCodeCollapsed} class:dragging={isDragging}>
 		<Resizable.PaneGroup direction="horizontal" class="overlay-panes">
 			<!-- Invisible spacer pane -->
 			<Resizable.Pane defaultSize={60} minSize={0} maxSize={100}>
 				<div class="spacer"></div>
 			</Resizable.Pane>
 
-			<Resizable.Handle withHandle />
+			<Resizable.Handle withHandle onDraggingChange={handleDragChange} />
 
 			<!-- Code editor pane -->
 			<Resizable.Pane
@@ -408,8 +413,20 @@
 		transform: translateX(0);
 	}
 
-	:global(.overlay-panes) {
+	.overlay-container.visible :global(.overlay-panes) {
 		height: 100vh;
+	}
+
+	/* Enable pointer-events on overlay-panes during drag for smooth resize */
+	.overlay-container.dragging :global(.overlay-panes) {
+		pointer-events: auto !important;
+	}
+
+	:global(.overlay-panes [data-slot="resizable-handle"]) {
+		pointer-events: auto;
+	}
+
+	:global(.overlay-panes [data-pane]:not(:has(.spacer))) {
 		pointer-events: auto;
 	}
 
@@ -426,6 +443,7 @@
 		display: flex;
 		flex-direction: column;
 		position: relative;
+		pointer-events: auto;
 	}
 
 	.close-editor-button {

@@ -194,6 +194,13 @@
 								for (const block of event.message.content) {
 									if (block.type === 'text') {
 										console.log('[CHAT] Text block, length:', block.text.length, 'section:', currentSectionText.length);
+
+										// Reset tools group when starting new text section after tools
+										if (currentToolsGroup.length > 0 && contentBlocks[contentBlocks.length - 1]?.type === 'tools') {
+											console.log('[CHAT] Starting new text section after tools, resetting currentToolsGroup');
+											currentToolsGroup = [];
+										}
+
 										currentStatus = 'Responding...';
 										currentSectionText += block.text;  // Accumulate for current section
 
@@ -275,10 +282,11 @@
 											currentToolsGroup[toolIndex].output = Array.isArray(block.content)
 												? block.content.map(c => c.text).join('\n')
 												: block.content;
-										// Update the tools block
-										const toolsBlock = contentBlocks.find(b => b.type === 'tools');
-										if (toolsBlock) {
-											toolsBlock.tools = [...currentToolsGroup];
+										// Update the tools block (find the current/last one, not first)
+										const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
+											!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
+										if (toolsBlockIndex >= 0) {
+											contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
 										}
 											messages[messages.length - 1].blocks = [...contentBlocks];
 											messages = [...messages];
@@ -370,6 +378,11 @@
 							if (event.type === 'assistant' && event.message?.content) {
 								for (const block of event.message.content) {
 									if (block.type === 'text') {
+										// Reset tools group when starting new text section after tools
+										if (currentToolsGroup.length > 0 && contentBlocks[contentBlocks.length - 1]?.type === 'tools') {
+											currentToolsGroup = [];
+										}
+
 										currentStatus = 'Responding...';
 										currentSectionText += block.text;  // Accumulate for current section
 
@@ -442,10 +455,11 @@
 											currentToolsGroup[toolIndex].output = Array.isArray(block.content)
 												? block.content.map(c => c.text).join('\n')
 												: block.content;
-											// Update the tools block
-											const toolsBlock = contentBlocks.find(b => b.type === 'tools');
-											if (toolsBlock) {
-												toolsBlock.tools = [...currentToolsGroup];
+											// Update the tools block (find the current/last one, not first)
+											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
+												!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
+											if (toolsBlockIndex >= 0) {
+												contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
 											}
 											messages[messages.length - 1].blocks = [...contentBlocks];
 											messages = [...messages];

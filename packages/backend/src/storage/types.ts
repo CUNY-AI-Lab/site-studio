@@ -113,4 +113,11 @@ export interface IStorage {
    * Get uploads path for a user
    */
   getUploadsPath(userId: string): string | null;
+
+  /**
+   * Find the owner (userId) of a project by projectId
+   * Searches across all users to find who owns the given project
+   * Returns null if project not found
+   */
+  findProjectOwner(projectId: string): Promise<string | null>;
 }

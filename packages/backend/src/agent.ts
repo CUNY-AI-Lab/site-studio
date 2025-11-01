@@ -2,6 +2,7 @@ import { query, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { createFileTools } from './tools/file-tools.js';
 import { createTemplateTools } from './tools/template-tools.js';
 import type { SandboxSession } from './sandbox/manager.js';
+import fs from 'fs/promises';
 
 // Agent system prompt for site building
 export const SITE_BUILDER_PROMPT = `You are a site building assistant for Site Studio, helping students and researchers create professional academic websites.
@@ -64,12 +65,41 @@ As you build:
 ## 3. File Operations
 
 Use these tools to build the site:
-- \`write_file\` - Create or update HTML/CSS/JS files
-- \`read_file\` - Check current file contents before editing
-- \`list_files\` - See what files exist in the project
-- \`add_page\` - Quickly add a new HTML page
-- \`create_directory\` - Organize files into folders
+
+**Basic Operations:**
+- \`list_files\` - See all files in the project (tree structure)
+- \`read_file\` - Read text file contents (HTML, CSS, JS, etc.)
+- \`write_file\` - Create or update files with new content
 - \`delete_file\` - Remove files that aren't needed
+- \`create_directory\` - Create folders to organize files
+
+**Advanced Operations:**
+- \`view_file\` - Download binary files (images, PDFs, audio, video) from cloud storage to local filesystem, then use Read tool to view them
+- \`edit_file\` - Smart editing by replacing specific text (more efficient than rewriting entire files)
+- \`search_files\` - Search for text across all project files (with optional file pattern filter)
+- \`rename_file\` - Rename or move files to different locations
+
+**Templates:**
+- \`scaffold_template\` - Start from a template (blank, research-portfolio, etc.)
+- \`add_page\` - Quickly add a new HTML page
+
+**Important Notes:**
+- All files are stored in cloud storage (R2), not local filesystem
+- **To view binary files (images, PDFs, audio, video):**
+  1. First: Use \`view_file\` with the filename (e.g., "image.jpg" or "document.pdf")
+  2. The tool will download it to local sandbox and return a message with the FULL PATH where it was saved
+  3. Then: Use Claude Code's Read tool with that EXACT full path from the message
+  4. CRITICAL: You must use the complete absolute path returned by \`view_file\`, not just the filename
+  5. Why: Custom MCP tools can only return text, not images. Read tool can display images/PDFs.
+- For text files: Use \`read_file\` (reads directly from R2, no download needed)
+- Use \`edit_file\` for small changes, \`write_file\` for complete rewrites
+- Use \`search_files\` to find text across multiple files
+
+**Example workflow for viewing an uploaded image:**
+User: "Can you look at the image I uploaded?"
+1. Use \`list_files\` to find image filename
+2. Use \`view_file image.jpg\` → returns "Downloaded image.jpg to /full/path/to/image.jpg. Use the Read tool with this exact path: /full/path/to/image.jpg"
+3. Use Read tool with \`/full/path/to/image.jpg\` (the exact path from step 2) → displays the image
 
 ## 4. Code Standards
 
@@ -199,6 +229,16 @@ export async function runSiteAgent(
   userId?: string,
   projectId?: string
 ): Promise<AsyncIterable<any>> {
+  // Clean up downloaded binaries from previous sessions (only for new sessions)
+  if (!sessionId) {
+    try {
+      await fs.rm(projectPath, { recursive: true, force: true });
+      await fs.mkdir(projectPath, { recursive: true });
+    } catch (error) {
+      // Ignore cleanup errors - directory might not exist yet
+    }
+  }
+
   // Create tools with projectPath and optional sandbox context
   const fileTools = createFileTools(projectPath, sandboxSession, userId, projectId);
   const templateTools = createTemplateTools(projectPath);
@@ -229,6 +269,15 @@ export async function runSiteAgent(
     mcpServers: {
       'site-studio': server,
     },
+    // Disable Claude Code's file-writing tools that don't work with R2 storage
+    // Keep Read tool - needed for viewing downloaded binaries after view_file
+    // Keep other useful tools like TodoWrite, AskUserQuestion, etc.
+    disallowedTools: [
+      'Edit',    // Use mcp__site-studio__edit_file instead
+      'Write',   // Use mcp__site-studio__write_file instead
+      'Glob',    // Searches local filesystem (incompatible with R2)
+      'Grep',    // Searches local files (incompatible with R2)
+    ],
   };
 
   // Resume conversation if session ID provided
