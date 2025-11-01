@@ -153,23 +153,25 @@
 						{:else}
 							<div class="project-icon">🎨</div>
 						{/if}
-						<h3 class="project-name">{project.name}</h3>
-						{#if project.published}
-							<div class="published-badge">
-								<Globe size={14} />
-								<span>Published</span>
-							</div>
-						{/if}
 					</button>
-					<DropdownMenu.Root>
-						<DropdownMenu.Trigger asChild>
-							{#snippet child({ props })}
-								<Button {...props} variant="ghost" size="icon" class="project-menu-button">
-									<MoreVertical size={16} />
-								</Button>
-							{/snippet}
-						</DropdownMenu.Trigger>
-						<DropdownMenu.Content>
+					<div class="project-info">
+						<div class="project-header">
+							<h3 class="project-name">{project.name}</h3>
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger asChild>
+									{#snippet child({ props })}
+										<Button
+											{...props}
+											variant="ghost"
+											size="icon-sm"
+											class="project-menu-button"
+											onclick={(e) => e.stopPropagation()}
+										>
+											<MoreVertical size={16} />
+										</Button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content>
 							<DropdownMenu.Item onclick={() => openProject(project.id)}>Open</DropdownMenu.Item>
 							{#if project.published && project.publishedUrl}
 								<DropdownMenu.Item onclick={() => openPublishedSite(project.publishedUrl!)}>
@@ -203,7 +205,15 @@
 								Delete
 							</DropdownMenu.Item>
 						</DropdownMenu.Content>
-					</DropdownMenu.Root>
+							</DropdownMenu.Root>
+						</div>
+						{#if project.published}
+							<div class="published-badge">
+								<Globe size={14} />
+								<span>Published</span>
+							</div>
+						{/if}
+					</div>
 				</div>
 			{/each}
 		</div>
@@ -317,19 +327,28 @@
 		display: block;
 	}
 
+	.project-info {
+		padding: 1rem 1rem 1rem 1.5rem;
+	}
+
+	.project-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+
 	.project-name {
 		font-size: 1.125rem;
 		font-weight: 600;
 		color: hsl(var(--foreground));
 		margin: 0;
 		word-break: break-word;
-		padding: 1rem 1.5rem 0.5rem;
+		flex: 1;
 	}
 
 	.project-card :global(.project-menu-button) {
-		position: absolute;
-		top: 0.5rem;
-		right: 0.5rem;
+		flex-shrink: 0;
 	}
 
 	.published-badge {
@@ -343,6 +362,7 @@
 		border-radius: 1rem;
 		font-size: 0.75rem;
 		font-weight: 500;
-		margin: 0.5rem 1.5rem 1rem;
+		margin-top: 0.5rem;
+		width: fit-content;
 	}
 </style>
