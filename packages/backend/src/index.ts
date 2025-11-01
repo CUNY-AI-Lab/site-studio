@@ -15,6 +15,8 @@ import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType } from './services/file-converter.js';
+import { getMicrosoftAuthorizationUrl, redeemMicrosoftCode, generateState, generateNonce } from './auth/oidc.js';
+import { setSession } from './middleware/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +51,73 @@ app.get('/api/templates', (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Public auth endpoints (defined before authentication middleware)
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    authMode: process.env.AUTH_MODE || 'anonymous',
+    providers: { microsoft: !!(process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET) },
+  });
+});
+
+app.get('/api/auth/login/microsoft', async (req, res) => {
+  try {
+    const state = generateState();
+    const nonce = generateNonce();
+
+    res.cookie('oidc_state', state, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 10 * 60 * 1000 });
+    res.cookie('oidc_nonce', nonce, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 10 * 60 * 1000 });
+
+    const authorizationUrl = await getMicrosoftAuthorizationUrl(state, nonce);
+    res.redirect(authorizationUrl);
+  } catch (err: any) {
+    console.error('Microsoft login error:', err);
+    res.status(500).send('Login initialization failed');
+  }
+});
+
+app.get('/api/auth/callback/microsoft', async (req, res) => {
+  try {
+    const state = req.cookies['oidc_state'];
+    const nonce = req.cookies['oidc_nonce'];
+    const currentUrl = `${process.env.BACKEND_URL || `http://localhost:${PORT}`}${req.originalUrl}`;
+
+    const tokenSet: any = await redeemMicrosoftCode(currentUrl, state, nonce);
+    const claims: any = tokenSet.claims && tokenSet.claims();
+
+    const sub = claims?.sub || 'unknown';
+    const email = claims?.preferred_username || claims?.email;
+    const name = claims?.name || email || 'Microsoft User';
+
+    // Establish app session
+    let sessionId = req.cookies?.['site-studio-session'] as string | undefined;
+    if (!sessionId) {
+      sessionId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    }
+    await setSession(sessionId, { id: `microsoft_${sub}`, email, name, createdAt: new Date() } as any);
+
+    res.cookie('site-studio-session', sessionId, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    res.clearCookie('oidc_state');
+    res.clearCookie('oidc_nonce');
+
+    const redirectTo = process.env.FRONTEND_URL || '/';
+    res.redirect(redirectTo);
+  } catch (err: any) {
+    console.error('Microsoft callback error:', err);
+    res.status(500).send('Authentication failed');
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('site-studio-session');
+  res.json({ success: true });
 });
 
 // Apply authentication to all other API routes

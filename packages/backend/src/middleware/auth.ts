@@ -13,10 +13,14 @@ export interface AuthenticatedRequest extends Request {
 // Session store instance (initialized on first use)
 let sessionStore: ISessionStore | null = null;
 
+function isAuthRequired(): boolean {
+  return (process.env.AUTH_MODE || 'anonymous') === 'required';
+}
+
 /**
  * Get or create the session store based on STORAGE_TYPE
  */
-function getSessionStore(): ISessionStore {
+export function getSessionStoreInstance(): ISessionStore {
   if (!sessionStore) {
     const storageType = process.env.STORAGE_TYPE || 'filesystem';
 
@@ -55,14 +59,20 @@ function generateUserId(): string {
  */
 export async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
-  const store = getSessionStore();
+  const store = getSessionStoreInstance();
 
   try {
     // Check for existing session ID in cookie or header
     let sessionId = req.cookies?.['site-studio-session'] || req.headers['x-session-id'] as string;
 
-    // If no session exists, create a new one
+    // If no session cookie
     if (!sessionId) {
+      if (isAuthRequired()) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
+
+      // Anonymous mode: create a new session
       sessionId = randomBytes(32).toString('hex');
       const newUser: User = {
         id: generateUserId(),
@@ -70,11 +80,11 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
       };
       await store.set(sessionId, newUser);
 
-      // Set session cookie (httpOnly for security)
       res.cookie('site-studio-session', sessionId, {
         httpOnly: true,
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
         sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
       });
 
       authReq.user = newUser;
@@ -84,8 +94,13 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
     // Retrieve existing user session
     let user = await store.get(sessionId);
 
-    // Session expired or invalid - create new one
+    // Session expired or invalid
     if (!user) {
+      if (isAuthRequired()) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
+      // Anonymous mode: create a new one
       sessionId = randomBytes(32).toString('hex');
       user = {
         id: generateUserId(),
@@ -97,6 +112,7 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
         httpOnly: true,
         maxAge: 30 * 24 * 60 * 60 * 1000,
         sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
       });
     }
 
@@ -127,7 +143,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
  */
 export async function clearSession(req: Request, res: Response) {
   const sessionId = req.cookies?.['site-studio-session'] || req.headers['x-session-id'] as string;
-  const store = getSessionStore();
+  const store = getSessionStoreInstance();
 
   if (sessionId) {
     await store.delete(sessionId);
@@ -141,7 +157,7 @@ export async function clearSession(req: Request, res: Response) {
  * Get session count for monitoring
  */
 export async function getSessionCount(): Promise<number> {
-  const store = getSessionStore();
+  const store = getSessionStoreInstance();
   return await store.count();
 }
 
@@ -149,6 +165,16 @@ export async function getSessionCount(): Promise<number> {
  * Cleanup old sessions (call periodically)
  */
 export async function cleanupSessions(): Promise<number> {
-  const store = getSessionStore();
+  const store = getSessionStoreInstance();
   return await store.cleanup();
 }
+
+/**
+ * Set or overwrite a session with a specific user (used by OIDC login)
+ */
+export async function setSession(sessionId: string, user: User): Promise<void> {
+  const store = getSessionStoreInstance();
+  await store.set(sessionId, user);
+}
+
+export { isAuthRequired };

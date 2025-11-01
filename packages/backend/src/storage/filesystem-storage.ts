@@ -302,7 +302,8 @@ export class FilesystemStorage implements IStorage {
     try {
       // List all user directories
       const entries = await fs.readdir(this.baseDir, { withFileTypes: true });
-      const userDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('user_'));
+      // Consider all user directories except 'uploads'
+      const userDirs = entries.filter(e => e.isDirectory() && e.name !== 'uploads');
 
       // Check each user to see if they own this project
       for (const userDir of userDirs) {
