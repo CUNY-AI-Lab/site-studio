@@ -28,7 +28,6 @@
     "mammoth": "^1.11.0",
     "mime-types": "^3.0.1",
     "multer": "^2.0.2",
-    "openid-client": "^6.8.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
