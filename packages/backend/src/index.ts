@@ -1006,6 +1006,8 @@ app.use('/preview/:id', (req, res, next) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+      // Remove ETag to prevent 304 Not Modified responses
+      res.removeHeader('ETag');
       res.send(buffer);
     } catch (error: any) {
       console.error(`Preview error for ${projectId}/${filePath}:`, error);
