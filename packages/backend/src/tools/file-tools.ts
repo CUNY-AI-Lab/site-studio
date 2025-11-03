@@ -476,19 +476,21 @@ or updates it if it does. Parent directories are created automatically.`,
         const matches: Array<{ path: string; line_numbers: number[] }> = [];
 
         if (useStorage && userId && projectId) {
-          // Search in R2
+          // Search in R2 - parallel file reads for better performance
           const files = await storage.listFiles(userId, projectId);
 
-          for (const file of files) {
-            // Skip if pattern provided and doesn't match
+          // Filter files by pattern if provided
+          const filesToSearch = files.filter(file => {
             if (params.file_pattern) {
               const regex = new RegExp(params.file_pattern.replace(/\*/g, '.*'));
-              if (!regex.test(file.path)) {
-                continue;
-              }
+              return regex.test(file.path);
             }
+            return true;
+          });
 
-            try {
+          // Read all files in parallel
+          const searchResults = await Promise.allSettled(
+            filesToSearch.map(async (file) => {
               const content = await storage.readFile(userId, projectId, file.path);
               if (content.includes(params.query)) {
                 // Find line numbers
@@ -497,14 +499,19 @@ or updates it if it does. Parent directories are created automatically.`,
                   .map((line, idx) => line.includes(params.query) ? idx + 1 : -1)
                   .filter(num => num > 0);
 
-                matches.push({
+                return {
                   path: file.path,
                   line_numbers: lineNumbers,
-                });
+                };
               }
-            } catch (err) {
-              // Skip binary files or files that can't be read as text
-              continue;
+              return null;
+            })
+          );
+
+          // Collect successful matches
+          for (const result of searchResults) {
+            if (result.status === 'fulfilled' && result.value) {
+              matches.push(result.value);
             }
           }
         } else {
@@ -586,9 +593,8 @@ or updates it if it does. Parent directories are created automatically.`,
     async (params) => {
       try {
         if (useStorage && userId && projectId) {
-          // R2: Read, write to new location, delete old
-          const buffer = await storage.readFileBuffer(userId, projectId, params.old_path);
-          await storage.writeFile(userId, projectId, params.new_path, buffer);
+          // Use optimized copyFile (CopyObject for R2) + delete
+          await storage.copyFile(userId, projectId, params.old_path, params.new_path);
           await storage.deleteFile(userId, projectId, params.old_path);
         } else {
           // Filesystem: Use rename

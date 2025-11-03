@@ -19,6 +19,9 @@ export class R2Storage implements IStorage {
   private client: S3Client;
   private bucketName: string;
   private accountId: string;
+  private cache: Map<string, { buffer: Buffer; timestamp: number }>;
+  private readonly CACHE_TTL_MS = 60_000; // 1 minute cache
+  private readonly MAX_CACHE_SIZE = 100; // Max 100 files cached
 
   constructor(
     accountId: string,
@@ -28,6 +31,7 @@ export class R2Storage implements IStorage {
   ) {
     this.accountId = accountId;
     this.bucketName = bucketName;
+    this.cache = new Map();
 
     // Initialize S3 client with R2 endpoint
     this.client = new S3Client({
@@ -71,6 +75,47 @@ export class R2Storage implements IStorage {
     return this.getKey(userId, projectId, '.metadata.json');
   }
 
+  /**
+   * Get cached file buffer if available and not expired
+   */
+  private getCachedBuffer(key: string): Buffer | null {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+
+    const age = Date.now() - cached.timestamp;
+    if (age > this.CACHE_TTL_MS) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return cached.buffer;
+  }
+
+  /**
+   * Cache a file buffer (with LRU eviction)
+   */
+  private cacheBuffer(key: string, buffer: Buffer): void {
+    // LRU eviction: remove oldest entry if cache is full
+    if (this.cache.size >= this.MAX_CACHE_SIZE) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) {
+        this.cache.delete(firstKey);
+      }
+    }
+
+    this.cache.set(key, {
+      buffer,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Invalidate cache for a specific key
+   */
+  private invalidateCache(key: string): void {
+    this.cache.delete(key);
+  }
+
   async writeFile(
     userId: string,
     projectId: string,
@@ -96,8 +141,8 @@ export class R2Storage implements IStorage {
       })
     );
 
-    // Update project metadata
-    await this.touchProjectMetadata(userId, projectId);
+    // Invalidate cache for this file
+    this.invalidateCache(key);
   }
 
   async readFile(userId: string, projectId: string, filePath: string): Promise<string> {
@@ -107,6 +152,12 @@ export class R2Storage implements IStorage {
 
   async readFileBuffer(userId: string, projectId: string, filePath: string): Promise<Buffer> {
     const key = this.getKey(userId, projectId, filePath);
+
+    // Check cache first
+    const cached = this.getCachedBuffer(key);
+    if (cached) {
+      return cached;
+    }
 
     try {
       const response = await this.client.send(
@@ -125,7 +176,12 @@ export class R2Storage implements IStorage {
       for await (const chunk of response.Body as any) {
         chunks.push(chunk);
       }
-      return Buffer.concat(chunks);
+      const buffer = Buffer.concat(chunks);
+
+      // Cache the result
+      this.cacheBuffer(key, buffer);
+
+      return buffer;
     } catch (error: any) {
       if (error.name === 'NoSuchKey') {
         throw new Error(`File not found: ${filePath}`);
@@ -163,8 +219,27 @@ export class R2Storage implements IStorage {
       })
     );
 
-    // Update project metadata
-    await this.touchProjectMetadata(userId, projectId);
+    // Invalidate cache for this file
+    this.invalidateCache(key);
+  }
+
+  async copyFile(userId: string, projectId: string, sourcePath: string, destPath: string): Promise<void> {
+    const sourceKey = this.getKey(userId, projectId, sourcePath);
+    const destKey = this.getKey(userId, projectId, destPath);
+
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        CopySource: `${this.bucketName}/${sourceKey}`,
+        Key: destKey,
+      })
+    );
+
+    // Cache the destination file by copying from source cache if available
+    const cached = this.getCachedBuffer(sourceKey);
+    if (cached) {
+      this.cacheBuffer(destKey, cached);
+    }
   }
 
   async listFiles(userId: string, projectId: string, prefix: string = ''): Promise<StorageFile[]> {

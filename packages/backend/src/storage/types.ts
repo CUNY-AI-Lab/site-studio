@@ -59,6 +59,11 @@ export interface IStorage {
   deleteFile(userId: string, projectId: string, filePath: string): Promise<void>;
 
   /**
+   * Copy a file within storage (optimized for R2 using CopyObject)
+   */
+  copyFile(userId: string, projectId: string, sourcePath: string, destPath: string): Promise<void>;
+
+  /**
    * List all files in a project directory
    */
   listFiles(userId: string, projectId: string, prefix?: string): Promise<StorageFile[]>;

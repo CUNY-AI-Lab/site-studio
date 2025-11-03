@@ -95,6 +95,18 @@ export class FilesystemStorage implements IStorage {
     await this.touchProjectMetadata(userId, projectId);
   }
 
+  async copyFile(userId: string, projectId: string, sourcePath: string, destPath: string): Promise<void> {
+    const sourceFullPath = this.getFilePath(userId, projectId, sourcePath);
+    const destFullPath = this.getFilePath(userId, projectId, destPath);
+    const destDir = path.dirname(destFullPath);
+
+    // Ensure destination directory exists
+    await fs.mkdir(destDir, { recursive: true });
+
+    // Copy file
+    await fs.copyFile(sourceFullPath, destFullPath);
+  }
+
   async listFiles(userId: string, projectId: string, prefix: string = ''): Promise<StorageFile[]> {
     const basePath = this.getFilePath(userId, projectId, prefix);
     const files: StorageFile[] = [];
