@@ -50,6 +50,7 @@
 	let selectedTemplate = $state<TemplateMetadata | null>(null);
 	let projectName = $state('');
 	let isCreating = $state(false);
+	let hasUserEditedName = $state(false);
 
 	onMount(async () => {
 		try {
@@ -58,6 +59,15 @@
 			console.error('Failed to load templates:', error);
 		} finally {
 			isLoadingTemplates = false;
+		}
+	});
+
+	// Reset state when dialog closes
+	$effect(() => {
+		if (!open) {
+			selectedTemplate = null;
+			projectName = '';
+			hasUserEditedName = false;
 		}
 	});
 
@@ -120,7 +130,8 @@
 	async function selectTemplate(template: TemplateMetadata) {
 		selectedTemplate = template;
 		// Auto-suggest project name based on template with sequential numbering
-		if (!projectName) {
+		// Only auto-fill if user hasn't manually edited the name
+		if (!hasUserEditedName) {
 			const nextNumber = await getNextNumber(template.id);
 			projectName = `${template.id}-${nextNumber}`;
 		}
@@ -193,7 +204,11 @@
 					<Button
 						variant="ghost"
 						size="sm"
-						onclick={() => (selectedTemplate = null)}
+						onclick={() => {
+					selectedTemplate = null;
+					projectName = '';
+					hasUserEditedName = false;
+				}}
 					>
 						Change
 					</Button>
@@ -204,6 +219,7 @@
 					<Input
 						id="projectName"
 						bind:value={projectName}
+						oninput={() => hasUserEditedName = true}
 						placeholder="my-awesome-project"
 						disabled={isCreating}
 					/>
