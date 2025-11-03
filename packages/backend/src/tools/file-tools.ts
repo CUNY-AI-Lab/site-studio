@@ -329,7 +329,7 @@ or updates it if it does. Parent directories are created automatically.`,
    */
   const viewFile = tool(
     'view_file',
-    `Download a binary file (image, PDF, audio, video, etc.) from cloud storage to local filesystem so it can be viewed using the Read tool. Use this for any non-text file that needs to be viewed.`,
+    `Download and view binary files (images, PDFs, audio, video, etc.) from cloud storage. PDFs are returned directly for viewing (up to 32 MB, 100 pages). Other file types are downloaded to local filesystem for use with the Read tool.`,
     z.object({
       file_path: z.string().describe('Path to the file relative to project root'),
     }).shape,
@@ -362,7 +362,44 @@ or updates it if it does. Parent directories are created automatically.`,
           }
         }
 
-        // Write to local filesystem in project directory
+        // Detect media type for user info
+        const mediaType = lookup(params.file_path) || 'application/octet-stream';
+        const sizeKB = (buffer.length / 1024).toFixed(2);
+        const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
+
+        // For PDFs, return as document block (supports up to 32 MB, 100 pages)
+        if (mediaType === 'application/pdf') {
+          // Check size limit (32 MB)
+          if (buffer.length > 32 * 1024 * 1024) {
+            return {
+              content: [{
+                type: 'text' as const,
+                text: `PDF file ${params.file_path} is ${sizeMB} MB, which exceeds the 32 MB limit for PDF viewing. Please use a smaller PDF or extract specific pages.`
+              }]
+            };
+          }
+
+          // Return PDF as document block
+          const base64Data = buffer.toString('base64');
+          return {
+            content: [
+              {
+                type: 'document' as const,
+                source: {
+                  type: 'base64' as const,
+                  media_type: 'application/pdf' as const,
+                  data: base64Data
+                }
+              },
+              {
+                type: 'text' as const,
+                text: `PDF file ${params.file_path} (${sizeKB} KB) loaded successfully. You can now analyze its contents.`
+              }
+            ]
+          };
+        }
+
+        // For non-PDF files, write to local filesystem and use Read tool
         const localPath = path.join(projectPath, params.file_path);
         const localDir = path.dirname(localPath);
 
@@ -371,10 +408,6 @@ or updates it if it does. Parent directories are created automatically.`,
 
         // Write the buffer to local file
         await fs.writeFile(localPath, buffer);
-
-        // Detect media type for user info
-        const mediaType = lookup(params.file_path) || 'application/octet-stream';
-        const sizeKB = (buffer.length / 1024).toFixed(2);
 
         return {
           content: [{

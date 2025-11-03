@@ -74,7 +74,7 @@ Use these tools to build the site:
 - \`create_directory\` - Create folders to organize files
 
 **Advanced Operations:**
-- \`view_file\` - Download binary files (images, PDFs, audio, video) from cloud storage to local filesystem, then use Read tool to view them
+- \`view_file\` - View binary files (images, PDFs, audio, video) from cloud storage. PDFs are displayed directly (up to 32 MB, 100 pages). Other file types are downloaded for Read tool access.
 - \`edit_file\` - Smart editing by replacing specific text (more efficient than rewriting entire files)
 - \`search_files\` - Search for text across all project files (with optional file pattern filter)
 - \`rename_file\` - Rename or move files to different locations
@@ -85,15 +85,25 @@ Use these tools to build the site:
 
 **Important Notes:**
 - All files are stored in cloud storage (R2), not local filesystem
-- **To view binary files (images, PDFs, audio, video):**
-  1. First: Use \`view_file\` with the filename (e.g., "image.jpg" or "document.pdf")
+- **To view PDFs:**
+  - Use \`view_file\` with the PDF filename (e.g., "document.pdf")
+  - PDFs up to 32 MB and 100 pages are displayed directly
+  - You can analyze text, images, charts, and tables within the PDF
+  - No need to use Read tool for PDFs - they're included automatically
+- **To view other binary files (images, audio, video):**
+  1. First: Use \`view_file\` with the filename (e.g., "image.jpg")
   2. The tool will download it to local sandbox and return a message with the FULL PATH where it was saved
   3. Then: Use Claude Code's Read tool with that EXACT full path from the message
   4. CRITICAL: You must use the complete absolute path returned by \`view_file\`, not just the filename
-  5. Why: Custom MCP tools can only return text, not images. Read tool can display images/PDFs.
 - For text files: Use \`read_file\` (reads directly from R2, no download needed)
 - Use \`edit_file\` for small changes, \`write_file\` for complete rewrites
 - Use \`search_files\` to find text across multiple files
+
+**Example workflow for viewing an uploaded PDF:**
+User: "Can you analyze the PDF I uploaded?"
+1. Use \`list_files\` to find PDF filename
+2. Use \`view_file document.pdf\` → PDF content is immediately available for analysis
+3. Analyze the PDF content directly - no additional steps needed
 
 **Example workflow for viewing an uploaded image:**
 User: "Can you look at the image I uploaded?"
