@@ -1000,7 +1000,9 @@ app.use('/preview/:id', (req, res, next) => {
 
       const contentType = contentTypes[ext] || 'application/octet-stream';
 
-      res.setHeader('Content-Type', contentType);
+      // Add charset=utf-8 for text-based content types
+      const isTextType = contentType.startsWith('text/') || contentType.includes('javascript') || contentType.includes('json');
+      res.setHeader('Content-Type', isTextType ? `${contentType}; charset=utf-8` : contentType);
       res.setHeader('X-Frame-Options', 'SAMEORIGIN');
       // Disable caching to ensure preview shows latest changes
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
