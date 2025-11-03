@@ -14,7 +14,7 @@ AI-powered web development tool for academics. Build professional websites throu
 
 **Frontend:** SvelteKit 5, Tailwind CSS v4, Monaco Editor
 **Backend:** Express 5, Claude Agent SDK, MCP Tools
-**AI:** Claude 3.5 Sonnet with interactive approval workflow
+**AI:** Claude Sonnet 4.5 with interactive approval workflow
 
 ## Quick Start
 
@@ -125,4 +125,4 @@ MIT
 
 ## Acknowledgments
 
-Built with Anthropic's Claude Agent SDK and Claude 3.5 Sonnet. Inspired by Vercel's v0.
+Built with Anthropic's Claude Agent SDK and Claude Sonnet 4.5. Inspired by Vercel's v0.
