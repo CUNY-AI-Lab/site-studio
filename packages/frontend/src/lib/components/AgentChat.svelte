@@ -557,37 +557,7 @@
 		{#if messages.length === 0}
 			<div class="welcome">
 				<h3>Let's Build Your Site</h3>
-				<p>Work with the agent to customize your website. Try one of these:</p>
-				<div class="suggestions">
-					<Badge
-						variant="outline"
-						class="suggestion-badge"
-						onclick={() => { input = 'Add a dark mode toggle'; sendMessage(); }}
-					>
-						Add a dark mode toggle
-					</Badge>
-					<Badge
-						variant="outline"
-						class="suggestion-badge"
-						onclick={() => { input = 'Create a contact form'; sendMessage(); }}
-					>
-						Create a contact form
-					</Badge>
-					<Badge
-						variant="outline"
-						class="suggestion-badge"
-						onclick={() => { input = 'Add an image gallery'; sendMessage(); }}
-					>
-						Add an image gallery
-					</Badge>
-					<Badge
-						variant="outline"
-						class="suggestion-badge"
-						onclick={() => { input = 'Improve the navigation menu'; sendMessage(); }}
-					>
-						Improve navigation
-					</Badge>
-				</div>
+				<p>Describe what you'd like to create or change.</p>
 			</div>
 		{:else}
 			{#each messages as message}
@@ -630,7 +600,7 @@
 				type="text"
 				bind:value={input}
 				onkeydown={handleKeyDown}
-				placeholder="Ask a follow-up..."
+				placeholder={messages.length > 0 ? "Ask a follow-up..." : "Describe what you'd like to build..."}
 				disabled={isLoading}
 				class="input-field"
 			/>
@@ -713,29 +683,7 @@
 
 	.welcome p {
 		color: var(--color-text-secondary);
-		margin-bottom: 1.5rem;
-	}
-
-	.suggestions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-		justify-content: center;
-		max-width: 400px;
-		margin: 0 auto;
-	}
-
-	:global(.suggestion-badge) {
-		cursor: pointer;
-		transition: all 0.2s;
-		font-size: 0.875rem;
-		padding: 0.5rem 1rem;
-	}
-
-	:global(.suggestion-badge:hover) {
-		background: hsl(var(--accent));
-		color: hsl(var(--accent-foreground));
-		border-color: hsl(var(--accent));
+		margin-bottom: 0;
 	}
 
 	.message {
