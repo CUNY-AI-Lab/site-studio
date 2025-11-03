@@ -1152,13 +1152,13 @@ app.use('/preview/:id', (req, res, next) => {
 });
 
 /**
- * GET /sites/:userId/:slug/*
+ * GET /sites/:userId/:slug/*splat
  * Serve published project sites
  */
-app.get('/sites/:userId/:slug/*', async (req, res) => {
+app.get('/sites/:userId/:slug/*splat', async (req, res) => {
   try {
     const { userId, slug } = req.params;
-    const filePath = (req.params as any)['0'] || 'index.html';
+    const filePath = (req.params as any)['splat'] || 'index.html';
 
     // Find all projects for this user
     const projects = await storage.listProjects(userId);
