@@ -11,39 +11,8 @@ primary_region = "ord"
   PORT = "3001"
   NODE_ENV = "production"
 
-[[services]]
-  internal_port = 3001
-  protocol = "tcp"
-
-  [services.concurrency]
-    type = "requests"
-    soft = 50
-    hard = 100
-
-  [[services.ports]]
-    handlers = ["http"]
-    port = 80
-
-  [[services.ports]]
-    handlers = ["tls", "http"]
-    port = 443
-
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "30s"
-    restart_limit = 0
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "30s"
-    method = "GET"
-    path = "/"
-    protocol = "http"
-    tls_skip_verify = false
-
 [http_service]
+  internal_port = 3001
   auto_start_machines = true
   auto_stop_machines = true
   force_https = true

@@ -1,4 +1,6 @@
-const API_BASE = '/api';
+import { resolvePath } from '$lib/utils/paths';
+
+const API_BASE = resolvePath('/api');
 
 export interface Project {
 	id: string;

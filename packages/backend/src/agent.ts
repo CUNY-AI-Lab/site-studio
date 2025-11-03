@@ -251,20 +251,10 @@ export async function runSiteAgent(
     tools: allTools,
   });
 
-  // Query options
+  // Query options for standalone server with direct API calls
   const queryOptions: any = {
-    // Use bypassPermissions since sandboxing is handled at the OS level
-    // The sandbox runtime ensures file/network isolation
+    // Use bypassPermissions for standalone Express server (no interactive prompts)
     permissionMode: 'bypassPermissions',
-    // Required to prevent SDK from spawning Claude Code CLI
-    // When true, SDK uses direct API calls instead of subprocess
-    allowDangerouslySkipPermissions: true,
-    // Explicitly set path to Claude Code executable
-    pathToClaudeCodeExecutable: '/home/zweb/.local/bin/claude',
-    // Capture stderr to see Claude Code errors
-    stderr: (data: string) => {
-      console.error('Claude Code stderr:', data);
-    },
     systemPrompt: SITE_BUILDER_PROMPT,
     mcpServers: {
       'site-studio': server,

@@ -1031,6 +1031,9 @@ app.use('/preview/:id', (req, res, next) => {
 // Start server
 // Serve frontend build (static) if present
 try {
+  // Path works for both dev and production since directory structure is the same
+  // __dirname = /app/packages/backend/dist (prod) or <repo>/packages/backend/dist (dev)
+  // ../../frontend/build resolves to /app/packages/frontend/build (prod) or <repo>/packages/frontend/build (dev)
   const FRONTEND_BUILD_DIR = path.join(__dirname, '../../frontend/build');
   await fs.access(FRONTEND_BUILD_DIR);
 
@@ -1047,7 +1050,8 @@ try {
   }));
 
   // SPA fallback (avoid capturing API and preview routes)
-  app.get('*', (req, res, next) => {
+  // Express 5 requires named wildcards, so we use /*splat
+  app.get('/*splat', (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/preview')) return next();
     res.sendFile(path.join(FRONTEND_BUILD_DIR, 'index.html'));
   });

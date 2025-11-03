@@ -34,11 +34,12 @@ body {
 .timeline-container {
     max-width: 1400px;
     margin: 3rem auto;
-    padding: 0 2rem;
+    padding: 2rem;
     background: white;
     border-radius: 1rem;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     overflow: hidden;
+    border: 1px solid #e2e8f0;
 }
 
 /* Override TimelineJS default styles for better appearance */
@@ -46,30 +47,88 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
-/* Customize timeline navigation */
-:global(.tl-timeline) {
-    border-radius: 0.5rem;
+/* Timeline container - darker background for navigation */
+.tl-timenav {
+    background-color: #334155 !important;
+    border-top: 2px solid #1e293b !important;
 }
 
-:global(.tl-timenav) {
-    background-color: #f1f5f9 !important;
+/* Timeline axis (the horizontal line with years) */
+.tl-timeaxis {
+    background-color: #475569 !important;
+    height: 4px !important;
 }
 
-:global(.tl-timemarker) {
-    border-radius: 0.25rem !important;
+.tl-timeaxis-tick {
+    background-color: #64748b !important;
+    border: none !important;
 }
 
-:global(.tl-timemarker .tl-timemarker-content-container .tl-timemarker-content .tl-timemarker-text h2.tl-headline) {
-    font-weight: 600 !important;
+/* Year labels on timeline */
+.tl-timeaxis-content-container {
+    background-color: transparent !important;
 }
 
-:global(.tl-slide-content-container) {
+.tl-timeaxis-content-container .tl-timeaxis-content {
+    background-color: #1e293b !important;
+    padding: 4px 8px !important;
+    border-radius: 4px !important;
+}
+
+.tl-timeaxis-text {
+    color: white !important;
+    font-weight: 700 !important;
+    font-size: 12px !important;
+}
+
+/* Timeline markers (the boxes on the timeline) */
+.tl-timemarker {
+    border-radius: 4px !important;
+}
+
+.tl-timemarker .tl-timemarker-content-container {
+    background-color: #667eea !important;
+    border: 2px solid #5568d3 !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3) !important;
+}
+
+.tl-timemarker .tl-timemarker-content-container .tl-timemarker-content {
+    padding: 6px 10px !important;
+}
+
+.tl-timemarker .tl-timemarker-content-container .tl-timemarker-content .tl-timemarker-text h2.tl-headline {
+    font-weight: 700 !important;
+    color: white !important;
+    font-size: 13px !important;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Active marker */
+.tl-timemarker-active .tl-timemarker-content-container {
+    background-color: #f59e0b !important;
+    border-color: #d97706 !important;
+    transform: scale(1.1) !important;
+}
+
+/* Timeline navigation background */
+.tl-timenav-container {
+    background-color: #334155 !important;
+}
+
+/* Main slide content */
+.tl-slide-content-container {
     padding: 2rem !important;
 }
 
-:global(.tl-text-content) {
+.tl-text-content {
     font-size: 1.125rem !important;
     line-height: 1.8 !important;
+    color: #1e293b !important;
+}
+
+.tl-headline {
+    color: #1e293b !important;
+    font-weight: 700 !important;
 }
 
 .footer {

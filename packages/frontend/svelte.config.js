@@ -8,7 +8,13 @@ const config = {
 	kit: {
 		adapter: adapter({
 			fallback: 'index.html'
-		})
+		}),
+		// Base path for deployment under a subdirectory
+		// Set PUBLIC_BASE_PATH environment variable to configure (e.g., '/site-studio')
+		// Leave empty or '/' for root deployment
+		paths: {
+			base: process.env.PUBLIC_BASE_PATH || ''
+		}
 	}
 };
 

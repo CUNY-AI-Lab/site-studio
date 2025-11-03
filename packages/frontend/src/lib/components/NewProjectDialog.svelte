@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { createProject, fetchTemplateCategories, type TemplateCategory, type TemplateMetadata } from '$lib/api/projects';
+	import { base } from '$app/paths';
+	import { createProject, fetchProjects, fetchTemplateCategories, type TemplateCategory, type TemplateMetadata } from '$lib/api/projects';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Input from '$lib/components/ui/input/input.svelte';
@@ -60,22 +61,50 @@
 		}
 	});
 
+	// Get the next sequential number for a template
+	async function getNextNumber(templateId: string): Promise<number> {
+		try {
+			const projects = await fetchProjects();
+			const prefix = `${templateId}-`;
+
+			// Find all projects that start with this template name
+			const matchingProjects = projects.filter(p => p.name.startsWith(prefix));
+
+			// Extract numbers and find the highest
+			let maxNumber = 0;
+			for (const project of matchingProjects) {
+				const match = project.name.match(new RegExp(`^${templateId}-(\\d+)$`));
+				if (match) {
+					const num = parseInt(match[1], 10);
+					if (num > maxNumber) maxNumber = num;
+				}
+			}
+
+			return maxNumber + 1;
+		} catch (error) {
+			console.error('Error fetching projects for numbering:', error);
+			return 1; // Default to 1 if we can't fetch
+		}
+	}
+
 	async function handleCreate() {
 		if (!selectedTemplate || isCreating) return;
 
 		isCreating = true;
 
 		try {
-			// Generate project name if not provided
-			const timestamp = Date.now().toString(36);
-			const random = Math.random().toString(36).substring(2, 7);
-			const name = projectName.trim() || `${selectedTemplate.id}-${timestamp}${random}`;
+			// Generate project name if not provided - use sequential numbering
+			let name = projectName.trim();
+			if (!name) {
+				const nextNumber = await getNextNumber(selectedTemplate.id);
+				name = `${selectedTemplate.id}-${nextNumber}`;
+			}
 
 			// Create the project with template
 			const project = await createProject(name, selectedTemplate.id);
 
 			// Navigate to the editor
-			goto(`/editor/${project.id}`);
+			goto(`${base}/editor/${project.id}`);
 
 			// Close dialog and notify success
 			onOpenChange(false);
@@ -88,12 +117,12 @@
 		}
 	}
 
-	function selectTemplate(template: TemplateMetadata) {
+	async function selectTemplate(template: TemplateMetadata) {
 		selectedTemplate = template;
-		// Auto-suggest project name based on template
+		// Auto-suggest project name based on template with sequential numbering
 		if (!projectName) {
-			const timestamp = Date.now().toString(36).substring(0, 4);
-			projectName = `${template.id}-${timestamp}`;
+			const nextNumber = await getNextNumber(template.id);
+			projectName = `${template.id}-${nextNumber}`;
 		}
 	}
 

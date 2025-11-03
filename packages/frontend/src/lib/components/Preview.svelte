@@ -2,13 +2,14 @@
     import { RefreshCw } from 'lucide-svelte';
     import { toPng } from 'html-to-image';
     import { uploadThumbnail } from '$lib/api/projects';
+    import { resolvePath } from '$lib/utils/paths';
 
     let { projectId, onRefresh }: { projectId: string; onRefresh?: () => void } = $props();
 
     let iframe1: HTMLIFrameElement;
     let iframe2: HTMLIFrameElement;
     let showIframe1 = $state(true);
-    let previewUrl = $derived(`/preview/${projectId}/index.html`);
+    let previewUrl = $derived(resolvePath(`/preview/${projectId}/index.html`));
     let refreshKey = $state(0);
 
     // Simple throttle to avoid frequent uploads
@@ -50,6 +51,7 @@
             const dataUrl = await toPng(root, {
                 cacheBust: true,
                 pixelRatio: 1,
+                skipFonts: true, // Skip external fonts to avoid CORS errors with CDN stylesheets
                 // Prefer viewport-like captures; full page can be huge
                 // width/height omitted to use node size
             });

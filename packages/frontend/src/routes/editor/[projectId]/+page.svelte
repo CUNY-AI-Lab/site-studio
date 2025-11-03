@@ -2,14 +2,17 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
+	import { resolvePath } from '$lib/utils/paths';
 	import CodeView from '$lib/components/CodeView.svelte';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose } from 'lucide-svelte';
-	import { fetchProjects, type Project } from '$lib/api/projects';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
+	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
+	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
 
 	let previewComponent: Preview;
@@ -21,11 +24,17 @@
 	let fileContent = $state('');
 	let files = $state([]);
 	let allProjects = $state<Project[]>([]);
+	let currentProject = $state<Project | null>(null);
 
 	// Panel collapse state
 	let isChatCollapsed = $state(false);
 	let isCodeCollapsed = $state(true); // Start collapsed
 	let isDragging = $state(false);
+
+	// Dialog states
+	let showRenameDialog = $state(false);
+	let showDeleteDialog = $state(false);
+	let publishingProjectId = $state<string | null>(null);
 
 	function handleDragChange(dragging: boolean) {
 		isDragging = dragging;
@@ -39,6 +48,8 @@
 	async function loadAllProjects() {
 		try {
 			allProjects = await fetchProjects();
+			// Set current project from the loaded projects
+			currentProject = allProjects.find(p => p.id === projectId) || null;
 		} catch (error) {
 			console.error('Error loading projects:', error);
 		}
@@ -49,7 +60,7 @@
 
 		try {
 			console.log('Loading files for project:', projectId);
-			const response = await fetch(`/api/projects/${projectId}/files`);
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/files`));
 			if (!response.ok) throw new Error('Failed to load files');
 
 			const data = await response.json();
@@ -65,7 +76,7 @@
 
 		try {
 			console.log('Loading file:', filePath);
-			const response = await fetch(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`);
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`));
 			if (!response.ok) throw new Error('Failed to load file');
 
 			const data = await response.json();
@@ -88,7 +99,7 @@
 			isSaving = true;
 			console.log('Saving file:', currentFile);
 
-			const response = await fetch(`/api/projects/${projectId}/file`, {
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -151,8 +162,70 @@
         isCodeCollapsed = !isCodeCollapsed;
     }
 
+	function handleRenameProject() {
+		if (!currentProject) return;
+		showRenameDialog = true;
+	}
+
+	function handleDeleteProject() {
+		if (!currentProject) return;
+		showDeleteDialog = true;
+	}
+
+	async function handlePublishProject() {
+		if (!currentProject) return;
+		try {
+			publishingProjectId = currentProject.id;
+			const result = await publishProject(currentProject.id);
+
+			// Update the current project
+			currentProject = { ...currentProject, published: true, publishedUrl: result.url };
+			// Update in allProjects list too
+			allProjects = allProjects.map(p =>
+				p.id === currentProject.id ? currentProject : p
+			);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to publish project');
+		} finally {
+			publishingProjectId = null;
+		}
+	}
+
+	async function handleUnpublishProject() {
+		if (!currentProject) return;
+		try {
+			publishingProjectId = currentProject.id;
+			await unpublishProject(currentProject.id);
+
+			// Update the current project
+			currentProject = { ...currentProject, published: false, publishedUrl: undefined };
+			// Update in allProjects list too
+			allProjects = allProjects.map(p =>
+				p.id === currentProject.id ? currentProject : p
+			);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to unpublish project');
+		} finally {
+			publishingProjectId = null;
+		}
+	}
+
+	function openPublishedSite(url: string) {
+		window.open(url, '_blank');
+	}
+
 
 </script>
+
+<!-- Dialogs -->
+<ProjectDialogs
+	bind:showRenameDialog
+	bind:showDeleteDialog
+	selectedProject={currentProject}
+	onRenameOpenChange={(open) => (showRenameDialog = open)}
+	onDeleteOpenChange={(open) => (showDeleteDialog = open)}
+	onSuccess={loadAllProjects}
+/>
 
 <div class="app">
 	<!-- Toggle buttons for collapsed panels -->
@@ -182,37 +255,90 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<h1 class="logo">🎨 Site Studio</h1>
-                    <Button variant="ghost" size="sm" href="/">
+                    <Button variant="ghost" size="sm" href="{base || '/'}">
                         <LayoutDashboard size={18} />
                     </Button>
                 </div>
-					<DropdownMenu.Root>
-						<DropdownMenu.Trigger asChild>
-							{#snippet child({ props })}
-								<button {...props} class="project-selector">
-									<span class="project-name">{projectId}</span>
-									<ChevronDown size={16} class="chevron" />
-								</button>
-							{/snippet}
-						</DropdownMenu.Trigger>
-						<DropdownMenu.Content align="start" class="project-menu">
-							{#if allProjects.length > 0}
-								{#each allProjects as project (project.id)}
-									<DropdownMenu.Item
-										onclick={() => goto(`/editor/${project.id}`)}
-										class={project.id === projectId ? 'active-project' : ''}
-									>
-										{project.name}
-										{#if project.id === projectId}
-											<span class="current-indicator">•</span>
-										{/if}
+					<div class="project-selectors">
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger asChild>
+								{#snippet child({ props })}
+									<button {...props} class="project-selector">
+										<span class="project-name">{projectId}</span>
+										<ChevronDown size={16} class="chevron" />
+									</button>
+								{/snippet}
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Content align="start" class="project-menu">
+								{#if allProjects.length > 0}
+									{#each allProjects as project (project.id)}
+										<DropdownMenu.Item
+											onclick={() => goto(`${base}/editor/${project.id}`)}
+											class={project.id === projectId ? 'active-project' : ''}
+										>
+											{project.name}
+											{#if project.id === projectId}
+												<span class="current-indicator">•</span>
+											{/if}
+										</DropdownMenu.Item>
+									{/each}
+								{:else}
+									<DropdownMenu.Item disabled>No other projects</DropdownMenu.Item>
+								{/if}
+							</DropdownMenu.Content>
+						</DropdownMenu.Root>
+
+						<!-- Project Options Menu -->
+						{#if currentProject}
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger asChild>
+									{#snippet child({ props })}
+										<Button
+											{...props}
+											variant="ghost"
+											size="icon-sm"
+											class="project-options-button"
+										>
+											<MoreVertical size={16} />
+										</Button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content align="end">
+									{#if currentProject.published && currentProject.publishedUrl}
+										<DropdownMenu.Item onclick={() => openPublishedSite(currentProject.publishedUrl!)}>
+											<ExternalLink size={14} />
+											<span>View Published Site</span>
+										</DropdownMenu.Item>
+										<DropdownMenu.Item
+											onclick={handleUnpublishProject}
+											disabled={publishingProjectId === currentProject.id}
+										>
+											<GlobeLock size={14} />
+											<span>{publishingProjectId === currentProject.id ? 'Unpublishing...' : 'Unpublish'}</span>
+										</DropdownMenu.Item>
+									{:else}
+										<DropdownMenu.Item
+											onclick={handlePublishProject}
+											disabled={publishingProjectId === currentProject.id}
+										>
+											<Globe size={14} />
+											<span>{publishingProjectId === currentProject.id ? 'Publishing...' : 'Publish'}</span>
+										</DropdownMenu.Item>
+									{/if}
+									<DropdownMenu.Separator />
+									<DropdownMenu.Item onclick={handleRenameProject}>
+										Rename
 									</DropdownMenu.Item>
-								{/each}
-							{:else}
-								<DropdownMenu.Item disabled>No other projects</DropdownMenu.Item>
-							{/if}
-						</DropdownMenu.Content>
-					</DropdownMenu.Root>
+									<DropdownMenu.Item
+										onclick={handleDeleteProject}
+										variant="destructive"
+									>
+										Delete
+									</DropdownMenu.Item>
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
+						{/if}
+					</div>
 				</div>
 				<div class="chat-wrapper">
 					<AgentChat {projectId} onUpdate={onAgentUpdate} />
@@ -348,6 +474,12 @@
 		margin-bottom: 0;
 	}
 
+	.project-selectors {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+
 	.project-selector {
 		display: flex;
 		align-items: center;
@@ -357,13 +489,17 @@
 		border: 1px solid var(--color-border);
 		border-radius: 0.375rem;
 		cursor: pointer;
-		width: 100%;
+		flex: 1;
 		transition: all 0.2s;
 	}
 
 	.project-selector:hover {
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-primary);
+	}
+
+	:global(.project-options-button) {
+		flex-shrink: 0;
 	}
 
 	.project-name {

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge';
 	import { Send, Loader2, Wrench, X, Paperclip } from 'lucide-svelte';
+	import { resolvePath } from '$lib/utils/paths';
 	import PlanApprovalCard from './PlanApprovalCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
@@ -56,7 +57,7 @@
 		const formData = new FormData();
 		formData.append('file', file);
 
-		const response = await fetch(`/api/projects/${projectId}/upload`, {
+		const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
 			method: 'POST',
 			body: formData
 		});
@@ -129,7 +130,7 @@
 		scrollToBottom();
 
 		try {
-			const response = await fetch('/api/query', {
+			const response = await fetch(resolvePath('/api/query'), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
@@ -329,7 +330,7 @@
 		pendingPlan = null;
 
 		try {
-			const response = await fetch('/api/query/approve', {
+			const response = await fetch(resolvePath('/api/query/approve'), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({

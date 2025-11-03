@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
+	import { resolvePath } from '$lib/utils/paths';
 
 	interface FileNode {
 		name: string;
@@ -34,7 +35,7 @@
 			const formData = new FormData();
 			formData.append('file', file);
 
-			const response = await fetch(`/api/projects/${projectId}/upload`, {
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
 				method: 'POST',
 				body: formData
 			});
@@ -56,7 +57,7 @@
 
 	async function handleDownload(filePath: string) {
 		try {
-			const response = await fetch(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`);
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`));
 
 			if (!response.ok) throw new Error('Download failed');
 
@@ -80,7 +81,7 @@
 		if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
 
 		try {
-			const response = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`, {
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`), {
 				method: 'DELETE'
 			});
 
@@ -109,7 +110,7 @@
 			pathParts[pathParts.length - 1] = newName;
 			const newPath = pathParts.join('/');
 
-			const response = await fetch(`/api/projects/${projectId}/files/rename`, {
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/files/rename`), {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ oldPath: filePath, newPath })

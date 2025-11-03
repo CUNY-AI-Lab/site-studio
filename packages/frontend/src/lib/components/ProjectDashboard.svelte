@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -36,7 +37,7 @@
 	}
 
 	function openProject(projectId: string) {
-		goto(`/editor/${projectId}`);
+		goto(`${base}/editor/${projectId}`);
 	}
 
 	function handleNewProject() {
