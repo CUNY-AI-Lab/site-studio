@@ -935,6 +935,33 @@ app.post('/api/query/approve', async (req, res) => {
 });
 
 /**
+ * Add cache-busting version parameters to local asset references in HTML
+ */
+function addCacheBusterToHTML(html: string, version?: string): string {
+  const v = version || Date.now().toString();
+
+  // Replace local CSS references: href="styles.css" -> href="styles.css?v=123"
+  html = html.replace(
+    /(<link[^>]*href=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
+    `$1$2?v=${v}$3`
+  );
+
+  // Replace local JS references: src="script.js" -> src="script.js?v=123"
+  html = html.replace(
+    /(<script[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
+    `$1$2?v=${v}$3`
+  );
+
+  // Replace local image references: src="image.png" -> src="image.png?v=123"
+  html = html.replace(
+    /(<img[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
+    `$1$2?v=${v}$3`
+  );
+
+  return html;
+}
+
+/**
  * Serve project files for preview
  * Only serves files from the authenticated user's project
  * Supports internal auth for thumbnail generation
@@ -981,7 +1008,7 @@ app.use('/preview/:id', (req, res, next) => {
         return;
       }
 
-      const buffer = await storage.readFileBuffer(ownerId, projectId, filePath);
+      let buffer = await storage.readFileBuffer(ownerId, projectId, filePath);
 
       // Set content type based on file extension
       const ext = path.extname(filePath).toLowerCase();
@@ -1010,6 +1037,15 @@ app.use('/preview/:id', (req, res, next) => {
       res.setHeader('Expires', '0');
       // Remove ETag to prevent 304 Not Modified responses
       res.removeHeader('ETag');
+
+      // If HTML file, add cache-busting to asset references
+      if (ext === '.html') {
+        const version = req.query.v as string;
+        const htmlContent = buffer.toString('utf-8');
+        const rewrittenHTML = addCacheBusterToHTML(htmlContent, version);
+        buffer = Buffer.from(rewrittenHTML, 'utf-8');
+      }
+
       res.send(buffer);
     } catch (error: any) {
       console.error(`Preview error for ${projectId}/${filePath}:`, error);
@@ -1020,8 +1056,7 @@ app.use('/preview/:id', (req, res, next) => {
       }
     }
   } else {
-    // For filesystem, use express.static
-    // Find the project owner
+    // For filesystem, manually serve files with HTML rewriting
     const ownerId = await storage.findProjectOwner(projectId);
     if (!ownerId) {
       res.status(404).send('Project not found');
@@ -1029,18 +1064,67 @@ app.use('/preview/:id', (req, res, next) => {
     }
 
     const projectPath = getProjectPath(ownerId, projectId);
-    express.static(projectPath, {
-      maxAge: 0,
-      etag: false,
-      setHeaders: (res) => {
-        // Allow preview iframe to load
-        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-        // Disable caching to ensure preview shows latest changes
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-      },
-    })(req, res, next);
+    let filePath = req.path.slice(1); // Remove leading slash
+
+    // Default to index.html for directory requests
+    if (!filePath || filePath.endsWith('/')) {
+      filePath = path.join(filePath, 'index.html');
+    }
+
+    // Security: prevent directory traversal
+    if (filePath.includes('..')) {
+      res.status(403).send('Forbidden');
+      return;
+    }
+
+    const fullPath = path.join(projectPath, filePath);
+
+    try {
+      const buffer = await fs.readFile(fullPath);
+      const ext = path.extname(filePath).toLowerCase();
+
+      const contentTypes: Record<string, string> = {
+        '.html': 'text/html',
+        '.css': 'text/css',
+        '.js': 'application/javascript',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon',
+      };
+
+      const contentType = contentTypes[ext] || 'application/octet-stream';
+      const isTextType = contentType.startsWith('text/') || contentType.includes('javascript') || contentType.includes('json');
+
+      res.setHeader('Content-Type', isTextType ? `${contentType}; charset=utf-8` : contentType);
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.removeHeader('ETag');
+
+      let responseBuffer = buffer;
+
+      // If HTML file, add cache-busting to asset references
+      if (ext === '.html') {
+        const version = req.query.v as string;
+        const htmlContent = buffer.toString('utf-8');
+        const rewrittenHTML = addCacheBusterToHTML(htmlContent, version);
+        responseBuffer = Buffer.from(rewrittenHTML, 'utf-8');
+      }
+
+      res.send(responseBuffer);
+    } catch (error: any) {
+      console.error(`Preview error for ${projectId}/${filePath}:`, error);
+      if (error.code === 'ENOENT') {
+        res.status(404).send('Not Found');
+      } else {
+        res.status(500).send('Internal Server Error');
+      }
+    }
   }
 });
 
