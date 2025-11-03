@@ -959,6 +959,7 @@ app.use('/preview/:id', (req, res, next) => {
 
   if (process.env.STORAGE_TYPE === 'r2') {
     // For R2, serve files manually
+    let filePath = ''; // Declare outside try block for error logging
     try {
       // Find the project owner
       const ownerId = await storage.findProjectOwner(projectId);
@@ -967,7 +968,7 @@ app.use('/preview/:id', (req, res, next) => {
         return;
       }
 
-      let filePath = req.path.slice(1); // Remove leading slash
+      filePath = req.path.slice(1); // Remove leading slash
 
       // Default to index.html for directory requests
       if (!filePath || filePath.endsWith('/')) {
@@ -1001,8 +1002,13 @@ app.use('/preview/:id', (req, res, next) => {
 
       res.setHeader('Content-Type', contentType);
       res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      // Disable caching to ensure preview shows latest changes
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.send(buffer);
     } catch (error: any) {
+      console.error(`Preview error for ${projectId}/${filePath}:`, error);
       if (error.message.includes('not found')) {
         res.status(404).send('Not Found');
       } else {
@@ -1020,9 +1026,15 @@ app.use('/preview/:id', (req, res, next) => {
 
     const projectPath = getProjectPath(ownerId, projectId);
     express.static(projectPath, {
+      maxAge: 0,
+      etag: false,
       setHeaders: (res) => {
         // Allow preview iframe to load
         res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        // Disable caching to ensure preview shows latest changes
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
       },
     })(req, res, next);
   }
