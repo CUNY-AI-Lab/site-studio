@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { resolvePath } from '$lib/utils/paths';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -149,7 +150,7 @@
 					<button class="project-card-button" onclick={() => openProject(project.id)}>
 						{#if project.thumbnailUrl}
 							<div class="project-thumbnail">
-								<img src={project.thumbnailUrl} alt={project.name} />
+								<img src={resolvePath(project.thumbnailUrl)} alt={project.name} />
 							</div>
 						{:else}
 							<div class="project-icon">🎨</div>
