@@ -21,6 +21,7 @@ export interface ProjectMetadata {
   publishedAt?: string;
   unpublishedAt?: string;
   thumbnailUrl?: string;
+  slug?: string; // URL-friendly slug for published sites
 }
 
 /**

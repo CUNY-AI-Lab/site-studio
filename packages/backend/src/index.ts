@@ -29,6 +29,19 @@ const PORT = process.env.PORT || 3001;
 // NOTE: This is only used for filesystem storage mode
 const SANDBOXES_DIR = process.env.SANDBOXES_DIR || path.join(__dirname, '../sandboxes');
 
+/**
+ * Convert a string to a URL-friendly slug
+ * Examples: "My Portfolio" → "my-portfolio", "Research 2025!" → "research-2025"
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '') // Remove special characters
+    .replace(/[\s_-]+/g, '-') // Replace spaces, underscores with single hyphen
+    .replace(/^-+|-+$/g, ''); // Remove leading/trailing hyphens
+}
+
 // Middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
@@ -284,17 +297,27 @@ app.post('/api/projects/:id/publish', async (req, res) => {
 
     // Get current metadata
     const metadata = await storage.getProjectMetadata(userId, id);
+    if (!metadata) {
+      return res.status(404).json({ error: 'Project metadata not found' });
+    }
+
+    // Generate or reuse slug
+    const slug = metadata.slug || slugify(metadata.name || id);
+
+    // Get public domain from env or construct from request
+    const publicDomain = process.env.R2_PUBLIC_DOMAIN ||
+      `${req.protocol}://${req.get('host')}`;
 
     // Generate public URL
-    // Format: https://site-studio-publisher.{subdomain}.workers.dev/{userId}/{projectId}/
-    const workerSubdomain = process.env.WORKER_SUBDOMAIN || 'your-subdomain';
-    const publicUrl = `https://site-studio-publisher.${workerSubdomain}.workers.dev/${userId}/${id}/`;
+    // Format: https://tools.cuny.qzz.io/sites/{userId}/{slug}/
+    const publicUrl = `${publicDomain}/sites/${userId}/${slug}/`;
 
     // Update metadata
     await storage.updateProjectMetadata(userId, id, {
       published: true,
       publishedUrl: publicUrl,
       publishedAt: new Date().toISOString(),
+      slug, // Store slug for future use
     });
 
     res.json({
@@ -1128,6 +1151,84 @@ app.use('/preview/:id', (req, res, next) => {
   }
 });
 
+/**
+ * GET /sites/:userId/:slug/*
+ * Serve published project sites
+ */
+app.get('/sites/:userId/:slug/*', async (req, res) => {
+  try {
+    const { userId, slug } = req.params;
+    const filePath = (req.params as any)['0'] || 'index.html';
+
+    // Find all projects for this user
+    const projects = await storage.listProjects(userId);
+
+    // Find the project with matching slug
+    let projectId: string | null = null;
+    for (const pid of projects) {
+      const metadata = await storage.getProjectMetadata(userId, pid);
+      if (metadata?.slug === slug && metadata?.published) {
+        projectId = pid;
+        break;
+      }
+    }
+
+    if (!projectId) {
+      return res.status(404).send('Published site not found');
+    }
+
+    // Serve the file from storage
+    const fileExists = await storage.fileExists(userId, projectId, filePath);
+    if (!fileExists) {
+      // Try index.html for directory requests
+      if (!filePath.endsWith('.html')) {
+        const indexPath = filePath === 'index.html' ? 'index.html' : `${filePath}/index.html`;
+        const indexExists = await storage.fileExists(userId, projectId, indexPath);
+        if (indexExists) {
+          const content = await storage.readFile(userId, projectId, indexPath);
+          res.setHeader('Content-Type', 'text/html');
+          return res.send(content);
+        }
+      }
+      return res.status(404).send('Not found');
+    }
+
+    // Read and serve the file
+    const content = await storage.readFileBuffer(userId, projectId, filePath);
+
+    // Set appropriate content type
+    const ext = path.extname(filePath).toLowerCase();
+    const contentTypes: Record<string, string> = {
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.js': 'application/javascript',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+    };
+
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+
+    // Cache static assets
+    if (ext !== '.html') {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+
+    res.send(content);
+  } catch (error: any) {
+    console.error('Error serving published site:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
 // Start server
 // Serve frontend build (static) if present
 try {
@@ -1149,10 +1250,12 @@ try {
     },
   }));
 
-  // SPA fallback (avoid capturing API and preview routes)
+  // SPA fallback (avoid capturing API, preview, and published sites routes)
   // Express 5 requires named wildcards, so we use /*splat
   app.get('/*splat', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/preview')) return next();
+    if (req.path.startsWith('/api') || req.path.startsWith('/preview') || req.path.startsWith('/sites')) {
+      return next();
+    }
     res.sendFile(path.join(FRONTEND_BUILD_DIR, 'index.html'));
   });
   console.log('🪄 Serving frontend from', FRONTEND_BUILD_DIR);
