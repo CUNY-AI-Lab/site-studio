@@ -1161,10 +1161,10 @@ app.use('/preview/:id', (req, res, next) => {
 });
 
 /**
- * GET /sites/:userId/:slug/*splat
+ * GET /sites/:userId/:slug{/*splat}
  * Serve published project sites
  */
-app.get('/sites/:userId/:slug/*splat', async (req, res) => {
+app.get('/sites/:userId/:slug{/*splat}', async (req, res) => {
   try {
     const { userId, slug } = req.params;
     const filePath = (req.params as any)['splat'] || 'index.html';
