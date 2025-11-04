@@ -10,17 +10,22 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { runSiteAgent } from './agent.js';
 import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.js';
+import { errorHandler } from './middleware/error-handler.js';
 import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType, getFileTypeDescription } from './services/file-converter.js';
+import { validateEnvironment } from './config/env-validation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../.env') });
+
+// Validate environment configuration at startup
+validateEnvironment();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -1007,9 +1012,9 @@ app.use('/preview/:id', (req, res, next) => {
   // Check for internal auth header (for thumbnail generation)
   const internalAuthToken = req.headers['x-internal-auth'] as string;
   const internalUserId = req.headers['x-user-id'] as string;
-  const expectedToken = process.env.INTERNAL_AUTH_TOKEN || 'internal-secret-token';
+  const expectedToken = process.env.INTERNAL_AUTH_TOKEN;
 
-  if (internalAuthToken === expectedToken && internalUserId) {
+  if (expectedToken && internalAuthToken === expectedToken && internalUserId) {
     // Internal request from thumbnail service
     (req as any).user = { id: internalUserId };
     next();
@@ -1303,6 +1308,9 @@ try {
 } catch (e) {
   console.log('ℹ️ Frontend build not found; API-only mode');
 }
+
+// Global error handling middleware (must be registered last)
+app.use(errorHandler);
 
 app.listen(PORT as number, '0.0.0.0', () => {
   console.log(`🎨 Site Studio backend running on http://localhost:${PORT}`);

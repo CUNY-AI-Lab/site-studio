@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Build outputs
 dist/
@@ -37,3 +36,9 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+
+# Backup files
+*.backup
+*.bak
+*.old
+*.tmp
