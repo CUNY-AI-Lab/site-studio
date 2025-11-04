@@ -625,15 +625,15 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
     // Sanitize filename (preserve dots for extensions)
     const sanitized = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-    // Find available filename (add (1), (2), etc. on conflict)
+    // Find available filename (add _1, _2, etc. on conflict)
     let filename = sanitized;
     let counter = 1;
 
-    // Check if file exists, if so try with (1), (2), etc.
+    // Check if file exists, if so try with _1, _2, etc.
     while (await storage.fileExists(userId, projectId, filename)) {
       const ext = path.extname(sanitized);
       const base = path.basename(sanitized, ext);
-      filename = `${base} (${counter})${ext}`;
+      filename = `${base}_${counter}${ext}`;
       counter++;
     }
 
