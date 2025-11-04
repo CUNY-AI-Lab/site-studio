@@ -17,6 +17,8 @@ import { getStorage, initializeStorage } from './storage/index.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType, getFileTypeDescription } from './services/file-converter.js';
 import { validateEnvironment } from './config/env-validation.js';
+import { apiLimiter, agentLimiter, uploadLimiter } from './middleware/rate-limit.js';
+import { healthCheck, readinessCheck } from './routes/health.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,6 +57,10 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' })); // Increased for PDF attachments in chat
 app.use(cookieParser());
 
+// Health check endpoints (no auth or rate limiting required)
+app.get('/health', healthCheck);
+app.get('/health/ready', readinessCheck);
+
 /**
  * GET /api/templates
  * Get all template categories with metadata
@@ -71,6 +77,9 @@ app.get('/api/templates', (req, res) => {
 
 // Public auth endpoints (defined before authentication middleware)
 // (Optional) Auth endpoints were removed in favor of Cloudflare Access gating
+
+// Apply rate limiting to API routes
+app.use('/api', apiLimiter);
 
 // Apply authentication to all other API routes
 app.use('/api', authenticateUser);
@@ -111,7 +120,7 @@ function getProjectPath(userId: string, projectId: string): string {
  */
 app.get('/api/projects', async (req, res) => {
   try {
-    const authReq = req as AuthenticatedRequest;
+    const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
 
     const projectIds = await storage.listProjects(userId);
@@ -142,7 +151,7 @@ app.get('/api/projects', async (req, res) => {
  */
 app.post('/api/projects', async (req, res) => {
   try {
-    const authReq = req as AuthenticatedRequest;
+    const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { name, template } = req.body;
 
@@ -217,7 +226,8 @@ app.post('/api/projects', async (req, res) => {
  */
 app.patch('/api/projects/:id', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     const { name } = req.body;
 
@@ -264,7 +274,8 @@ app.patch('/api/projects/:id', async (req, res) => {
  */
 app.delete('/api/projects/:id', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Check if project exists
@@ -291,7 +302,8 @@ app.delete('/api/projects/:id', async (req, res) => {
  */
 app.post('/api/projects/:id/publish', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Check if project exists
@@ -341,7 +353,8 @@ app.post('/api/projects/:id/publish', async (req, res) => {
  */
 app.post('/api/projects/:id/unpublish', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Check if project exists
@@ -382,7 +395,8 @@ app.post('/api/projects/:id/unpublish', async (req, res) => {
 // Accept a client-generated thumbnail image and store it
 app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Check if project exists
@@ -424,7 +438,8 @@ app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res)
  */
 app.get('/api/projects/:id/thumbnail', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Check if project exists
@@ -458,7 +473,8 @@ app.get('/api/projects/:id/thumbnail', async (req, res) => {
  */
 app.get('/api/projects/:id/files', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
 
     // Get flat list of files from storage
@@ -539,7 +555,8 @@ app.get('/api/projects/:id/files', async (req, res) => {
  */
 app.get('/api/projects/:id/file', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     let filePath = req.query.path as string;
 
@@ -574,7 +591,8 @@ app.get('/api/projects/:id/file', async (req, res) => {
  */
 app.post('/api/projects/:id/file', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     let { path: filePath, content } = req.body;
 
@@ -616,9 +634,9 @@ app.post('/api/projects/:id/file', async (req, res) => {
  * POST /api/projects/:id/upload
  * Upload file(s) to a user's project
  */
-app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => {
+app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), async (req, res) => {
   try {
-    const authReq = req as AuthenticatedRequest;
+    const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { id: projectId } = req.params;
 
@@ -664,7 +682,8 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
  */
 app.get('/api/projects/:id/download', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     let filePath = req.query.path as string;
 
@@ -706,7 +725,8 @@ app.get('/api/projects/:id/download', async (req, res) => {
  */
 app.delete('/api/projects/:id/files', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     let filePath = req.query.path as string;
 
@@ -748,7 +768,8 @@ app.delete('/api/projects/:id/files', async (req, res) => {
  */
 app.put('/api/projects/:id/files/rename', async (req, res) => {
   try {
-    const userId = (req as any).user.id;
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
     const { id } = req.params;
     let { oldPath, newPath } = req.body;
 
@@ -810,9 +831,9 @@ app.put('/api/projects/:id/files/rename', async (req, res) => {
  * Stream agent responses via SSE
  * Supports 'plan' mode (shows proposed actions) or 'execute' mode (runs without asking)
  */
-app.post('/api/query', async (req, res) => {
+app.post('/api/query', agentLimiter, async (req, res) => {
   try {
-    const authReq = req as AuthenticatedRequest;
+    const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { prompt, projectId, sessionId, mode, uploadedFile } = req.body;
 
@@ -912,7 +933,7 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
  */
 app.post('/api/query/approve', async (req, res) => {
   try {
-    const authReq = req as AuthenticatedRequest;
+    const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { projectId, sessionId, approved } = req.body;
 
@@ -1016,7 +1037,10 @@ app.use('/preview/:id', (req, res, next) => {
 
   if (expectedToken && internalAuthToken === expectedToken && internalUserId) {
     // Internal request from thumbnail service
-    (req as any).user = { id: internalUserId };
+    (req as unknown as AuthenticatedRequest).user = {
+      id: internalUserId,
+      createdAt: new Date()
+    };
     next();
   } else {
     // Regular user request - require authentication
