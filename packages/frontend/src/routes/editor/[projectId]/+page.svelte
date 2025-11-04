@@ -15,6 +15,9 @@
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
 
+	// Reactive page title based on current project
+	let pageTitle = $derived(currentProject ? `${currentProject.name} - Site Studio` : 'Editor - Site Studio');
+
 	let previewComponent: Preview;
 	let chatPane: ReturnType<typeof Pane>;
 
@@ -216,6 +219,10 @@
 
 
 </script>
+
+<svelte:head>
+	<title>{pageTitle}</title>
+</svelte:head>
 
 <!-- Dialogs -->
 <ProjectDialogs
