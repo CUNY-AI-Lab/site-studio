@@ -1167,7 +1167,11 @@ app.use('/preview/:id', (req, res, next) => {
 app.get('/sites/:userId/:slug{/*splat}', async (req, res) => {
   try {
     const { userId, slug } = req.params;
-    const filePath = (req.params as any)['splat'] || 'index.html';
+    // Express may return splat as an array or string, ensure it's a string
+    const splatParam = (req.params as any)['splat'];
+    const filePath = Array.isArray(splatParam)
+      ? splatParam.join('/')
+      : (splatParam || 'index.html');
 
     // Find all projects for this user
     const projects = await storage.listProjects(userId);
