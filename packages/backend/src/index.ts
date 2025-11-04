@@ -345,12 +345,21 @@ app.post('/api/projects/:id/unpublish', async (req, res) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    // Update metadata
+    // Get current metadata to check if already published
+    const metadata = await storage.getProjectMetadata(userId, id);
+    if (!metadata?.published) {
+      return res.status(400).json({ error: 'Project is not currently published' });
+    }
+
+    // Update metadata to unpublish
+    // Note: Files remain in storage; access is prevented by checking published flag in /sites/ route
     await storage.updateProjectMetadata(userId, id, {
       published: false,
       publishedUrl: undefined,
       unpublishedAt: new Date().toISOString(),
     });
+
+    console.log(`[Unpublish] Project ${id} unpublished for user ${userId}`);
 
     res.json({
       success: true,
