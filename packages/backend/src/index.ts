@@ -89,7 +89,7 @@ const sandboxManager = getSandboxManager();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 32 * 1024 * 1024, // 32MB limit (matches PDF viewing limit)
   },
 });
 
@@ -1054,7 +1054,20 @@ app.use('/preview/:id', (req, res, next) => {
         '.jpeg': 'image/jpeg',
         '.gif': 'image/gif',
         '.svg': 'image/svg+xml',
+        '.webp': 'image/webp',
+        '.avif': 'image/avif',
         '.ico': 'image/x-icon',
+        '.pdf': 'application/pdf',
+        '.woff': 'font/woff',
+        '.woff2': 'font/woff2',
+        '.ttf': 'font/ttf',
+        '.eot': 'application/vnd.ms-fontobject',
+        '.otf': 'font/otf',
+        '.mp4': 'video/mp4',
+        '.webm': 'video/webm',
+        '.mp3': 'audio/mpeg',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
       };
 
       const contentType = contentTypes[ext] || 'application/octet-stream';
@@ -1221,10 +1234,20 @@ app.get('/sites/:userId/:slug{/*splat}', async (req, res) => {
       '.jpeg': 'image/jpeg',
       '.gif': 'image/gif',
       '.svg': 'image/svg+xml',
+      '.webp': 'image/webp',
+      '.avif': 'image/avif',
       '.ico': 'image/x-icon',
+      '.pdf': 'application/pdf',
       '.woff': 'font/woff',
       '.woff2': 'font/woff2',
       '.ttf': 'font/ttf',
+      '.eot': 'application/vnd.ms-fontobject',
+      '.otf': 'font/otf',
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
     };
 
     const contentType = contentTypes[ext] || 'application/octet-stream';
