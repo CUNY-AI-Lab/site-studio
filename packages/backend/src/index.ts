@@ -14,7 +14,7 @@ import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
-import { generateFilePrompt, isSupportedFileType } from './services/file-converter.js';
+import { generateFilePrompt, isSupportedFileType, getFileTypeDescription } from './services/file-converter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -639,7 +639,6 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
 
     // Write file directly to project using storage abstraction
     // This works for both filesystem and R2 storage
-    console.log(`[Upload] Uploading ${filename}, buffer type: ${typeof req.file.buffer}, isBuffer: ${Buffer.isBuffer(req.file.buffer)}, first bytes: ${req.file.buffer.slice(0, 4).toString('hex')}`);
     await storage.writeFile(userId, projectId, filename, req.file.buffer);
 
     res.json({
@@ -829,23 +828,29 @@ app.post('/api/query', async (req, res) => {
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
 
-    // Handle uploaded file if present - pass path to agent
+    // Handle uploaded file if present - tell agent to use view_file tool
     let enhancedPrompt = prompt;
 
     if (uploadedFile) {
-      // File is now stored directly in the project directory
       try {
         // Check if file type is supported
         if (!isSupportedFileType(uploadedFile)) {
           throw new Error('Unsupported file type');
         }
 
-        // Generate prompt with filename (agent needs relative path, not absolute)
-        enhancedPrompt = generateFilePrompt(prompt, uploadedFile, uploadedFile);
+        // Don't pre-write the file - let the agent use view_file tool to download it
+        // This matches the working flow when files have been in R2 for a while
+        const fileType = getFileTypeDescription(uploadedFile);
+
+        console.log(`[File Upload] ${fileType} ${uploadedFile} ready in R2, agent will use view_file tool`);
+
+        enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]
+
+The file is stored in R2 cloud storage. Please use the view_file tool with filename "${uploadedFile}" to download and analyze it.`;
+
       } catch (error: any) {
-        console.error('Error processing uploaded file:', error);
-        // Return error to user
-        res.status(400).json({ error: error.message });
+        console.error('Error preparing uploaded file:', error);
+        res.status(500).json({ error: error.message });
         return;
       }
     }

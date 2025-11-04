@@ -34,11 +34,14 @@ Returns a tree structure showing the project's file organization.`,
       directory: z.string().optional().describe('Subdirectory to list (defaults to project root)'),
     }).shape,
     async (params) => {
+      const startTime = Date.now();
       try {
         if (useStorage && userId && projectId) {
           // Use storage abstraction (R2 or filesystem)
           const prefix = params.directory || '';
+          const r2Start = Date.now();
           const files = await storage.listFiles(userId, projectId, prefix);
+          console.log(`[Tool:list_files] R2 listFiles took ${Date.now() - r2Start}ms`);
 
           // Build tree representation
           const lines: string[] = [];
@@ -80,6 +83,7 @@ Returns a tree structure showing the project's file organization.`,
 
           const treeLines = treeToLines(tree);
 
+          console.log(`[Tool:list_files] Total time: ${Date.now() - startTime}ms`);
           return {
             content: [{
               type: 'text' as const,
@@ -385,8 +389,8 @@ or updates it if it does. Parent directories are created automatically.`,
         // Ensure directory exists
         await fs.mkdir(localDir, { recursive: true });
 
-        // Write the buffer to local file
-        await fs.writeFile(localPath, buffer);
+        // Write the buffer to local file (explicit binary mode to preserve data integrity)
+        await fs.writeFile(localPath, buffer, { encoding: null });
 
         return {
           content: [{

@@ -262,11 +262,13 @@ export async function runSiteAgent(
     // Use bypassPermissions for standalone Express server (no interactive prompts)
     permissionMode: 'bypassPermissions',
     systemPrompt: SITE_BUILDER_PROMPT,
+    // Set higher maxThinkingTokens to give agent more thinking capacity
+    maxThinkingTokens: 8192,
     mcpServers: {
       'site-studio': server,
     },
     // Disable Claude Code's file-writing tools that don't work with R2 storage
-    // Keep Read tool - needed for viewing downloaded binaries after view_file
+    // Keep Read tool - it provides PDF extraction when using Direct Anthropic API (not AWS Bedrock)
     // Keep other useful tools like TodoWrite, AskUserQuestion, etc.
     disallowedTools: [
       'Edit',    // Use mcp__site-studio__edit_file instead
