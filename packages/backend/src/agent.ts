@@ -88,16 +88,54 @@ export async function runSiteAgent(
     mcpServers: {
       'site-studio': server,
     },
-    // Disable Claude Code's file-writing tools that don't work with R2 storage
-    // Keep Read tool - it provides PDF extraction when using Direct Anthropic API (not AWS Bedrock)
-    // Keep other useful tools like TodoWrite, AskUserQuestion, etc.
+    // SECURITY: Restrict agent to only site-building tools
+    //
+    // ALLOWED TOOLS:
+    // - MCP tools (mcp__site-studio__*) - our custom file/template operations
+    // - Read tool - for viewing uploaded PDFs/images
+    //
+    // ALL OTHER TOOLS ARE DISALLOWED to prevent:
+    // - Exposing system architecture to users (Bash, system commands)
+    // - Inappropriate web access (WebSearch, WebFetch)
+    // - Spawning uncontrolled agents (Task, Agent)
+    // - Accessing local filesystem directly (Glob, Grep, Edit, Write)
+    // - Revealing app internals (TodoWrite shows our task structure)
     disallowedTools: [
-      'Edit',    // Use mcp__site-studio__edit_file instead
-      'Write',   // Use mcp__site-studio__write_file instead
-      'Glob',    // Searches local filesystem (incompatible with R2)
-      'Grep',    // Searches local files (incompatible with R2)
+      // File system tools (incompatible with R2 storage, work on local filesystem)
+      'Edit',                // Use mcp__site-studio__edit_file instead
+      'Write',               // Use mcp__site-studio__write_file instead
+      'Glob',                // Searches local filesystem, not R2
+      'Grep',                // Searches local files, not R2
+
+      // System execution tools (SECURITY RISK - exposes system architecture to users)
+      'Bash',                // Can run arbitrary system commands, exposes OS details
+      'BashOutput',          // Related to Bash execution
+      'KillShell',           // Related to Bash process management
+
+      // Web access tools (inappropriate for site building, potential data leakage)
+      'WebSearch',           // Agent should not search the web
+      'WebFetch',            // Agent should not fetch external URLs
+
+      // Agent spawning tools (prevents uncontrolled agent recursion)
+      'Task',                // Can spawn other agents with different permissions
+      'SlashCommand',        // Can execute arbitrary slash commands
+      'Skill',               // Can execute arbitrary skills
+
+      // Other tools not needed for site building
+      'NotebookEdit',        // Jupyter notebooks not relevant to static sites
+
+      // App internals (would reveal our architecture to users)
+      'TodoWrite',           // Shows our internal task tracking structure
+      'AskUserQuestion',     // Agent should build sites, not ask meta-questions
     ],
   };
+
+  log.info({
+    userId,
+    projectId,
+    sessionId,
+    disallowedToolCount: queryOptions.disallowedTools.length,
+  }, 'Agent security restrictions applied');
 
   // Resume conversation if session ID provided
   if (sessionId) {
