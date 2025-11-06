@@ -28,6 +28,10 @@ import {
   querySchema,
   approvalSchema
 } from './middleware/validation.js';
+import { logger, getLogger, requestLogger } from './config/logger.js';
+import { fileUploadValidator } from './middleware/file-validation.js';
+
+const log = getLogger('app');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -376,7 +380,7 @@ app.post('/api/projects/:id/unpublish', async (req, res, next) => {
       unpublishedAt: new Date().toISOString(),
     });
 
-    console.log(`[Unpublish] Project ${id} unpublished for user ${userId}`);
+    log.info({ projectId: id, userId }, 'Project unpublished');
 
     res.json({
       success: true,
@@ -426,7 +430,7 @@ app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res,
       thumbnailUrl: `/api/projects/${id}/thumbnail`,
     });
   } catch (error) {
-    console.error('Thumbnail upload error:', error);
+    log.error({ error }, 'Thumbnail upload failed');
     res.status(500).json({ error: 'Failed to save thumbnail' });
   }
 });
@@ -461,7 +465,7 @@ app.get('/api/projects/:id/thumbnail', async (req, res, next) => {
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(thumbnailBuffer);
   } catch (error) {
-    console.error('Thumbnail retrieval error:', error);
+    log.error({ error }, 'Thumbnail retrieval failed');
     res.status(500).json({ error: 'Failed to retrieve thumbnail' });
   }
 });
@@ -623,7 +627,7 @@ app.post('/api/projects/:id/file', validateBody(saveFileSchema), async (req, res
  * POST /api/projects/:id/upload
  * Upload file(s) to a user's project
  */
-app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), async (req, res, next) => {
+app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), fileUploadValidator(), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -849,7 +853,7 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 The file is stored in R2 cloud storage. Please use the view_file tool with filename "${uploadedFile}" to download and analyze it.`;
 
       } catch (error) {
-        console.error('Error preparing uploaded file:', error);
+        log.error({ error }, 'Failed to prepare uploaded file');
         next(error);
         return;
       }
@@ -890,7 +894,7 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error) {
-    console.error('Query error:', error);
+    log.error({ error }, 'Agent query failed');
     const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {
@@ -961,7 +965,7 @@ app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, ne
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error) {
-    console.error('Approval error:', error);
+    log.error({ error }, 'Agent approval failed');
     const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {
@@ -1103,7 +1107,7 @@ app.use('/preview/:id', (req, res, next) => {
 
       res.send(buffer);
     } catch (error) {
-      console.error(`Preview error for ${projectId}/${filePath}:`, error);
+      log.error({ projectId, filePath, error }, 'Preview error');
       if (error instanceof Error && error.message.includes('not found')) {
         res.status(404).send('Not Found');
       } else {
@@ -1173,7 +1177,7 @@ app.use('/preview/:id', (req, res, next) => {
 
       res.send(responseBuffer);
     } catch (error) {
-      console.error(`Preview error for ${projectId}/${filePath}:`, error);
+      log.error({ projectId, filePath, error }, 'Preview error');
       if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         res.status(404).send('Not Found');
       } else {
@@ -1270,7 +1274,7 @@ app.get('/sites/:userId/:slug{/*splat}', async (req, res, next) => {
 
     res.send(content);
   } catch (error) {
-    console.error('Error serving published site:', error);
+    log.error({ error }, 'Failed to serve published site');
     res.status(500).send('Internal server error');
   }
 });
@@ -1304,16 +1308,19 @@ try {
     }
     res.sendFile(path.join(FRONTEND_BUILD_DIR, 'index.html'));
   });
-  console.log('🪄 Serving frontend from', FRONTEND_BUILD_DIR);
+  log.info({ path: FRONTEND_BUILD_DIR }, '🪄 Serving frontend');
 } catch (e) {
-  console.log('ℹ️ Frontend build not found; API-only mode');
+  log.info('ℹ️ Frontend build not found; API-only mode');
 }
+
+// HTTP request logging middleware
+app.use(requestLogger());
 
 // Global error handling middleware (must be registered last)
 app.use(errorHandler);
 
 app.listen(PORT as number, '0.0.0.0', () => {
-  console.log(`🎨 Site Studio backend running on http://localhost:${PORT}`);
-  console.log(`🔒 Sandboxed projects directory: ${SANDBOXES_DIR}`);
-  console.log(`🛡️  Multi-user isolation enabled`);
+  log.info({ port: PORT, host: '0.0.0.0' }, '🎨 Site Studio backend running');
+  log.info({ sandboxesDir: SANDBOXES_DIR }, '🔒 Sandboxed projects directory');
+  log.info('🛡️  Multi-user isolation enabled');
 });

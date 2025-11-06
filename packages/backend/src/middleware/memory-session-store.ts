@@ -5,12 +5,40 @@
  */
 
 import { ISessionStore, User, StoredSession } from './session-store.js';
+import { getLogger } from '../config/logger.js';
+
+const log = getLogger('session-store');
 
 export class MemorySessionStore implements ISessionStore {
   private sessions: Map<string, StoredSession>;
+  private cleanupInterval: NodeJS.Timeout;
 
   constructor() {
     this.sessions = new Map();
+
+    // Run cleanup every hour to prevent memory leaks
+    this.cleanupInterval = setInterval(() => {
+      this.cleanup().then((count) => {
+        if (count > 0) {
+          log.info({ cleanedSessions: count }, 'Cleaned up expired sessions');
+        }
+      }).catch((error) => {
+        log.error({ error }, 'Error during session cleanup');
+      });
+    }, 60 * 60 * 1000); // 1 hour
+
+    // Ensure cleanup runs even if process is shutting down
+    process.on('SIGTERM', () => this.destroy());
+    process.on('SIGINT', () => this.destroy());
+  }
+
+  /**
+   * Stop the cleanup interval (for graceful shutdown)
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
   }
 
   /**
