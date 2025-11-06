@@ -9,12 +9,12 @@ const __dirname = path.dirname(__filename);
 
 describe('FilesystemStorage', () => {
   let storage: FilesystemStorage;
-  const testDir = path.join(__dirname, '../../../../test-storage');
+  const testDir = path.join(__dirname, '../../../../test-storage', `test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const testUserId = 'test-user';
   const testProjectId = 'test-project';
 
   beforeEach(async () => {
-    // Create test directory
+    // Create test directory with unique name
     await fs.mkdir(testDir, { recursive: true });
     storage = new FilesystemStorage(testDir);
   });
@@ -25,6 +25,7 @@ describe('FilesystemStorage', () => {
       await fs.rm(testDir, { recursive: true, force: true });
     } catch (error) {
       // Ignore errors during cleanup
+      console.warn('Failed to cleanup test directory:', error);
     }
   });
 

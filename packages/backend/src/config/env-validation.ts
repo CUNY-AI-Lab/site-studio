@@ -38,31 +38,8 @@ export function validateEnvironment(): void {
     }
   }
 
-  // Validate AI provider configuration
-  const usesBedrock = process.env.CLAUDE_CODE_USE_BEDROCK === '1';
-  const usesVertex = process.env.CLAUDE_CODE_USE_VERTEX === '1';
-
-  if (usesBedrock) {
-    const bedrockRequired = ['AWS_REGION', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
-
-    for (const key of bedrockRequired) {
-      if (!process.env[key]) {
-        result.missing.push(key);
-        result.valid = false;
-      }
-    }
-  } else if (usesVertex) {
-    // Vertex AI uses Application Default Credentials, but we can warn if not set
-    if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      console.warn('⚠️  GOOGLE_APPLICATION_CREDENTIALS not set, ensure gcloud auth is configured');
-    }
-  } else {
-    // Default to Anthropic API
-    if (!process.env.ANTHROPIC_API_KEY) {
-      result.missing.push('ANTHROPIC_API_KEY');
-      result.valid = false;
-    }
-  }
+  // Note: AI authentication uses Claude Code's built-in credentials
+  // No separate API key validation needed
 
   // Validate internal auth token (no default allowed)
   if (!process.env.INTERNAL_AUTH_TOKEN) {
@@ -103,7 +80,6 @@ export function validateEnvironment(): void {
   // Success - log configuration summary
   console.log('✅ Environment validation passed');
   console.log(`   Storage: ${storageType}`);
-  console.log(`   AI Provider: ${usesBedrock ? 'AWS Bedrock' : usesVertex ? 'Google Vertex' : 'Anthropic API'}`);
   console.log(`   Auth Mode: ${authMode}`);
 }
 
