@@ -125,9 +125,10 @@ export async function runSiteAgent(
       'NotebookEdit',        // Jupyter notebooks not relevant to static sites
 
       // App internals (would reveal our architecture to users)
-      'TodoWrite',           // Shows our internal task tracking structure
-      'AskUserQuestion',     // Agent should build sites, not ask meta-questions
+      'AskUserQuestion',     // Agent should build sites, not ask meta-questions (conflicts with bypassPermissions)
     ],
+    // NOTE: TodoWrite is ALLOWED - it helps users see what the agent is planning to do
+
   };
 
   log.info({

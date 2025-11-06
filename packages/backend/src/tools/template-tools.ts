@@ -567,22 +567,18 @@ footer {
         await fs.writeFile(fullPath, content, 'utf-8');
       }
 
+      const fileCount = Object.keys(template).length;
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({
-            success: true,
-            template: params.template,
-            files: Object.keys(template),
-            message: `Created ${params.template} template successfully`,
-          }, null, 2),
+          text: `✓ Created ${params.template} template with ${fileCount} file${fileCount !== 1 ? 's' : ''}`,
         }],
       };
     } catch (error: any) {
       return {
         content: [{
           type: 'text' as const,
-          text: `Error scaffolding template: ${error.message}`,
+          text: `✗ Failed to create template: ${error.message}`,
         }],
       };
     }
@@ -628,18 +624,14 @@ footer {
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({
-            success: true,
-            filename: filename,
-            message: `Created page ${filename} successfully`,
-          }, null, 2),
+          text: `✓ Created ${filename}`,
         }],
       };
     } catch (error: any) {
       return {
         content: [{
           type: 'text' as const,
-          text: `Error creating page: ${error.message}`,
+          text: `✗ Failed to create page: ${error.message}`,
         }],
       };
     }
