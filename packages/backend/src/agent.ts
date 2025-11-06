@@ -3,7 +3,10 @@ import { createFileTools } from './tools/file-tools.js';
 import { createTemplateTools } from './tools/template-tools.js';
 import type { SandboxSession } from './sandbox/manager.js';
 import { SITE_BUILDER_PROMPT } from './prompts/site-builder.js';
+import { getLogger } from './config/logger.js';
 import fs from 'fs/promises';
+
+const log = getLogger('agent');
 
 /**
  * Create and run a site building session with sandbox support
@@ -24,13 +27,34 @@ export async function runSiteAgent(
   userId?: string,
   projectId?: string
 ): Promise<AsyncIterable<any>> {
+  log.info({
+    userId,
+    projectId,
+    sessionId: sessionId || 'NEW',
+    mode,
+    projectPath,
+    promptLength: prompt.length,
+    hasSession: !!sessionId,
+  }, 'Initializing agent');
+
   // Clean up downloaded binaries from previous sessions (only for new sessions)
   if (!sessionId) {
     try {
       await fs.rm(projectPath, { recursive: true, force: true });
       await fs.mkdir(projectPath, { recursive: true });
+      log.debug({
+        userId,
+        projectId,
+        projectPath,
+      }, 'Cleaned up project directory for new session');
     } catch (error) {
       // Ignore cleanup errors - directory might not exist yet
+      log.debug({
+        userId,
+        projectId,
+        projectPath,
+        error,
+      }, 'Project directory cleanup skipped (may not exist)');
     }
   }
 
@@ -38,6 +62,14 @@ export async function runSiteAgent(
   const fileTools = createFileTools(projectPath, sandboxSession, userId, projectId);
   const templateTools = createTemplateTools(projectPath);
   const allTools = [...fileTools, ...templateTools];
+
+  log.debug({
+    userId,
+    projectId,
+    toolCount: allTools.length,
+    fileToolCount: fileTools.length,
+    templateToolCount: templateTools.length,
+  }, 'Tools created for agent');
 
   // Create MCP server with all tools
   const server = createSdkMcpServer({
@@ -70,10 +102,43 @@ export async function runSiteAgent(
   // Resume conversation if session ID provided
   if (sessionId) {
     queryOptions.resume = sessionId;
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      mode,
+    }, 'Resuming agent conversation with SDK');
+  } else {
+    log.info({
+      userId,
+      projectId,
+      mode,
+    }, 'Starting new agent conversation with SDK');
   }
 
-  return query({
-    prompt,
-    options: queryOptions,
-  });
+  try {
+    const stream = query({
+      prompt,
+      options: queryOptions,
+    });
+
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      mode,
+    }, 'Agent SDK query stream created');
+
+    return stream;
+  } catch (error) {
+    log.error({
+      error,
+      userId,
+      projectId,
+      sessionId,
+      mode,
+      stack: error instanceof Error ? error.stack : undefined,
+    }, 'Failed to create agent SDK query stream');
+    throw error;
+  }
 }

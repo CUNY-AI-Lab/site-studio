@@ -820,14 +820,35 @@ app.put('/api/projects/:id/files/rename', validateBody(renameFileSchema), async 
  * Supports 'plan' mode (shows proposed actions) or 'execute' mode (runs without asking)
  */
 app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res, next) => {
+  const startTime = Date.now();
+  let agentSessionId: string | undefined;
+  let eventCount = 0;
+
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { prompt, projectId, sessionId, mode, uploadedFile } = req.body;
 
+    // Log query start with full context
+    log.info({
+      userId,
+      projectId,
+      sessionId: sessionId || 'NEW',
+      mode: mode || 'plan',
+      hasUploadedFile: !!uploadedFile,
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 100),
+    }, 'Agent query started');
+
     // Get or create sandboxed session (Zod already validated prompt and projectId)
     const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
     const projectPath = session.projectPath;
+
+    log.info({
+      sessionId: session.sessionId,
+      projectPath,
+      isNewSession: !sessionId,
+    }, 'Sandbox session ready');
 
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
@@ -846,14 +867,24 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
         // This matches the working flow when files have been in R2 for a while
         const fileType = getFileTypeDescription(uploadedFile);
 
-        console.log(`[File Upload] ${fileType} ${uploadedFile} ready in R2, agent will use view_file tool`);
+        log.info({
+          fileType,
+          fileName: uploadedFile,
+          userId,
+          projectId
+        }, 'File upload ready for agent');
 
         enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]
 
 The file is stored in R2 cloud storage. Please use the view_file tool with filename "${uploadedFile}" to download and analyze it.`;
 
       } catch (error) {
-        log.error({ error }, 'Failed to prepare uploaded file');
+        log.error({
+          error,
+          uploadedFile,
+          userId,
+          projectId
+        }, 'Failed to prepare uploaded file');
         next(error);
         return;
       }
@@ -869,6 +900,8 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
       res.flushHeaders();
     }
 
+    log.info({ userId, projectId, sessionId }, 'SSE connection established');
+
     // Run agent with sandboxed session (mode: 'plan' or 'execute')
     // Only pass sessionId for resume if client explicitly provided one
     const stream = await runSiteAgent(
@@ -881,8 +914,79 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
       projectId // Pass projectId for storage abstraction
     );
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      mode: mode || 'plan'
+    }, 'Agent stream started');
+
+    // Track connection state
+    let connectionClosed = false;
+    req.on('close', () => {
+      connectionClosed = true;
+      log.warn({
+        userId,
+        projectId,
+        sessionId: agentSessionId || sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Client disconnected before stream completed');
+    });
+
     // Stream events to client
     for await (const event of stream) {
+      if (connectionClosed) {
+        log.warn({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          eventCount,
+        }, 'Breaking stream loop - connection closed');
+        break;
+      }
+
+      eventCount++;
+
+      // Capture session ID from init event
+      if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
+        agentSessionId = event.session_id;
+        log.info({
+          userId,
+          projectId,
+          agentSessionId,
+          isResume: !!sessionId,
+        }, 'Agent session initialized');
+      }
+
+      // Log important events (but not every single one to avoid spam)
+      if (event.type === 'permission_request') {
+        log.info({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          toolCallCount: event.tool_calls?.length || 0,
+        }, 'Agent requesting permission for tool calls');
+      } else if (event.type === 'error') {
+        log.error({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          error: event.error,
+        }, 'Agent returned error event');
+      }
+
+      // Log event type distribution every 10 events
+      if (eventCount % 10 === 0) {
+        log.debug({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          eventCount,
+          lastEventType: event.type,
+        }, 'Stream progress');
+      }
+
       const data = JSON.stringify(event);
       res.write(`data: ${data}\n\n`);
 
@@ -893,14 +997,31 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
 
     res.write('data: [DONE]\n\n');
     res.end();
+
+    log.info({
+      userId,
+      projectId,
+      sessionId: agentSessionId || sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+    }, 'Agent query completed successfully');
   } catch (error) {
-    log.error({ error }, 'Agent query failed');
+    log.error({
+      error,
+      userId: (req as any).user?.id,
+      projectId: req.body?.projectId,
+      sessionId: agentSessionId || req.body?.sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+      stack: error instanceof Error ? error.stack : undefined,
+    }, 'Agent query failed');
+
     const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {
       next(error);
     } else {
-      res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
       res.end();
     }
   }
@@ -911,6 +1032,9 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
  * Approve and execute a proposed plan
  */
 app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, next) => {
+  const startTime = Date.now();
+  let eventCount = 0;
+
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -926,6 +1050,13 @@ app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, ne
       return;
     }
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      approved,
+    }, approved ? 'Plan approved - executing' : 'Plan rejected');
+
     // Get existing sandboxed session
     const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
     const projectPath = session.projectPath;
@@ -940,6 +1071,21 @@ app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, ne
       res.flushHeaders();
     }
 
+    log.info({ userId, projectId, sessionId }, 'SSE connection established for approval');
+
+    // Track connection state
+    let connectionClosed = false;
+    req.on('close', () => {
+      connectionClosed = true;
+      log.warn({
+        userId,
+        projectId,
+        sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Client disconnected during plan execution');
+    });
+
     // Resume session with approval/rejection
     const resumePrompt = approved ? 'Yes, proceed with the plan.' : 'No, please don\'t proceed.';
     const stream = await runSiteAgent(
@@ -952,8 +1098,48 @@ app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, ne
       projectId // Pass projectId for storage abstraction
     );
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      approved,
+    }, 'Plan execution stream started');
+
     // Stream execution results
     for await (const event of stream) {
+      if (connectionClosed) {
+        log.warn({
+          userId,
+          projectId,
+          sessionId,
+          eventCount,
+        }, 'Breaking execution stream - connection closed');
+        break;
+      }
+
+      eventCount++;
+
+      // Log important events
+      if (event.type === 'error') {
+        log.error({
+          userId,
+          projectId,
+          sessionId,
+          error: event.error,
+        }, 'Agent returned error during execution');
+      }
+
+      // Log progress every 10 events
+      if (eventCount % 10 === 0) {
+        log.debug({
+          userId,
+          projectId,
+          sessionId,
+          eventCount,
+          lastEventType: event.type,
+        }, 'Execution progress');
+      }
+
       const data = JSON.stringify(event);
       res.write(`data: ${data}\n\n`);
 
@@ -964,8 +1150,25 @@ app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, ne
 
     res.write('data: [DONE]\n\n');
     res.end();
+
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+    }, 'Plan execution completed successfully');
   } catch (error) {
-    log.error({ error }, 'Agent approval failed');
+    log.error({
+      error,
+      userId: (req as any).user?.id,
+      projectId: req.body?.projectId,
+      sessionId: req.body?.sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+      stack: error instanceof Error ? error.stack : undefined,
+    }, 'Agent approval failed');
+
     const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {

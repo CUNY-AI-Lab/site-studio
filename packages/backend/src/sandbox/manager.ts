@@ -4,6 +4,9 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { createUserSandboxConfig, getUserProjectPath, getUserUploadsPath, type SandboxConfig } from './config.js';
 import type { UserSession } from '../types/user.js';
+import { getLogger } from '../config/logger.js';
+
+const log = getLogger('sandbox');
 
 /**
  * Manages sandboxed environments for users
@@ -23,12 +26,34 @@ export class SandboxSessionManager {
     let session = this.activeSessions.get(key);
     if (session) {
       session.lastActivity = new Date();
+      log.debug({
+        sessionId: key,
+        userId,
+        projectId,
+        age: Date.now() - session.createdAt.getTime(),
+        inactiveDuration: Date.now() - session.lastActivity.getTime(),
+      }, 'Resuming existing sandbox session');
       return session;
     }
 
     // Create new session
+    log.info({
+      sessionId: key,
+      userId,
+      projectId,
+      isProvided: !!sessionId,
+    }, 'Creating new sandbox session');
+
     session = await this.createSession(userId, projectId, key);
     this.activeSessions.set(key, session);
+
+    log.info({
+      sessionId: key,
+      userId,
+      projectId,
+      projectPath: session.projectPath,
+      activeSessionCount: this.activeSessions.size,
+    }, 'Sandbox session created');
 
     return session;
   }
@@ -71,8 +96,17 @@ export class SandboxSessionManager {
   async endSession(sessionId: string): Promise<void> {
     const session = this.activeSessions.get(sessionId);
     if (!session) {
+      log.debug({ sessionId }, 'Attempted to end non-existent session');
       return;
     }
+
+    log.info({
+      sessionId,
+      userId: session.userId,
+      projectId: session.projectId,
+      age: Date.now() - session.createdAt.getTime(),
+      activeSessionCount: this.activeSessions.size - 1,
+    }, 'Ending sandbox session');
 
     this.activeSessions.delete(sessionId);
     // Note: AnthropicSandboxManager doesn't expose a cleanup method yet
@@ -85,16 +119,31 @@ export class SandboxSessionManager {
   async cleanupInactiveSessions(): Promise<void> {
     const now = Date.now();
     const sessionsToEnd: string[] = [];
+    const sessionDetails: Array<{ sessionId: string; inactiveMs: number }> = [];
 
     for (const [sessionId, session] of this.activeSessions.entries()) {
       const inactiveTime = now - session.lastActivity.getTime();
       if (inactiveTime > this.SESSION_TIMEOUT_MS) {
         sessionsToEnd.push(sessionId);
+        sessionDetails.push({ sessionId, inactiveMs: inactiveTime });
       }
     }
 
-    for (const sessionId of sessionsToEnd) {
-      await this.endSession(sessionId);
+    if (sessionsToEnd.length > 0) {
+      log.info({
+        count: sessionsToEnd.length,
+        totalActiveSessions: this.activeSessions.size,
+        sessions: sessionDetails,
+      }, 'Cleaning up inactive sandbox sessions');
+
+      for (const sessionId of sessionsToEnd) {
+        await this.endSession(sessionId);
+      }
+
+      log.info({
+        cleaned: sessionsToEnd.length,
+        remaining: this.activeSessions.size,
+      }, 'Inactive session cleanup completed');
     }
   }
 
