@@ -6,6 +6,7 @@
 
 import { ISessionStore, User, StoredSession } from './session-store.js';
 import { getLogger } from '../config/logger.js';
+import { SESSION_CLEANUP_INTERVAL_MS } from '../config/constants.js';
 
 const log = getLogger('session-store');
 
@@ -25,7 +26,7 @@ export class MemorySessionStore implements ISessionStore {
       }).catch((error) => {
         log.error({ error }, 'Error during session cleanup');
       });
-    }, 60 * 60 * 1000); // 1 hour
+    }, SESSION_CLEANUP_INTERVAL_MS);
 
     // Ensure cleanup runs even if process is shutting down
     process.on('SIGTERM', () => this.destroy());

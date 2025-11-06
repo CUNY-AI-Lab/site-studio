@@ -4,6 +4,7 @@ import type { User } from '../types/user.js';
 import { ISessionStore } from './session-store.js';
 import { R2SessionStore } from './r2-session-store.js';
 import { MemorySessionStore } from './memory-session-store.js';
+import { SESSION_COOKIE_MAX_AGE, SESSION_COOKIE_NAME, DEFAULT_SESSION_TTL_DAYS } from '../config/constants.js';
 
 // Extended Express Request to include user
 export interface AuthenticatedRequest extends Request {
@@ -18,7 +19,14 @@ function isAuthRequired(): boolean {
 }
 
 /**
- * Get or create the session store based on STORAGE_TYPE
+ * Get or create the session store based on STORAGE_TYPE environment variable
+ *
+ * Creates a singleton session store instance on first call. Supports two backends:
+ * - 'r2': Cloudflare R2 object storage (sessions persist across server restarts)
+ * - 'filesystem': In-memory storage (sessions lost on restart, for development)
+ *
+ * @returns {ISessionStore} The global session store instance
+ * @throws {Error} If R2 storage is selected but credentials are not configured
  */
 export function getSessionStoreInstance(): ISessionStore {
   if (!sessionStore) {
@@ -54,8 +62,27 @@ function generateUserId(): string {
 }
 
 /**
- * Get or create a user session based on a session cookie
- * This is a simplified auth system for demo purposes
+ * Authentication middleware for Express routes
+ *
+ * Manages user sessions via cookies or X-Session-ID header. Supports two modes:
+ * - 'anonymous': Creates sessions automatically for unauthenticated users
+ * - 'required': Returns 401 for requests without valid sessions
+ *
+ * The authenticated user is attached to req.user after successful authentication.
+ *
+ * @param {Request} req - Express request object
+ * @param {Response} res - Express response object
+ * @param {NextFunction} next - Express next function
+ *
+ * @example
+ * // Apply to all API routes
+ * app.use('/api', authenticateUser);
+ *
+ * // Access authenticated user in route handlers
+ * app.get('/api/projects', async (req, res) => {
+ *   const authReq = req as unknown as AuthenticatedRequest;
+ *   const userId = authReq.user.id;
+ * });
  */
 export async function authenticateUser(req: Request, res: Response, next: NextFunction) {
   const authReq = req as AuthenticatedRequest;
@@ -63,7 +90,7 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
 
   try {
     // Check for existing session ID in cookie or header
-    let sessionId = req.cookies?.['site-studio-session'] || req.headers['x-session-id'] as string;
+    let sessionId = req.cookies?.[SESSION_COOKIE_NAME] || req.headers['x-session-id'] as string;
 
     // If no session cookie
     if (!sessionId) {
@@ -80,9 +107,9 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
       };
       await store.set(sessionId, newUser);
 
-      res.cookie('site-studio-session', sessionId, {
+      res.cookie(SESSION_COOKIE_NAME, sessionId, {
         httpOnly: true,
-        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+        maxAge: SESSION_COOKIE_MAX_AGE,
         sameSite: 'lax',
         secure: process.env.NODE_ENV === 'production',
       });
@@ -108,9 +135,9 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
       };
       await store.set(sessionId, user);
 
-      res.cookie('site-studio-session', sessionId, {
+      res.cookie(SESSION_COOKIE_NAME, sessionId, {
         httpOnly: true,
-        maxAge: 30 * 24 * 60 * 60 * 1000,
+        maxAge: SESSION_COOKIE_MAX_AGE,
         sameSite: 'lax',
         secure: process.env.NODE_ENV === 'production',
       });
@@ -142,14 +169,14 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
  * Optional: Clear a user session (logout)
  */
 export async function clearSession(req: Request, res: Response) {
-  const sessionId = req.cookies?.['site-studio-session'] || req.headers['x-session-id'] as string;
+  const sessionId = req.cookies?.[SESSION_COOKIE_NAME] || req.headers['x-session-id'] as string;
   const store = getSessionStoreInstance();
 
   if (sessionId) {
     await store.delete(sessionId);
   }
 
-  res.clearCookie('site-studio-session');
+  res.clearCookie(SESSION_COOKIE_NAME);
   res.json({ message: 'Session cleared' });
 }
 
