@@ -1,0 +1,11 @@
+[
+  {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "test-session-error"
+  },
+  {
+    "type": "error",
+    "error": "Failed to execute tool: permission denied"
+  }
+]
