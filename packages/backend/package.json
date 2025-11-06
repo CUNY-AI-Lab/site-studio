@@ -8,6 +8,10 @@
     "build": "tsc",
     "dev": "tsc && node dist/index.js",
     "start": "node dist/index.js",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
     "generate-previews": "echo 'Deprecated: use client capture for thumbnails'"
   },
   "keywords": [
@@ -26,6 +30,7 @@
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",
+    "file-type": "^21.0.0",
     "mammoth": "^1.11.0",
     "mime-types": "^3.0.1",
     "multer": "^2.0.2",

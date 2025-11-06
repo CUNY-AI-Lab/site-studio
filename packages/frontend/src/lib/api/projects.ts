@@ -1,4 +1,5 @@
 import { resolvePath } from '$lib/utils/paths';
+import { apiFetch, handleApiError } from './errors';
 
 const API_BASE = resolvePath('/api');
 
@@ -35,15 +36,7 @@ export interface ProjectFile {
  * Fetch all projects for the current user
  */
 export async function fetchProjects(): Promise<Project[]> {
-	const response = await fetch(`${API_BASE}/projects`, {
-		credentials: 'include',
-	});
-
-	if (!response.ok) {
-		throw new Error('Failed to fetch projects');
-	}
-
-	const data = await response.json();
+	const data = await apiFetch<{ projects: Project[] }>(`${API_BASE}/projects`);
 	return data.projects;
 }
 
@@ -51,72 +44,42 @@ export async function fetchProjects(): Promise<Project[]> {
  * Create a new project
  */
 export async function createProject(name: string, template?: string): Promise<Project> {
-	const response = await fetch(`${API_BASE}/projects`, {
+	return apiFetch<Project>(`${API_BASE}/projects`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
 		},
-		credentials: 'include',
 		body: JSON.stringify({ name, template }),
 	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Failed to create project' }));
-		throw new Error(error.error || 'Failed to create project');
-	}
-
-	return response.json();
 }
 
 /**
  * Rename an existing project
  */
 export async function renameProject(projectId: string, newName: string): Promise<Project> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+	return apiFetch<Project>(`${API_BASE}/projects/${projectId}`, {
 		method: 'PATCH',
 		headers: {
 			'Content-Type': 'application/json',
 		},
-		credentials: 'include',
 		body: JSON.stringify({ name: newName }),
 	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Failed to rename project' }));
-		throw new Error(error.error || 'Failed to rename project');
-	}
-
-	return response.json();
 }
 
 /**
  * Delete a project
  */
 export async function deleteProject(projectId: string): Promise<void> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}`, {
+	await apiFetch<void>(`${API_BASE}/projects/${projectId}`, {
 		method: 'DELETE',
-		credentials: 'include',
 	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Failed to delete project' }));
-		throw new Error(error.error || 'Failed to delete project');
-	}
 }
 
 /**
  * Fetch files for a specific project
  */
 export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[]> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}/files`, {
-		credentials: 'include',
-	});
-
-	if (!response.ok) {
-		throw new Error('Failed to fetch project files');
-	}
-
-	const data = await response.json();
+	const data = await apiFetch<{ files: ProjectFile[] }>(`${API_BASE}/projects/${projectId}/files`);
 	return data.files;
 }
 
@@ -124,18 +87,9 @@ export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[
  * Fetch a specific file's content
  */
 export async function fetchFileContent(projectId: string, filePath: string): Promise<string> {
-	const response = await fetch(
-		`${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`,
-		{
-			credentials: 'include',
-		}
+	const data = await apiFetch<{ content: string }>(
+		`${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`
 	);
-
-	if (!response.ok) {
-		throw new Error('Failed to fetch file content');
-	}
-
-	const data = await response.json();
 	return data.content;
 }
 
@@ -147,18 +101,13 @@ export async function saveFileContent(
 	filePath: string,
 	content: string
 ): Promise<void> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}/file`, {
+	await apiFetch<void>(`${API_BASE}/projects/${projectId}/file`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
 		},
-		credentials: 'include',
 		body: JSON.stringify({ path: filePath, content }),
 	});
-
-	if (!response.ok) {
-		throw new Error('Failed to save file');
-	}
 }
 
 /**
@@ -175,7 +124,7 @@ export async function uploadFile(projectId: string, file: File): Promise<string>
 	});
 
 	if (!response.ok) {
-		throw new Error('Upload failed');
+		await handleApiError(response);
 	}
 
 	const data = await response.json();
@@ -194,7 +143,7 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 	);
 
 	if (!response.ok) {
-		throw new Error('Download failed');
+		await handleApiError(response);
 	}
 
 	const blob = await response.blob();
@@ -212,52 +161,37 @@ export async function downloadFile(projectId: string, filePath: string): Promise
  * Upload a generated thumbnail image (PNG) for a project
  */
 export async function uploadThumbnail(projectId: string, blob: Blob): Promise<void> {
-    const form = new FormData();
-    form.append('image', blob, 'thumbnail.png');
+	const form = new FormData();
+	form.append('image', blob, 'thumbnail.png');
 
-    const response = await fetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
-        method: 'POST',
-        credentials: 'include',
-        body: form,
-    });
+	const response = await fetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
+		method: 'POST',
+		credentials: 'include',
+		body: form,
+	});
 
-    if (!response.ok) {
-        // Non-fatal for UX; throw so callers can optionally handle
-        const error = await response.json().catch(() => ({ error: 'Failed to upload thumbnail' }));
-        throw new Error(error.error || 'Failed to upload thumbnail');
-    }
+	if (!response.ok) {
+		// Non-fatal for UX; throw structured error so callers can handle
+		await handleApiError(response);
+	}
 }
 
 /**
  * Publish a project to make it publicly accessible
  */
 export async function publishProject(projectId: string): Promise<{ url: string }> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}/publish`, {
+	return apiFetch<{ url: string }>(`${API_BASE}/projects/${projectId}/publish`, {
 		method: 'POST',
-		credentials: 'include',
 	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Failed to publish project' }));
-		throw new Error(error.error || 'Failed to publish project');
-	}
-
-	return response.json();
 }
 
 /**
  * Unpublish a project to make it private again
  */
 export async function unpublishProject(projectId: string): Promise<void> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}/unpublish`, {
+	await apiFetch<void>(`${API_BASE}/projects/${projectId}/unpublish`, {
 		method: 'POST',
-		credentials: 'include',
 	});
-
-	if (!response.ok) {
-		const error = await response.json().catch(() => ({ error: 'Failed to unpublish project' }));
-		throw new Error(error.error || 'Failed to unpublish project');
-	}
 }
 
 /**
@@ -265,12 +199,6 @@ export async function unpublishProject(projectId: string): Promise<void> {
  * This endpoint doesn't require authentication
  */
 export async function fetchTemplateCategories(): Promise<TemplateCategory[]> {
-	const response = await fetch(`${API_BASE}/templates`);
-
-	if (!response.ok) {
-		throw new Error('Failed to fetch templates');
-	}
-
-	const data = await response.json();
+	const data = await apiFetch<{ categories: TemplateCategory[] }>(`${API_BASE}/templates`);
 	return data.categories;
 }

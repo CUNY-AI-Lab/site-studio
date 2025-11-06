@@ -26,9 +26,15 @@
   "license": "MIT",
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.16",
-    "@types/node": "^20.14.0",
+    "@types/node": "^20.19.24",
+    "@vitest/ui": "^4.0.7",
     "concurrently": "^8.2.2",
     "tailwindcss": "^4.1.16",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.7"
+  },
+  "dependencies": {
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2"
   }
 }

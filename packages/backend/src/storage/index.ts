@@ -18,6 +18,13 @@ export { R2Storage } from './r2-storage.js';
 
 /**
  * Create storage instance based on environment configuration
+ *
+ * Supports two storage backends:
+ * - 'r2': Cloudflare R2 object storage (production)
+ * - 'filesystem': Local filesystem storage (development)
+ *
+ * @returns {IStorage} Configured storage implementation
+ * @throws {Error} If R2 storage is selected but required environment variables are missing
  */
 export function createStorage(): IStorage {
   const storageType = process.env.STORAGE_TYPE || 'filesystem';
@@ -45,11 +52,17 @@ export function createStorage(): IStorage {
   }
 }
 
-// Global storage instance
+// Global storage instance (singleton pattern)
 let storage: IStorage | null = null;
 
 /**
- * Get the global storage instance
+ * Get the global storage instance (singleton)
+ *
+ * Creates the storage instance on first call based on STORAGE_TYPE environment variable.
+ * Subsequent calls return the same instance.
+ *
+ * @returns {IStorage} The global storage instance
+ * @throws {Error} If storage configuration is invalid
  */
 export function getStorage(): IStorage {
   if (!storage) {
@@ -59,7 +72,13 @@ export function getStorage(): IStorage {
 }
 
 /**
- * Initialize storage (call once at startup)
+ * Initialize storage system at application startup
+ *
+ * Must be called once during server initialization before handling requests.
+ * Ensures storage backend is properly configured and accessible.
+ *
+ * @returns {Promise<void>} Resolves when storage is initialized
+ * @throws {Error} If storage initialization fails
  */
 export async function initializeStorage(): Promise<void> {
   const storageInstance = getStorage();

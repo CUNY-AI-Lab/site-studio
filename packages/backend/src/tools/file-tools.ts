@@ -84,14 +84,14 @@ Returns a tree structure showing the project's file organization.`,
           const treeLines = treeToLines(tree);
 
           console.log(`[Tool:list_files] Total time: ${Date.now() - startTime}ms`);
+
+          // Return clean tree view for agent and users
           return {
             content: [{
               type: 'text' as const,
-              text: JSON.stringify({
-                success: true,
-                tree: treeLines.join('\n'),
-                projectPath: `${userId}/${projectId}`,
-              }, null, 2),
+              text: treeLines.length > 0
+                ? `Project files:\n\n${treeLines.join('\n')}`
+                : 'No files in project yet.',
             }],
           };
         } else {
@@ -121,14 +121,13 @@ Returns a tree structure showing the project's file organization.`,
 
           const tree = await listDir(targetDir);
 
+          // Return clean tree view
           return {
             content: [{
               type: 'text' as const,
-              text: JSON.stringify({
-                success: true,
-                tree: tree.join('\n'),
-                projectPath: projectPath,
-              }, null, 2),
+              text: tree.length > 0
+                ? `Project files:\n\n${tree.join('\n')}`
+                : 'No files in project yet.',
             }],
           };
         }
@@ -174,21 +173,20 @@ Returns the file content as text.`,
           content = await fs.readFile(fullPath, 'utf-8');
         }
 
+        // Return the actual file content (agent will see this)
+        // The frontend shows this in tool execution details
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              file_path: params.file_path,
-              content: content,
-            }, null, 2),
+            text: content,
           }],
         };
       } catch (error: any) {
+        const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `Error reading file: ${error.message}`,
+            text: `✗ Failed to read ${fileName}: ${error.message}`,
           }],
         };
       }
@@ -220,21 +218,21 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.writeFile(fullPath, params.content, 'utf-8');
         }
 
+        // Return user-friendly message
+        const fileName = params.file_path.split('/').pop() || params.file_path;
+        const size = Buffer.byteLength(params.content, 'utf-8');
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              file_path: params.file_path,
-              message: 'File written successfully',
-            }, null, 2),
+            text: `✓ Created ${fileName} (${size} bytes)`,
           }],
         };
       } catch (error: any) {
+        const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `Error writing file: ${error.message}`,
+            text: `✗ Failed to create ${fileName}: ${error.message}`,
           }],
         };
       }
@@ -269,21 +267,19 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.unlink(fullPath);
         }
 
+        const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              file_path: params.file_path,
-              message: 'File deleted successfully',
-            }, null, 2),
+            text: `✓ Deleted ${fileName}`,
           }],
         };
       } catch (error: any) {
+        const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `Error deleting file: ${error.message}`,
+            text: `✗ Failed to delete ${fileName}: ${error.message}`,
           }],
         };
       }
@@ -306,21 +302,19 @@ or updates it if it does. Parent directories are created automatically.`,
 
       await fs.mkdir(fullPath, { recursive: true });
 
+      const dirName = params.directory_path.split('/').pop() || params.directory_path;
       return {
         content: [{
           type: 'text' as const,
-          text: JSON.stringify({
-            success: true,
-            directory_path: params.directory_path,
-            message: 'Directory created successfully',
-          }, null, 2),
+          text: `✓ Created directory ${dirName}`,
         }],
       };
     } catch (error: any) {
+      const dirName = params.directory_path.split('/').pop() || params.directory_path;
       return {
         content: [{
           type: 'text' as const,
-          text: `Error creating directory: ${error.message}`,
+          text: `✗ Failed to create directory ${dirName}: ${error.message}`,
         }],
       };
     }
@@ -458,18 +452,15 @@ or updates it if it does. Parent directories are created automatically.`,
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              file_path: params.file_path,
-              message: 'File edited successfully',
-            }, null, 2),
+            text: `✓ Edited ${params.file_path.split('/').pop() || params.file_path}`,
           }],
         };
       } catch (error: any) {
+        const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `Error editing file: ${error.message}`,
+            text: `✗ Failed to edit ${fileName}: ${error.message}`,
           }],
         };
       }
@@ -576,19 +567,16 @@ or updates it if it does. Parent directories are created automatically.`,
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              query: params.query,
-              matches: matches,
-              total_matches: matches.length,
-            }, null, 2),
+            text: matches.length > 0
+              ? `Found "${params.query}" in ${matches.length} file(s):\n\n${matches.map(m => `• ${m}`).join('\n')}`
+              : `No matches found for "${params.query}"`,
           }],
         };
       } catch (error: any) {
         return {
           content: [{
             type: 'text' as const,
-            text: `Error searching files: ${error.message}`,
+            text: `✗ Search failed: ${error.message}`,
           }],
         };
       }
@@ -625,19 +613,15 @@ or updates it if it does. Parent directories are created automatically.`,
         return {
           content: [{
             type: 'text' as const,
-            text: JSON.stringify({
-              success: true,
-              old_path: params.old_path,
-              new_path: params.new_path,
-              message: 'File renamed successfully',
-            }, null, 2),
+            text: `✓ Renamed ${params.old_path.split('/').pop()} → ${params.new_path.split('/').pop()}`,
           }],
         };
       } catch (error: any) {
+        const oldName = params.old_path.split('/').pop() || params.old_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `Error renaming file: ${error.message}`,
+            text: `✗ Failed to rename ${oldName}: ${error.message}`,
           }],
         };
       }

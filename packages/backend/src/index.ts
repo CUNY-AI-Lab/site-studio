@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { runSiteAgent } from './agent.js';
 import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.js';
-import { errorHandler } from './middleware/error-handler.js';
+import { errorHandler, ApiError, asyncHandler } from './middleware/error-handler.js';
 import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
@@ -19,6 +19,19 @@ import { generateFilePrompt, isSupportedFileType, getFileTypeDescription } from 
 import { validateEnvironment } from './config/env-validation.js';
 import { apiLimiter, agentLimiter, uploadLimiter } from './middleware/rate-limit.js';
 import { healthCheck, readinessCheck } from './routes/health.js';
+import {
+  validateBody,
+  createProjectSchema,
+  renameProjectSchema,
+  saveFileSchema,
+  renameFileSchema,
+  querySchema,
+  approvalSchema
+} from './middleware/validation.js';
+import { logger, getLogger, requestLogger } from './config/logger.js';
+import { fileUploadValidator } from './middleware/file-validation.js';
+
+const log = getLogger('app');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,12 +79,12 @@ app.get('/health/ready', readinessCheck);
  * Get all template categories with metadata
  * Public endpoint (no auth required)
  */
-app.get('/api/templates', (req, res) => {
+app.get('/api/templates', (req, res, next) => {
   try {
     const categories = getTemplateCategories();
     res.json({ categories });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -118,7 +131,7 @@ function getProjectPath(userId: string, projectId: string): string {
  * GET /api/projects
  * List all projects for the authenticated user
  */
-app.get('/api/projects', async (req, res) => {
+app.get('/api/projects', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -140,8 +153,8 @@ app.get('/api/projects', async (req, res) => {
     );
 
     res.json({ projects });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -149,18 +162,13 @@ app.get('/api/projects', async (req, res) => {
  * POST /api/projects
  * Create a new project for the authenticated user
  */
-app.post('/api/projects', async (req, res) => {
+app.post('/api/projects', validateBody(createProjectSchema), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { name, template } = req.body;
 
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ error: 'Project name is required' });
-      return;
-    }
-
-    // Validate template if provided
+    // Validate template if provided (Zod already validated name)
     if (template && !isValidTemplate(template)) {
       res.status(400).json({ error: 'Invalid template ID' });
       return;
@@ -215,8 +223,8 @@ app.post('/api/projects', async (req, res) => {
       name: name,
       path: sanitized, // Return only project ID, not full path
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -224,19 +232,14 @@ app.post('/api/projects', async (req, res) => {
  * PATCH /api/projects/:id
  * Rename a project for the authenticated user
  */
-app.patch('/api/projects/:id', async (req, res) => {
+app.patch('/api/projects/:id', validateBody(renameProjectSchema), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { id } = req.params;
     const { name } = req.body;
 
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ error: 'New project name is required' });
-      return;
-    }
-
-    // Sanitize new project name
+    // Sanitize new project name (Zod already validated name)
     const newId = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
 
     // Check if old project exists
@@ -263,8 +266,8 @@ app.patch('/api/projects/:id', async (req, res) => {
       name: name,
       message: 'Project renamed successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -272,7 +275,7 @@ app.patch('/api/projects/:id', async (req, res) => {
  * DELETE /api/projects/:id
  * Delete a project for the authenticated user
  */
-app.delete('/api/projects/:id', async (req, res) => {
+app.delete('/api/projects/:id', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -291,8 +294,8 @@ app.delete('/api/projects/:id', async (req, res) => {
       success: true,
       message: 'Project deleted successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -300,7 +303,7 @@ app.delete('/api/projects/:id', async (req, res) => {
  * POST /api/projects/:id/publish
  * Publish a project to make it publicly accessible
  */
-app.post('/api/projects/:id/publish', async (req, res) => {
+app.post('/api/projects/:id/publish', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -342,8 +345,8 @@ app.post('/api/projects/:id/publish', async (req, res) => {
       message: 'Project published successfully',
       url: publicUrl,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -351,7 +354,7 @@ app.post('/api/projects/:id/publish', async (req, res) => {
  * POST /api/projects/:id/unpublish
  * Unpublish a project to make it private again
  */
-app.post('/api/projects/:id/unpublish', async (req, res) => {
+app.post('/api/projects/:id/unpublish', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -377,14 +380,14 @@ app.post('/api/projects/:id/unpublish', async (req, res) => {
       unpublishedAt: new Date().toISOString(),
     });
 
-    console.log(`[Unpublish] Project ${id} unpublished for user ${userId}`);
+    log.info({ projectId: id, userId }, 'Project unpublished');
 
     res.json({
       success: true,
       message: 'Project unpublished successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -393,7 +396,7 @@ app.post('/api/projects/:id/unpublish', async (req, res) => {
  * Generate a thumbnail for the project
  */
 // Accept a client-generated thumbnail image and store it
-app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res) => {
+app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -426,8 +429,8 @@ app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res)
       success: true,
       thumbnailUrl: `/api/projects/${id}/thumbnail`,
     });
-  } catch (error: any) {
-    console.error('Thumbnail upload error:', error);
+  } catch (error) {
+    log.error({ error }, 'Thumbnail upload failed');
     res.status(500).json({ error: 'Failed to save thumbnail' });
   }
 });
@@ -436,7 +439,7 @@ app.post('/api/projects/:id/thumbnail', upload.single('image'), async (req, res)
  * GET /api/projects/:id/thumbnail
  * Retrieve the thumbnail for a project
  */
-app.get('/api/projects/:id/thumbnail', async (req, res) => {
+app.get('/api/projects/:id/thumbnail', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -461,8 +464,8 @@ app.get('/api/projects/:id/thumbnail', async (req, res) => {
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(thumbnailBuffer);
-  } catch (error: any) {
-    console.error('Thumbnail retrieval error:', error);
+  } catch (error) {
+    log.error({ error }, 'Thumbnail retrieval failed');
     res.status(500).json({ error: 'Failed to retrieve thumbnail' });
   }
 });
@@ -471,7 +474,7 @@ app.get('/api/projects/:id/thumbnail', async (req, res) => {
  * GET /api/projects/:id/files
  * List files in a user's project
  */
-app.get('/api/projects/:id/files', async (req, res) => {
+app.get('/api/projects/:id/files', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -544,8 +547,8 @@ app.get('/api/projects/:id/files', async (req, res) => {
     const files = buildTree(visibleFiles);
 
     res.json({ files });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -553,7 +556,7 @@ app.get('/api/projects/:id/files', async (req, res) => {
  * GET /api/projects/:id/file?path=...
  * Read a file from a user's project
  */
-app.get('/api/projects/:id/file', async (req, res) => {
+app.get('/api/projects/:id/file', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -580,8 +583,8 @@ app.get('/api/projects/:id/file', async (req, res) => {
       path: filePath,
       content: content,
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -589,24 +592,14 @@ app.get('/api/projects/:id/file', async (req, res) => {
  * POST /api/projects/:id/file
  * Write/update a file in a user's project
  */
-app.post('/api/projects/:id/file', async (req, res) => {
+app.post('/api/projects/:id/file', validateBody(saveFileSchema), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { id } = req.params;
     let { path: filePath, content } = req.body;
 
-    if (!filePath || typeof filePath !== 'string') {
-      res.status(400).json({ error: 'File path is required' });
-      return;
-    }
-
-    if (content === undefined) {
-      res.status(400).json({ error: 'File content is required' });
-      return;
-    }
-
-    // Strip leading slashes
+    // Strip leading slashes (Zod already validated path and content)
     filePath = filePath.replace(/^\/+/, '');
 
     // Security: basic path validation (prevent directory traversal)
@@ -625,8 +618,8 @@ app.post('/api/projects/:id/file', async (req, res) => {
       path: filePath,
       message: 'File saved successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -634,7 +627,7 @@ app.post('/api/projects/:id/file', async (req, res) => {
  * POST /api/projects/:id/upload
  * Upload file(s) to a user's project
  */
-app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), async (req, res) => {
+app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), fileUploadValidator(), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -671,8 +664,8 @@ app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), async
       size: req.file.size,
       message: 'File uploaded successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -680,7 +673,7 @@ app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), async
  * GET /api/projects/:id/download?path=...
  * Download a specific file from a user's project
  */
-app.get('/api/projects/:id/download', async (req, res) => {
+app.get('/api/projects/:id/download', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -712,9 +705,9 @@ app.get('/api/projects/:id/download', async (req, res) => {
 
     // Send file
     res.send(buffer);
-  } catch (error: any) {
+  } catch (error) {
     if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
+      next(error);
     }
   }
 });
@@ -723,7 +716,7 @@ app.get('/api/projects/:id/download', async (req, res) => {
  * DELETE /api/projects/:id/files?path=...
  * Delete a specific file from a user's project
  */
-app.delete('/api/projects/:id/files', async (req, res) => {
+app.delete('/api/projects/:id/files', async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -757,8 +750,8 @@ app.delete('/api/projects/:id/files', async (req, res) => {
       success: true,
       message: 'File deleted successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -766,19 +759,14 @@ app.delete('/api/projects/:id/files', async (req, res) => {
  * PUT /api/projects/:id/files/rename
  * Rename a file in a user's project
  */
-app.put('/api/projects/:id/files/rename', async (req, res) => {
+app.put('/api/projects/:id/files/rename', validateBody(renameFileSchema), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { id } = req.params;
     let { oldPath, newPath } = req.body;
 
-    if (!oldPath || !newPath) {
-      res.status(400).json({ error: 'oldPath and newPath are required' });
-      return;
-    }
-
-    // Strip leading slashes
+    // Strip leading slashes (Zod already validated oldPath and newPath)
     oldPath = oldPath.replace(/^\/+/, '');
     newPath = newPath.replace(/^\/+/, '');
 
@@ -821,8 +809,8 @@ app.put('/api/projects/:id/files/rename', async (req, res) => {
       newPath,
       message: 'File renamed successfully',
     });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -831,25 +819,36 @@ app.put('/api/projects/:id/files/rename', async (req, res) => {
  * Stream agent responses via SSE
  * Supports 'plan' mode (shows proposed actions) or 'execute' mode (runs without asking)
  */
-app.post('/api/query', agentLimiter, async (req, res) => {
+app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res, next) => {
+  const startTime = Date.now();
+  let agentSessionId: string | undefined;
+  let eventCount = 0;
+
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { prompt, projectId, sessionId, mode, uploadedFile } = req.body;
 
-    if (!prompt || typeof prompt !== 'string') {
-      res.status(400).json({ error: 'Prompt is required' });
-      return;
-    }
+    // Log query start with full context
+    log.info({
+      userId,
+      projectId,
+      sessionId: sessionId || 'NEW',
+      mode: mode || 'plan',
+      hasUploadedFile: !!uploadedFile,
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 100),
+    }, 'Agent query started');
 
-    if (!projectId || typeof projectId !== 'string') {
-      res.status(400).json({ error: 'Project ID is required' });
-      return;
-    }
-
-    // Get or create sandboxed session
+    // Get or create sandboxed session (Zod already validated prompt and projectId)
     const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
     const projectPath = session.projectPath;
+
+    log.info({
+      sessionId: session.sessionId,
+      projectPath,
+      isNewSession: !sessionId,
+    }, 'Sandbox session ready');
 
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
@@ -868,15 +867,25 @@ app.post('/api/query', agentLimiter, async (req, res) => {
         // This matches the working flow when files have been in R2 for a while
         const fileType = getFileTypeDescription(uploadedFile);
 
-        console.log(`[File Upload] ${fileType} ${uploadedFile} ready in R2, agent will use view_file tool`);
+        log.info({
+          fileType,
+          fileName: uploadedFile,
+          userId,
+          projectId
+        }, 'File upload ready for agent');
 
         enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]
 
 The file is stored in R2 cloud storage. Please use the view_file tool with filename "${uploadedFile}" to download and analyze it.`;
 
-      } catch (error: any) {
-        console.error('Error preparing uploaded file:', error);
-        res.status(500).json({ error: error.message });
+      } catch (error) {
+        log.error({
+          error,
+          uploadedFile,
+          userId,
+          projectId
+        }, 'Failed to prepare uploaded file');
+        next(error);
         return;
       }
     }
@@ -891,6 +900,8 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
       res.flushHeaders();
     }
 
+    log.info({ userId, projectId, sessionId }, 'SSE connection established');
+
     // Run agent with sandboxed session (mode: 'plan' or 'execute')
     // Only pass sessionId for resume if client explicitly provided one
     const stream = await runSiteAgent(
@@ -903,8 +914,79 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
       projectId // Pass projectId for storage abstraction
     );
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      mode: mode || 'plan'
+    }, 'Agent stream started');
+
+    // Track connection state
+    let connectionClosed = false;
+    req.on('close', () => {
+      connectionClosed = true;
+      log.warn({
+        userId,
+        projectId,
+        sessionId: agentSessionId || sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Client disconnected before stream completed');
+    });
+
     // Stream events to client
     for await (const event of stream) {
+      if (connectionClosed) {
+        log.warn({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          eventCount,
+        }, 'Breaking stream loop - connection closed');
+        break;
+      }
+
+      eventCount++;
+
+      // Capture session ID from init event
+      if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
+        agentSessionId = event.session_id;
+        log.info({
+          userId,
+          projectId,
+          agentSessionId,
+          isResume: !!sessionId,
+        }, 'Agent session initialized');
+      }
+
+      // Log important events (but not every single one to avoid spam)
+      if (event.type === 'permission_request') {
+        log.info({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          toolCallCount: event.tool_calls?.length || 0,
+        }, 'Agent requesting permission for tool calls');
+      } else if (event.type === 'error') {
+        log.error({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          error: event.error,
+        }, 'Agent returned error event');
+      }
+
+      // Log event type distribution every 10 events
+      if (eventCount % 10 === 0) {
+        log.debug({
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+          eventCount,
+          lastEventType: event.type,
+        }, 'Stream progress');
+      }
+
       const data = JSON.stringify(event);
       res.write(`data: ${data}\n\n`);
 
@@ -915,13 +997,31 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
 
     res.write('data: [DONE]\n\n');
     res.end();
-  } catch (error: any) {
-    console.error('Query error:', error);
+
+    log.info({
+      userId,
+      projectId,
+      sessionId: agentSessionId || sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+    }, 'Agent query completed successfully');
+  } catch (error) {
+    log.error({
+      error,
+      userId: (req as any).user?.id,
+      projectId: req.body?.projectId,
+      sessionId: agentSessionId || req.body?.sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+      stack: error instanceof Error ? error.stack : undefined,
+    }, 'Agent query failed');
+
+    const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
+      next(error);
     } else {
-      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`);
       res.end();
     }
   }
@@ -931,7 +1031,10 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
  * POST /api/query/approve
  * Approve and execute a proposed plan
  */
-app.post('/api/query/approve', async (req, res) => {
+app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, next) => {
+  const startTime = Date.now();
+  let eventCount = 0;
+
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
@@ -947,6 +1050,13 @@ app.post('/api/query/approve', async (req, res) => {
       return;
     }
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      approved,
+    }, approved ? 'Plan approved - executing' : 'Plan rejected');
+
     // Get existing sandboxed session
     const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
     const projectPath = session.projectPath;
@@ -961,6 +1071,21 @@ app.post('/api/query/approve', async (req, res) => {
       res.flushHeaders();
     }
 
+    log.info({ userId, projectId, sessionId }, 'SSE connection established for approval');
+
+    // Track connection state
+    let connectionClosed = false;
+    req.on('close', () => {
+      connectionClosed = true;
+      log.warn({
+        userId,
+        projectId,
+        sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Client disconnected during plan execution');
+    });
+
     // Resume session with approval/rejection
     const resumePrompt = approved ? 'Yes, proceed with the plan.' : 'No, please don\'t proceed.';
     const stream = await runSiteAgent(
@@ -973,8 +1098,48 @@ app.post('/api/query/approve', async (req, res) => {
       projectId // Pass projectId for storage abstraction
     );
 
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      approved,
+    }, 'Plan execution stream started');
+
     // Stream execution results
     for await (const event of stream) {
+      if (connectionClosed) {
+        log.warn({
+          userId,
+          projectId,
+          sessionId,
+          eventCount,
+        }, 'Breaking execution stream - connection closed');
+        break;
+      }
+
+      eventCount++;
+
+      // Log important events
+      if (event.type === 'error') {
+        log.error({
+          userId,
+          projectId,
+          sessionId,
+          error: event.error,
+        }, 'Agent returned error during execution');
+      }
+
+      // Log progress every 10 events
+      if (eventCount % 10 === 0) {
+        log.debug({
+          userId,
+          projectId,
+          sessionId,
+          eventCount,
+          lastEventType: event.type,
+        }, 'Execution progress');
+      }
+
       const data = JSON.stringify(event);
       res.write(`data: ${data}\n\n`);
 
@@ -985,13 +1150,31 @@ app.post('/api/query/approve', async (req, res) => {
 
     res.write('data: [DONE]\n\n');
     res.end();
-  } catch (error: any) {
-    console.error('Approval error:', error);
+
+    log.info({
+      userId,
+      projectId,
+      sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+    }, 'Plan execution completed successfully');
+  } catch (error) {
+    log.error({
+      error,
+      userId: (req as any).user?.id,
+      projectId: req.body?.projectId,
+      sessionId: req.body?.sessionId,
+      eventCount,
+      duration: Date.now() - startTime,
+      stack: error instanceof Error ? error.stack : undefined,
+    }, 'Agent approval failed');
+
+    const errorMessage = error instanceof Error ? error.message : 'An error occurred';
 
     if (!res.headersSent) {
-      res.status(500).json({ error: error.message });
+      next(error);
     } else {
-      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
       res.end();
     }
   }
@@ -1126,9 +1309,9 @@ app.use('/preview/:id', (req, res, next) => {
       }
 
       res.send(buffer);
-    } catch (error: any) {
-      console.error(`Preview error for ${projectId}/${filePath}:`, error);
-      if (error.message.includes('not found')) {
+    } catch (error) {
+      log.error({ projectId, filePath, error }, 'Preview error');
+      if (error instanceof Error && error.message.includes('not found')) {
         res.status(404).send('Not Found');
       } else {
         res.status(500).send('Internal Server Error');
@@ -1196,9 +1379,9 @@ app.use('/preview/:id', (req, res, next) => {
       }
 
       res.send(responseBuffer);
-    } catch (error: any) {
-      console.error(`Preview error for ${projectId}/${filePath}:`, error);
-      if (error.code === 'ENOENT') {
+    } catch (error) {
+      log.error({ projectId, filePath, error }, 'Preview error');
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         res.status(404).send('Not Found');
       } else {
         res.status(500).send('Internal Server Error');
@@ -1211,7 +1394,7 @@ app.use('/preview/:id', (req, res, next) => {
  * GET /sites/:userId/:slug{/*splat}
  * Serve published project sites
  */
-app.get('/sites/:userId/:slug{/*splat}', async (req, res) => {
+app.get('/sites/:userId/:slug{/*splat}', async (req, res, next) => {
   try {
     const { userId, slug } = req.params;
     // Express may return splat as an array or string, ensure it's a string
@@ -1293,8 +1476,8 @@ app.get('/sites/:userId/:slug{/*splat}', async (req, res) => {
     }
 
     res.send(content);
-  } catch (error: any) {
-    console.error('Error serving published site:', error);
+  } catch (error) {
+    log.error({ error }, 'Failed to serve published site');
     res.status(500).send('Internal server error');
   }
 });
@@ -1328,16 +1511,19 @@ try {
     }
     res.sendFile(path.join(FRONTEND_BUILD_DIR, 'index.html'));
   });
-  console.log('🪄 Serving frontend from', FRONTEND_BUILD_DIR);
+  log.info({ path: FRONTEND_BUILD_DIR }, '🪄 Serving frontend');
 } catch (e) {
-  console.log('ℹ️ Frontend build not found; API-only mode');
+  log.info('ℹ️ Frontend build not found; API-only mode');
 }
+
+// HTTP request logging middleware
+app.use(requestLogger());
 
 // Global error handling middleware (must be registered last)
 app.use(errorHandler);
 
 app.listen(PORT as number, '0.0.0.0', () => {
-  console.log(`🎨 Site Studio backend running on http://localhost:${PORT}`);
-  console.log(`🔒 Sandboxed projects directory: ${SANDBOXES_DIR}`);
-  console.log(`🛡️  Multi-user isolation enabled`);
+  log.info({ port: PORT, host: '0.0.0.0' }, '🎨 Site Studio backend running');
+  log.info({ sandboxesDir: SANDBOXES_DIR }, '🔒 Sandboxed projects directory');
+  log.info('🛡️  Multi-user isolation enabled');
 });
