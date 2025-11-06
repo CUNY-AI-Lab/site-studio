@@ -126,10 +126,6 @@ export class R2Storage implements IStorage {
     const contentType = lookup(filePath) || 'application/octet-stream';
 
     const body = typeof content === 'string' ? Buffer.from(content, 'utf-8') : content;
-    console.log(`[R2] Writing ${key}, content type: ${typeof content}, isBuffer: ${Buffer.isBuffer(content)}, body isBuffer: ${Buffer.isBuffer(body)}`);
-    if (Buffer.isBuffer(body)) {
-      console.log(`[R2] First 4 bytes: ${body.slice(0, 4).toString('hex')}`);
-    }
 
     await this.client.send(
       new PutObjectCommand({
