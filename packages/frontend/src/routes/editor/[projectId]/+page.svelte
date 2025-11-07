@@ -10,7 +10,7 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download } from 'lucide-svelte';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
@@ -217,6 +217,36 @@
 		window.open(url, '_blank');
 	}
 
+	async function handleExportProject() {
+		if (!currentProject) return;
+		try {
+			const response = await fetch(resolvePath(`/api/projects/${currentProject.id}/export`), {
+				credentials: 'include'
+			});
+
+			if (!response.ok) {
+				throw new Error('Export failed');
+			}
+
+			// Create a blob from the response
+			const blob = await response.blob();
+
+			// Create a temporary download link
+			const url = window.URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${currentProject.id}.zip`;
+			document.body.appendChild(a);
+			a.click();
+
+			// Cleanup
+			window.URL.revokeObjectURL(url);
+			document.body.removeChild(a);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to export project');
+		}
+	}
+
 
 </script>
 
@@ -333,6 +363,10 @@
 										</DropdownMenu.Item>
 									{/if}
 									<DropdownMenu.Separator />
+									<DropdownMenu.Item onclick={handleExportProject}>
+										<Download size={14} />
+										<span>Export as ZIP</span>
+									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleRenameProject}>
 										Rename
 									</DropdownMenu.Item>

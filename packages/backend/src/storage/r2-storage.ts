@@ -13,6 +13,7 @@ import {
   CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { lookup } from 'mime-types';
+import archiver from 'archiver';
 import type { IStorage, StorageFile, ProjectMetadata } from './types.js';
 
 export class R2Storage implements IStorage {
@@ -524,5 +525,53 @@ export class R2Storage implements IStorage {
       console.error('Error finding project owner:', error);
       return null;
     }
+  }
+
+  async exportProject(userId: string, projectId: string): Promise<Buffer> {
+    // Check if project exists
+    if (!await this.projectExists(userId, projectId)) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    // Get all files in the project
+    const files = await this.listFiles(userId, projectId);
+
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const archive = archiver('zip', {
+        zlib: { level: 9 } // Maximum compression
+      });
+
+      // Collect data chunks
+      archive.on('data', (chunk: Buffer) => chunks.push(chunk));
+
+      // Handle completion
+      archive.on('end', () => {
+        resolve(Buffer.concat(chunks));
+      });
+
+      // Handle errors
+      archive.on('error', (err: Error) => {
+        reject(err);
+      });
+
+      // Download and add each file to the archive
+      const addFilesToArchive = async () => {
+        try {
+          for (const file of files) {
+            if (!file.isDirectory) {
+              const buffer = await this.readFileBuffer(userId, projectId, file.path);
+              archive.append(buffer, { name: file.path });
+            }
+          }
+          // Finalize the archive
+          archive.finalize();
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      addFilesToArchive();
+    });
   }
 }

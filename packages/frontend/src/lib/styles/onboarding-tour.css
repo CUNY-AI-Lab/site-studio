@@ -1,0 +1,112 @@
+/* Custom styles for driver.js onboarding tour to match Site Studio theme */
+
+/* Overlay */
+.driver-overlay {
+	background-color: rgba(0, 0, 0, 0.75) !important;
+}
+
+/* Popover container */
+.driver-popover {
+	background-color: hsl(var(--card)) !important;
+	border: 1px solid hsl(var(--border)) !important;
+	border-radius: 12px !important;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15) !important;
+	max-width: 400px !important;
+}
+
+/* Popover arrow */
+.driver-popover-arrow {
+	border-color: hsl(var(--card)) !important;
+}
+
+/* Title */
+.driver-popover-title {
+	color: hsl(var(--foreground)) !important;
+	font-size: 1.125rem !important;
+	font-weight: 600 !important;
+	margin-bottom: 0.75rem !important;
+}
+
+/* Description */
+.driver-popover-description {
+	color: hsl(var(--muted-foreground)) !important;
+	font-size: 0.9375rem !important;
+	line-height: 1.6 !important;
+	white-space: pre-line !important;
+}
+
+/* Progress text */
+.driver-popover-progress-text {
+	color: hsl(var(--muted-foreground)) !important;
+	font-size: 0.8125rem !important;
+}
+
+/* Buttons container */
+.driver-popover-footer {
+	margin-top: 1.25rem !important;
+	display: flex !important;
+	gap: 0.5rem !important;
+	justify-content: space-between !important;
+	align-items: center !important;
+}
+
+/* Button base styles */
+.driver-popover-btn {
+	padding: 0.5rem 1rem !important;
+	border-radius: 0.375rem !important;
+	font-size: 0.875rem !important;
+	font-weight: 500 !important;
+	transition: all 0.2s !important;
+	border: 1px solid transparent !important;
+}
+
+/* Close button */
+.driver-popover-close-btn {
+	position: absolute !important;
+	top: 0.75rem !important;
+	right: 0.75rem !important;
+	background: transparent !important;
+	border: none !important;
+	color: hsl(var(--muted-foreground)) !important;
+	font-size: 1.25rem !important;
+	line-height: 1 !important;
+	padding: 0.25rem !important;
+	cursor: pointer !important;
+	opacity: 0.7 !important;
+	transition: opacity 0.2s !important;
+}
+
+.driver-popover-close-btn:hover {
+	opacity: 1 !important;
+}
+
+/* Previous button */
+.driver-popover-prev-btn {
+	background-color: transparent !important;
+	color: hsl(var(--foreground)) !important;
+	border-color: hsl(var(--border)) !important;
+}
+
+.driver-popover-prev-btn:hover {
+	background-color: hsl(var(--muted)) !important;
+}
+
+/* Next/Done button */
+.driver-popover-next-btn {
+	background-color: hsl(var(--primary)) !important;
+	color: hsl(var(--primary-foreground)) !important;
+}
+
+.driver-popover-next-btn:hover {
+	opacity: 0.9 !important;
+}
+
+/* Highlighted element */
+.driver-active-element {
+	border-radius: 8px !important;
+}
+
+/* Disable smooth scroll during tour */
+.driver-active {
+	scroll-behavior: auto !important;
+}

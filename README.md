@@ -5,14 +5,14 @@ AI-powered web development tool for academics. Build professional websites throu
 ## Features
 
 - 🤖 **Plan/Execute AI Agent** - Review and approve proposed changes before execution
-- 📝 **Live Code Editor** - Monaco Editor with syntax highlighting and auto-save
+- 📝 **Live Code Editor** - CodeMirror 6 with syntax highlighting and auto-save
 - 👀 **Live Preview** - Real-time updates with flicker-free dual iframe system
 - 📁 **File Management** - Complete project file access and organization
 - 🎨 **Modern UI** - SvelteKit 5 with shadcn-svelte components
 
 ## Tech Stack
 
-**Frontend:** SvelteKit 5, Tailwind CSS v4, Monaco Editor
+**Frontend:** SvelteKit 5, Tailwind CSS v4, CodeMirror 6
 **Backend:** Express 5, Claude Agent SDK, MCP Tools
 **AI:** Claude Sonnet 4.5 with interactive approval workflow
 

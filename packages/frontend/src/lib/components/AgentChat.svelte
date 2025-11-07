@@ -53,6 +53,10 @@
 	let attachedFile = $state<File | null>(null); // Track attached file
 	let isUploading = $state(false); // Track upload state
 
+	// Limit displayed messages to most recent 10 to manage context
+	const MAX_DISPLAYED_MESSAGES = 10;
+	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
+
 	async function uploadFile(file: File): Promise<string> {
 		const formData = new FormData();
 		formData.append('file', file);
@@ -554,13 +558,18 @@
 
 <div class="agent-chat">
 	<div class="messages" bind:this={messagesContainer}>
-		{#if messages.length === 0}
+		{#if displayedMessages.length === 0}
 			<div class="welcome">
 				<h3>Let's Build Your Site</h3>
 				<p>Describe what you'd like to create or change.</p>
 			</div>
 		{:else}
-			{#each messages as message}
+			{#if messages.length > MAX_DISPLAYED_MESSAGES}
+				<div class="conversation-notice">
+					Showing last {MAX_DISPLAYED_MESSAGES} messages ({messages.length - MAX_DISPLAYED_MESSAGES} older messages hidden)
+				</div>
+			{/if}
+			{#each displayedMessages as message}
 				<div class="message {message.role}">
 					{#if message.blocks && message.blocks.length > 0}
 						{#each message.blocks as block}
@@ -684,6 +693,17 @@
 	.welcome p {
 		color: var(--color-text-secondary);
 		margin-bottom: 0;
+	}
+
+	.conversation-notice {
+		text-align: center;
+		padding: 0.75rem;
+		margin-bottom: 1rem;
+		background: var(--color-bg-tertiary);
+		border: 1px solid var(--color-border);
+		border-radius: 8px;
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
 	}
 
 	.message {
