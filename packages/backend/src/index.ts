@@ -1244,6 +1244,12 @@ app.use('/preview/:id', (req, res, next) => {
         return;
       }
 
+      // Authorization: verify the authenticated user owns this project
+      if (ownerId !== authReq.user.id) {
+        res.status(403).send('Access denied');
+        return;
+      }
+
       filePath = req.path.slice(1); // Remove leading slash
 
       // Default to index.html for directory requests
@@ -1321,6 +1327,12 @@ app.use('/preview/:id', (req, res, next) => {
     const ownerId = await storage.findProjectOwner(projectId);
     if (!ownerId) {
       res.status(404).send('Project not found');
+      return;
+    }
+
+    // Authorization: verify the authenticated user owns this project
+    if (ownerId !== authReq.user.id) {
+      res.status(403).send('Access denied');
       return;
     }
 

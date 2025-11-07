@@ -537,7 +537,7 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
-		background: var(--color-bg);
+		background: var(--color-bg-primary);
 	}
 
 	/* Overlay Container */

@@ -161,7 +161,7 @@
 <style>
 	.preview {
 		height: 100%;
-		background: var(--color-bg-primary);
+		background: #fff;
 		position: relative;
 	}
 

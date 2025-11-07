@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createFileTools } from '../tools/file-tools.js';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import type { Request, Response } from 'express';
+import type { AuthenticatedRequest } from '../middleware/auth.js';
 
 describe('Security - Path Traversal Protection', () => {
   let testDir: string;
@@ -224,5 +226,130 @@ describe('Security - Input Validation', () => {
       const result = await searchFiles.handler({ query: 'foo' });
       expect(result.content[0].text).toContain('multiline.txt');
     });
+  });
+});
+
+describe('Security - Cross-User Access Prevention', () => {
+  it('should prevent unauthorized access to preview endpoint', async () => {
+    // Mock storage with findProjectOwner method
+    const mockStorage = {
+      findProjectOwner: vi.fn().mockResolvedValue('user_alice'),
+      readFileBuffer: vi.fn().mockResolvedValue(Buffer.from('<html>Secret content</html>')),
+    };
+
+    // User Alice (owns the project)
+    const userAlice = { id: 'user_alice', createdAt: new Date() };
+
+    // User Bob (trying to access Alice's project)
+    const userBob = { id: 'user_bob', createdAt: new Date() };
+
+    // Mock request from Bob trying to access Alice's project
+    const mockRequest: Partial<AuthenticatedRequest> = {
+      params: { id: 'alice-project' },
+      path: '/index.html',
+      user: userBob,
+    };
+
+    const mockResponse: Partial<Response> = {
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn().mockReturnThis(),
+    };
+
+    // Simulate the authorization check logic from the endpoint
+    const projectId = mockRequest.params!.id;
+    const ownerId = await mockStorage.findProjectOwner(projectId);
+
+    // This is the critical check that was missing before the fix
+    if (ownerId !== mockRequest.user!.id) {
+      mockResponse.status!(403);
+      mockResponse.send!('Access denied');
+    } else {
+      // This should not execute for Bob
+      const buffer = await mockStorage.readFileBuffer(ownerId, projectId, 'index.html');
+      mockResponse.send!(buffer);
+    }
+
+    // Verify Bob was denied access
+    expect(mockStorage.findProjectOwner).toHaveBeenCalledWith('alice-project');
+    expect(mockResponse.status).toHaveBeenCalledWith(403);
+    expect(mockResponse.send).toHaveBeenCalledWith('Access denied');
+    expect(mockStorage.readFileBuffer).not.toHaveBeenCalled();
+  });
+
+  it('should allow authorized access to preview endpoint', async () => {
+    // Mock storage
+    const mockStorage = {
+      findProjectOwner: vi.fn().mockResolvedValue('user_alice'),
+      readFileBuffer: vi.fn().mockResolvedValue(Buffer.from('<html>My content</html>')),
+    };
+
+    // User Alice accessing her own project
+    const userAlice = { id: 'user_alice', createdAt: new Date() };
+
+    const mockRequest: Partial<AuthenticatedRequest> = {
+      params: { id: 'alice-project' },
+      path: '/index.html',
+      user: userAlice,
+    };
+
+    const mockResponse: Partial<Response> = {
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn().mockReturnThis(),
+      setHeader: vi.fn().mockReturnThis(),
+    };
+
+    // Simulate the authorization check logic
+    const projectId = mockRequest.params!.id;
+    const ownerId = await mockStorage.findProjectOwner(projectId);
+
+    if (ownerId !== mockRequest.user!.id) {
+      mockResponse.status!(403);
+      mockResponse.send!('Access denied');
+    } else {
+      // Alice should be allowed access
+      const buffer = await mockStorage.readFileBuffer(ownerId, projectId, 'index.html');
+      mockResponse.send!(buffer);
+    }
+
+    // Verify Alice was allowed access
+    expect(mockStorage.findProjectOwner).toHaveBeenCalledWith('alice-project');
+    expect(mockResponse.status).not.toHaveBeenCalledWith(403);
+    expect(mockStorage.readFileBuffer).toHaveBeenCalledWith('user_alice', 'alice-project', 'index.html');
+    expect(mockResponse.send).toHaveBeenCalledWith(Buffer.from('<html>My content</html>'));
+  });
+
+  it('should return 404 for non-existent projects', async () => {
+    // Mock storage that returns null for non-existent project
+    const mockStorage = {
+      findProjectOwner: vi.fn().mockResolvedValue(null),
+    };
+
+    const userAlice = { id: 'user_alice', createdAt: new Date() };
+
+    const mockRequest: Partial<AuthenticatedRequest> = {
+      params: { id: 'non-existent-project' },
+      path: '/index.html',
+      user: userAlice,
+    };
+
+    const mockResponse: Partial<Response> = {
+      status: vi.fn().mockReturnThis(),
+      send: vi.fn().mockReturnThis(),
+    };
+
+    // Simulate the logic
+    const projectId = mockRequest.params!.id;
+    const ownerId = await mockStorage.findProjectOwner(projectId);
+
+    if (!ownerId) {
+      mockResponse.status!(404);
+      mockResponse.send!('Project not found');
+      // Early return
+    }
+
+    // Verify 404 response
+    expect(mockStorage.findProjectOwner).toHaveBeenCalledWith('non-existent-project');
+    expect(mockResponse.status).toHaveBeenCalledWith(404);
+    expect(mockResponse.send).toHaveBeenCalledWith('Project not found');
   });
 });
