@@ -9,6 +9,9 @@
 	import { MoreVertical, Plus, FolderOpen, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
+	import { hasCompletedOnboarding, createDashboardTour } from '$lib/utils/onboarding';
+	import 'driver.js/dist/driver.css';
+	import '$lib/styles/onboarding-tour.css';
 
 	let projects = $state<Project[]>([]);
 	let loading = $state(true);
@@ -22,6 +25,15 @@
 
 	onMount(async () => {
 		await loadProjects();
+
+		// Show onboarding tour for first-time users with no projects
+		if (!loading && projects.length === 0 && !hasCompletedOnboarding()) {
+			// Small delay to ensure DOM is ready
+			setTimeout(() => {
+				const tour = createDashboardTour();
+				tour.drive();
+			}, 500);
+		}
 	});
 
 	async function loadProjects() {
