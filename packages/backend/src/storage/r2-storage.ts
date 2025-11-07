@@ -536,7 +536,7 @@ export class R2Storage implements IStorage {
     // Get all files in the project
     const files = await this.listFiles(userId, projectId);
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       const archive = archiver('zip', {
         zlib: { level: 9 } // Maximum compression
@@ -555,20 +555,23 @@ export class R2Storage implements IStorage {
         reject(err);
       });
 
-      try {
-        // Download and add each file to the archive
-        for (const file of files) {
-          if (!file.isDirectory) {
-            const buffer = await this.readFileBuffer(userId, projectId, file.path);
-            archive.append(buffer, { name: file.path });
+      // Download and add each file to the archive
+      const addFilesToArchive = async () => {
+        try {
+          for (const file of files) {
+            if (!file.isDirectory) {
+              const buffer = await this.readFileBuffer(userId, projectId, file.path);
+              archive.append(buffer, { name: file.path });
+            }
           }
+          // Finalize the archive
+          archive.finalize();
+        } catch (error) {
+          reject(error);
         }
+      };
 
-        // Finalize the archive
-        archive.finalize();
-      } catch (error) {
-        reject(error);
-      }
+      addFilesToArchive();
     });
   }
 }

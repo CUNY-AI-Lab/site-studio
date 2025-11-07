@@ -80,7 +80,7 @@ export function createDashboardTour() {
 export function createEditorTour() {
 	const steps: DriveStep[] = [
 		{
-			element: '.chat-sidebar',
+			element: '.agent-chat',
 			popover: {
 				title: 'AI Chat Assistant',
 				description:
