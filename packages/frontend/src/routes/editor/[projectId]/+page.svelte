@@ -15,9 +15,6 @@
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
 
-	// Reactive page title based on current project
-	let pageTitle = $derived(currentProject ? `${currentProject.name} - Site Studio` : 'Editor - Site Studio');
-
 	let previewComponent: Preview;
 	let chatPane: ReturnType<typeof Pane>;
 
@@ -28,6 +25,9 @@
 	let files = $state([]);
 	let allProjects = $state<Project[]>([]);
 	let currentProject = $state<Project | null>(null);
+
+	// Reactive page title based on current project
+	let pageTitle = $derived(currentProject ? `${currentProject.name} - Site Studio` : 'Editor - Site Studio');
 
 	// Panel collapse state
 	let isChatCollapsed = $state(false);

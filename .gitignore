@@ -23,6 +23,11 @@ packages/backend/sandboxes/
 # Logs
 *.log
 npm-debug.log*
+backend.log
+frontend.log
+
+# Process management
+*.pid
 
 # OS files
 .DS_Store

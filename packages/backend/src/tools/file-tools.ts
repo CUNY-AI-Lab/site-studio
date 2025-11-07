@@ -568,7 +568,7 @@ or updates it if it does. Parent directories are created automatically.`,
           content: [{
             type: 'text' as const,
             text: matches.length > 0
-              ? `Found "${params.query}" in ${matches.length} file(s):\n\n${matches.map(m => `• ${m}`).join('\n')}`
+              ? `Found "${params.query}" in ${matches.length} file(s):\n\n${matches.map(m => `• ${m.path} (lines: ${m.line_numbers.join(', ')})`).join('\n')}`
               : `No matches found for "${params.query}"`,
           }],
         };

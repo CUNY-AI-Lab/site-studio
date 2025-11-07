@@ -1293,12 +1293,11 @@ app.use('/preview/:id', (req, res, next) => {
       const isTextType = contentType.startsWith('text/') || contentType.includes('javascript') || contentType.includes('json');
       res.setHeader('Content-Type', isTextType ? `${contentType}; charset=utf-8` : contentType);
       res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-      // Disable caching to ensure preview shows latest changes
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      // Allow caching but revalidate to ensure preview shows latest changes
+      // This enables browser caching of external CDN libraries while keeping local content fresh
+      res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      // Remove ETag to prevent 304 Not Modified responses
-      res.removeHeader('ETag');
+      // Keep ETag for efficient revalidation (304 Not Modified responses)
 
       // If HTML file, add cache-busting to asset references
       if (ext === '.html') {
@@ -1363,10 +1362,11 @@ app.use('/preview/:id', (req, res, next) => {
 
       res.setHeader('Content-Type', isTextType ? `${contentType}; charset=utf-8` : contentType);
       res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      // Allow caching but revalidate to ensure preview shows latest changes
+      // This enables browser caching of external CDN libraries while keeping local content fresh
+      res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      res.removeHeader('ETag');
+      // Keep ETag for efficient revalidation (304 Not Modified responses)
 
       let responseBuffer = buffer;
 
@@ -1522,8 +1522,41 @@ app.use(requestLogger());
 // Global error handling middleware (must be registered last)
 app.use(errorHandler);
 
-app.listen(PORT as number, '0.0.0.0', () => {
+// Store server reference for graceful shutdown
+const server = app.listen(PORT as number, '0.0.0.0', () => {
   log.info({ port: PORT, host: '0.0.0.0' }, '🎨 Site Studio backend running');
   log.info({ sandboxesDir: SANDBOXES_DIR }, '🔒 Sandboxed projects directory');
   log.info('🛡️  Multi-user isolation enabled');
 });
+
+// Graceful shutdown handler
+function gracefulShutdown(signal: string) {
+  log.info({ signal }, '🛑 Received shutdown signal, closing server...');
+
+  // Close HTTP server (stops accepting new connections)
+  server.close(async () => {
+    log.info('✓ HTTP server closed');
+
+    try {
+      // Cleanup sandbox manager (cleanup inactive sessions)
+      log.info('Cleaning up sandbox sessions...');
+      await sandboxManager.cleanupInactiveSessions();
+
+      log.info('✓ All resources cleaned up successfully');
+      process.exit(0);
+    } catch (error) {
+      log.error({ error }, '✗ Error during cleanup');
+      process.exit(1);
+    }
+  });
+
+  // Force exit after 10 seconds if graceful shutdown hangs
+  setTimeout(() => {
+    log.error('✗ Forceful shutdown after timeout');
+    process.exit(1);
+  }, 10000).unref();
+}
+
+// Register signal handlers for graceful shutdown
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

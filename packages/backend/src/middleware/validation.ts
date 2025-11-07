@@ -8,7 +8,7 @@ import { Request, Response, NextFunction } from 'express';
 // Project-related schemas
 export const createProjectSchema = z.object({
   name: z.string().min(1, 'Project name is required').max(100, 'Project name too long'),
-  template: z.string().optional(),
+  template: z.string().nullish(),
 });
 
 export const renameProjectSchema = z.object({
@@ -30,9 +30,9 @@ export const renameFileSchema = z.object({
 export const querySchema = z.object({
   prompt: z.string().min(1, 'Prompt is required'),
   projectId: z.string().min(1, 'Project ID is required'),
-  sessionId: z.string().optional(),
-  mode: z.enum(['plan', 'execute']).optional(),
-  uploadedFile: z.string().optional(),
+  sessionId: z.string().nullish(),
+  mode: z.enum(['plan', 'execute']).nullish(),
+  uploadedFile: z.string().nullish(),
 });
 
 export const approvalSchema = z.object({
