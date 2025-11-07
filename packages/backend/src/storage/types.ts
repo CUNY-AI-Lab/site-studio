@@ -126,4 +126,11 @@ export interface IStorage {
    * Returns null if project not found
    */
   findProjectOwner(projectId: string): Promise<string | null>;
+
+  /**
+   * Export a project as a ZIP buffer
+   * Includes all files in the project directory
+   * @returns Buffer containing ZIP file data
+   */
+  exportProject(userId: string, projectId: string): Promise<Buffer>;
 }

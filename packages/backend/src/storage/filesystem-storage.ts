@@ -5,6 +5,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import archiver from 'archiver';
 import type { IStorage, StorageFile, ProjectMetadata } from './types.js';
 
 export class FilesystemStorage implements IStorage {
@@ -331,5 +332,45 @@ export class FilesystemStorage implements IStorage {
       console.error('Error finding project owner:', error);
       return null;
     }
+  }
+
+  async exportProject(userId: string, projectId: string): Promise<Buffer> {
+    const projectPath = this.getProjectPath(userId, projectId);
+
+    // Check if project exists
+    if (!await this.projectExists(userId, projectId)) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    return new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      const archive = archiver('zip', {
+        zlib: { level: 9 } // Maximum compression
+      });
+
+      // Collect data chunks
+      archive.on('data', (chunk: Buffer) => chunks.push(chunk));
+
+      // Handle completion
+      archive.on('end', () => {
+        resolve(Buffer.concat(chunks));
+      });
+
+      // Handle errors
+      archive.on('error', (err: Error) => {
+        reject(err);
+      });
+
+      // Add all files from project directory
+      // Exclude metadata file from export
+      archive.glob('**/*', {
+        cwd: projectPath,
+        ignore: ['.metadata.json'],
+        dot: false
+      });
+
+      // Finalize the archive
+      archive.finalize();
+    });
   }
 }

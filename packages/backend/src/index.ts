@@ -272,6 +272,38 @@ app.patch('/api/projects/:id', validateBody(renameProjectSchema), async (req, re
 });
 
 /**
+ * GET /api/projects/:id/export
+ * Export a project as a ZIP file
+ */
+app.get('/api/projects/:id/export', async (req, res, next) => {
+  try {
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
+    const { id } = req.params;
+
+    // Check if project exists
+    if (!(await storage.projectExists(userId, id))) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    log.info({ userId, projectId: id }, 'Exporting project as ZIP');
+
+    // Generate ZIP buffer
+    const zipBuffer = await storage.exportProject(userId, id);
+
+    // Send ZIP file
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${id}.zip"`);
+    res.setHeader('Content-Length', zipBuffer.length.toString());
+    res.send(zipBuffer);
+  } catch (error) {
+    log.error({ error }, 'Failed to export project');
+    next(error);
+  }
+});
+
+/**
  * DELETE /api/projects/:id
  * Delete a project for the authenticated user
  */
