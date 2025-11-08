@@ -656,6 +656,56 @@ app.post('/api/projects/:id/file', validateBody(saveFileSchema), async (req, res
 });
 
 /**
+ * POST /api/projects/:id/revert
+ * Revert a file to its previous state
+ */
+app.post('/api/projects/:id/revert', async (req, res, next) => {
+  try {
+    const authReq = req as unknown as AuthenticatedRequest;
+    const userId = authReq.user.id;
+    const { id } = req.params;
+    let { file_path, content } = req.body;
+
+    // Validate inputs
+    if (!file_path) {
+      res.status(400).json({ error: 'file_path is required' });
+      return;
+    }
+
+    // Strip leading slashes
+    file_path = file_path.replace(/^\/+/, '');
+
+    // Security: basic path validation (prevent directory traversal)
+    if (file_path.includes('..')) {
+      res.status(403).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    // If content is null, delete the file (reverting a create)
+    if (content === null) {
+      await storage.deleteFile(userId, id, file_path);
+      res.json({
+        success: true,
+        path: file_path,
+        message: 'File deleted (reverted creation)',
+      });
+      return;
+    }
+
+    // Otherwise, restore the file content
+    await storage.writeFile(userId, id, file_path, content);
+
+    res.json({
+      success: true,
+      path: file_path,
+      message: 'File reverted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/projects/:id/upload
  * Upload file(s) to a user's project
  */

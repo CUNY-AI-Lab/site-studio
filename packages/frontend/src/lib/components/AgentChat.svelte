@@ -578,7 +578,7 @@
 							{:else if block.type === 'tools' && block.tools}
 								<div class="tools-section">
 									{#each block.tools as tool, i}
-										<ToolExecutionCard {tool} index={i} />
+										<ToolExecutionCard {tool} index={i} {projectId} onRevert={onUpdate} />
 									{/each}
 								</div>
 							{/if}
