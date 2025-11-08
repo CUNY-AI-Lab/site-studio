@@ -308,20 +308,6 @@
 		}
 	}
 
-	.tool-output pre {
-		margin: 0;
-		padding: 0.75rem;
-		background: var(--color-bg-secondary);
-		border-radius: 6px;
-		font-size: 0.75rem;
-		overflow-x: auto;
-	}
-
-	.tool-output code {
-		font-family: 'Courier New', monospace;
-		color: var(--color-text-secondary);
-	}
-
 	.output-message {
 		margin-top: 0.5rem;
 		padding: 0.75rem;
