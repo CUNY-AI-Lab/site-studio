@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-svelte';
+	import DiffDisplay from './DiffDisplay.svelte';
 
 	interface ToolExecution {
 		name: string;
@@ -8,12 +9,24 @@
 		output?: string;
 	}
 
+	interface DiffData {
+		type: 'file_write' | 'file_edit' | 'file_delete';
+		file_path: string;
+		before: string | null;
+		after: string | null;
+		isNewFile: boolean;
+	}
+
 	let {
 		tool,
-		index = 0
+		index = 0,
+		projectId = '',
+		onRevert
 	}: {
 		tool: ToolExecution;
 		index?: number;
+		projectId?: string;
+		onRevert?: () => void;
 	} = $props();
 
 	let expanded = $state(false);
@@ -86,6 +99,27 @@
 		if (tool.status === 'error') return 'status-error';
 		return 'status-running';
 	}
+
+	// Extract diff data from output
+	function extractDiffData(output: string | undefined): { diffData: DiffData | null; cleanOutput: string } {
+		if (!output) return { diffData: null, cleanOutput: '' };
+
+		const diffMatch = output.match(/<!-- diff:(.*?) -->/s);
+		if (diffMatch) {
+			try {
+				const diffData = JSON.parse(diffMatch[1]) as DiffData;
+				const cleanOutput = output.replace(/<!-- diff:.*? -->/s, '').trim();
+				return { diffData, cleanOutput };
+			} catch (e) {
+				console.error('Failed to parse diff data:', e);
+			}
+		}
+
+		return { diffData: null, cleanOutput: output };
+	}
+
+	let parsedOutput = $derived(extractDiffData(tool.output));
+	let hasDiff = $derived(parsedOutput.diffData !== null);
 </script>
 
 <button class="tool-card {getStatusClass()}" onclick={() => {
@@ -109,9 +143,16 @@
 		</div>
 	</div>
 
-	{#if expanded && tool.output}
+	{#if expanded && (hasDiff || parsedOutput.cleanOutput)}
 		<div class="tool-output">
-			<pre><code>{tool.output}</code></pre>
+			{#if hasDiff && parsedOutput.diffData}
+				<DiffDisplay diffData={parsedOutput.diffData} {projectId} {onRevert} />
+			{/if}
+			{#if parsedOutput.cleanOutput}
+				<div class="output-message">
+					{parsedOutput.cleanOutput}
+				</div>
+			{/if}
 		</div>
 	{/if}
 </button>
@@ -279,5 +320,15 @@
 	.tool-output code {
 		font-family: 'Courier New', monospace;
 		color: var(--color-text-secondary);
+	}
+
+	.output-message {
+		margin-top: 0.5rem;
+		padding: 0.75rem;
+		background: var(--color-bg-secondary);
+		border-radius: 6px;
+		font-size: 0.875rem;
+		color: var(--color-text-primary);
+		line-height: 1.5;
 	}
 </style>

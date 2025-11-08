@@ -207,6 +207,23 @@ or updates it if it does. Parent directories are created automatically.`,
     }).shape,
     async (params) => {
       try {
+        // Capture before state for diffing
+        let beforeContent: string | null = null;
+        let isNewFile = false;
+
+        try {
+          if (useStorage && userId && projectId) {
+            beforeContent = await storage.readFile(userId, projectId, params.file_path);
+          } else {
+            const fullPath = path.join(projectPath, params.file_path);
+            beforeContent = await fs.readFile(fullPath, 'utf-8');
+          }
+        } catch {
+          // File doesn't exist - this is a new file
+          isNewFile = true;
+        }
+
+        // Write the file
         if (useStorage && userId && projectId) {
           // Use storage abstraction
           await storage.writeFile(userId, projectId, params.file_path, params.content);
@@ -218,13 +235,25 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.writeFile(fullPath, params.content, 'utf-8');
         }
 
-        // Return user-friendly message
+        // Return user-friendly message with diff data
         const fileName = params.file_path.split('/').pop() || params.file_path;
         const size = Buffer.byteLength(params.content, 'utf-8');
+
+        // Include diff metadata in the response
+        const diffData = JSON.stringify({
+          type: 'file_write',
+          file_path: params.file_path,
+          before: beforeContent,
+          after: params.content,
+          isNewFile,
+        });
+
         return {
           content: [{
             type: 'text' as const,
-            text: `✓ Created ${fileName} (${size} bytes)`,
+            text: isNewFile
+              ? `✓ Created ${fileName} (${size} bytes)\n<!-- diff:${diffData} -->`
+              : `✓ Updated ${fileName} (${size} bytes)\n<!-- diff:${diffData} -->`,
           }],
         };
       } catch (error: any) {
@@ -251,6 +280,21 @@ or updates it if it does. Parent directories are created automatically.`,
     }).shape,
     async (params) => {
       try {
+        // Capture content before deletion for potential revert
+        let beforeContent: string | null = null;
+
+        try {
+          if (useStorage && userId && projectId) {
+            beforeContent = await storage.readFile(userId, projectId, params.file_path);
+          } else {
+            const fullPath = path.join(projectPath, params.file_path);
+            beforeContent = await fs.readFile(fullPath, 'utf-8');
+          }
+        } catch {
+          // File doesn't exist or is binary - skip capture
+        }
+
+        // Delete the file
         if (useStorage && userId && projectId) {
           // Use storage abstraction
           await storage.deleteFile(userId, projectId, params.file_path);
@@ -267,11 +311,20 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.unlink(fullPath);
         }
 
+        // Include diff metadata
+        const diffData = JSON.stringify({
+          type: 'file_delete',
+          file_path: params.file_path,
+          before: beforeContent,
+          after: null,
+          isNewFile: false,
+        });
+
         const fileName = params.file_path.split('/').pop() || params.file_path;
         return {
           content: [{
             type: 'text' as const,
-            text: `✓ Deleted ${fileName}`,
+            text: `✓ Deleted ${fileName}\n<!-- diff:${diffData} -->`,
           }],
         };
       } catch (error: any) {
@@ -449,10 +502,19 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.writeFile(fullPath, updated, 'utf-8');
         }
 
+        // Include diff metadata
+        const diffData = JSON.stringify({
+          type: 'file_edit',
+          file_path: params.file_path,
+          before: content,
+          after: updated,
+          isNewFile: false,
+        });
+
         return {
           content: [{
             type: 'text' as const,
-            text: `✓ Edited ${params.file_path.split('/').pop() || params.file_path}`,
+            text: `✓ Edited ${params.file_path.split('/').pop() || params.file_path}\n<!-- diff:${diffData} -->`,
           }],
         };
       } catch (error: any) {
