@@ -14,6 +14,9 @@
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
+	import { hasCompletedOnboarding, createEditorTour } from '$lib/utils/onboarding';
+	import 'driver.js/dist/driver.css';
+	import '$lib/styles/onboarding-tour.css';
 
 	let previewComponent: Preview;
 	let chatPane: ReturnType<typeof Pane>;
@@ -46,6 +49,36 @@
 	onMount(async () => {
 		await loadFiles();
 		await loadAllProjects();
+
+		// Show onboarding tour for first-time users
+		if (!hasCompletedOnboarding()) {
+			// Small delay to ensure DOM is ready
+			setTimeout(() => {
+				const tour = createEditorTour();
+				tour.drive();
+			}, 1000);
+		}
+
+		// Add keyboard shortcut to force tutorial (Ctrl+Shift+H or Cmd+Shift+H for Help)
+		const handleKeyPress = (e: KeyboardEvent) => {
+			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
+				e.preventDefault();
+				const tour = createEditorTour();
+				tour.drive();
+			}
+		};
+		window.addEventListener('keydown', handleKeyPress);
+
+		// Expose function to force tutorial from console
+		(window as any).showEditorTutorial = () => {
+			const tour = createEditorTour();
+			tour.drive();
+		};
+
+		return () => {
+			window.removeEventListener('keydown', handleKeyPress);
+			delete (window as any).showEditorTutorial;
+		};
 	});
 
 	async function loadAllProjects() {

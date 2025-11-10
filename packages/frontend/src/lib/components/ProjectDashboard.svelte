@@ -34,6 +34,27 @@
 				tour.drive();
 			}, 500);
 		}
+
+		// Add keyboard shortcut to force tutorial (Ctrl+Shift+H or Cmd+Shift+H for Help)
+		const handleKeyPress = (e: KeyboardEvent) => {
+			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
+				e.preventDefault();
+				const tour = createDashboardTour();
+				tour.drive();
+			}
+		};
+		window.addEventListener('keydown', handleKeyPress);
+
+		// Expose function to force tutorial from console
+		(window as any).showTutorial = () => {
+			const tour = createDashboardTour();
+			tour.drive();
+		};
+
+		return () => {
+			window.removeEventListener('keydown', handleKeyPress);
+			delete (window as any).showTutorial;
+		};
 	});
 
 	async function loadProjects() {

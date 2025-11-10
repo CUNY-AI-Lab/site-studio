@@ -52,6 +52,7 @@
 	let currentStatus = $state<string>(''); // For showing contextual status
 	let attachedFile = $state<File | null>(null); // Track attached file
 	let isUploading = $state(false); // Track upload state
+	let filesModifiedDuringExecution = $state(false); // Track if files were modified
 
 	// Limit displayed messages to most recent 10 to manage context
 	const MAX_DISPLAYED_MESSAGES = 10;
@@ -98,6 +99,7 @@
 		attachedFile = null;
 		if (fileInput) fileInput.value = '';
 		isLoading = true;
+		filesModifiedDuringExecution = false; // Reset file modification tracking
 
 		// Add user message
 		let messageContent = userMessage;
@@ -284,9 +286,16 @@
 										if (toolIndex !== -1) {
 											currentToolsGroup[toolIndex].status = block.is_error ? 'error' : 'success';
 											// Extract text from content array
-											currentToolsGroup[toolIndex].output = Array.isArray(block.content)
+											const output = Array.isArray(block.content)
 												? block.content.map(c => c.text).join('\n')
 												: block.content;
+											currentToolsGroup[toolIndex].output = output;
+
+											// Check if this tool modified files (has diff metadata)
+											if (!block.is_error && output.includes('<!-- diff:')) {
+												filesModifiedDuringExecution = true;
+											}
+
 										// Update the tools block (find the current/last one, not first)
 										const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
 											!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
@@ -308,8 +317,10 @@
 				}
 			}
 
-			// Notify parent to refresh
-			onUpdate();
+			// Notify parent to refresh only if files were modified
+			if (filesModifiedDuringExecution) {
+				onUpdate();
+			}
 		} catch (error) {
 			console.error('Error sending message:', error);
 			messages = [
@@ -330,6 +341,7 @@
 		if (!pendingSessionId) return;
 
 		isLoading = true;
+		filesModifiedDuringExecution = false; // Reset file modification tracking
 		const tempPlan = pendingPlan;
 		pendingPlan = null;
 
@@ -457,9 +469,16 @@
 										const toolIndex = currentToolsGroup.findIndex(t => t.id === block.tool_use_id);
 										if (toolIndex !== -1) {
 											currentToolsGroup[toolIndex].status = block.is_error ? 'error' : 'success';
-											currentToolsGroup[toolIndex].output = Array.isArray(block.content)
+											const output = Array.isArray(block.content)
 												? block.content.map(c => c.text).join('\n')
 												: block.content;
+											currentToolsGroup[toolIndex].output = output;
+
+											// Check if this tool modified files (has diff metadata)
+											if (!block.is_error && output.includes('<!-- diff:')) {
+												filesModifiedDuringExecution = true;
+											}
+
 											// Update the tools block (find the current/last one, not first)
 											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
 												!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
@@ -481,8 +500,10 @@
 				}
 			}
 
-			// Notify parent to refresh
-			onUpdate();
+			// Notify parent to refresh only if files were modified
+			if (filesModifiedDuringExecution) {
+				onUpdate();
+			}
 		} catch (error) {
 			console.error('Error approving plan:', error);
 			messages = [
