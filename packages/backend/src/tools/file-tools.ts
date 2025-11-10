@@ -239,21 +239,31 @@ or updates it if it does. Parent directories are created automatically.`,
         const fileName = params.file_path.split('/').pop() || params.file_path;
         const size = Buffer.byteLength(params.content, 'utf-8');
 
-        // Include diff metadata in the response
-        const diffData = JSON.stringify({
-          type: 'file_write',
-          file_path: params.file_path,
-          before: beforeContent,
-          after: params.content,
-          isNewFile,
-        });
+        // Only include diff metadata for files under 100KB to avoid payload bloat
+        const MAX_DIFF_SIZE = 100 * 1024; // 100KB
+        const beforeSize = beforeContent ? Buffer.byteLength(beforeContent, 'utf-8') : 0;
+        const afterSize = Buffer.byteLength(params.content, 'utf-8');
+        const shouldIncludeDiff = beforeSize <= MAX_DIFF_SIZE && afterSize <= MAX_DIFF_SIZE;
+
+        let message = isNewFile
+          ? `✓ Created ${fileName} (${size} bytes)`
+          : `✓ Updated ${fileName} (${size} bytes)`;
+
+        if (shouldIncludeDiff) {
+          const diffData = JSON.stringify({
+            type: 'file_write',
+            file_path: params.file_path,
+            before: beforeContent,
+            after: params.content,
+            isNewFile,
+          });
+          message += `\n<!-- diff:${diffData} -->`;
+        }
 
         return {
           content: [{
             type: 'text' as const,
-            text: isNewFile
-              ? `✓ Created ${fileName} (${size} bytes)\n<!-- diff:${diffData} -->`
-              : `✓ Updated ${fileName} (${size} bytes)\n<!-- diff:${diffData} -->`,
+            text: message,
           }],
         };
       } catch (error: any) {
@@ -311,20 +321,30 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.unlink(fullPath);
         }
 
-        // Include diff metadata
-        const diffData = JSON.stringify({
-          type: 'file_delete',
-          file_path: params.file_path,
-          before: beforeContent,
-          after: null,
-          isNewFile: false,
-        });
-
         const fileName = params.file_path.split('/').pop() || params.file_path;
+
+        // Only include diff metadata for files under 100KB
+        const MAX_DIFF_SIZE = 100 * 1024; // 100KB
+        const beforeSize = beforeContent ? Buffer.byteLength(beforeContent, 'utf-8') : 0;
+        const shouldIncludeDiff = beforeSize <= MAX_DIFF_SIZE;
+
+        let message = `✓ Deleted ${fileName}`;
+
+        if (shouldIncludeDiff) {
+          const diffData = JSON.stringify({
+            type: 'file_delete',
+            file_path: params.file_path,
+            before: beforeContent,
+            after: null,
+            isNewFile: false,
+          });
+          message += `\n<!-- diff:${diffData} -->`;
+        }
+
         return {
           content: [{
             type: 'text' as const,
-            text: `✓ Deleted ${fileName}\n<!-- diff:${diffData} -->`,
+            text: message,
           }],
         };
       } catch (error: any) {
@@ -502,19 +522,31 @@ or updates it if it does. Parent directories are created automatically.`,
           await fs.writeFile(fullPath, updated, 'utf-8');
         }
 
-        // Include diff metadata
-        const diffData = JSON.stringify({
-          type: 'file_edit',
-          file_path: params.file_path,
-          before: content,
-          after: updated,
-          isNewFile: false,
-        });
+        const fileName = params.file_path.split('/').pop() || params.file_path;
+
+        // Only include diff metadata for files under 100KB
+        const MAX_DIFF_SIZE = 100 * 1024; // 100KB
+        const beforeSize = Buffer.byteLength(content, 'utf-8');
+        const afterSize = Buffer.byteLength(updated, 'utf-8');
+        const shouldIncludeDiff = beforeSize <= MAX_DIFF_SIZE && afterSize <= MAX_DIFF_SIZE;
+
+        let message = `✓ Edited ${fileName}`;
+
+        if (shouldIncludeDiff) {
+          const diffData = JSON.stringify({
+            type: 'file_edit',
+            file_path: params.file_path,
+            before: content,
+            after: updated,
+            isNewFile: false,
+          });
+          message += `\n<!-- diff:${diffData} -->`;
+        }
 
         return {
           content: [{
             type: 'text' as const,
-            text: `✓ Edited ${params.file_path.split('/').pop() || params.file_path}\n<!-- diff:${diffData} -->`,
+            text: message,
           }],
         };
       } catch (error: any) {

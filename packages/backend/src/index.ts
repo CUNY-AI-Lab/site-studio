@@ -25,6 +25,7 @@ import {
   renameProjectSchema,
   saveFileSchema,
   renameFileSchema,
+  revertFileSchema,
   querySchema,
   approvalSchema
 } from './middleware/validation.js';
@@ -659,18 +660,12 @@ app.post('/api/projects/:id/file', validateBody(saveFileSchema), async (req, res
  * POST /api/projects/:id/revert
  * Revert a file to its previous state
  */
-app.post('/api/projects/:id/revert', async (req, res, next) => {
+app.post('/api/projects/:id/revert', validateBody(revertFileSchema), async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { id } = req.params;
     let { file_path, content } = req.body;
-
-    // Validate inputs
-    if (!file_path) {
-      res.status(400).json({ error: 'file_path is required' });
-      return;
-    }
 
     // Strip leading slashes
     file_path = file_path.replace(/^\/+/, '');
@@ -681,8 +676,8 @@ app.post('/api/projects/:id/revert', async (req, res, next) => {
       return;
     }
 
-    // If content is null, delete the file (reverting a create)
-    if (content === null) {
+    // If content is null or undefined, delete the file (reverting a create)
+    if (content == null) {
       await storage.deleteFile(userId, id, file_path);
       res.json({
         success: true,

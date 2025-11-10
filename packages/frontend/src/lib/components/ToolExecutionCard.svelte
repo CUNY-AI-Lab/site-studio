@@ -104,11 +104,11 @@
 	function extractDiffData(output: string | undefined): { diffData: DiffData | null; cleanOutput: string } {
 		if (!output) return { diffData: null, cleanOutput: '' };
 
-		const diffMatch = output.match(/<!-- diff:(.*?) -->/s);
+		const diffMatch = output.match(/<!-- diff:([\s\S]*?) -->/);
 		if (diffMatch) {
 			try {
 				const diffData = JSON.parse(diffMatch[1]) as DiffData;
-				const cleanOutput = output.replace(/<!-- diff:.*? -->/s, '').trim();
+				const cleanOutput = output.replace(/<!-- diff:[\s\S]*? -->/g, '').trim();
 				return { diffData, cleanOutput };
 			} catch (e) {
 				console.error('Failed to parse diff data:', e);

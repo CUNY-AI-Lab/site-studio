@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { diffLines, type Change } from 'diff';
 	import { Button } from './ui/button';
-	import { Undo2 } from 'lucide-svelte';
+	import { Undo2, Redo2 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
+	import { onMount } from 'svelte';
 
 	interface DiffData {
 		type: 'file_write' | 'file_edit' | 'file_delete';
@@ -24,6 +25,50 @@
 
 	let isReverting = $state(false);
 	let reverted = $state(false);
+
+	// Session storage utilities
+	const STORAGE_KEY = `site-studio-reverts-${projectId}`;
+
+	interface RevertState {
+		[filePath: string]: {
+			reverted: boolean;
+			before: string | null;
+			after: string | null;
+		};
+	}
+
+	function loadRevertState(): RevertState {
+		try {
+			const stored = sessionStorage.getItem(STORAGE_KEY);
+			return stored ? JSON.parse(stored) : {};
+		} catch (e) {
+			console.error('Error loading revert state:', e);
+			return {};
+		}
+	}
+
+	function saveRevertState(filePath: string, isReverted: boolean) {
+		try {
+			const state = loadRevertState();
+			state[filePath] = {
+				reverted: isReverted,
+				before: diffData.before,
+				after: diffData.after,
+			};
+			sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+		} catch (e) {
+			console.error('Error saving revert state:', e);
+		}
+	}
+
+	// Load initial state from sessionStorage
+	onMount(() => {
+		const state = loadRevertState();
+		const fileState = state[diffData.file_path];
+		if (fileState) {
+			reverted = fileState.reverted;
+		}
+	});
 
 	// Compute the diff
 	let changes = $derived.by(() => {
@@ -48,7 +93,7 @@
 		let additions = 0;
 		let deletions = 0;
 		for (const change of changes) {
-			const lineCount = change.value.split('\n').filter((l) => l).length;
+			const lineCount = change.value.split('\n').length - (change.value.endsWith('\n') ? 1 : 0);
 			if (change.added) additions += lineCount;
 			if (change.removed) deletions += lineCount;
 		}
@@ -57,6 +102,10 @@
 
 	async function handleRevert() {
 		if (reverted) return; // Already reverted
+		if (!projectId || projectId.trim() === '') {
+			console.error('Project ID is required for revert operation');
+			return;
+		}
 
 		isReverting = true;
 		try {
@@ -76,6 +125,7 @@
 			}
 
 			reverted = true;
+			saveRevertState(diffData.file_path, true);
 
 			// Notify parent component if callback provided
 			if (onRevert) {
@@ -83,7 +133,46 @@
 			}
 		} catch (error) {
 			console.error('Error reverting file:', error);
-			alert('Failed to revert file. Please try again.');
+			// Error logged to console for debugging
+		} finally {
+			isReverting = false;
+		}
+	}
+
+	async function handleRestore() {
+		if (!reverted) return; // Not reverted yet
+		if (!projectId || projectId.trim() === '') {
+			console.error('Project ID is required for restore operation');
+			return;
+		}
+
+		isReverting = true;
+		try {
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/revert`), {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					file_path: diffData.file_path,
+					content: diffData.after, // Restore to after state (undo the revert)
+				}),
+			});
+
+			if (!response.ok) {
+				throw new Error('Failed to restore file');
+			}
+
+			reverted = false;
+			saveRevertState(diffData.file_path, false);
+
+			// Notify parent component if callback provided
+			if (onRevert) {
+				onRevert();
+			}
+		} catch (error) {
+			console.error('Error restoring file:', error);
+			// Error logged to console for debugging
 		} finally {
 			isReverting = false;
 		}
@@ -109,15 +198,27 @@
 			{#if stats.deletions > 0}
 				<span class="stat deletions">-{stats.deletions}</span>
 			{/if}
-			<Button
-				variant={reverted ? "default" : "outline"}
-				size="sm"
-				onclick={handleRevert}
-				disabled={isReverting || reverted}
-			>
-				<Undo2 size={14} />
-				{reverted ? 'Reverted' : isReverting ? 'Reverting...' : 'Revert'}
-			</Button>
+			{#if reverted}
+				<Button
+					variant="default"
+					size="sm"
+					onclick={handleRestore}
+					disabled={isReverting}
+				>
+					<Redo2 size={14} />
+					{isReverting ? 'Restoring...' : 'Restore'}
+				</Button>
+			{:else}
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={handleRevert}
+					disabled={isReverting}
+				>
+					<Undo2 size={14} />
+					{isReverting ? 'Reverting...' : 'Revert'}
+				</Button>
+			{/if}
 		</div>
 	</div>
 

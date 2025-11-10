@@ -26,6 +26,11 @@ export const renameFileSchema = z.object({
   newPath: z.string().min(1, 'New path is required'),
 });
 
+export const revertFileSchema = z.object({
+  file_path: z.string().min(1, 'File path is required').trim(),
+  content: z.string().nullable(), // null to delete, string to restore
+});
+
 // Agent query schemas
 export const querySchema = z.object({
   prompt: z.string().min(1, 'Prompt is required'),
