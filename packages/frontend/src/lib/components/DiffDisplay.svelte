@@ -246,11 +246,12 @@
 
 <style>
 	.diff-display {
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
+		border: 2px solid var(--color-border);
+		border-radius: 0;
 		overflow: hidden;
-		background: var(--color-bg-secondary);
+		background: var(--color-bg-primary);
 		margin: 0.5rem 0;
+		box-shadow: var(--shadow-sm);
 	}
 
 	.diff-header {
@@ -258,8 +259,8 @@
 		justify-content: space-between;
 		align-items: center;
 		padding: 0.75rem;
-		background: var(--color-bg-tertiary);
-		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		border-bottom: 2px solid var(--color-border);
 		gap: 0.75rem;
 	}
 
@@ -272,9 +273,9 @@
 	}
 
 	.diff-file-path {
-		font-family: 'Courier New', monospace;
+		font-family: var(--font-mono);
 		font-size: 0.875rem;
-		font-weight: 500;
+		font-weight: 600;
 		color: var(--color-text-primary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -282,26 +283,30 @@
 	}
 
 	.diff-badge {
-		padding: 0.125rem 0.5rem;
-		border-radius: 4px;
-		font-size: 0.75rem;
-		font-weight: 500;
+		padding: 0.25rem 0.625rem;
+		border-radius: 0;
+		border: 2px solid currentColor;
+		font-size: 0.65rem;
+		font-weight: 700;
+		font-family: var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
 		white-space: nowrap;
 	}
 
 	.diff-badge.created {
-		background: rgba(34, 197, 94, 0.15);
-		color: rgb(34, 197, 94);
+		background: transparent;
+		color: var(--color-success);
 	}
 
 	.diff-badge.modified {
-		background: rgba(59, 130, 246, 0.15);
-		color: rgb(59, 130, 246);
+		background: transparent;
+		color: var(--color-accent);
 	}
 
 	.diff-badge.deleted {
-		background: rgba(239, 68, 68, 0.15);
-		color: rgb(239, 68, 68);
+		background: transparent;
+		color: var(--color-error);
 	}
 
 	.diff-stats {
@@ -311,39 +316,43 @@
 	}
 
 	.stat {
-		font-family: 'Courier New', monospace;
+		font-family: var(--font-mono);
 		font-size: 0.75rem;
-		font-weight: 600;
+		font-weight: 700;
 	}
 
 	.stat.additions {
-		color: rgb(34, 197, 94);
+		color: var(--color-success);
 	}
 
 	.stat.deletions {
-		color: rgb(239, 68, 68);
+		color: var(--color-error);
 	}
 
 	.diff-content {
 		max-height: 400px;
 		overflow-y: auto;
-		font-family: 'Courier New', monospace;
+		font-family: var(--font-mono);
 		font-size: 0.75rem;
-		line-height: 1.5;
+		line-height: 1.6;
+		background: var(--color-bg-tertiary);
 	}
 
 	.diff-line {
 		display: flex;
 		align-items: flex-start;
 		min-height: 1.5rem;
+		border-left: 3px solid transparent;
 	}
 
 	.diff-line.added {
-		background: rgba(34, 197, 94, 0.1);
+		background: var(--color-bg-secondary);
+		border-left-color: var(--color-success);
 	}
 
 	.diff-line.removed {
-		background: rgba(239, 68, 68, 0.1);
+		background: var(--color-bg-secondary);
+		border-left-color: var(--color-error);
 	}
 
 	.diff-line.unchanged {
@@ -352,22 +361,23 @@
 
 	.line-marker {
 		display: inline-block;
-		width: 2rem;
+		width: 2.5rem;
 		padding: 0 0.5rem;
 		text-align: center;
 		flex-shrink: 0;
 		user-select: none;
-		color: var(--color-text-secondary);
+		color: var(--color-text-tertiary);
+		font-weight: 700;
 	}
 
 	.diff-line.added .line-marker {
-		color: rgb(34, 197, 94);
-		font-weight: 600;
+		color: var(--color-success);
+		font-weight: 700;
 	}
 
 	.diff-line.removed .line-marker {
-		color: rgb(239, 68, 68);
-		font-weight: 600;
+		color: var(--color-error);
+		font-weight: 700;
 	}
 
 	.diff-line pre {

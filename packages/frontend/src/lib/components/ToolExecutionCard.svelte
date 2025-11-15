@@ -161,18 +161,19 @@
 	.tool-card {
 		width: 100%;
 		text-align: left;
-		background: var(--color-bg-tertiary);
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
+		background: var(--color-bg-secondary);
+		border: 2px solid var(--color-border);
+		border-radius: 0;
 		padding: 0.75rem;
 		margin: 0.5rem 0;
 		transition: all 0.2s;
 		cursor: pointer;
 		position: relative;
 		overflow: hidden;
-		font-family: inherit;
+		font-family: var(--font-sans);
 		font-size: inherit;
 		color: inherit;
+		box-shadow: var(--shadow-sm);
 	}
 
 	.tool-card::before {
@@ -181,14 +182,15 @@
 		left: 0;
 		top: 0;
 		bottom: 0;
-		width: 3px;
-		background: var(--indicator-color, rgb(107, 114, 128));
+		width: 4px;
+		background: var(--indicator-color, var(--color-text-tertiary));
 		transition: all 0.2s;
 	}
 
 	.tool-card.status-running {
-		--indicator-color: rgb(59, 130, 246);
-		background: rgba(59, 130, 246, 0.03);
+		--indicator-color: var(--color-accent);
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-accent);
 	}
 
 	.tool-card.status-running::before {
@@ -200,22 +202,25 @@
 			opacity: 1;
 		}
 		50% {
-			opacity: 0.5;
+			opacity: 0.4;
 		}
 	}
 
 	.tool-card.status-success {
-		--indicator-color: rgb(34, 197, 94);
-		background: rgba(34, 197, 94, 0.03);
+		--indicator-color: var(--color-success);
+		background: var(--color-bg-secondary);
+		border-color: var(--color-success);
 	}
 
 	.tool-card.status-error {
-		--indicator-color: rgb(239, 68, 68);
-		background: rgba(239, 68, 68, 0.03);
+		--indicator-color: var(--color-error);
+		background: var(--color-bg-secondary);
+		border-color: var(--color-error);
 	}
 
 	.tool-card:hover {
-		background: rgba(var(--indicator-color-rgb, 107, 114, 128), 0.08);
+		box-shadow: var(--shadow-md);
+		transform: translateY(-1px);
 		border-color: var(--indicator-color);
 	}
 
@@ -240,27 +245,28 @@
 		justify-content: center;
 		width: 24px;
 		height: 24px;
-		border-radius: 6px;
+		border-radius: 0;
 		background: var(--indicator-color);
-		opacity: 0.15;
+		opacity: 0.2;
 		flex-shrink: 0;
 	}
 
 	:global(.tool-icon) {
-		color: var(--indicator-color);
+		color: var(--color-text-primary);
 		flex-shrink: 0;
 	}
 
 	.tool-label {
 		font-size: 0.875rem;
-		font-weight: 500;
+		font-weight: 600;
+		font-family: var(--font-sans);
 		color: var(--color-text-primary);
 		white-space: nowrap;
 	}
 
 	.tool-target {
 		font-size: 0.75rem;
-		font-family: 'Courier New', monospace;
+		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -311,9 +317,11 @@
 	.output-message {
 		margin-top: 0.5rem;
 		padding: 0.75rem;
-		background: var(--color-bg-secondary);
-		border-radius: 6px;
+		background: var(--color-bg-primary);
+		border-radius: 0;
+		border-left: 2px solid var(--indicator-color);
 		font-size: 0.875rem;
+		font-family: var(--font-mono);
 		color: var(--color-text-primary);
 		line-height: 1.5;
 	}

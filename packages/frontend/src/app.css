@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* === Custom Fonts === */
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=JetBrains+Mono:wght@400;500;600;700&family=Archivo:wght@400;500;600;700;800&display=swap');
+
 * {
 	margin: 0;
 	padding: 0;
@@ -7,31 +10,41 @@
 }
 
 :root {
-	/* === Color System === */
-	/* Background colors */
-	--color-bg-primary: #ffffff;
-	--color-bg-secondary: #f9fafb;
-	--color-bg-tertiary: #f3f4f6;
+	/* === Retrofuturistic Color System === */
+	/* Background colors - warm cream/paper tones */
+	--color-bg-primary: #F5F1E8;
+	--color-bg-secondary: #EBE5D9;
+	--color-bg-tertiary: #E0D8C8;
 
-	/* Border colors */
-	--color-border: #e5e7eb;
-	--color-border-hover: #d1d5db;
+	/* Border colors - warm grays */
+	--color-border: #C5BDB0;
+	--color-border-hover: #A89F8F;
 
-	/* Text colors */
-	--color-text-primary: #111827;
-	--color-text-secondary: #6b7280;
-	--color-text-tertiary: #9ca3af;
+	/* Text colors - deep warm tones */
+	--color-text-primary: #2C2824;
+	--color-text-secondary: #5A524A;
+	--color-text-tertiary: #8B8680;
 
-	/* Accent colors (academic blue) */
-	--color-accent: #2563eb;
-	--color-accent-hover: #1d4ed8;
-	--color-accent-light: #dbeafe;
+	/* Primary accent - terracotta/burnt sienna */
+	--color-accent: #C96436;
+	--color-accent-hover: #9F5236;
+	--color-accent-light: #E8A589;
+
+	/* Secondary accent - sage green */
+	--color-secondary: #7A907C;
+	--color-secondary-hover: #455A46;
+	--color-secondary-light: #A8BDA9;
+
+	/* Tertiary accent - warm gold */
+	--color-tertiary: #D4A356;
+	--color-tertiary-hover: #C08C3A;
+	--color-tertiary-light: #E8C88C;
 
 	/* Semantic colors */
-	--color-success: #059669;
-	--color-warning: #d97706;
-	--color-error: #dc2626;
-	--color-info: #0891b2;
+	--color-success: #6B8E67;
+	--color-warning: #D4A356;
+	--color-error: #B85C4F;
+	--color-info: #7A907C;
 
 	/* === Spacing System === */
 	--spacing-xs: 0.25rem;
@@ -39,35 +52,46 @@
 	--spacing-md: 1rem;
 	--spacing-lg: 1.5rem;
 	--spacing-xl: 2rem;
+	--spacing-2xl: 3rem;
 
 	/* === Typography === */
+	/* Font families */
+	--font-display: 'EB Garamond', Georgia, serif;
+	--font-mono: 'JetBrains Mono', 'Courier New', monospace;
+	--font-sans: 'Archivo', -apple-system, BlinkMacSystemFont, sans-serif;
+
+	/* Font sizes */
 	--font-size-xs: 0.75rem;
 	--font-size-sm: 0.875rem;
 	--font-size-base: 1rem;
 	--font-size-lg: 1.125rem;
 	--font-size-xl: 1.25rem;
 	--font-size-2xl: 1.5rem;
+	--font-size-3xl: 1.875rem;
+	--font-size-4xl: 2.25rem;
 
 	--font-weight-normal: 400;
 	--font-weight-medium: 500;
 	--font-weight-semibold: 600;
 	--font-weight-bold: 700;
+	--font-weight-black: 800;
 
 	--line-height-tight: 1.25;
 	--line-height-normal: 1.5;
 	--line-height-relaxed: 1.75;
 
-	/* === Shadows === */
-	--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-	--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-	--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-	--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+	/* === Flat/Offset Shadows (Retrofuturistic) === */
+	--shadow-sm: 2px 2px 0 rgba(44, 40, 36, 0.15);
+	--shadow-md: 4px 4px 0 rgba(44, 40, 36, 0.15);
+	--shadow-lg: 6px 6px 0 rgba(44, 40, 36, 0.15);
+	--shadow-xl: 8px 8px 0 rgba(44, 40, 36, 0.15);
 
-	/* === Border Radius === */
-	--radius-sm: 0.25rem;
-	--radius-md: 0.375rem;
-	--radius-lg: 0.5rem;
-	--radius-xl: 0.75rem;
+	/* === Border Radius (Sharp/Minimal) === */
+	--radius-none: 0;
+	--radius-sm: 2px;
+	--radius-md: 2px;
+	--radius-lg: 2px;
+	--radius-xl: 2px;
 	--radius-full: 9999px;
 
 	/* === Transitions === */
@@ -83,93 +107,118 @@
 	--z-modal: 40;
 	--z-toast: 50;
 
-	/* === shadcn-svelte theme variables === */
-	--background: 0 0% 100%;
-	--foreground: 222.2 84% 4.9%;
-	--muted: 210 40% 96.1%;
-	--muted-foreground: 215.4 16.3% 46.9%;
-	--popover: 0 0% 100%;
-	--popover-foreground: 222.2 84% 4.9%;
-	--card: 0 0% 100%;
-	--card-foreground: 222.2 84% 4.9%;
-	--border: 214.3 31.8% 91.4%;
-	--input: 214.3 31.8% 91.4%;
-	--primary: 222.2 47.4% 11.2%;
-	--primary-foreground: 210 40% 98%;
-	--secondary: 210 40% 96.1%;
-	--secondary-foreground: 222.2 47.4% 11.2%;
-	--accent: 210 40% 96.1%;
-	--accent-foreground: 222.2 47.4% 11.2%;
-	--destructive: 0 84.2% 60.2%;
-	--destructive-foreground: 210 40% 98%;
-	--ring: 222.2 84% 4.9%;
-	--radius: 0.5rem;
+	/* === shadcn-svelte theme variables (Retrofuturistic) === */
+	--background: 40 31% 92%;
+	--foreground: 30 15% 15%;
+	--muted: 40 28% 87%;
+	--muted-foreground: 30 15% 35%;
+	--popover: 40 31% 92%;
+	--popover-foreground: 30 15% 15%;
+	--card: 40 31% 92%;
+	--card-foreground: 30 15% 15%;
+	--border: 38 18% 73%;
+	--input: 38 18% 73%;
+	--primary: 18 59% 50%;
+	--primary-foreground: 40 31% 92%;
+	--secondary: 125 9% 52%;
+	--secondary-foreground: 40 31% 92%;
+	--accent: 40 54% 58%;
+	--accent-foreground: 30 15% 15%;
+	--destructive: 8 42% 51%;
+	--destructive-foreground: 40 31% 92%;
+	--ring: 18 59% 50%;
+	--radius: 2px;
 }
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		/* === Dark Mode Color System === */
-		/* Background colors */
-		--color-bg-primary: #111827;
-		--color-bg-secondary: #1f2937;
-		--color-bg-tertiary: #374151;
+		/* === Dark Mode Retrofuturistic Colors === */
+		/* Background colors - deep warm browns */
+		--color-bg-primary: #1A1815;
+		--color-bg-secondary: #2C2824;
+		--color-bg-tertiary: #3D3832;
 
-		/* Border colors */
-		--color-border: #4b5563;
-		--color-border-hover: #6b7280;
+		/* Border colors - warm grays */
+		--color-border: #5A524A;
+		--color-border-hover: #6E6559;
 
-		/* Text colors */
-		--color-text-primary: #f9fafb;
-		--color-text-secondary: #9ca3af;
-		--color-text-tertiary: #6b7280;
+		/* Text colors - warm cream tones */
+		--color-text-primary: #F5F1E8;
+		--color-text-secondary: #C5BDB0;
+		--color-text-tertiary: #8B8680;
 
-		/* Accent colors (academic blue) */
-		--color-accent: #3b82f6;
-		--color-accent-hover: #60a5fa;
-		--color-accent-light: #1e3a8a;
+		/* Primary accent - brighter terracotta */
+		--color-accent: #E8774F;
+		--color-accent-hover: #F09870;
+		--color-accent-light: #9F5236;
+
+		/* Secondary accent - brighter sage */
+		--color-secondary: #8FA891;
+		--color-secondary-hover: #A8BDA9;
+		--color-secondary-light: #455A46;
+
+		/* Tertiary accent - brighter gold */
+		--color-tertiary: #E8BB6C;
+		--color-tertiary-hover: #F0CA89;
+		--color-tertiary-light: #C08C3A;
 
 		/* Semantic colors */
-		--color-success: #10b981;
-		--color-warning: #f59e0b;
-		--color-error: #ef4444;
-		--color-info: #06b6d4;
+		--color-success: #7BA077;
+		--color-warning: #E8BB6C;
+		--color-error: #D97666;
+		--color-info: #8FA891;
 
-		/* Shadows (softer in dark mode) */
-		--shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-		--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
-		--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
-		--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+		/* Flat/offset shadows for dark mode */
+		--shadow-sm: 2px 2px 0 rgba(0, 0, 0, 0.4);
+		--shadow-md: 4px 4px 0 rgba(0, 0, 0, 0.4);
+		--shadow-lg: 6px 6px 0 rgba(0, 0, 0, 0.4);
+		--shadow-xl: 8px 8px 0 rgba(0, 0, 0, 0.4);
 
 		/* === shadcn-svelte dark theme variables === */
-		--background: 222.2 84% 4.9%;
-		--foreground: 210 40% 98%;
-		--muted: 217.2 32.6% 17.5%;
-		--muted-foreground: 215 20.2% 65.1%;
-		--popover: 222.2 84% 4.9%;
-		--popover-foreground: 210 40% 98%;
-		--card: 222.2 84% 4.9%;
-		--card-foreground: 210 40% 98%;
-		--border: 217.2 32.6% 17.5%;
-		--input: 217.2 32.6% 17.5%;
-		--primary: 210 40% 98%;
-		--primary-foreground: 222.2 47.4% 11.2%;
-		--secondary: 217.2 32.6% 17.5%;
-		--secondary-foreground: 210 40% 98%;
-		--accent: 217.2 32.6% 17.5%;
-		--accent-foreground: 210 40% 98%;
-		--destructive: 0 62.8% 30.6%;
-		--destructive-foreground: 210 40% 98%;
-		--ring: 212.7 26.8% 83.9%;
+		--background: 28 8% 10%;
+		--foreground: 40 31% 92%;
+		--muted: 30 15% 20%;
+		--muted-foreground: 38 18% 70%;
+		--popover: 28 8% 10%;
+		--popover-foreground: 40 31% 92%;
+		--card: 28 8% 10%;
+		--card-foreground: 40 31% 92%;
+		--border: 30 15% 30%;
+		--input: 30 15% 30%;
+		--primary: 18 67% 61%;
+		--primary-foreground: 28 8% 10%;
+		--secondary: 125 12% 60%;
+		--secondary-foreground: 28 8% 10%;
+		--accent: 40 67% 67%;
+		--accent-foreground: 28 8% 10%;
+		--destructive: 8 55% 63%;
+		--destructive-foreground: 40 31% 92%;
+		--ring: 18 67% 61%;
 	}
 }
 
 body {
-	font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+	font-family: var(--font-sans);
 	background: var(--color-bg-primary);
 	color: var(--color-text-primary);
 	height: 100vh;
 	overflow: hidden;
 	line-height: var(--line-height-normal);
+	position: relative;
+}
+
+/* Grain texture overlay for retrofuturistic feel */
+body::before {
+	content: '';
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	opacity: 0.03;
+	z-index: var(--z-base);
+	pointer-events: none;
+	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='2.5' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
 }
 
 button {
@@ -198,22 +247,23 @@ input, textarea {
 	transition: all var(--transition-slow);
 }
 
-/* Focus states */
+/* Focus states - sharp, retrofuturistic */
 *:focus-visible {
 	outline: 2px solid var(--color-accent);
 	outline-offset: 2px;
+	border-radius: var(--radius-sm);
 }
 
-/* Selection */
+/* Selection - warm terracotta */
 ::selection {
 	background: var(--color-accent-light);
 	color: var(--color-text-primary);
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling - sharp, geometric */
 ::-webkit-scrollbar {
-	width: 8px;
-	height: 8px;
+	width: 12px;
+	height: 12px;
 }
 
 ::-webkit-scrollbar-track {
@@ -222,9 +272,23 @@ input, textarea {
 
 ::-webkit-scrollbar-thumb {
 	background: var(--color-border);
-	border-radius: var(--radius-full);
+	border-radius: 0; /* Sharp corners */
+	border: 2px solid var(--color-bg-secondary);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-	background: var(--color-border-hover);
+	background: var(--color-accent);
+}
+
+/* Typography utilities */
+.font-display {
+	font-family: var(--font-display);
+}
+
+.font-mono {
+	font-family: var(--font-mono);
+}
+
+.font-sans {
+	font-family: var(--font-sans);
 }

@@ -25,8 +25,8 @@
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			"selection:bg-primary dark:bg-input/30 selection:text-primary-foreground border-input ring-offset-background placeholder:text-muted-foreground shadow-xs flex h-9 w-full min-w-0 rounded-md border bg-transparent px-3 pt-1.5 text-sm font-medium outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50",
-			"focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+			"font-mono selection:bg-primary selection:text-primary-foreground border-input ring-offset-background placeholder:text-muted-foreground shadow-sm flex h-9 w-full min-w-0 rounded-sm border-2 bg-background px-3 pt-1.5 text-sm font-medium outline-none transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50",
+			"focus-visible:border-primary focus-visible:shadow-md focus-visible:-translate-y-0.5",
 			"aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
 			className
 		)}
@@ -40,8 +40,8 @@
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			"border-input bg-background selection:bg-primary dark:bg-input/30 selection:text-primary-foreground ring-offset-background placeholder:text-muted-foreground shadow-xs flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
-			"focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+			"font-mono border-input bg-background selection:bg-primary selection:text-primary-foreground ring-offset-background placeholder:text-muted-foreground shadow-sm flex h-9 w-full min-w-0 rounded-sm border-2 px-3 py-1 text-base outline-none transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+			"focus-visible:border-primary focus-visible:shadow-md focus-visible:-translate-y-0.5",
 			"aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
 			className
 		)}

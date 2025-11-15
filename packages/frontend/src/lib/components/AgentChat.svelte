@@ -718,12 +718,13 @@
 
 	.conversation-notice {
 		text-align: center;
-		padding: 0.75rem;
+		padding: 0.875rem;
 		margin-bottom: 1rem;
 		background: var(--color-bg-tertiary);
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
+		border: 2px solid var(--color-border);
+		border-radius: 0;
 		font-size: 0.8125rem;
+		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 	}
 
@@ -732,7 +733,7 @@
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
+		gap: 0.625rem;
 	}
 
 	.message.user {
@@ -742,9 +743,10 @@
 	.message.user :global(.message-content) {
 		background: var(--color-accent);
 		color: white;
-		padding: 0.75rem 1rem;
-		border-radius: 12px;
-		border-bottom-right-radius: 4px;
+		padding: 0.875rem 1.125rem;
+		border-radius: 0;
+		border-left: 4px solid var(--color-accent-hover);
+		box-shadow: var(--shadow-sm);
 	}
 
 	.message.assistant {
@@ -754,9 +756,10 @@
 	.message.assistant :global(.message-content) {
 		background: var(--color-bg-tertiary);
 		color: var(--color-text-primary);
-		padding: 0.75rem 1rem;
-		border-radius: 12px;
-		border-bottom-left-radius: 4px;
+		padding: 0.875rem 1.125rem;
+		border-radius: 0;
+		border-left: 4px solid var(--color-secondary);
+		box-shadow: var(--shadow-sm);
 	}
 
 	.tools-section {
@@ -782,8 +785,8 @@
 
 	.input-container {
 		padding: 1rem;
-		border-top: 1px solid var(--color-border);
-		background: var(--color-bg-primary);
+		border-top: 2px solid var(--color-border);
+		background: var(--color-bg-tertiary);
 		display: flex;
 		flex-direction: column;
 		gap: 0.75rem;
@@ -792,18 +795,18 @@
 	.input-row {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.625rem;
 	}
 
 	.input-field {
 		flex: 1;
-		padding: 0.75rem 1rem;
-		border: 1px solid var(--color-border);
-		border-radius: 8px;
-		background: var(--color-bg-secondary);
+		padding: 0.875rem 1rem;
+		border: 2px solid var(--color-border);
+		border-radius: 0;
+		background: var(--color-bg-primary);
 		color: var(--color-text-primary);
 		font-size: 0.875rem;
-		font-family: inherit;
+		font-family: var(--font-sans);
 	}
 
 	.input-field:focus {

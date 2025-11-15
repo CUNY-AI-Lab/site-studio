@@ -259,26 +259,41 @@
 	.project-dashboard {
 		min-height: 100vh;
 		background: hsl(var(--background));
-		padding: 2rem;
+		padding: 3rem 2rem 2rem;
 	}
 
 	.dashboard-header {
 		display: flex;
 		justify-content: space-between;
-		align-items: center;
-		margin-bottom: 2rem;
-		padding-bottom: 1rem;
-		border-bottom: 1px solid hsl(var(--border));
+		align-items: flex-end;
+		margin-bottom: 3rem;
+		padding-bottom: 1.5rem;
+		border-bottom: 2px solid hsl(var(--border));
+		position: relative;
+	}
+
+	.dashboard-header::after {
+		content: '';
+		position: absolute;
+		bottom: -2px;
+		left: 0;
+		width: 120px;
+		height: 2px;
+		background: hsl(var(--primary));
 	}
 
 	.dashboard-title {
-		font-size: 2rem;
+		font-family: var(--font-display);
+		font-size: 3rem;
 		font-weight: 700;
 		color: hsl(var(--foreground));
-		margin: 0 0 0.25rem 0;
+		margin: 0 0 0.5rem 0;
+		line-height: 1.1;
 	}
 
 	.dashboard-subtitle {
+		font-family: var(--font-sans);
+		font-size: 1rem;
 		color: hsl(var(--muted-foreground));
 		margin: 0;
 	}
@@ -300,7 +315,8 @@
 	}
 
 	.empty-state h2 {
-		font-size: 1.5rem;
+		font-family: var(--font-display);
+		font-size: 2rem;
 		font-weight: 600;
 		color: hsl(var(--foreground));
 		margin: 0;
@@ -308,22 +324,24 @@
 
 	.projects-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 1.5rem;
+		grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+		gap: 2rem;
 	}
 
 	.project-card {
 		position: relative;
 		background: hsl(var(--card));
-		border: 1px solid hsl(var(--border));
-		border-radius: 0.5rem;
+		border: 2px solid hsl(var(--border));
+		border-radius: 0;
 		overflow: hidden;
 		transition: all 0.2s;
+		box-shadow: var(--shadow-md);
 	}
 
 	.project-card:hover {
 		border-color: hsl(var(--primary));
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+		box-shadow: var(--shadow-lg);
+		transform: translateY(-2px);
 	}
 
 	.project-card-button {
@@ -339,20 +357,43 @@
 	}
 
 	.project-icon {
-		font-size: 3rem;
+		font-size: 4rem;
 		padding: 3rem 1.5rem 1rem;
 		display: flex;
 		justify-content: center;
 		align-items: center;
-		height: 180px;
-		background: linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.5) 100%);
+		height: 200px;
+		background: linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.6) 100%);
+		position: relative;
+	}
+
+	.project-icon::before {
+		content: '';
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		height: 4px;
+		background: hsl(var(--primary));
 	}
 
 	.project-thumbnail {
 		width: 100%;
-		height: 180px;
+		height: 200px;
 		overflow: hidden;
 		background: hsl(var(--muted));
+		position: relative;
+	}
+
+	.project-thumbnail::before {
+		content: '';
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		right: 0;
+		height: 4px;
+		background: hsl(var(--primary));
+		z-index: 1;
 	}
 
 	.project-thumbnail img {
@@ -360,10 +401,16 @@
 		height: 100%;
 		object-fit: cover;
 		display: block;
+		transition: transform 0.2s;
+	}
+
+	.project-card:hover .project-thumbnail img {
+		transform: scale(1.02);
 	}
 
 	.project-info {
-		padding: 1rem 1rem 1rem 1.5rem;
+		padding: 1.25rem 1.5rem;
+		background: hsl(var(--card));
 	}
 
 	.project-header {
@@ -374,12 +421,14 @@
 	}
 
 	.project-name {
-		font-size: 1.125rem;
+		font-family: var(--font-display);
+		font-size: 1.25rem;
 		font-weight: 600;
 		color: hsl(var(--foreground));
 		margin: 0;
 		word-break: break-word;
 		flex: 1;
+		line-height: 1.3;
 	}
 
 	.project-card :global(.project-menu-button) {
@@ -389,15 +438,19 @@
 	.published-badge {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		gap: 0.25rem;
-		padding: 0.25rem 0.75rem;
-		background: hsl(var(--primary) / 0.1);
+		justify-content: flex-start;
+		gap: 0.375rem;
+		padding: 0.375rem 0.75rem;
+		background: transparent;
 		color: hsl(var(--primary));
-		border-radius: 1rem;
+		border: 2px solid hsl(var(--primary));
+		border-radius: 0;
 		font-size: 0.75rem;
-		font-weight: 500;
-		margin-top: 0.5rem;
+		font-weight: 700;
+		font-family: var(--font-mono);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		margin-top: 0.75rem;
 		width: fit-content;
 	}
 </style>

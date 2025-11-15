@@ -2,16 +2,16 @@
 	import { type VariantProps, tv } from "tailwind-variants";
 
 	export const badgeVariants = tv({
-		base: "focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium transition-[color,box-shadow] focus-visible:ring-[3px] [&>svg]:pointer-events-none [&>svg]:size-3",
+		base: "font-mono uppercase tracking-wide focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-sm border-2 px-2.5 py-1 text-xs font-semibold transition-all duration-200 focus-visible:ring-[3px] [&>svg]:pointer-events-none [&>svg]:size-3",
 		variants: {
 			variant: {
 				default:
-					"bg-primary text-primary-foreground [a&]:hover:bg-primary/90 border-transparent",
+					"bg-primary text-primary-foreground [a&]:hover:shadow-sm [a&]:hover:-translate-y-0.5 border-transparent shadow-sm",
 				secondary:
-					"bg-secondary text-secondary-foreground [a&]:hover:bg-secondary/90 border-transparent",
+					"bg-secondary text-secondary-foreground [a&]:hover:shadow-sm [a&]:hover:-translate-y-0.5 border-transparent shadow-sm",
 				destructive:
-					"bg-destructive [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/70 border-transparent text-white",
-				outline: "text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+					"bg-destructive [a&]:hover:shadow-sm [a&]:hover:-translate-y-0.5 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 border-transparent text-destructive-foreground shadow-sm",
+				outline: "text-foreground [a&]:hover:bg-muted [a&]:hover:text-foreground border-border",
 			},
 		},
 		defaultVariants: {

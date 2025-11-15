@@ -478,28 +478,29 @@
 		height: 100vh;
 	}
 
-	/* Panel Toggle Buttons */
+	/* Panel Toggle Buttons - Retrofuturistic */
 	.panel-toggle {
 		position: fixed;
 		top: 50%;
 		transform: translateY(-50%);
 		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border);
-		padding: 0.75rem;
-		border-radius: 0.5rem;
+		border: 2px solid var(--color-border);
+		border-radius: 0;
+		padding: 0.875rem;
 		cursor: pointer;
 		z-index: 50;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		transition: all 0.2s;
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		box-shadow: var(--shadow-md);
 	}
 
 	.panel-toggle:hover {
 		background: var(--color-bg-tertiary);
-		border-color: var(--color-primary);
-		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		border-color: var(--color-accent);
+		box-shadow: var(--shadow-lg);
+		transform: translateY(-50%) translateY(-2px);
 	}
 
 	.panel-toggle-left {
@@ -510,13 +511,14 @@
 		right: 1rem;
 	}
 
-	/* Left Chat Sidebar */
+	/* Left Chat Sidebar - Retrofuturistic */
 	.chat-sidebar {
 		display: flex;
 		flex-direction: column;
 		background: var(--color-bg-secondary);
 		height: 100%;
 		overflow: hidden;
+		border-right: 2px solid var(--color-border);
 	}
 
 	.chat-wrapper {
@@ -528,12 +530,25 @@
 	.chat-header {
 		flex-shrink: 0;
 		padding: 1.5rem;
-		border-bottom: 1px solid var(--color-border);
+		border-bottom: 2px solid var(--color-border);
+		background: var(--color-bg-tertiary);
+		position: relative;
+	}
+
+	.chat-header::after {
+		content: '';
+		position: absolute;
+		bottom: -2px;
+		left: 0;
+		width: 80px;
+		height: 2px;
+		background: var(--color-accent);
 	}
 
 	.chat-header .logo {
-		font-size: 1.25rem;
-		font-weight: 600;
+		font-family: var(--font-display);
+		font-size: 1.5rem;
+		font-weight: 700;
 		margin-bottom: 0.5rem;
 	}
 
@@ -541,7 +556,7 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		margin-bottom: 0.75rem;
+		margin-bottom: 1rem;
 	}
 
 	.header-top .logo {
@@ -558,18 +573,19 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.5rem 0.75rem;
-		background: var(--color-bg);
-		border: 1px solid var(--color-border);
-		border-radius: 0.375rem;
+		padding: 0.625rem 0.875rem;
+		background: var(--color-bg-primary);
+		border: 2px solid var(--color-border);
+		border-radius: 0;
 		cursor: pointer;
 		flex: 1;
 		transition: all 0.2s;
 	}
 
 	.project-selector:hover {
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-primary);
+		background: var(--color-bg-secondary);
+		border-color: var(--color-accent);
+		box-shadow: var(--shadow-sm);
 	}
 
 	:global(.project-options-button) {
@@ -579,8 +595,9 @@
 	.project-name {
 		font-size: 0.875rem;
 		color: var(--color-text-secondary);
-		font-family: monospace;
+		font-family: var(--font-mono);
 		flex: 1;
+		font-weight: 600;
 	}
 
 	.chevron {

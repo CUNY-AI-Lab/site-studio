@@ -36,12 +36,52 @@ export default {
 				card: {
 					DEFAULT: 'hsl(var(--card))',
 					foreground: 'hsl(var(--card-foreground))'
+				},
+				// Retrofuturistic palette
+				terracotta: {
+					DEFAULT: 'var(--color-accent)',
+					hover: 'var(--color-accent-hover)',
+					light: 'var(--color-accent-light)'
+				},
+				sage: {
+					DEFAULT: 'var(--color-secondary)',
+					hover: 'var(--color-secondary-hover)',
+					light: 'var(--color-secondary-light)'
+				},
+				gold: {
+					DEFAULT: 'var(--color-tertiary)',
+					hover: 'var(--color-tertiary-hover)',
+					light: 'var(--color-tertiary-light)'
 				}
 			},
+			fontFamily: {
+				display: 'var(--font-display)',
+				mono: 'var(--font-mono)',
+				sans: 'var(--font-sans)'
+			},
 			borderRadius: {
-				lg: 'var(--radius)',
-				md: 'calc(var(--radius) - 2px)',
-				sm: 'calc(var(--radius) - 4px)'
+				none: '0',
+				sm: '2px',
+				DEFAULT: '2px',
+				md: '2px',
+				lg: '2px',
+				xl: '2px',
+				full: '9999px'
+			},
+			boxShadow: {
+				sm: 'var(--shadow-sm)',
+				DEFAULT: 'var(--shadow-md)',
+				md: 'var(--shadow-md)',
+				lg: 'var(--shadow-lg)',
+				xl: 'var(--shadow-xl)'
+			},
+			spacing: {
+				xs: 'var(--spacing-xs)',
+				sm: 'var(--spacing-sm)',
+				md: 'var(--spacing-md)',
+				lg: 'var(--spacing-lg)',
+				xl: 'var(--spacing-xl)',
+				'2xl': 'var(--spacing-2xl)'
 			}
 		}
 	}
