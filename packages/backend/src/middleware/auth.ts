@@ -110,8 +110,8 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
       res.cookie(SESSION_COOKIE_NAME, sessionId, {
         httpOnly: true,
         maxAge: SESSION_COOKIE_MAX_AGE,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'none',
+        secure: true, // Required for sameSite: 'none' (localhost is exempt from HTTPS requirement)
       });
 
       authReq.user = newUser;
@@ -138,8 +138,8 @@ export async function authenticateUser(req: Request, res: Response, next: NextFu
       res.cookie(SESSION_COOKIE_NAME, sessionId, {
         httpOnly: true,
         maxAge: SESSION_COOKIE_MAX_AGE,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'none',
+        secure: true, // Required for sameSite: 'none' (localhost is exempt from HTTPS requirement)
       });
     }
 
