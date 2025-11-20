@@ -1314,16 +1314,10 @@ app.use('/preview/:id', (req, res, next) => {
     // For R2, serve files manually
     let filePath = ''; // Declare outside try block for error logging
     try {
-      // Find the project owner
-      const ownerId = await storage.findProjectOwner(projectId);
-      if (!ownerId) {
+      // Check if the authenticated user owns this project
+      const userId = authReq.user.id;
+      if (!(await storage.projectExists(userId, projectId))) {
         res.status(404).send('Project not found');
-        return;
-      }
-
-      // Authorization: verify the authenticated user owns this project
-      if (ownerId !== authReq.user.id) {
-        res.status(403).send('Access denied');
         return;
       }
 
@@ -1340,7 +1334,7 @@ app.use('/preview/:id', (req, res, next) => {
         return;
       }
 
-      let buffer = await storage.readFileBuffer(ownerId, projectId, filePath);
+      let buffer = await storage.readFileBuffer(userId, projectId, filePath);
 
       // Set content type based on file extension
       const ext = path.extname(filePath).toLowerCase();
@@ -1401,19 +1395,13 @@ app.use('/preview/:id', (req, res, next) => {
     }
   } else {
     // For filesystem, manually serve files with HTML rewriting
-    const ownerId = await storage.findProjectOwner(projectId);
-    if (!ownerId) {
+    const userId = authReq.user.id;
+    if (!(await storage.projectExists(userId, projectId))) {
       res.status(404).send('Project not found');
       return;
     }
 
-    // Authorization: verify the authenticated user owns this project
-    if (ownerId !== authReq.user.id) {
-      res.status(403).send('Access denied');
-      return;
-    }
-
-    const projectPath = getProjectPath(ownerId, projectId);
+    const projectPath = getProjectPath(userId, projectId);
     let filePath = req.path.slice(1); // Remove leading slash
 
     // Default to index.html for directory requests
