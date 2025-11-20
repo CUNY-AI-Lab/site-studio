@@ -58,6 +58,7 @@
 	font-weight: 500 !important;
 	transition: all 0.2s !important;
 	border: 1px solid transparent !important;
+	text-shadow: none !important;
 }
 
 /* Close button */

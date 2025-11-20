@@ -139,6 +139,9 @@ export function createEditorTour() {
 		prevBtnText: 'Back',
 		doneBtnText: 'Got It!',
 		disableActiveInteraction: true,
+		onDestroyed: () => {
+			markOnboardingComplete();
+		},
 		steps
 	};
 
