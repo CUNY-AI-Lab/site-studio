@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=Inter:wght@400;500;600&display=swap');
+
 * {
     margin: 0;
     padding: 0;
@@ -5,16 +7,27 @@
 }
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-family: 'Inter', sans-serif;
     line-height: 1.6;
-    color: #1e293b;
+    color: #171717;
 }
 
 .hero {
-    background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+    background: #0a0a0a;
     color: white;
-    padding: 4rem 2rem;
+    padding: 5rem 2rem;
     text-align: center;
+    position: relative;
+}
+
+.hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(to right, transparent 0%, white 50%, transparent 100%);
 }
 
 .container {
@@ -23,35 +36,38 @@ body {
 }
 
 .profile-photo {
-    width: 180px;
-    height: 180px;
+    width: 160px;
+    height: 160px;
     border-radius: 50%;
     object-fit: cover;
-    margin-bottom: 2rem;
-    border: 5px solid rgba(255, 255, 255, 0.3);
+    margin-bottom: 2.5rem;
+    border: 2px solid rgba(255, 255, 255, 0.2);
 }
 
 h1 {
-    font-size: 3rem;
-    font-weight: 800;
-    margin-bottom: 0.75rem;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 3.5rem;
+    font-weight: 900;
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
 }
 
 .title {
-    font-size: 1.5rem;
-    margin-bottom: 2rem;
-    opacity: 0.95;
-    font-weight: 300;
+    font-size: 1.25rem;
+    margin-bottom: 2.5rem;
+    opacity: 0.85;
+    font-weight: 400;
+    letter-spacing: 0.02em;
 }
 
 .description {
-    font-size: 1.25rem;
-    line-height: 1.8;
-    margin-bottom: 2.5rem;
-    max-width: 700px;
+    font-size: 1.125rem;
+    line-height: 1.7;
+    margin-bottom: 3rem;
+    max-width: 680px;
     margin-left: auto;
     margin-right: auto;
-    opacity: 0.95;
+    opacity: 0.9;
 }
 
 .links {
@@ -63,87 +79,91 @@ h1 {
 
 .btn-primary, .btn-secondary {
     text-decoration: none;
-    padding: 1rem 2rem;
-    border-radius: 0.75rem;
+    padding: 0.875rem 1.75rem;
     font-weight: 600;
-    transition: all 0.2s;
-    font-size: 1.125rem;
+    transition: all 0.2s ease;
+    font-size: 0.9375rem;
+    letter-spacing: 0.01em;
 }
 
 .btn-primary {
     background: white;
-    color: #7c3aed;
+    color: #0a0a0a;
+    border: 1px solid white;
 }
 
 .btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    background: transparent;
+    color: white;
 }
 
 .btn-secondary {
-    background: rgba(255, 255, 255, 0.2);
+    background: transparent;
     color: white;
-    border: 2px solid white;
+    border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
 .btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.3);
+    border-color: white;
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .content {
-    padding: 4rem 2rem;
-    background: #ffffff;
+    padding: 5rem 2rem;
+    background: #fafafa;
 }
 
 h2 {
-    font-size: 2rem;
-    margin-bottom: 2rem;
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: 2.25rem;
+    margin-bottom: 2.5rem;
     text-align: center;
-    color: #0f172a;
+    color: #0a0a0a;
+    font-weight: 700;
 }
 
 .work-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 2rem;
-    margin-top: 2rem;
+    margin-top: 2.5rem;
 }
 
 .work-item {
     padding: 2rem;
-    border-radius: 1rem;
-    background: #f8fafc;
-    border: 2px solid #e2e8f0;
-    transition: all 0.2s;
+    background: #ffffff;
+    border: 1px solid #e5e5e5;
+    transition: all 0.25s ease;
 }
 
 .work-item:hover {
-    border-color: #7c3aed;
-    box-shadow: 0 8px 20px rgba(124, 58, 237, 0.1);
+    border-color: #a3a3a3;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
 .work-item h3 {
-    color: #7c3aed;
-    margin-bottom: 0.75rem;
+    color: #0a0a0a;
+    margin-bottom: 0.875rem;
     font-size: 1.25rem;
+    font-weight: 600;
 }
 
 .work-item p {
-    color: #475569;
+    color: #525252;
     line-height: 1.7;
 }
 
 @media (max-width: 640px) {
     h1 {
-        font-size: 2rem;
+        font-size: 2.5rem;
     }
 
     .title {
-        font-size: 1.25rem;
+        font-size: 1.125rem;
     }
 
     .description {
-        font-size: 1.125rem;
+        font-size: 1rem;
     }
 
     .links {

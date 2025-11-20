@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;600;700&family=Inter:wght@400;500&display=swap');
+
 * {
     margin: 0;
     padding: 0;
@@ -5,9 +7,9 @@
 }
 
 body {
-    font-family: Georgia, 'Times New Roman', Times, serif;
+    font-family: 'Lora', Georgia, serif;
     line-height: 1.8;
-    color: #1a202c;
+    color: #1a1a1a;
     background: #ffffff;
 }
 
@@ -18,41 +20,47 @@ body {
 }
 
 header {
-    background: #f7fafc;
-    padding: 3rem 0;
-    border-bottom: 3px solid #2d3748;
-    margin-bottom: 3rem;
+    background: #fafafa;
+    padding: 4rem 0;
+    border-bottom: 2px solid #262626;
+    margin-bottom: 3.5rem;
 }
 
 header h1 {
-    font-size: 2.5rem;
+    font-size: 2.75rem;
     font-weight: 700;
-    margin-bottom: 0.75rem;
-    color: #1a202c;
+    margin-bottom: 0.875rem;
+    color: #0a0a0a;
+    letter-spacing: -0.01em;
 }
 
 .affiliation {
-    font-size: 1.125rem;
-    color: #4a5568;
+    font-size: 1.0625rem;
+    color: #525252;
     margin-bottom: 0.5rem;
 }
 
 .contact {
-    font-size: 1rem;
-    color: #718096;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9375rem;
+    color: #737373;
 }
 
 .toc {
-    background: #edf2f7;
+    background: #fafafa;
     padding: 2rem;
-    margin-bottom: 3rem;
-    border-left: 4px solid #4a5568;
+    margin-bottom: 3.5rem;
+    border-left: 3px solid #262626;
 }
 
 .toc h3 {
-    font-size: 1.25rem;
-    margin-bottom: 1rem;
-    color: #2d3748;
+    font-size: 1.125rem;
+    margin-bottom: 1.25rem;
+    color: #0a0a0a;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-family: 'Inter', sans-serif;
+    font-weight: 600;
 }
 
 .toc ul {
@@ -61,19 +69,21 @@ header h1 {
 }
 
 .toc li {
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.625rem;
 }
 
 .toc a {
-    color: #2d3748;
+    color: #262626;
     text-decoration: none;
-    font-weight: 600;
-    border-bottom: 2px solid transparent;
+    font-weight: 500;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.9375rem;
+    border-bottom: 1px solid transparent;
     transition: border-color 0.2s;
 }
 
 .toc a:hover {
-    border-bottom-color: #2d3748;
+    border-bottom-color: #262626;
 }
 
 section {
@@ -81,35 +91,38 @@ section {
 }
 
 h2 {
-    font-size: 2rem;
-    color: #1a202c;
-    margin-bottom: 2rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 2px solid #e2e8f0;
+    font-size: 1.75rem;
+    color: #0a0a0a;
+    margin-bottom: 2.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid #d4d4d4;
     font-weight: 700;
 }
 
 h3 {
-    font-size: 1.5rem;
-    color: #4a5568;
-    margin-bottom: 1.5rem;
-    margin-top: 2rem;
+    font-size: 1.25rem;
+    color: #525252;
+    margin-bottom: 1.75rem;
+    margin-top: 2.5rem;
     font-weight: 600;
 }
 
 .year-group {
-    margin-bottom: 2.5rem;
+    margin-bottom: 3rem;
 }
 
 .year-group h3 {
-    color: #2d3748;
-    font-size: 1.25rem;
-    margin-bottom: 1rem;
+    color: #262626;
+    font-size: 1.125rem;
+    margin-bottom: 1.25rem;
     margin-top: 0;
+    font-family: 'Inter', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
 
 .citation {
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.75rem;
     padding-left: 2rem;
     text-indent: -2rem;
 }
@@ -117,7 +130,7 @@ h3 {
 .bibentry {
     font-size: 1rem;
     line-height: 1.8;
-    color: #2d3748;
+    color: #262626;
     margin: 0;
 }
 
@@ -126,52 +139,58 @@ h3 {
 }
 
 .doi {
-    color: #3182ce;
+    color: #0a0a0a;
     text-decoration: none;
-    border-bottom: 1px solid transparent;
+    font-weight: 500;
+    font-family: 'Inter', sans-serif;
+    border-bottom: 1px solid #d4d4d4;
     transition: border-color 0.2s;
 }
 
 .doi:hover {
-    border-bottom-color: #3182ce;
+    border-bottom-color: #0a0a0a;
 }
 
 .note {
-    background: #fffbeb;
-    border: 2px solid #fbbf24;
+    background: #fafafa;
+    border-left: 3px solid #262626;
     padding: 2rem;
-    margin-top: 3rem;
-    border-radius: 0.5rem;
+    margin-top: 3.5rem;
 }
 
 .note p {
     margin: 0;
-    color: #78350f;
+    color: #262626;
 }
 
 .note strong {
-    color: #92400e;
+    color: #0a0a0a;
 }
 
 footer {
-    background: #2d3748;
-    color: white;
-    padding: 2rem 0;
+    background: #fafafa;
+    padding: 3rem 0;
     text-align: center;
     margin-top: 4rem;
+    border-top: 1px solid #d4d4d4;
 }
 
 footer p {
     margin: 0;
+    color: #525252;
 }
 
 footer a {
-    color: white;
-    text-decoration: underline;
+    font-family: 'Inter', sans-serif;
+    color: #0a0a0a;
+    text-decoration: none;
+    font-weight: 500;
+    border-bottom: 1px solid #d4d4d4;
+    transition: border-color 0.2s;
 }
 
 footer a:hover {
-    opacity: 0.8;
+    border-bottom-color: #0a0a0a;
 }
 
 @media print {
@@ -190,22 +209,22 @@ footer a:hover {
 
     .doi {
         color: black;
+        text-decoration: underline;
     }
 
     footer {
         background: white;
-        color: black;
         border-top: 1px solid black;
     }
 }
 
 @media (max-width: 768px) {
     .container {
-        padding: 0 1rem;
+        padding: 0 1.5rem;
     }
 
     header h1 {
-        font-size: 1.75rem;
+        font-size: 2.125rem;
     }
 
     .affiliation {
