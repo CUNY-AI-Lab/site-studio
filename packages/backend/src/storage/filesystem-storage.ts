@@ -8,6 +8,42 @@ import path from 'path';
 import archiver from 'archiver';
 import type { IStorage, StorageFile, ProjectMetadata } from './types.js';
 
+/**
+ * Validate and sanitize file path to prevent path traversal attacks
+ * @throws Error if path is invalid
+ */
+function validateFilePath(filePath: string): string {
+  // Reject empty paths
+  if (!filePath || filePath.trim() === '') {
+    throw new Error('File path cannot be empty');
+  }
+
+  // Reject absolute paths
+  if (filePath.startsWith('/') || (filePath.length > 1 && filePath[1] === ':')) {
+    throw new Error('Absolute paths are not allowed');
+  }
+
+  // Reject path traversal attempts
+  if (filePath.includes('..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+
+  // Reject paths with null bytes (common attack vector)
+  if (filePath.includes('\0')) {
+    throw new Error('Invalid characters in path');
+  }
+
+  // Normalize and validate using path.normalize
+  const normalized = path.normalize(filePath).replace(/\\/g, '/');
+
+  // After normalization, check again for traversal (path.normalize resolves ..)
+  if (normalized.startsWith('..') || normalized.includes('/..') || normalized.startsWith('/')) {
+    throw new Error('Path traversal is not allowed');
+  }
+
+  return normalized;
+}
+
 export class FilesystemStorage implements IStorage {
   private baseDir: string;
 
@@ -36,9 +72,11 @@ export class FilesystemStorage implements IStorage {
 
   /**
    * Get the full path for a file
+   * Validates filePath to prevent path traversal attacks
    */
   getFilePath(userId: string, projectId: string, filePath: string): string {
-    return path.join(this.getProjectPath(userId, projectId), filePath);
+    const safePath = validateFilePath(filePath);
+    return path.join(this.getProjectPath(userId, projectId), safePath);
   }
 
   /**

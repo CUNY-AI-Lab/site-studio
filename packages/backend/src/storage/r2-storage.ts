@@ -16,6 +16,46 @@ import { lookup } from 'mime-types';
 import archiver from 'archiver';
 import type { IStorage, StorageFile, ProjectMetadata } from './types.js';
 
+/**
+ * Validate and sanitize file path to prevent path traversal attacks
+ * @throws Error if path is invalid
+ */
+function validateFilePath(filePath: string): string {
+  // Reject empty paths
+  if (!filePath || filePath.trim() === '') {
+    throw new Error('File path cannot be empty');
+  }
+
+  // Reject absolute paths
+  if (filePath.startsWith('/')) {
+    throw new Error('Absolute paths are not allowed');
+  }
+
+  // Reject path traversal attempts
+  if (filePath.includes('..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+
+  // Reject paths with null bytes (common attack vector)
+  if (filePath.includes('\0')) {
+    throw new Error('Invalid characters in path');
+  }
+
+  // Normalize path separators and remove leading/trailing slashes
+  const normalized = filePath
+    .replace(/\\/g, '/')  // Convert backslashes to forward slashes
+    .replace(/\/+/g, '/') // Collapse multiple slashes
+    .replace(/^\/+/, '')  // Remove leading slashes
+    .replace(/\/+$/, ''); // Remove trailing slashes
+
+  // Final check: ensure normalized path doesn't start with ..
+  if (normalized.startsWith('..') || normalized.includes('/..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+
+  return normalized;
+}
+
 export class R2Storage implements IStorage {
   private client: S3Client;
   private bucketName: string;
@@ -52,12 +92,14 @@ export class R2Storage implements IStorage {
 
   /**
    * Generate R2 object key from user/project/file path
+   * Validates filePath to prevent path traversal attacks
    */
   private getKey(userId: string, projectId: string, filePath: string = ''): string {
     const parts = ['projects', userId, projectId];
     if (filePath) {
-      // Remove leading slash if present
-      parts.push(filePath.startsWith('/') ? filePath.slice(1) : filePath);
+      // Validate and sanitize the file path
+      const safePath = validateFilePath(filePath);
+      parts.push(safePath);
     }
     return parts.join('/');
   }
