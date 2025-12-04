@@ -214,12 +214,27 @@
 			let currentMessage: Message = { role: 'assistant', content: '', blocks: [] };
 			messages = [...messages, currentMessage];
 
+			// Buffer for incomplete SSE lines that span across chunks
+			let lineBuffer = '';
+
 			while (true) {
 				const { done, value } = await reader.read();
 				if (done) break;
 
 				const chunk = decoder.decode(value, { stream: true });
-				const lines = chunk.split('\n');
+
+				// Prepend any buffered content from previous chunk
+				const fullChunk = lineBuffer + chunk;
+				lineBuffer = '';
+
+				// Split by newline - SSE uses \n\n as message separator
+				const lines = fullChunk.split('\n');
+
+				// If the chunk doesn't end with a newline, the last "line" is incomplete
+				// Save it for the next chunk
+				if (!fullChunk.endsWith('\n')) {
+					lineBuffer = lines.pop() || '';
+				}
 
 				for (const line of lines) {
 					if (line.startsWith('data: ')) {
@@ -231,6 +246,13 @@
 
 						try {
 							const event = JSON.parse(data);
+
+							// Log non-streaming events for debugging
+							const isStreamingDelta = event.type === 'stream_event' &&
+								event.event?.type === 'content_block_delta';
+							if (!isStreamingDelta) {
+								console.log('[SSE]', event.type, event.subtype || event.event?.type || '', event);
+							}
 
 							// Capture session ID
 							if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
