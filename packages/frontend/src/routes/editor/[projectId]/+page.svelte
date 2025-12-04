@@ -324,7 +324,7 @@
 			<aside class="chat-sidebar">
 				<div class="chat-header">
 					<div class="header-top">
-						<h1 class="logo">🎨 Site Studio</h1>
+						<h1 class="logo">Site Studio</h1>
                     <Button variant="ghost" size="sm" href="{base || '/'}">
                         <LayoutDashboard size={18} />
                     </Button>
@@ -472,35 +472,37 @@
 		flex-direction: column;
 		height: 100vh;
 		position: relative;
+		background: var(--color-bg-primary);
 	}
 
 	:global(.main-layout) {
 		height: 100vh;
 	}
 
-	/* Panel Toggle Buttons - Retrofuturistic */
+	/* Panel Toggle Buttons - Open Studio */
 	.panel-toggle {
 		position: fixed;
 		top: 50%;
 		transform: translateY(-50%);
-		background: var(--color-bg-secondary);
-		border: 2px solid var(--color-border);
-		border-radius: 0;
-		padding: 0.875rem;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
+		padding: 0.75rem;
 		cursor: pointer;
 		z-index: 50;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.2s;
+		transition: all 0.2s ease;
 		box-shadow: var(--shadow-md);
+		color: var(--color-text-secondary);
 	}
 
 	.panel-toggle:hover {
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-accent);
+		background: var(--color-bg-secondary);
+		border-color: var(--color-primary);
 		box-shadow: var(--shadow-lg);
-		transform: translateY(-50%) translateY(-2px);
+		color: var(--color-primary);
 	}
 
 	.panel-toggle-left {
@@ -511,14 +513,14 @@
 		right: 1rem;
 	}
 
-	/* Left Chat Sidebar - Retrofuturistic */
+	/* Left Chat Sidebar - Open Studio */
 	.chat-sidebar {
 		display: flex;
 		flex-direction: column;
 		background: var(--color-bg-secondary);
 		height: 100%;
 		overflow: hidden;
-		border-right: 2px solid var(--color-border);
+		border-right: 1px solid var(--color-border);
 	}
 
 	.chat-wrapper {
@@ -529,26 +531,16 @@
 
 	.chat-header {
 		flex-shrink: 0;
-		padding: 1.5rem;
-		border-bottom: 2px solid var(--color-border);
-		background: var(--color-bg-tertiary);
-		position: relative;
-	}
-
-	.chat-header::after {
-		content: '';
-		position: absolute;
-		bottom: -2px;
-		left: 0;
-		width: 80px;
-		height: 2px;
-		background: var(--color-accent);
+		padding: 1.25rem;
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-elevated);
 	}
 
 	.chat-header .logo {
 		font-family: var(--font-display);
-		font-size: 1.5rem;
-		font-weight: 700;
+		font-size: 1.25rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
 		margin-bottom: 0.5rem;
 	}
 
@@ -573,19 +565,18 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.625rem 0.875rem;
+		padding: 0.5rem 0.75rem;
 		background: var(--color-bg-primary);
-		border: 2px solid var(--color-border);
-		border-radius: 0;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
 		cursor: pointer;
 		flex: 1;
-		transition: all 0.2s;
+		transition: all 0.15s ease;
 	}
 
 	.project-selector:hover {
 		background: var(--color-bg-secondary);
-		border-color: var(--color-accent);
-		box-shadow: var(--shadow-sm);
+		border-color: var(--color-border-hover);
 	}
 
 	:global(.project-options-button) {
@@ -594,10 +585,13 @@
 
 	.project-name {
 		font-size: 0.875rem;
-		color: var(--color-text-secondary);
-		font-family: var(--font-mono);
+		color: var(--color-text-primary);
+		font-family: var(--font-sans);
 		flex: 1;
-		font-weight: 600;
+		font-weight: 500;
+		text-overflow: ellipsis;
+		overflow: hidden;
+		white-space: nowrap;
 	}
 
 	.chevron {
@@ -605,14 +599,14 @@
 	}
 
 	:global(.project-menu .active-project) {
-		background: var(--color-bg-tertiary);
-		font-weight: 600;
+		background: var(--color-primary-light);
+		font-weight: 500;
 	}
 
 	.current-indicator {
 		margin-left: auto;
 		color: var(--color-primary);
-		font-size: 1.25rem;
+		font-size: 1rem;
 	}
 
 	/* Center Preview Area */
@@ -666,32 +660,35 @@
 
 	.code-panel {
 		height: 100%;
-		background: var(--color-bg);
-		box-shadow: -4px 0 12px rgba(0, 0, 0, 0.15);
+		background: var(--color-bg-elevated);
+		box-shadow: var(--shadow-xl);
 		display: flex;
 		flex-direction: column;
 		position: relative;
 		pointer-events: auto;
+		border-left: 1px solid var(--color-border);
 	}
 
 	.close-editor-button {
 		position: absolute;
-		top: 0.5rem;
+		top: 0.75rem;
 		right: 1rem;
 		background: var(--color-bg-secondary);
 		border: 1px solid var(--color-border);
 		padding: 0.5rem;
-		border-radius: 0.375rem;
+		border-radius: var(--radius-md);
 		cursor: pointer;
 		z-index: 10;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.15s;
+		transition: all 0.15s ease;
+		color: var(--color-text-secondary);
 	}
 
 	.close-editor-button:hover {
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-primary);
+		color: var(--color-primary);
 	}
 </style>

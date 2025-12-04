@@ -7,6 +7,8 @@
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
+		startTime?: number;
+		elapsedTime?: number;
 	}
 
 	interface DiffData {
@@ -122,7 +124,7 @@
 	let hasDiff = $derived(parsedOutput.diffData !== null);
 </script>
 
-<button class="tool-card {getStatusClass()}" onclick={() => {
+<button class="tool-card {getStatusClass()}" class:expanded={expanded} onclick={() => {
 		expanded = !expanded;
 	}}>
 	<div class="tool-header">
@@ -136,6 +138,9 @@
 			{/if}
 		</div>
 		<div class="tool-status">
+			{#if tool.status === 'running' && tool.elapsedTime !== undefined}
+				<span class="elapsed-time">{tool.elapsedTime.toFixed(1)}s</span>
+			{/if}
 			<svelte:component this={getStatusIcon()} size={14} class="status-icon" />
 			{#if tool.output}
 				<svelte:component this={expanded ? ChevronDown : ChevronRight} size={14} class="chevron-icon" />
@@ -146,7 +151,7 @@
 	{#if expanded && (hasDiff || parsedOutput.cleanOutput)}
 		<div class="tool-output">
 			{#if hasDiff && parsedOutput.diffData}
-				<DiffDisplay diffData={parsedOutput.diffData} {projectId} {onRevert} />
+				<DiffDisplay diffData={parsedOutput.diffData} {projectId} toolId={tool.id} {onRevert} />
 			{/if}
 			{#if parsedOutput.cleanOutput}
 				<div class="output-message">
@@ -159,21 +164,27 @@
 
 <style>
 	.tool-card {
-		width: 100%;
+		width: auto;
+		max-width: 280px;
 		text-align: left;
-		background: var(--color-bg-secondary);
-		border: 2px solid var(--color-border);
-		border-radius: 0;
-		padding: 0.75rem;
-		margin: 0.5rem 0;
-		transition: all 0.2s;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		padding: 0.5rem 0.625rem;
+		transition: all 0.15s ease;
 		cursor: pointer;
 		position: relative;
 		overflow: hidden;
 		font-family: var(--font-sans);
-		font-size: inherit;
+		font-size: 0.8125rem;
 		color: inherit;
-		box-shadow: var(--shadow-sm);
+		flex-shrink: 0;
+	}
+
+	.tool-card.expanded {
+		width: 100%;
+		max-width: 100%;
+		flex-basis: 100%;
 	}
 
 	.tool-card::before {
@@ -182,19 +193,20 @@
 		left: 0;
 		top: 0;
 		bottom: 0;
-		width: 4px;
+		width: 3px;
 		background: var(--indicator-color, var(--color-text-tertiary));
-		transition: all 0.2s;
+		border-radius: var(--radius-full) 0 0 var(--radius-full);
+		transition: all 0.15s ease;
 	}
 
 	.tool-card.status-running {
-		--indicator-color: var(--color-accent);
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-accent);
+		--indicator-color: var(--color-tertiary);
+		background: var(--color-tertiary-light);
+		border-color: var(--color-tertiary);
 	}
 
 	.tool-card.status-running::before {
-		animation: pulse 2s ease-in-out infinite;
+		animation: pulse 1.5s ease-in-out infinite;
 	}
 
 	@keyframes pulse {
@@ -202,52 +214,51 @@
 			opacity: 1;
 		}
 		50% {
-			opacity: 0.4;
+			opacity: 0.5;
 		}
 	}
 
 	.tool-card.status-success {
 		--indicator-color: var(--color-success);
-		background: var(--color-bg-secondary);
-		border-color: var(--color-success);
+		background: var(--color-bg-elevated);
+		border-color: var(--color-border);
 	}
 
 	.tool-card.status-error {
 		--indicator-color: var(--color-error);
-		background: var(--color-bg-secondary);
+		background: var(--color-error-light);
 		border-color: var(--color-error);
 	}
 
 	.tool-card:hover {
-		box-shadow: var(--shadow-md);
-		transform: translateY(-1px);
-		border-color: var(--indicator-color);
+		border-color: var(--color-border-hover);
 	}
 
 	.tool-header {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		gap: 0.75rem;
+		gap: 0.5rem;
 	}
 
 	.tool-info {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.375rem;
 		flex: 1;
 		min-width: 0;
+		overflow: hidden;
 	}
 
 	.tool-icon-wrapper {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 24px;
-		height: 24px;
-		border-radius: 0;
+		width: 18px;
+		height: 18px;
+		border-radius: var(--radius-sm);
 		background: var(--indicator-color);
-		opacity: 0.2;
+		opacity: 0.15;
 		flex-shrink: 0;
 	}
 
@@ -257,28 +268,44 @@
 	}
 
 	.tool-label {
-		font-size: 0.875rem;
-		font-weight: 600;
+		font-size: 0.75rem;
+		font-weight: 500;
 		font-family: var(--font-sans);
 		color: var(--color-text-primary);
 		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.tool-target {
-		font-size: 0.75rem;
+		font-size: 0.6875rem;
 		font-family: var(--font-mono);
-		color: var(--color-text-secondary);
+		color: var(--color-text-tertiary);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		flex: 1;
-		min-width: 0;
+		max-width: 100px;
 	}
 
 	.tool-status {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.375rem;
+	}
+
+	.elapsed-time {
+		font-size: 0.75rem;
+		font-family: var(--font-mono);
+		color: var(--color-text-tertiary);
+		padding: 0.125rem 0.375rem;
+		background: var(--color-bg-secondary);
+		border-radius: var(--radius-sm);
+		animation: pulse 1.5s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50% { opacity: 0.6; }
 	}
 
 	:global(.status-icon) {
@@ -287,18 +314,18 @@
 	}
 
 	:global(.chevron-icon) {
-		color: var(--color-text-secondary);
+		color: var(--color-text-tertiary);
 		flex-shrink: 0;
-		transition: color 0.2s;
+		transition: color 0.15s ease;
 	}
 
 	.tool-card:hover :global(.chevron-icon) {
-		color: var(--color-text-primary);
+		color: var(--color-text-secondary);
 	}
 
 	.tool-output {
-		margin-top: 0.75rem;
-		padding-top: 0.75rem;
+		margin-top: 0.625rem;
+		padding-top: 0.625rem;
 		border-top: 1px solid var(--color-border);
 		animation: slideDown 0.2s ease-out;
 	}
@@ -316,13 +343,12 @@
 
 	.output-message {
 		margin-top: 0.5rem;
-		padding: 0.75rem;
-		background: var(--color-bg-primary);
-		border-radius: 0;
-		border-left: 2px solid var(--indicator-color);
-		font-size: 0.875rem;
+		padding: 0.625rem 0.75rem;
+		background: var(--color-bg-secondary);
+		border-radius: var(--radius-sm);
+		font-size: 0.8125rem;
 		font-family: var(--font-mono);
-		color: var(--color-text-primary);
+		color: var(--color-text-secondary);
 		line-height: 1.5;
 	}
 </style>

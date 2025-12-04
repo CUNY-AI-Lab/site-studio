@@ -1,6 +1,6 @@
 {
   "name": "@site-studio/frontend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Frontend web app for Site Studio",
   "type": "module",
   "scripts": {

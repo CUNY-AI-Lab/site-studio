@@ -9,6 +9,22 @@ import fs from 'fs/promises';
 const log = getLogger('agent');
 
 /**
+ * Pending tool approval request
+ */
+export interface ToolApprovalRequest {
+  id: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  resolve: (approved: boolean) => void;
+}
+
+/**
+ * Callback for handling tool approval requests
+ * Called when the agent wants to execute a write/edit tool in plan mode
+ */
+export type ToolApprovalCallback = (request: ToolApprovalRequest) => void;
+
+/**
  * Create and run a site building session with sandbox support
  * @param prompt - User's message
  * @param projectPath - Path to the project directory
@@ -17,6 +33,7 @@ const log = getLogger('agent');
  * @param sandboxSession - Optional sandbox session context for isolation
  * @param userId - User ID (for storage abstraction)
  * @param projectId - Project ID (for storage abstraction)
+ * @param toolApprovalCallback - Callback for tool approval in plan mode
  */
 export async function runSiteAgent(
   prompt: string,
@@ -25,7 +42,8 @@ export async function runSiteAgent(
   mode: 'plan' | 'execute' = 'plan',
   sandboxSession?: SandboxSession,
   userId?: string,
-  projectId?: string
+  projectId?: string,
+  toolApprovalCallback?: ToolApprovalCallback
 ): Promise<AsyncIterable<any>> {
   log.info({
     userId,
@@ -80,13 +98,21 @@ export async function runSiteAgent(
 
   // Query options for standalone server with direct API calls
   const queryOptions: any = {
-    // Use bypassPermissions for standalone Express server (no interactive prompts)
-    permissionMode: 'bypassPermissions',
+    // Use 'default' permissionMode to allow canUseTool callback to be invoked
+    // The canUseTool callback handles approval logic for plan mode
+    // For execute mode, we allow all tools without approval
+    permissionMode: mode === 'plan' ? 'default' : 'bypassPermissions',
     systemPrompt: SITE_BUILDER_PROMPT,
     // Set higher maxThinkingTokens to give agent more thinking capacity
     maxThinkingTokens: 8192,
+    // Enable streaming for real-time text display
+    includePartialMessages: true,
     mcpServers: {
       'site-studio': server,
+    },
+    // Capture CLI stderr for debugging
+    stderr: (data: string) => {
+      log.debug({ stderr: data.substring(0, 500) }, 'SDK CLI stderr');
     },
     // SECURITY: Restrict agent to only site-building tools
     //
@@ -125,18 +151,90 @@ export async function runSiteAgent(
       'NotebookEdit',        // Jupyter notebooks not relevant to static sites
 
       // App internals (would reveal our architecture to users)
-      'AskUserQuestion',     // Agent should build sites, not ask meta-questions (conflicts with bypassPermissions)
+      'AskUserQuestion',     // Agent should build sites, not ask meta-questions
     ],
     // NOTE: TodoWrite is ALLOWED - it helps users see what the agent is planning to do
 
   };
+
+  // Add canUseTool callback for plan mode approval
+  // This intercepts tool calls and allows the frontend to approve/deny them
+  if (mode === 'plan' && toolApprovalCallback) {
+    // Tools that require approval before execution
+    const toolsRequiringApproval = [
+      'mcp__site-studio__write_file',
+      'mcp__site-studio__edit_file',
+      'mcp__site-studio__delete_file',
+      'mcp__site-studio__scaffold_template',
+    ];
+
+    queryOptions.canUseTool = async (toolName: string, input: Record<string, unknown>) => {
+      // Log ALL tool calls to debug tool name format
+      log.info({
+        userId,
+        projectId,
+        toolName,
+        requiresApproval: toolsRequiringApproval.includes(toolName),
+      }, 'canUseTool called');
+
+      // Only require approval for write/edit operations
+      if (!toolsRequiringApproval.includes(toolName)) {
+        return { behavior: 'allow', updatedInput: input };
+      }
+
+      log.info({
+        userId,
+        projectId,
+        toolName,
+        inputKeys: Object.keys(input),
+      }, 'Tool requires approval');
+
+      // Create approval request and wait for response
+      return new Promise((resolve) => {
+        const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+        const request: ToolApprovalRequest = {
+          id: requestId,
+          toolName,
+          input,
+          resolve: (approved: boolean) => {
+            log.info({
+              userId,
+              projectId,
+              requestId,
+              toolName,
+              approved,
+            }, 'Tool approval resolved');
+
+            if (approved) {
+              resolve({ behavior: 'allow', updatedInput: input });
+            } else {
+              resolve({ behavior: 'deny', message: 'User declined the operation', interrupt: false });
+            }
+          },
+        };
+
+        // Notify the caller about the pending approval
+        toolApprovalCallback(request);
+      });
+    };
+
+    log.info({
+      userId,
+      projectId,
+      mode,
+    }, 'Plan mode enabled with canUseTool callback');
+  }
 
   log.info({
     userId,
     projectId,
     sessionId,
     disallowedToolCount: queryOptions.disallowedTools.length,
-  }, 'Agent security restrictions applied');
+    includePartialMessages: queryOptions.includePartialMessages,
+    hasStderrCallback: !!queryOptions.stderr,
+    hasCanUseTool: !!queryOptions.canUseTool,
+  }, 'Agent query options configured');
 
   // Resume conversation if session ID provided
   if (sessionId) {

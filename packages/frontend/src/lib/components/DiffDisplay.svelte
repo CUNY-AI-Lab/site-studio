@@ -16,18 +16,35 @@
 	let {
 		diffData,
 		projectId,
+		toolId,
 		onRevert
 	}: {
 		diffData: DiffData;
 		projectId: string;
+		toolId?: string;
 		onRevert?: () => void;
 	} = $props();
 
 	let isReverting = $state(false);
 	let reverted = $state(false);
 
-	// Session storage utilities
+	// Session storage utilities - use toolId if available for unique identification
 	const STORAGE_KEY = `site-studio-reverts-${projectId}`;
+
+	// Create a unique key for this specific diff (combines file path + tool ID or content hash)
+	function getDiffKey(): string {
+		if (toolId) {
+			return `${diffData.file_path}::${toolId}`;
+		}
+		// Fallback: create a simple hash from before/after content
+		const content = `${diffData.before || ''}::${diffData.after || ''}`;
+		let hash = 0;
+		for (let i = 0; i < content.length && i < 100; i++) {
+			hash = ((hash << 5) - hash) + content.charCodeAt(i);
+			hash = hash & hash;
+		}
+		return `${diffData.file_path}::${hash}`;
+	}
 
 	interface RevertState {
 		[filePath: string]: {
@@ -47,10 +64,11 @@
 		}
 	}
 
-	function saveRevertState(filePath: string, isReverted: boolean) {
+	function saveRevertState(isReverted: boolean) {
 		try {
 			const state = loadRevertState();
-			state[filePath] = {
+			const key = getDiffKey();
+			state[key] = {
 				reverted: isReverted,
 				before: diffData.before,
 				after: diffData.after,
@@ -64,7 +82,8 @@
 	// Load initial state from sessionStorage
 	onMount(() => {
 		const state = loadRevertState();
-		const fileState = state[diffData.file_path];
+		const key = getDiffKey();
+		const fileState = state[key];
 		if (fileState) {
 			reverted = fileState.reverted;
 		}
@@ -114,6 +133,7 @@
 				headers: {
 					'Content-Type': 'application/json',
 				},
+				credentials: 'include',
 				body: JSON.stringify({
 					file_path: diffData.file_path,
 					content: diffData.before, // Restore to before state
@@ -125,7 +145,7 @@
 			}
 
 			reverted = true;
-			saveRevertState(diffData.file_path, true);
+			saveRevertState(true);
 
 			// Notify parent component if callback provided
 			if (onRevert) {
@@ -153,6 +173,7 @@
 				headers: {
 					'Content-Type': 'application/json',
 				},
+				credentials: 'include',
 				body: JSON.stringify({
 					file_path: diffData.file_path,
 					content: diffData.after, // Restore to after state (undo the revert)
@@ -164,7 +185,7 @@
 			}
 
 			reverted = false;
-			saveRevertState(diffData.file_path, false);
+			saveRevertState(false);
 
 			// Notify parent component if callback provided
 			if (onRevert) {

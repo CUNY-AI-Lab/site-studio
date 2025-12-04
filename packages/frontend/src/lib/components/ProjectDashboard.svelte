@@ -148,11 +148,11 @@
 <div class="project-dashboard">
 	<div class="dashboard-header">
 		<div>
-			<h1 class="dashboard-title">🎨 Site Studio</h1>
-			<p class="dashboard-subtitle">Build websites with AI assistance</p>
+			<h1 class="dashboard-title">Site Studio</h1>
+			<p class="dashboard-subtitle">Create websites with your AI assistant</p>
 		</div>
 		<Button onclick={handleNewProject}>
-			<Plus size={20} />
+			<Plus size={18} />
 			New Project
 		</Button>
 	</div>
@@ -258,44 +258,38 @@
 <style>
 	.project-dashboard {
 		min-height: 100vh;
-		background: hsl(var(--background));
-		padding: 3rem 2rem 2rem;
+		background: var(--color-bg-primary);
+		padding: 2.5rem 2rem 3rem;
 	}
 
 	.dashboard-header {
 		display: flex;
 		justify-content: space-between;
 		align-items: flex-end;
-		margin-bottom: 3rem;
+		margin-bottom: 2.5rem;
 		padding-bottom: 1.5rem;
-		border-bottom: 2px solid hsl(var(--border));
-		position: relative;
-	}
-
-	.dashboard-header::after {
-		content: '';
-		position: absolute;
-		bottom: -2px;
-		left: 0;
-		width: 120px;
-		height: 2px;
-		background: hsl(var(--primary));
+		border-bottom: 1px solid var(--color-border);
+		max-width: 1400px;
+		margin-left: auto;
+		margin-right: auto;
 	}
 
 	.dashboard-title {
 		font-family: var(--font-display);
-		font-size: 3rem;
-		font-weight: 700;
-		color: hsl(var(--foreground));
-		margin: 0 0 0.5rem 0;
-		line-height: 1.1;
+		font-size: 2.5rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
+		margin: 0 0 0.375rem 0;
+		line-height: 1.2;
+		letter-spacing: -0.01em;
 	}
 
 	.dashboard-subtitle {
 		font-family: var(--font-sans);
 		font-size: 1rem;
-		color: hsl(var(--muted-foreground));
+		color: var(--color-text-tertiary);
 		margin: 0;
+		font-weight: 400;
 	}
 
 	.loading-state,
@@ -305,43 +299,58 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		gap: 1rem;
-		padding: 4rem 2rem;
+		gap: 1.25rem;
+		padding: 5rem 2rem;
 		text-align: center;
+		max-width: 400px;
+		margin: 0 auto;
 	}
 
 	.empty-state {
-		color: hsl(var(--muted-foreground));
+		color: var(--color-text-tertiary);
+	}
+
+	.empty-state :global(svg) {
+		color: var(--color-primary);
+		opacity: 0.6;
 	}
 
 	.empty-state h2 {
 		font-family: var(--font-display);
-		font-size: 2rem;
+		font-size: 1.5rem;
 		font-weight: 600;
-		color: hsl(var(--foreground));
+		color: var(--color-text-primary);
 		margin: 0;
+	}
+
+	.empty-state p {
+		color: var(--color-text-secondary);
+		font-size: 0.9375rem;
+		line-height: 1.5;
 	}
 
 	.projects-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-		gap: 2rem;
+		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		gap: 1.5rem;
+		max-width: 1400px;
+		margin: 0 auto;
 	}
 
 	.project-card {
 		position: relative;
-		background: hsl(var(--card));
-		border: 2px solid hsl(var(--border));
-		border-radius: 0;
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
 		overflow: hidden;
-		transition: all 0.2s;
-		box-shadow: var(--shadow-md);
+		transition: all 0.2s ease;
+		box-shadow: var(--shadow-sm);
 	}
 
 	.project-card:hover {
-		border-color: hsl(var(--primary));
+		border-color: var(--color-border-hover);
 		box-shadow: var(--shadow-lg);
-		transform: translateY(-2px);
+		transform: translateY(-3px);
 	}
 
 	.project-card-button {
@@ -354,46 +363,26 @@
 		display: flex;
 		flex-direction: column;
 		align-items: stretch;
+		border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 	}
 
 	.project-icon {
-		font-size: 4rem;
-		padding: 3rem 1.5rem 1rem;
+		font-size: 3.5rem;
+		padding: 2.5rem 1.5rem;
 		display: flex;
 		justify-content: center;
 		align-items: center;
-		height: 200px;
-		background: linear-gradient(135deg, hsl(var(--muted)) 0%, hsl(var(--muted) / 0.6) 100%);
+		height: 180px;
+		background: linear-gradient(160deg, var(--color-bg-secondary) 0%, var(--color-bg-tertiary) 100%);
 		position: relative;
-	}
-
-	.project-icon::before {
-		content: '';
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		height: 4px;
-		background: hsl(var(--primary));
 	}
 
 	.project-thumbnail {
 		width: 100%;
-		height: 200px;
+		height: 180px;
 		overflow: hidden;
-		background: hsl(var(--muted));
+		background: var(--color-bg-secondary);
 		position: relative;
-	}
-
-	.project-thumbnail::before {
-		content: '';
-		position: absolute;
-		bottom: 0;
-		left: 0;
-		right: 0;
-		height: 4px;
-		background: hsl(var(--primary));
-		z-index: 1;
 	}
 
 	.project-thumbnail img {
@@ -401,16 +390,16 @@
 		height: 100%;
 		object-fit: cover;
 		display: block;
-		transition: transform 0.2s;
+		transition: transform 0.3s ease;
 	}
 
 	.project-card:hover .project-thumbnail img {
-		transform: scale(1.02);
+		transform: scale(1.03);
 	}
 
 	.project-info {
-		padding: 1.25rem 1.5rem;
-		background: hsl(var(--card));
+		padding: 1.125rem 1.25rem;
+		background: var(--color-bg-elevated);
 	}
 
 	.project-header {
@@ -421,36 +410,42 @@
 	}
 
 	.project-name {
-		font-family: var(--font-display);
-		font-size: 1.25rem;
+		font-family: var(--font-sans);
+		font-size: 1rem;
 		font-weight: 600;
-		color: hsl(var(--foreground));
+		color: var(--color-text-primary);
 		margin: 0;
 		word-break: break-word;
 		flex: 1;
-		line-height: 1.3;
+		line-height: 1.4;
+		text-align: left;
 	}
 
 	.project-card :global(.project-menu-button) {
 		flex-shrink: 0;
+		opacity: 0.6;
+		transition: opacity 0.15s ease;
+	}
+
+	.project-card:hover :global(.project-menu-button) {
+		opacity: 1;
 	}
 
 	.published-badge {
-		display: flex;
+		display: inline-flex;
 		align-items: center;
-		justify-content: flex-start;
 		gap: 0.375rem;
-		padding: 0.375rem 0.75rem;
-		background: transparent;
-		color: hsl(var(--primary));
-		border: 2px solid hsl(var(--primary));
-		border-radius: 0;
-		font-size: 0.75rem;
-		font-weight: 700;
-		font-family: var(--font-mono);
+		padding: 0.25rem 0.625rem;
+		background: var(--color-primary-light);
+		color: var(--color-primary);
+		border: none;
+		border-radius: var(--radius-full);
+		font-size: 0.6875rem;
+		font-weight: 600;
+		font-family: var(--font-sans);
 		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		margin-top: 0.75rem;
+		letter-spacing: 0.03em;
+		margin-top: 0.625rem;
 		width: fit-content;
 	}
 </style>

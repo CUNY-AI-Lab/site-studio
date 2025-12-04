@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
-import { runSiteAgent } from './agent.js';
+import { runSiteAgent, type ToolApprovalRequest } from './agent.js';
 import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.js';
 import { errorHandler, ApiError, asyncHandler } from './middleware/error-handler.js';
 import { getSandboxManager } from './sandbox/manager.js';
@@ -26,8 +26,7 @@ import {
   saveFileSchema,
   renameFileSchema,
   revertFileSchema,
-  querySchema,
-  approvalSchema
+  querySchema
 } from './middleware/validation.js';
 import { logger, getLogger, requestLogger } from './config/logger.js';
 import { fileUploadValidator } from './middleware/file-validation.js';
@@ -49,6 +48,10 @@ const PORT = process.env.PORT || 3001;
 // Sandboxes directory (where user projects are stored in isolation)
 // NOTE: This is only used for filesystem storage mode
 const SANDBOXES_DIR = process.env.SANDBOXES_DIR || path.join(__dirname, '../sandboxes');
+
+// Store pending tool approval requests
+// Key: requestId, Value: resolve function to call when approved/denied
+const pendingToolApprovals = new Map<string, ToolApprovalRequest>();
 
 /**
  * Convert a string to a URL-friendly slug
@@ -979,6 +982,32 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
 
     log.info({ userId, projectId, sessionId }, 'SSE connection established');
 
+    // Create tool approval callback for plan mode
+    // When the agent wants to use a write/edit tool, this sends an event to the frontend
+    const toolApprovalCallback = (request: ToolApprovalRequest) => {
+      // Store the pending approval
+      pendingToolApprovals.set(request.id, request);
+
+      log.info({
+        userId,
+        projectId,
+        requestId: request.id,
+        toolName: request.toolName,
+      }, 'Tool approval request created');
+
+      // Send event to frontend
+      const approvalEvent = {
+        type: 'tool_approval_request',
+        request_id: request.id,
+        tool_name: request.toolName,
+        input: request.input,
+      };
+      res.write(`data: ${JSON.stringify(approvalEvent)}\n\n`);
+      if (typeof (res as any).flush === 'function') {
+        (res as any).flush();
+      }
+    };
+
     // Run agent with sandboxed session (mode: 'plan' or 'execute')
     // Only pass sessionId for resume if client explicitly provided one
     const stream = await runSiteAgent(
@@ -988,7 +1017,8 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
       mode || 'plan',
       session, // Pass sandbox session context
       userId, // Pass userId for storage abstraction
-      projectId // Pass projectId for storage abstraction
+      projectId, // Pass projectId for storage abstraction
+      mode === 'plan' ? toolApprovalCallback : undefined // Pass callback for plan mode
     );
 
     log.info({
@@ -1036,7 +1066,7 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
         }, 'Agent session initialized');
       }
 
-      // Log important events (but not every single one to avoid spam)
+      // Log important events
       if (event.type === 'permission_request') {
         log.info({
           userId,
@@ -1051,17 +1081,11 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
           sessionId: agentSessionId || sessionId,
           error: event.error,
         }, 'Agent returned error event');
-      }
-
-      // Log event type distribution every 10 events
-      if (eventCount % 10 === 0) {
+      } else if (event.type === 'tool_progress') {
         log.debug({
-          userId,
-          projectId,
-          sessionId: agentSessionId || sessionId,
-          eventCount,
-          lastEventType: event.type,
-        }, 'Stream progress');
+          toolName: (event as any).tool_name,
+          elapsedSeconds: (event as any).elapsed_time_seconds,
+        }, 'Tool progress');
       }
 
       const data = JSON.stringify(event);
@@ -1105,155 +1129,51 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
 });
 
 /**
- * POST /api/query/approve
- * Approve and execute a proposed plan
+ * POST /api/query/tool-approve
+ * Approve or deny a specific tool operation in plan mode
  */
-app.post('/api/query/approve', validateBody(approvalSchema), async (req, res, next) => {
-  const startTime = Date.now();
-  let eventCount = 0;
-
+app.post('/api/query/tool-approve', authenticateUser, async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
-    const { projectId, sessionId, approved } = req.body;
+    const { requestId, approved } = req.body;
 
-    if (!projectId || typeof projectId !== 'string') {
-      res.status(400).json({ error: 'Project ID is required' });
+    if (!requestId || typeof requestId !== 'string') {
+      res.status(400).json({ error: 'Request ID is required' });
       return;
     }
 
-    if (!sessionId || typeof sessionId !== 'string') {
-      res.status(400).json({ error: 'Session ID is required' });
+    if (typeof approved !== 'boolean') {
+      res.status(400).json({ error: 'Approved must be a boolean' });
       return;
     }
 
-    log.info({
-      userId,
-      projectId,
-      sessionId,
-      approved,
-    }, approved ? 'Plan approved - executing' : 'Plan rejected');
-
-    // Get existing sandboxed session
-    const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
-    const projectPath = session.projectPath;
-
-    // Set up SSE
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-
-    if (typeof res.flushHeaders === 'function') {
-      res.flushHeaders();
-    }
-
-    log.info({ userId, projectId, sessionId }, 'SSE connection established for approval');
-
-    // Track connection state
-    let connectionClosed = false;
-    req.on('close', () => {
-      connectionClosed = true;
+    // Find and resolve the pending approval
+    const pendingRequest = pendingToolApprovals.get(requestId);
+    if (!pendingRequest) {
       log.warn({
         userId,
-        projectId,
-        sessionId,
-        eventCount,
-        duration: Date.now() - startTime,
-      }, 'Client disconnected during plan execution');
-    });
+        requestId,
+      }, 'Tool approval request not found');
+      res.status(404).json({ error: 'Approval request not found or expired' });
+      return;
+    }
 
-    // Resume session with approval/rejection
-    const resumePrompt = approved ? 'Yes, proceed with the plan.' : 'No, please don\'t proceed.';
-    const stream = await runSiteAgent(
-      resumePrompt,
-      projectPath,
-      sessionId,
-      'execute',
-      session, // Pass sandbox session context
-      userId, // Pass userId for storage abstraction
-      projectId // Pass projectId for storage abstraction
-    );
+    // Remove from pending and resolve
+    pendingToolApprovals.delete(requestId);
+    pendingRequest.resolve(approved);
 
     log.info({
       userId,
-      projectId,
-      sessionId,
+      requestId,
+      toolName: pendingRequest.toolName,
       approved,
-    }, 'Plan execution stream started');
+    }, 'Tool approval resolved');
 
-    // Stream execution results
-    for await (const event of stream) {
-      if (connectionClosed) {
-        log.warn({
-          userId,
-          projectId,
-          sessionId,
-          eventCount,
-        }, 'Breaking execution stream - connection closed');
-        break;
-      }
-
-      eventCount++;
-
-      // Log important events
-      if (event.type === 'error') {
-        log.error({
-          userId,
-          projectId,
-          sessionId,
-          error: event.error,
-        }, 'Agent returned error during execution');
-      }
-
-      // Log progress every 10 events
-      if (eventCount % 10 === 0) {
-        log.debug({
-          userId,
-          projectId,
-          sessionId,
-          eventCount,
-          lastEventType: event.type,
-        }, 'Execution progress');
-      }
-
-      const data = JSON.stringify(event);
-      res.write(`data: ${data}\n\n`);
-
-      if (typeof (res as any).flush === 'function') {
-        (res as any).flush();
-      }
-    }
-
-    res.write('data: [DONE]\n\n');
-    res.end();
-
-    log.info({
-      userId,
-      projectId,
-      sessionId,
-      eventCount,
-      duration: Date.now() - startTime,
-    }, 'Plan execution completed successfully');
+    res.json({ success: true, approved });
   } catch (error) {
-    log.error({
-      error,
-      userId: (req as any).user?.id,
-      projectId: req.body?.projectId,
-      sessionId: req.body?.sessionId,
-      eventCount,
-      duration: Date.now() - startTime,
-      stack: error instanceof Error ? error.stack : undefined,
-    }, 'Agent approval failed');
-
-    const errorMessage = error instanceof Error ? error.message : 'An error occurred';
-
-    if (!res.headersSent) {
-      next(error);
-    } else {
-      res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
-      res.end();
-    }
+    log.error({ error }, 'Tool approval failed');
+    next(error);
   }
 });
 

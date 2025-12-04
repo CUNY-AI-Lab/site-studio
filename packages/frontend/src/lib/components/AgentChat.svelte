@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Send, Loader2, Wrench, X, Paperclip } from 'lucide-svelte';
+	import { Send, Loader2, Wrench, X, Paperclip, Square } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import PlanApprovalCard from './PlanApprovalCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
@@ -30,6 +31,8 @@
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
+		startTime?: number;  // Track when tool started for elapsed time
+		elapsedTime?: number; // Current elapsed time in seconds
 	}
 
 	let {
@@ -44,8 +47,7 @@
 	let input = $state('');
 	let isLoading = $state(false);
 	let sessionId = $state<string | null>(null);
-	let pendingPlan = $state<ToolCall[] | null>(null);
-	let pendingSessionId = $state<string | null>(null);
+	let pendingToolApproval = $state<{ requestId: string; toolName: string; input: Record<string, any> } | null>(null);
 	let messagesContainer: HTMLDivElement;
 	let planMode = $state(true); // true = plan mode (interactive), false = direct execution
 	let fileInput: HTMLInputElement;
@@ -53,10 +55,58 @@
 	let attachedFile = $state<File | null>(null); // Track attached file
 	let isUploading = $state(false); // Track upload state
 	let filesModifiedDuringExecution = $state(false); // Track if files were modified
+	let abortController = $state<AbortController | null>(null); // For canceling requests
+	let toolTimerInterval = $state<ReturnType<typeof setInterval> | null>(null); // Timer for tool elapsed time
 
 	// Limit displayed messages to most recent 10 to manage context
 	const MAX_DISPLAYED_MESSAGES = 10;
 	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
+
+	// Track running tools for elapsed time updates
+	let runningTools = $state<Map<string, ToolExecution>>(new Map());
+
+	// Start timer to update elapsed time for running tools
+	function startToolTimer() {
+		if (toolTimerInterval) return;
+		toolTimerInterval = setInterval(() => {
+			const now = Date.now();
+			runningTools.forEach((tool) => {
+				if (tool.startTime && tool.status === 'running') {
+					tool.elapsedTime = Math.round((now - tool.startTime) / 100) / 10; // 0.1s precision
+				}
+			});
+			// Trigger reactivity
+			runningTools = new Map(runningTools);
+		}, 100);
+	}
+
+	// Stop the timer when no tools are running
+	function stopToolTimer() {
+		if (toolTimerInterval) {
+			clearInterval(toolTimerInterval);
+			toolTimerInterval = null;
+		}
+	}
+
+	// Stop the current request
+	function stopRequest() {
+		if (abortController) {
+			abortController.abort();
+			abortController = null;
+		}
+		stopToolTimer();
+		isLoading = false;
+		currentStatus = '';
+
+		// Mark any running tools as stopped
+		runningTools.forEach((tool) => {
+			if (tool.status === 'running') {
+				tool.status = 'error';
+				tool.output = 'Request cancelled by user';
+			}
+		});
+		runningTools.clear();
+	}
 
 	async function uploadFile(file: File): Promise<string> {
 		const formData = new FormData();
@@ -100,6 +150,7 @@
 		if (fileInput) fileInput.value = '';
 		isLoading = true;
 		filesModifiedDuringExecution = false; // Reset file modification tracking
+		abortController = new AbortController(); // Create new abort controller
 
 		// Add user message
 		let messageContent = userMessage;
@@ -143,8 +194,10 @@
 					prompt: userMessage,
 					projectId: projectId,
 					sessionId: sessionId,
-					uploadedFile: uploadedFilename // Send the uploaded filename to backend
-				})
+					uploadedFile: uploadedFilename, // Send the uploaded filename to backend
+					mode: planMode ? 'plan' : 'execute' // Send plan mode preference
+				}),
+				signal: abortController?.signal // Enable request cancellation
 			});
 
 			if (!response.ok) throw new Error('Request failed');
@@ -157,6 +210,7 @@
 		let contentBlocks: ContentBlock[] = [];
 			let currentToolsGroup: ToolExecution[] = [];
 			let processedToolIds = new Set<string>();  // Track which tools we've seen
+			let receivedStreamEvents = false;  // Track if we've received stream_event text deltas
 			let currentMessage: Message = { role: 'assistant', content: '', blocks: [] };
 			messages = [...messages, currentMessage];
 
@@ -177,34 +231,71 @@
 
 						try {
 							const event = JSON.parse(data);
-							console.log('[CHAT] Event received:', event.type, event);
 
 							// Capture session ID
 							if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
 								sessionId = event.session_id;
-								console.log('[CHAT] Session ID:', sessionId);
 							}
 
-							// Handle permission requests (plan mode)
-							if (event.type === 'permission_request' && event.tool_calls) {
-								console.log('[CHAT] Permission request, tool calls:', event.tool_calls.length);
-								pendingPlan = event.tool_calls;
-								pendingSessionId = sessionId;
-								isLoading = false;
+							// Handle streaming text deltas for real-time display
+							if (event.type === 'stream_event' && event.event) {
+								const streamEvent = event.event;
+								if (streamEvent.type === 'content_block_delta' &&
+									streamEvent.delta?.type === 'text_delta') {
+									const textDelta = streamEvent.delta.text;
+
+									currentStatus = 'Responding...';
+									currentSectionText += textDelta;
+									receivedStreamEvents = true;  // Mark that we're using stream events for text
+
+									// Find or create text block for current section
+									let textBlockIndex = contentBlocks.findIndex((b, i) => {
+										if (b.type === 'text') {
+											const hasToolsAfter = contentBlocks.slice(i + 1).some(cb => cb.type === 'tools');
+											return !hasToolsAfter;
+										}
+										return false;
+									});
+
+									if (textBlockIndex >= 0) {
+										contentBlocks[textBlockIndex].text = currentSectionText;
+									} else {
+										contentBlocks.push({ type: 'text', text: currentSectionText });
+									}
+
+									messages[messages.length - 1].blocks = [...contentBlocks];
+									messages = [...messages];
+									scrollToBottom();
+								}
+							}
+
+							// Handle tool approval requests (canUseTool callback)
+							if (event.type === 'tool_approval_request') {
+								pendingToolApproval = {
+									requestId: event.request_id,
+									toolName: event.tool_name,
+									input: event.input
+								};
+								currentStatus = 'Waiting for approval...';
+								// Wait for DOM to update before scrolling
+								await tick();
 								scrollToBottom();
-								return; // Stop processing until user approves/rejects
+								// Double scroll after a short delay to ensure approval card is fully rendered
+								setTimeout(scrollToBottom, 100);
 							}
 
 							// Handle assistant messages
 							if (event.type === 'assistant' && event.message?.content) {
-								console.log('[CHAT] Assistant message, blocks:', event.message.content.length);
 								for (const block of event.message.content) {
 									if (block.type === 'text') {
-										console.log('[CHAT] Text block, length:', block.text.length, 'section:', currentSectionText.length);
+										// Skip assistant text if we've already processed stream_events for real-time display
+										// The assistant event contains the complete text which would duplicate streamed content
+										if (receivedStreamEvents) {
+											continue;
+										}
 
 										// Reset tools group when starting new text section after tools
 										if (currentToolsGroup.length > 0 && contentBlocks[contentBlocks.length - 1]?.type === 'tools') {
-											console.log('[CHAT] Starting new text section after tools, resetting currentToolsGroup');
 											currentToolsGroup = [];
 										}
 
@@ -229,14 +320,12 @@
 											contentBlocks.push({ type: 'text', text: currentSectionText });
 										}
 
-										console.log('[CHAT] ContentBlocks now:', contentBlocks.length, 'types:', contentBlocks.map(b => b.type));
 										messages[messages.length - 1].blocks = [...contentBlocks];
 										messages = [...messages];
 										scrollToBottom();
 									} else if (block.type === 'tool_use') {
 										// Only process if we haven't seen this tool ID before
 										if (!processedToolIds.has(block.id)) {
-											console.log('[CHAT] Tool use (NEW):', block.name, 'id:', block.id);
 											processedToolIds.add(block.id);
 
 											// Flush current text section before starting tools
@@ -249,15 +338,20 @@
 											}
 											// Reset for next section
 											currentSectionText = '';
+											receivedStreamEvents = false;  // Reset for next text section after tools
 
 											currentStatus = `Using ${block.name.replace(/_/g, ' ')}...`;
 											const toolExecution: ToolExecution = {
 												id: block.id,
 												name: block.name,
 												input: block.input,
-												status: 'running'
+												status: 'running',
+												startTime: Date.now(),
+												elapsedTime: 0
 											};
 											currentToolsGroup.push(toolExecution);
+											runningTools.set(block.id, toolExecution);
+											startToolTimer();
 
 											// Update or create tools block
 											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
@@ -270,8 +364,6 @@
 											messages[messages.length - 1].blocks = [...contentBlocks];
 											messages = [...messages];
 											scrollToBottom();
-										} else {
-											console.log('[CHAT] Tool use (DUPLICATE SKIPPED):', block.name, 'id:', block.id);
 										}
 									}
 								}
@@ -281,31 +373,48 @@
 							if (event.type === 'user' && event.message?.content) {
 								for (const block of event.message.content) {
 									if (block.type === 'tool_result') {
-										// Match tool result with tool_use by ID
-										const toolIndex = currentToolsGroup.findIndex(t => t.id === block.tool_use_id);
-										if (toolIndex !== -1) {
-											currentToolsGroup[toolIndex].status = block.is_error ? 'error' : 'success';
-											// Extract text from content array
-											const output = Array.isArray(block.content)
-												? block.content.map(c => c.text).join('\n')
-												: block.content;
-											currentToolsGroup[toolIndex].output = output;
+										console.log('[CHAT] Tool result for:', block.tool_use_id, 'is_error:', block.is_error);
 
-											// Check if this tool modified files (has diff metadata)
-											if (!block.is_error && output.includes('<!-- diff:')) {
-												filesModifiedDuringExecution = true;
+										// Always remove from running tools (cleanup timer even if not in currentToolsGroup)
+										runningTools.delete(block.tool_use_id);
+										if (runningTools.size === 0) {
+											stopToolTimer();
+										}
+
+										// Extract output text
+										const output = Array.isArray(block.content)
+											? block.content.map(c => c.text).join('\n')
+											: block.content;
+
+										// Check if this tool modified files (has diff metadata) - refresh preview immediately
+										if (!block.is_error && output.includes('<!-- diff:')) {
+											filesModifiedDuringExecution = true;
+											onUpdate(); // Refresh preview immediately after file change
+										}
+
+										// Search ALL tools blocks in contentBlocks to find the matching tool
+										let toolFound = false;
+										for (const contentBlock of contentBlocks) {
+											if (contentBlock.type === 'tools' && contentBlock.tools) {
+												const tool = contentBlock.tools.find(t => t.id === block.tool_use_id);
+												if (tool) {
+													tool.status = block.is_error ? 'error' : 'success';
+													tool.output = output;
+													toolFound = true;
+													console.log('[CHAT] Tool result matched in contentBlocks:', block.tool_use_id);
+													break;
+												}
 											}
+										}
 
-										// Update the tools block (find the current/last one, not first)
-										const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
-											!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
-										if (toolsBlockIndex >= 0) {
-											contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
+										if (!toolFound) {
+											console.log('[CHAT] Tool result not found in any contentBlocks:', block.tool_use_id);
 										}
-											messages[messages.length - 1].blocks = [...contentBlocks];
-											messages = [...messages];
-											scrollToBottom();
-										}
+
+										// Update UI
+										messages[messages.length - 1].blocks = [...contentBlocks];
+										messages = [...messages];
+										scrollToBottom();
 										currentStatus = '';
 									}
 								}
@@ -317,227 +426,106 @@
 				}
 			}
 
-			// Notify parent to refresh only if files were modified
-			if (filesModifiedDuringExecution) {
-				onUpdate();
-			}
-		} catch (error) {
+		} catch (error: any) {
 			console.error('Error sending message:', error);
-			messages = [
-				...messages,
-				{
-					role: 'assistant',
-					content: 'Sorry, there was an error processing your request.'
-				}
-			];
+			// Check if it was aborted
+			if (error.name === 'AbortError' || abortController?.signal.aborted) {
+				messages = [
+					...messages,
+					{
+						role: 'assistant',
+						content: 'Request cancelled.'
+					}
+				];
+			} else {
+				messages = [
+					...messages,
+					{
+						role: 'assistant',
+						content: 'Sorry, there was an error processing your request.'
+					}
+				];
+			}
 		} finally {
 			isLoading = false;
 			currentStatus = '';
+			abortController = null;
+			stopToolTimer();
+			// Mark any tools still showing as 'running' as cancelled
+			for (const tool of runningTools.values()) {
+				if (tool.status === 'running') {
+					tool.status = 'error';
+					tool.output = tool.output || 'Operation interrupted';
+				}
+			}
+			runningTools.clear();
+			// Update UI to reflect cancelled tools
+			messages = [...messages];
 			scrollToBottom();
 		}
 	}
 
-	async function approvePlan() {
-		if (!pendingSessionId) return;
+	// Approve a tool operation (canUseTool callback flow)
+	async function approveToolOperation() {
+		if (!pendingToolApproval) return;
 
-		isLoading = true;
-		filesModifiedDuringExecution = false; // Reset file modification tracking
-		const tempPlan = pendingPlan;
-		pendingPlan = null;
+		const requestId = pendingToolApproval.requestId;
+		pendingToolApproval = null;
+		currentStatus = 'Executing...';
 
 		try {
-			const response = await fetch(resolvePath('/api/query/approve'), {
+			const response = await fetch(resolvePath('/api/query/tool-approve'), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
 				body: JSON.stringify({
-					projectId: projectId,
-					sessionId: pendingSessionId,
+					requestId,
 					approved: true
 				})
 			});
 
-			if (!response.ok) throw new Error('Approval failed');
-			if (!response.body) throw new Error('No response body');
-
-			// Read SSE stream for execution results
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let currentSectionText = '';  // Text for current section (resets after tools)
-			let contentBlocks: ContentBlock[] = [];
-			let currentToolsGroup: ToolExecution[] = [];
-			let processedToolIds = new Set<string>();  // Track which tools we've seen
-
-			// Add execution message
-			let currentMessage: Message = { role: 'assistant', content: '', blocks: [] };
-			messages = [...messages, currentMessage];
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				const chunk = decoder.decode(value, { stream: true });
-				const lines = chunk.split('\n');
-
-				for (const line of lines) {
-					if (line.startsWith('data: ')) {
-						const data = line.slice(6);
-						if (data === '[DONE]') break;
-
-						try {
-							const event = JSON.parse(data);
-
-							// Capture session ID
-							if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
-								sessionId = event.session_id;
-							}
-
-							// Handle assistant messages with blocks
-							if (event.type === 'assistant' && event.message?.content) {
-								for (const block of event.message.content) {
-									if (block.type === 'text') {
-										// Reset tools group when starting new text section after tools
-										if (currentToolsGroup.length > 0 && contentBlocks[contentBlocks.length - 1]?.type === 'tools') {
-											currentToolsGroup = [];
-										}
-
-										currentStatus = 'Responding...';
-										currentSectionText += block.text;  // Accumulate for current section
-
-										// Find or create text block for current section
-										let textBlockIndex = contentBlocks.findIndex((b, i) => {
-											if (b.type === 'text') {
-												const hasToolsAfter = contentBlocks.slice(i + 1).some(cb => cb.type === 'tools');
-												return !hasToolsAfter;
-											}
-											return false;
-										});
-
-										if (textBlockIndex >= 0) {
-											contentBlocks[textBlockIndex].text = currentSectionText;
-										} else {
-											contentBlocks.push({ type: 'text', text: currentSectionText });
-										}
-
-										messages[messages.length - 1].blocks = [...contentBlocks];
-										messages = [...messages];
-										scrollToBottom();
-									} else if (block.type === 'tool_use') {
-										// Only process if we haven't seen this tool ID before
-										if (!processedToolIds.has(block.id)) {
-											processedToolIds.add(block.id);
-
-											// Flush current text section before starting tools
-											if (currentSectionText.trim()) {
-												const lastBlock = contentBlocks[contentBlocks.length - 1];
-												if (lastBlock?.type === 'text') {
-													lastBlock.text = currentSectionText;
-												}
-											}
-											// Reset for next section
-											currentSectionText = '';
-
-											currentStatus = `Using ${block.name.replace(/_/g, ' ')}...`;
-											const toolExecution: ToolExecution = {
-												id: block.id,
-												name: block.name,
-												input: block.input,
-												status: 'running'
-											};
-											currentToolsGroup.push(toolExecution);
-
-											// Update or create tools block
-											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
-												!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
-											if (toolsBlockIndex >= 0) {
-												contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
-											} else {
-												contentBlocks.push({ type: 'tools', tools: [...currentToolsGroup] });
-											}
-											messages[messages.length - 1].blocks = [...contentBlocks];
-											messages = [...messages];
-											scrollToBottom();
-										}
-									}
-								}
-							}
-
-							// Handle user events (tool results)
-							if (event.type === 'user' && event.message?.content) {
-								for (const block of event.message.content) {
-									if (block.type === 'tool_result') {
-										// Match tool result with tool_use by ID
-										const toolIndex = currentToolsGroup.findIndex(t => t.id === block.tool_use_id);
-										if (toolIndex !== -1) {
-											currentToolsGroup[toolIndex].status = block.is_error ? 'error' : 'success';
-											const output = Array.isArray(block.content)
-												? block.content.map(c => c.text).join('\n')
-												: block.content;
-											currentToolsGroup[toolIndex].output = output;
-
-											// Check if this tool modified files (has diff metadata)
-											if (!block.is_error && output.includes('<!-- diff:')) {
-												filesModifiedDuringExecution = true;
-											}
-
-											// Update the tools block (find the current/last one, not first)
-											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
-												!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
-											if (toolsBlockIndex >= 0) {
-												contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
-											}
-											messages[messages.length - 1].blocks = [...contentBlocks];
-											messages = [...messages];
-											scrollToBottom();
-										}
-										currentStatus = '';
-									}
-								}
-							}
-						} catch (e) {
-							// Ignore parse errors
-						}
-					}
-				}
-			}
-
-			// Notify parent to refresh only if files were modified
-			if (filesModifiedDuringExecution) {
-				onUpdate();
+			if (!response.ok) {
+				console.error('Tool approval failed:', response.status);
 			}
 		} catch (error) {
-			console.error('Error approving plan:', error);
-			messages = [
-				...messages,
-				{
-					role: 'assistant',
-					content: 'Sorry, there was an error executing the plan.'
-				}
-			];
-		} finally {
-			isLoading = false;
-			scrollToBottom();
+			console.error('Error approving tool:', error);
 		}
 	}
 
-	function rejectPlan() {
-		pendingPlan = null;
-		pendingSessionId = null;
-		messages = [
-			...messages,
-			{
-				role: 'assistant',
-				content: 'Plan rejected. Please tell me what you\'d like to change.'
+	// Deny a specific tool operation (for canUseTool callback flow)
+	async function denyToolOperation() {
+		if (!pendingToolApproval) return;
+
+		const requestId = pendingToolApproval.requestId;
+		pendingToolApproval = null;
+		currentStatus = '';
+
+		try {
+			const response = await fetch(resolvePath('/api/query/tool-approve'), {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
+				body: JSON.stringify({
+					requestId,
+					approved: false
+				})
+			});
+
+			if (!response.ok) {
+				console.error('Tool denial failed:', response.status);
 			}
-		];
-		scrollToBottom();
+		} catch (error) {
+			console.error('Error denying tool:', error);
+		}
 	}
 
 	function scrollToBottom() {
-		setTimeout(() => {
+		// Use requestAnimationFrame for more reliable scroll timing after DOM updates
+		requestAnimationFrame(() => {
 			if (messagesContainer) {
 				messagesContainer.scrollTop = messagesContainer.scrollHeight;
 			}
-		}, 0);
+		});
 	}
 
 	function handleKeyDown(e: KeyboardEvent) {
@@ -611,10 +599,18 @@
 				</div>
 			{/each}
 
-			{#if pendingPlan}
-				<PlanApprovalCard plan={pendingPlan} onApprove={approvePlan} onReject={rejectPlan} />
-			{/if}
 		{/if}
+
+		<!-- Tool approval card - {#key} forces re-render on async state changes -->
+		{#key pendingToolApproval}
+			{#if pendingToolApproval}
+				<PlanApprovalCard
+					plan={[{ name: pendingToolApproval.toolName, input: pendingToolApproval.input }]}
+					onApprove={approveToolOperation}
+					onReject={denyToolOperation}
+				/>
+			{/if}
+		{/key}
 
 		{#if isLoading}
 			<div class="thinking-indicator">
@@ -634,13 +630,15 @@
 				disabled={isLoading}
 				class="input-field"
 			/>
-			<button onclick={sendMessage} disabled={isLoading || !input.trim()} class="send-button">
-				{#if isLoading}
-					<Loader2 size={18} class="animate-spin" />
-				{:else}
+			{#if isLoading}
+				<button onclick={stopRequest} class="stop-button" title="Stop request">
+					<Square size={16} />
+				</button>
+			{:else}
+				<button onclick={sendMessage} disabled={!input.trim()} class="send-button">
 					<Send size={18} />
-				{/if}
-			</button>
+				</button>
+			{/if}
 		</div>
 
 		<!-- File attachment indicator -->
@@ -689,13 +687,14 @@
 		height: 100%;
 		display: flex;
 		flex-direction: column;
+		background: var(--color-bg-secondary);
 	}
 
 	.messages {
 		flex: 1;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 1rem;
+		padding: 1.25rem;
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
@@ -703,10 +702,13 @@
 
 	.welcome {
 		text-align: center;
-		padding: 2rem;
+		padding: 3rem 2rem;
 	}
 
 	.welcome h3 {
+		font-family: var(--font-display);
+		font-size: 1.25rem;
+		font-weight: 600;
 		margin-bottom: 0.5rem;
 		color: var(--color-text-primary);
 	}
@@ -714,26 +716,26 @@
 	.welcome p {
 		color: var(--color-text-secondary);
 		margin-bottom: 0;
+		font-size: 0.9375rem;
 	}
 
 	.conversation-notice {
 		text-align: center;
-		padding: 0.875rem;
-		margin-bottom: 1rem;
+		padding: 0.625rem 0.875rem;
+		margin-bottom: 0.75rem;
 		background: var(--color-bg-tertiary);
-		border: 2px solid var(--color-border);
-		border-radius: 0;
-		font-size: 0.8125rem;
-		font-family: var(--font-mono);
-		color: var(--color-text-secondary);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		font-size: 0.75rem;
+		color: var(--color-text-tertiary);
 	}
 
 	.message {
-		max-width: 85%;
+		max-width: 90%;
 		padding: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 0.625rem;
+		gap: 0.5rem;
 	}
 
 	.message.user {
@@ -741,12 +743,12 @@
 	}
 
 	.message.user :global(.message-content) {
-		background: var(--color-accent);
-		color: white;
-		padding: 0.875rem 1.125rem;
-		border-radius: 0;
-		border-left: 4px solid var(--color-accent-hover);
-		box-shadow: var(--shadow-sm);
+		background: var(--color-primary-light, #e6f4f4);
+		color: var(--color-text-primary, #1f2937);
+		padding: 0.75rem 1rem;
+		border-radius: var(--radius-lg);
+		border-bottom-right-radius: var(--radius-sm);
+		border-left: 3px solid var(--color-primary, #0d7377);
 	}
 
 	.message.assistant {
@@ -754,18 +756,19 @@
 	}
 
 	.message.assistant :global(.message-content) {
-		background: var(--color-bg-tertiary);
+		background: var(--color-bg-elevated);
 		color: var(--color-text-primary);
-		padding: 0.875rem 1.125rem;
-		border-radius: 0;
-		border-left: 4px solid var(--color-secondary);
-		box-shadow: var(--shadow-sm);
+		padding: 0.75rem 1rem;
+		border-radius: var(--radius-lg);
+		border-bottom-left-radius: var(--radius-sm);
+		border: 1px solid var(--color-border);
 	}
 
 	.tools-section {
 		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: 0.375rem;
 		margin-top: 0.25rem;
 	}
 
@@ -773,45 +776,48 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.5rem;
+		padding: 0.5rem 0.75rem;
 		width: fit-content;
-		opacity: 0.6;
+		background: var(--color-bg-tertiary);
+		border-radius: var(--radius-full);
 	}
 
 	.thinking-text {
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		color: var(--color-text-secondary);
 	}
 
 	.input-container {
 		padding: 1rem;
-		border-top: 2px solid var(--color-border);
-		background: var(--color-bg-tertiary);
+		border-top: 1px solid var(--color-border);
+		background: var(--color-bg-elevated);
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		gap: 0.625rem;
 	}
 
 	.input-row {
 		display: flex;
 		align-items: center;
-		gap: 0.625rem;
+		gap: 0.5rem;
 	}
 
 	.input-field {
 		flex: 1;
-		padding: 0.875rem 1rem;
-		border: 2px solid var(--color-border);
-		border-radius: 0;
+		padding: 0.75rem 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-lg);
 		background: var(--color-bg-primary);
 		color: var(--color-text-primary);
-		font-size: 0.875rem;
+		font-size: 0.9375rem;
 		font-family: var(--font-sans);
+		transition: all 0.15s ease;
 	}
 
 	.input-field:focus {
 		outline: none;
-		border-color: var(--color-accent);
+		border-color: var(--color-primary);
+		box-shadow: var(--shadow-glow-primary);
 	}
 
 	.input-field:disabled {
@@ -819,29 +825,53 @@
 		cursor: not-allowed;
 	}
 
+	.input-field::placeholder {
+		color: var(--color-text-muted);
+	}
+
 	.send-button {
-		width: 40px;
-		height: 40px;
-		border-radius: 8px;
-		border: 1px solid var(--color-border);
-		background: var(--color-bg-secondary);
-		color: var(--color-text-secondary);
+		width: 42px;
+		height: 42px;
+		border-radius: var(--radius-lg);
+		border: none;
+		background: var(--color-primary);
+		color: white;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.2s;
+		transition: all 0.15s ease;
 		flex-shrink: 0;
+		cursor: pointer;
 	}
 
 	.send-button:hover:not(:disabled) {
-		background: var(--color-bg-tertiary);
-		border-color: var(--color-accent);
-		color: var(--color-accent);
+		background: var(--color-primary-hover);
+		transform: scale(1.02);
 	}
 
 	.send-button:disabled {
-		opacity: 0.3;
+		opacity: 0.4;
 		cursor: not-allowed;
+	}
+
+	.stop-button {
+		width: 42px;
+		height: 42px;
+		border-radius: var(--radius-lg);
+		border: none;
+		background: var(--color-error);
+		color: white;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.15s ease;
+		flex-shrink: 0;
+		cursor: pointer;
+	}
+
+	.stop-button:hover {
+		background: var(--color-error-hover, #c53030);
+		transform: scale(1.02);
 	}
 
 	.attachment-indicator {
@@ -849,20 +879,19 @@
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.5rem 0.75rem;
-		background: var(--color-bg-secondary);
-		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		font-size: 0.875rem;
-		margin-bottom: 0.5rem;
+		background: var(--color-primary-light);
+		border: 1px solid var(--color-primary);
+		border-radius: var(--radius-md);
+		font-size: 0.8125rem;
 	}
 
 	.attachment-indicator .filename {
-		color: var(--color-text-primary);
+		color: var(--color-primary);
 		font-weight: 500;
 	}
 
 	.attachment-indicator .filesize {
-		color: var(--color-text-secondary);
+		color: var(--color-text-tertiary);
 		font-size: 0.75rem;
 	}
 
@@ -872,17 +901,17 @@
 		background: transparent;
 		color: var(--color-text-secondary);
 		cursor: pointer;
-		border-radius: 4px;
+		border-radius: var(--radius-sm);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.2s;
+		transition: all 0.15s ease;
 		margin-left: auto;
 	}
 
 	.remove-btn:hover {
-		background: var(--color-bg-tertiary);
-		color: var(--color-text-primary);
+		background: var(--color-bg-secondary);
+		color: var(--color-error);
 	}
 
 	.upload-status {
@@ -890,12 +919,11 @@
 		align-items: center;
 		gap: 0.5rem;
 		padding: 0.5rem 0.75rem;
-		background: rgba(59, 130, 246, 0.1);
-		border: 1px solid rgba(59, 130, 246, 0.3);
-		border-radius: 6px;
-		font-size: 0.875rem;
-		color: rgb(59, 130, 246);
-		margin-bottom: 0.5rem;
+		background: var(--color-info-light);
+		border: 1px solid var(--color-info);
+		border-radius: var(--radius-md);
+		font-size: 0.8125rem;
+		color: var(--color-info);
 	}
 
 	.action-buttons {
@@ -905,61 +933,63 @@
 	}
 
 	.icon-btn {
-		width: 36px;
-		height: 36px;
-		border-radius: 6px;
+		width: 34px;
+		height: 34px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--color-border);
 		background: var(--color-bg-secondary);
-		color: var(--color-text-primary);
+		color: var(--color-text-secondary);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-size: 1.25rem;
-		transition: all 0.2s;
+		font-size: 1.125rem;
+		transition: all 0.15s ease;
 		cursor: pointer;
 	}
 
 	.icon-btn:hover {
 		background: var(--color-bg-tertiary);
-		border-color: var(--color-accent);
+		border-color: var(--color-border-hover);
+		color: var(--color-text-primary);
 	}
 
 	.plan-btn {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.5rem 1rem;
-		border-radius: 6px;
+		gap: 0.375rem;
+		padding: 0.5rem 0.875rem;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--color-border);
 		background: var(--color-bg-secondary);
-		color: var(--color-text-primary);
-		font-size: 0.875rem;
-		transition: all 0.2s;
+		color: var(--color-text-secondary);
+		font-size: 0.8125rem;
+		font-weight: 500;
+		transition: all 0.15s ease;
 		cursor: pointer;
 	}
 
 	.plan-btn:hover {
 		background: var(--color-bg-tertiary);
-		border-color: var(--color-accent);
+		border-color: var(--color-border-hover);
 	}
 
 	.plan-btn.active {
-		background: rgba(59, 130, 246, 0.15);
-		border-color: rgb(59, 130, 246);
-		color: rgb(59, 130, 246);
+		background: var(--color-primary-light);
+		border-color: var(--color-primary);
+		color: var(--color-primary);
 	}
 
 	.plan-btn.active:hover {
-		background: rgba(59, 130, 246, 0.25);
+		background: var(--color-primary-lighter);
 	}
 
 	.play-icon {
-		font-size: 0.75rem;
+		font-size: 0.625rem;
 	}
 
 	.plus-icon {
-		font-weight: 300;
-		font-size: 1.5rem;
+		font-weight: 400;
+		font-size: 1.25rem;
 		line-height: 1;
 	}
 
