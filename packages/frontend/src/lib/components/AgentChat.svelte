@@ -140,7 +140,10 @@
 		}
 	}
 
-	async function sendMessage() {
+	async function sendMessage(retryCount = 0, previousUploadedFilename?: string) {
+		const MAX_RETRIES = 2;
+		const RETRY_DELAY_MS = 1000;
+
 		if (!input.trim() || isLoading) return;
 
 		const userMessage = input.trim();
@@ -152,16 +155,18 @@
 		filesModifiedDuringExecution = false; // Reset file modification tracking
 		abortController = new AbortController(); // Create new abort controller
 
-		// Add user message
-		let messageContent = userMessage;
-		if (fileToUpload) {
-			messageContent += ` [Attached: ${fileToUpload.name}]`;
+		// Add user message (only on first attempt, not retries)
+		if (retryCount === 0) {
+			let messageContent = userMessage;
+			if (fileToUpload) {
+				messageContent += ` [Attached: ${fileToUpload.name}]`;
+			}
+			messages = [...messages, { role: 'user', content: messageContent }];
 		}
-		messages = [...messages, { role: 'user', content: messageContent }];
 
-		// Upload file first if attached
-		let uploadedFilename: string | undefined;
-		if (fileToUpload) {
+		// Upload file first if attached (skip on retry - already uploaded)
+		let uploadedFilename: string | undefined = previousUploadedFilename;
+		if (fileToUpload && retryCount === 0) {
 			try {
 				isUploading = true;
 				uploadedFilename = await uploadFile(fileToUpload);
@@ -460,11 +465,27 @@
 					}
 				];
 			} else {
+				// Check for network errors (QUIC, connection failures, etc.)
+				const isNetworkError = error.name === 'TypeError' &&
+					(error.message?.includes('network') || error.message?.includes('fetch'));
+
+				if (isNetworkError && retryCount < MAX_RETRIES) {
+					console.log(`Network error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
+					isLoading = false;
+					currentStatus = `Connection lost, retrying...`;
+					await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+					// Restore input for retry
+					input = userMessage;
+					return sendMessage(retryCount + 1, uploadedFilename);
+				}
+
 				messages = [
 					...messages,
 					{
 						role: 'assistant',
-						content: 'Sorry, there was an error processing your request.'
+						content: isNetworkError
+							? 'Connection lost. Please check your network and try again.'
+							: 'Sorry, there was an error processing your request.'
 					}
 				];
 			}
