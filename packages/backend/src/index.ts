@@ -52,6 +52,10 @@ const SANDBOXES_DIR = process.env.SANDBOXES_DIR || path.join(__dirname, '../sand
 // Store pending tool approval requests
 // Key: requestId, Value: resolve function to call when approved/denied
 const pendingToolApprovals = new Map<string, ToolApprovalRequest>();
+// Store timeouts for pending approvals (auto-deny after timeout)
+const approvalTimeouts = new Map<string, NodeJS.Timeout>();
+// Approval timeout: 5 minutes
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Convert a string to a URL-friendly slug
@@ -982,11 +986,32 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
 
     log.info({ userId, projectId, sessionId }, 'SSE connection established');
 
+    // Track pending approval IDs for this request (for cleanup on disconnect)
+    const sessionApprovalIds: string[] = [];
+
     // Create tool approval callback for plan mode
     // When the agent wants to use a write/edit tool, this sends an event to the frontend
     const toolApprovalCallback = (request: ToolApprovalRequest) => {
       // Store the pending approval
       pendingToolApprovals.set(request.id, request);
+      sessionApprovalIds.push(request.id);
+
+      // Set timeout to auto-deny after 5 minutes (prevents memory leaks)
+      const timeout = setTimeout(() => {
+        const pendingRequest = pendingToolApprovals.get(request.id);
+        if (pendingRequest) {
+          log.warn({
+            userId,
+            projectId,
+            requestId: request.id,
+            toolName: request.toolName,
+          }, 'Tool approval timed out, auto-denying');
+          pendingToolApprovals.delete(request.id);
+          approvalTimeouts.delete(request.id);
+          pendingRequest.resolve(false);
+        }
+      }, APPROVAL_TIMEOUT_MS);
+      approvalTimeouts.set(request.id, timeout);
 
       log.info({
         userId,
@@ -1032,6 +1057,22 @@ The file is stored in R2 cloud storage. Please use the view_file tool with filen
     let connectionClosed = false;
     req.on('close', () => {
       connectionClosed = true;
+
+      // Clean up any pending approvals for this session
+      for (const requestId of sessionApprovalIds) {
+        const pendingRequest = pendingToolApprovals.get(requestId);
+        if (pendingRequest) {
+          log.info({ requestId, toolName: pendingRequest.toolName }, 'Cleaning up pending approval on disconnect');
+          pendingToolApprovals.delete(requestId);
+          const timeout = approvalTimeouts.get(requestId);
+          if (timeout) {
+            clearTimeout(timeout);
+            approvalTimeouts.delete(requestId);
+          }
+          pendingRequest.resolve(false); // Deny on disconnect
+        }
+      }
+
       log.warn({
         userId,
         projectId,
@@ -1159,8 +1200,13 @@ app.post('/api/query/tool-approve', authenticateUser, async (req, res, next) => 
       return;
     }
 
-    // Remove from pending and resolve
+    // Remove from pending, clear timeout, and resolve
     pendingToolApprovals.delete(requestId);
+    const timeout = approvalTimeouts.get(requestId);
+    if (timeout) {
+      clearTimeout(timeout);
+      approvalTimeouts.delete(requestId);
+    }
     pendingRequest.resolve(approved);
 
     log.info({

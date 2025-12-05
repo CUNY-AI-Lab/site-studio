@@ -88,6 +88,16 @@
 		}
 	}
 
+	// Cleanup timer on component unmount
+	$effect(() => {
+		return () => {
+			stopToolTimer();
+			if (abortController) {
+				abortController.abort();
+			}
+		};
+	});
+
 	// Stop the current request
 	function stopRequest() {
 		if (abortController) {
@@ -114,6 +124,7 @@
 
 		const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
 			method: 'POST',
+			credentials: 'include',
 			body: formData
 		});
 
@@ -195,6 +206,7 @@
 			const response = await fetch(resolvePath('/api/query'), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
 				body: JSON.stringify({
 					prompt: userMessage,
 					projectId: projectId,
