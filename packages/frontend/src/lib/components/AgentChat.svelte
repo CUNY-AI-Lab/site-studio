@@ -288,13 +288,6 @@
 						try {
 							const event = JSON.parse(data);
 
-							// Log non-streaming events for debugging
-							const isStreamingDelta = event.type === 'stream_event' &&
-								event.event?.type === 'content_block_delta';
-							if (!isStreamingDelta) {
-								console.log('[SSE]', event.type, event.subtype || event.event?.type || '', event);
-							}
-
 							// Capture session ID
 							if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
 								sessionId = event.session_id;
@@ -437,8 +430,6 @@
 							if (event.type === 'user' && event.message?.content) {
 								for (const block of event.message.content) {
 									if (block.type === 'tool_result') {
-										console.log('[CHAT] Tool result for:', block.tool_use_id, 'is_error:', block.is_error);
-
 										// Always remove from running tools (cleanup timer even if not in currentToolsGroup)
 										runningTools.delete(block.tool_use_id);
 										if (runningTools.size === 0) {
@@ -461,9 +452,6 @@
 										if (tool) {
 											tool.status = block.is_error ? 'error' : 'success';
 											tool.output = output;
-											console.log('[CHAT] Tool result matched:', block.tool_use_id);
-										} else {
-											console.log('[CHAT] Tool result not found (may have arrived before tool_use):', block.tool_use_id);
 										}
 
 										// Update UI
