@@ -10,7 +10,7 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download } from 'lucide-svelte';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2 } from 'lucide-svelte';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
@@ -358,6 +358,35 @@
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
 
+						<!-- Publish Button - Always visible -->
+						{#if currentProject}
+							{#if currentProject.published && currentProject.publishedUrl}
+								<button
+									class="publish-button published"
+									onclick={() => openPublishedSite(currentProject.publishedUrl!)}
+									title="View published site"
+								>
+									<Check size={14} class="publish-icon" />
+									<span>Published</span>
+									<ExternalLink size={12} class="external-icon" />
+								</button>
+							{:else}
+								<button
+									class="publish-button"
+									onclick={handlePublishProject}
+									disabled={publishingProjectId === currentProject.id}
+								>
+									{#if publishingProjectId === currentProject.id}
+										<Loader2 size={14} class="publish-icon spinning" />
+										<span>Publishing...</span>
+									{:else}
+										<Globe size={14} class="publish-icon" />
+										<span>Publish</span>
+									{/if}
+								</button>
+							{/if}
+						{/if}
+
 						<!-- Project Options Menu -->
 						{#if currentProject}
 							<DropdownMenu.Root>
@@ -386,16 +415,8 @@
 											<GlobeLock size={14} />
 											<span>{publishingProjectId === currentProject.id ? 'Unpublishing...' : 'Unpublish'}</span>
 										</DropdownMenu.Item>
-									{:else}
-										<DropdownMenu.Item
-											onclick={handlePublishProject}
-											disabled={publishingProjectId === currentProject.id}
-										>
-											<Globe size={14} />
-											<span>{publishingProjectId === currentProject.id ? 'Publishing...' : 'Publish'}</span>
-										</DropdownMenu.Item>
+										<DropdownMenu.Separator />
 									{/if}
-									<DropdownMenu.Separator />
 									<DropdownMenu.Item onclick={handleExportProject}>
 										<Download size={14} />
 										<span>Export as ZIP</span>
@@ -581,6 +602,70 @@
 
 	:global(.project-options-button) {
 		flex-shrink: 0;
+	}
+
+	/* Publish Button */
+	.publish-button {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.4rem 0.75rem;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		font-family: var(--font-sans);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		transition: all 0.15s ease;
+		border: 1px solid transparent;
+		background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+		color: white;
+		box-shadow: 0 1px 2px rgba(16, 185, 129, 0.2);
+	}
+
+	.publish-button:hover:not(:disabled) {
+		background: linear-gradient(135deg, #059669 0%, #047857 100%);
+		box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+		transform: translateY(-1px);
+	}
+
+	.publish-button:active:not(:disabled) {
+		transform: translateY(0);
+	}
+
+	.publish-button:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+	}
+
+	.publish-button.published {
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		border-color: var(--color-border);
+		box-shadow: none;
+	}
+
+	.publish-button.published:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-border-hover);
+		transform: none;
+	}
+
+	.publish-button.published :global(.publish-icon) {
+		color: #10b981;
+	}
+
+	.publish-button.published :global(.external-icon) {
+		color: var(--color-text-tertiary);
+		margin-left: 0.125rem;
+	}
+
+	:global(.publish-icon.spinning) {
+		animation: spin 1s linear infinite;
+	}
+
+	@keyframes spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
 	}
 
 	.project-name {
