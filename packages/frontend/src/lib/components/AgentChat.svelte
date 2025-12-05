@@ -98,6 +98,29 @@
 		};
 	});
 
+	// Reset state when projectId changes (e.g., browser back/forward navigation)
+	let previousProjectId = $state<string | null>(null);
+	$effect(() => {
+		if (previousProjectId !== null && previousProjectId !== projectId) {
+			// Project changed - reset all chat state
+			messages = [];
+			sessionId = null;
+			pendingToolApproval = null;
+			input = '';
+			isLoading = false;
+			currentStatus = '';
+			attachedFile = null;
+			filesModifiedDuringExecution = false;
+			stopToolTimer();
+			runningTools.clear();
+			if (abortController) {
+				abortController.abort();
+				abortController = null;
+			}
+		}
+		previousProjectId = projectId;
+	});
+
 	// Stop the current request
 	function stopRequest() {
 		if (abortController) {
@@ -166,25 +189,13 @@
 		filesModifiedDuringExecution = false; // Reset file modification tracking
 		abortController = new AbortController(); // Create new abort controller
 
-		// Add user message (only on first attempt, not retries)
-		if (retryCount === 0) {
-			let messageContent = userMessage;
-			if (fileToUpload) {
-				messageContent += ` [Attached: ${fileToUpload.name}]`;
-			}
-			messages = [...messages, { role: 'user', content: messageContent }];
-		}
-
-		// Upload file first if attached (skip on retry - already uploaded)
+		// Upload file FIRST if attached (skip on retry - already uploaded)
+		// This ensures we don't show user message if upload fails
 		let uploadedFilename: string | undefined = previousUploadedFilename;
 		if (fileToUpload && retryCount === 0) {
 			try {
 				isUploading = true;
 				uploadedFilename = await uploadFile(fileToUpload);
-				// Append file info to the prompt
-				const fileInfo = `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload.size / 1024).toFixed(1)}KB)]`;
-				messages[messages.length - 1].content += fileInfo;
-				messages = [...messages];
 			} catch (error) {
 				console.error('File upload failed:', error);
 				messages = [...messages, {
@@ -197,6 +208,18 @@
 			} finally {
 				isUploading = false;
 			}
+		}
+
+		// Add user message AFTER successful upload (only on first attempt, not retries)
+		if (retryCount === 0) {
+			let messageContent = userMessage;
+			if (fileToUpload) {
+				messageContent += ` [Attached: ${fileToUpload.name}]`;
+			}
+			if (uploadedFilename) {
+				messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
+			}
+			messages = [...messages, { role: 'user', content: messageContent }];
 		}
 
 		// Scroll to bottom
@@ -227,6 +250,7 @@
 		let contentBlocks: ContentBlock[] = [];
 			let currentToolsGroup: ToolExecution[] = [];
 			let processedToolIds = new Set<string>();  // Track which tools we've seen
+			let toolIdMap = new Map<string, ToolExecution>();  // O(1) lookup for tool results
 			let receivedStreamEvents = false;  // Track if we've received stream_event text deltas
 			let currentMessage: Message = { role: 'assistant', content: '', blocks: [] };
 			messages = [...messages, currentMessage];
@@ -390,6 +414,7 @@
 											};
 											currentToolsGroup.push(toolExecution);
 											runningTools.set(block.id, toolExecution);
+											toolIdMap.set(block.id, toolExecution);  // O(1) lookup for results
 											startToolTimer();
 
 											// Update or create tools block
@@ -431,23 +456,14 @@
 											onUpdate(); // Refresh preview immediately after file change
 										}
 
-										// Search ALL tools blocks in contentBlocks to find the matching tool
-										let toolFound = false;
-										for (const contentBlock of contentBlocks) {
-											if (contentBlock.type === 'tools' && contentBlock.tools) {
-												const tool = contentBlock.tools.find(t => t.id === block.tool_use_id);
-												if (tool) {
-													tool.status = block.is_error ? 'error' : 'success';
-													tool.output = output;
-													toolFound = true;
-													console.log('[CHAT] Tool result matched in contentBlocks:', block.tool_use_id);
-													break;
-												}
-											}
-										}
-
-										if (!toolFound) {
-											console.log('[CHAT] Tool result not found in any contentBlocks:', block.tool_use_id);
+										// O(1) lookup for tool result matching
+										const tool = toolIdMap.get(block.tool_use_id);
+										if (tool) {
+											tool.status = block.is_error ? 'error' : 'success';
+											tool.output = output;
+											console.log('[CHAT] Tool result matched:', block.tool_use_id);
+										} else {
+											console.log('[CHAT] Tool result not found (may have arrived before tool_use):', block.tool_use_id);
 										}
 
 										// Update UI
