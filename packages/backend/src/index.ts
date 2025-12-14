@@ -30,6 +30,7 @@ import {
 } from './middleware/validation.js';
 import { logger, getLogger, requestLogger } from './config/logger.js';
 import { fileUploadValidator } from './middleware/file-validation.js';
+import { createSyncService, getSyncService } from './services/project-sync.js';
 
 const log = getLogger('app');
 
@@ -110,6 +111,10 @@ await initializeStorage();
 
 // Get storage instance
 const storage = getStorage();
+
+// Initialize sync service for R2 ↔ filesystem sync
+const syncService = createSyncService(storage);
+log.info('Sync service initialized');
 
 // Ensure sandboxes directory exists (for filesystem mode only)
 if (process.env.STORAGE_TYPE !== 'r2') {
@@ -936,6 +941,19 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
+
+    // Hydrate local filesystem from R2 (download files for agent to work on)
+    // This is needed for standard tools (Edit, Write, Bash) which operate on local files
+    if (process.env.STORAGE_TYPE === 'r2') {
+      log.info({ userId, projectId, projectPath }, 'Hydrating project from R2');
+      const hydrateResult = await syncService.hydrate(userId, projectId, projectPath);
+      log.info({
+        userId,
+        projectId,
+        filesDownloaded: hydrateResult.filesDownloaded,
+        errors: hydrateResult.errors.length,
+      }, 'Project hydration complete');
+    }
 
     // Handle uploaded file if present - tell agent to use view_file tool
     let enhancedPrompt = prompt;
