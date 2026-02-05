@@ -13,6 +13,7 @@ import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.j
 import { errorHandler, ApiError, asyncHandler } from './middleware/error-handler.js';
 import { getSandboxManager } from './sandbox/manager.js';
 import { getUserProjectPath } from './sandbox/config.js';
+import { getSandboxConfig } from './config/sandbox-config.js';
 import { getStorage, initializeStorage } from './storage/index.js';
 import { applyTemplate, isValidTemplate, type TemplateId, getTemplateCategories } from './templates.js';
 import { generateFilePrompt, isSupportedFileType, getFileTypeDescription } from './services/file-converter.js';
@@ -955,7 +956,7 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
       }, 'Project hydration complete');
     }
 
-    // Handle uploaded file if present - tell agent to use view_file tool
+    // Handle uploaded file if present - build mode-aware prompt
     let enhancedPrompt = prompt;
 
     if (uploadedFile) {
@@ -965,20 +966,34 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
           throw new Error('Unsupported file type');
         }
 
-        // Don't pre-write the file - let the agent use view_file tool to download it
-        // This matches the working flow when files have been in R2 for a while
         const fileType = getFileTypeDescription(uploadedFile);
+        const sandboxConfig = getSandboxConfig();
 
         log.info({
           fileType,
           fileName: uploadedFile,
           userId,
-          projectId
+          projectId,
+          sandboxEnabled: sandboxConfig.enabled,
         }, 'File upload ready for agent');
 
-        enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]
+        if (sandboxConfig.enabled) {
+          // Sandbox mode: hydration already downloaded the file to local filesystem
+          // Agent uses standard tools (Read, Edit, Write) with absolute paths
+          const localFilePath = path.join(projectPath, uploadedFile);
+          enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]\n\nThe file has been downloaded to the local filesystem. Use the Read tool with this exact path to access it: ${localFilePath}`;
+        } else {
+          // MCP mode: agent uses MCP tools to access files in storage
+          const isBinary = ['image', 'PDF document', 'Word document', 'Excel spreadsheet'].includes(fileType);
 
-The file is stored in R2 cloud storage. Please use the view_file tool with filename "${uploadedFile}" to download and analyze it.`;
+          if (isBinary) {
+            // Binary files need view_file to download locally, then Read to view
+            enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]\n\nTo access this file:\n1. Use the view_file tool with file_path "${uploadedFile}" to download it to the local filesystem\n2. Then use the Read tool with the exact path returned by view_file to view the contents`;
+          } else {
+            // Text files can be read directly via MCP read_file tool
+            enhancedPrompt = `${prompt}\n\n[SYSTEM: User uploaded a ${fileType}: ${uploadedFile}]\n\nUse the read_file tool with file_path "${uploadedFile}" to read the file contents.`;
+          }
+        }
 
       } catch (error) {
         log.error({

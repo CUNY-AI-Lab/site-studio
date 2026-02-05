@@ -59,7 +59,7 @@ export function validateBody<T extends z.ZodSchema>(schema: T) {
       if (error instanceof z.ZodError) {
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(err => ({
+          details: error.issues.map((err: z.ZodIssue) => ({
             path: err.path.join('.'),
             message: err.message,
           })),
@@ -84,7 +84,7 @@ export function validateQuery<T extends z.ZodSchema>(schema: T) {
       if (error instanceof z.ZodError) {
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(err => ({
+          details: error.issues.map((err: z.ZodIssue) => ({
             path: err.path.join('.'),
             message: err.message,
           })),
@@ -109,7 +109,7 @@ export function validateParams<T extends z.ZodSchema>(schema: T) {
       if (error instanceof z.ZodError) {
         res.status(400).json({
           error: 'Validation failed',
-          details: error.errors.map(err => ({
+          details: error.issues.map((err: z.ZodIssue) => ({
             path: err.path.join('.'),
             message: err.message,
           })),

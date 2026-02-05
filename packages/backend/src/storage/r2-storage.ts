@@ -300,7 +300,12 @@ export class R2Storage implements IStorage {
       (obj) => obj.Key && obj.Key !== this.getMetadataKey(userId, projectId)
     ).map((obj) => {
       // Remove the project prefix to get relative path
-      const relativePath = obj.Key!.slice(projectKeyPrefix.length);
+      // Note: projectKeyPrefix doesn't have trailing slash, so slice gives "/file.html"
+      // We need to remove the leading slash to get "file.html"
+      let relativePath = obj.Key!.slice(projectKeyPrefix.length);
+      if (relativePath.startsWith('/')) {
+        relativePath = relativePath.slice(1);
+      }
       const pathParts = relativePath.split('/');
 
       return {

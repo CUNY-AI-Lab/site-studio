@@ -81,9 +81,10 @@ export class ProjectSyncService {
 
           log.debug({ userId, projectId, filePath }, 'Downloaded file');
         } catch (error) {
-          const errorMsg = `Failed to download ${filePath}: ${error}`;
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMsg = `Failed to download ${filePath}: ${errorMessage}`;
           result.errors.push(errorMsg);
-          log.error({ userId, projectId, filePath, error }, 'Failed to download file');
+          log.error({ userId, projectId, filePath, errorMessage }, 'Failed to download file');
         }
       }
 

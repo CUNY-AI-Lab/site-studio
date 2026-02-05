@@ -57,26 +57,10 @@ export async function runSiteAgent(
     hasSession: !!sessionId,
   }, 'Initializing agent');
 
-  // Clean up downloaded binaries from previous sessions (only for new sessions)
-  if (!sessionId) {
-    try {
-      await fs.rm(projectPath, { recursive: true, force: true });
-      await fs.mkdir(projectPath, { recursive: true });
-      log.debug({
-        userId,
-        projectId,
-        projectPath,
-      }, 'Cleaned up project directory for new session');
-    } catch (error) {
-      // Ignore cleanup errors - directory might not exist yet
-      log.debug({
-        userId,
-        projectId,
-        projectPath,
-        error,
-      }, 'Project directory cleanup skipped (may not exist)');
-    }
-  }
+  // NOTE: Do NOT clean up projectPath here!
+  // The projectPath has already been hydrated from R2 storage by index.ts before calling runSiteAgent.
+  // Cleaning up here would wipe the downloaded files.
+  // If cleanup is needed between sessions, it should happen in index.ts BEFORE hydration.
 
   // Check if sandbox will be enabled (determines which tools to register)
   const sandboxConfig = getSandboxConfig();
@@ -112,7 +96,8 @@ export async function runSiteAgent(
     permissionMode: mode === 'plan' ? 'default' : 'bypassPermissions',
     systemPrompt: SITE_BUILDER_PROMPT,
     // Set higher maxThinkingTokens to give agent more thinking capacity
-    maxThinkingTokens: 8192,
+    // SDK automatically enables interleaved thinking via beta header
+    maxThinkingTokens: 32000,
     // Enable streaming for real-time text display
     includePartialMessages: true,
     mcpServers: {

@@ -196,6 +196,7 @@
 			try {
 				isUploading = true;
 				uploadedFilename = await uploadFile(fileToUpload);
+				onUpdate(); // Refresh preview - uploaded file may be referenced
 			} catch (error) {
 				console.error('File upload failed:', error);
 				messages = [...messages, {
@@ -441,8 +442,11 @@
 											? block.content.map(c => c.text).join('\n')
 											: block.content;
 
-										// Check if this tool modified files (has diff metadata) - refresh preview immediately
-										if (!block.is_error && output.includes('<!-- diff:')) {
+										// Check if this tool modified files - refresh preview immediately
+									// MCP tools include <!-- diff: metadata; standard tools (Edit, Write, Bash) don't
+									const fileModifyingTools = ['Edit', 'Write', 'Bash', 'mcp__site-studio__write_file', 'mcp__site-studio__edit_file', 'mcp__site-studio__delete_file'];
+									const matchedTool = toolIdMap.get(block.tool_use_id);
+									if (!block.is_error && (output.includes('<!-- diff:') || (matchedTool && fileModifyingTools.includes(matchedTool.name)))) {
 											filesModifiedDuringExecution = true;
 											onUpdate(); // Refresh preview immediately after file change
 										}
@@ -681,20 +685,25 @@
 
 	<div class="input-container">
 		<div class="input-row">
-			<input
-				type="text"
+			<textarea
 				bind:value={input}
 				onkeydown={handleKeyDown}
+				oninput={(e) => {
+					const target = e.target as HTMLTextAreaElement;
+					target.style.height = 'auto';
+					target.style.height = Math.min(target.scrollHeight, 200) + 'px';
+				}}
 				placeholder={messages.length > 0 ? "Ask a follow-up..." : "Describe what you'd like to build..."}
 				disabled={isLoading}
 				class="input-field"
-			/>
+				rows="1"
+			></textarea>
 			{#if isLoading}
 				<button onclick={stopRequest} class="stop-button" title="Stop request">
 					<Square size={16} />
 				</button>
 			{:else}
-				<button onclick={sendMessage} disabled={!input.trim()} class="send-button">
+				<button onclick={() => sendMessage()} disabled={!input.trim()} class="send-button">
 					<Send size={18} />
 				</button>
 			{/if}
@@ -857,7 +866,7 @@
 
 	.input-row {
 		display: flex;
-		align-items: center;
+		align-items: flex-end;
 		gap: 0.5rem;
 	}
 
@@ -871,6 +880,11 @@
 		font-size: 0.9375rem;
 		font-family: var(--font-sans);
 		transition: all 0.15s ease;
+		resize: none;
+		overflow-y: auto;
+		min-height: 42px;
+		max-height: 200px;
+		line-height: 1.5;
 	}
 
 	.input-field:focus {
