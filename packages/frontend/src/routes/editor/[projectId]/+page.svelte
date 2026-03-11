@@ -4,7 +4,6 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { resolvePath } from '$lib/utils/paths';
-	import CodeView from '$lib/components/CodeView.svelte';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
@@ -14,12 +13,24 @@
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import { Pane } from 'paneforge';
-	import { hasCompletedOnboarding, createEditorTour } from '$lib/utils/onboarding';
-	import 'driver.js/dist/driver.css';
-	import '$lib/styles/onboarding-tour.css';
+
+	type CodeViewComponentType = typeof import('$lib/components/CodeView.svelte').default;
+	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
 	let previewComponent: Preview;
 	let chatPane: ReturnType<typeof Pane>;
+	let projectLoadVersion = 0;
+	let previousProjectId = $state<string | null>(null);
+	let stableProjectId = $state<string | null>(null);
+	let codeViewComponent = $state<CodeViewComponentType | null>(null);
+	let isLoadingCodeView = $state(false);
+	let codeViewModulePromise: Promise<CodeViewComponentType> | null = null;
+	let onboardingModulePromise: Promise<OnboardingModule> | null = null;
+	type SaveSnapshot = {
+		projectId: string;
+		filePath: string;
+		content: string;
+	};
 
 	// Get projectId from URL params
 	let projectId = $derived($page.params.projectId);
@@ -46,33 +57,63 @@
 		isDragging = dragging;
 	}
 
-	onMount(async () => {
-		await loadFiles();
-		await loadAllProjects();
-
-		// Show onboarding tour for first-time users
-		if (!hasCompletedOnboarding()) {
-			// Small delay to ensure DOM is ready
-			setTimeout(() => {
-				const tour = createEditorTour();
-				tour.drive();
-			}, 1000);
+	async function loadOnboardingModule(): Promise<OnboardingModule> {
+		if (!onboardingModulePromise) {
+			onboardingModulePromise = Promise.all([
+				import('$lib/utils/onboarding'),
+				import('driver.js/dist/driver.css'),
+				import('$lib/styles/onboarding-tour.css')
+			]).then(([module]) => module);
 		}
+
+		return onboardingModulePromise;
+	}
+
+	async function maybeStartEditorTour(force = false) {
+		const onboarding = await loadOnboardingModule();
+		if (!force && onboarding.hasCompletedOnboarding()) {
+			return;
+		}
+
+		onboarding.createEditorTour().drive();
+	}
+
+	async function ensureCodeViewLoaded() {
+		if (codeViewComponent) {
+			return codeViewComponent;
+		}
+
+		if (!codeViewModulePromise) {
+			isLoadingCodeView = true;
+			codeViewModulePromise = import('$lib/components/CodeView.svelte')
+				.then((module) => module.default)
+				.finally(() => {
+					isLoadingCodeView = false;
+				});
+		}
+
+		codeViewComponent = await codeViewModulePromise;
+		return codeViewComponent;
+	}
+
+	onMount(() => {
+		// Show onboarding tour for first-time users after the editor layout settles.
+		setTimeout(() => {
+			void maybeStartEditorTour();
+		}, 1000);
 
 		// Add keyboard shortcut to force tutorial (Ctrl+Shift+H or Cmd+Shift+H for Help)
 		const handleKeyPress = (e: KeyboardEvent) => {
 			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
 				e.preventDefault();
-				const tour = createEditorTour();
-				tour.drive();
+				void maybeStartEditorTour(true);
 			}
 		};
 		window.addEventListener('keydown', handleKeyPress);
 
 		// Expose function to force tutorial from console
-		(window as any).showEditorTutorial = () => {
-			const tour = createEditorTour();
-			tour.drive();
+		(window as any).showEditorTutorial = async () => {
+			await maybeStartEditorTour(true);
 		};
 
 		return () => {
@@ -83,36 +124,42 @@
 
 	async function loadAllProjects() {
 		try {
-			allProjects = await fetchProjects();
-			// Set current project from the loaded projects
-			currentProject = allProjects.find(p => p.id === projectId) || null;
+			return await fetchProjects();
 		} catch (error) {
 			console.error('Error loading projects:', error);
+			return [];
 		}
 	}
 
-	async function loadFiles() {
-		if (!projectId) return;
+	async function loadFiles(targetProjectId = projectId) {
+		if (!targetProjectId) return [];
 
 		try {
-			console.log('Loading files for project:', projectId);
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/files`));
+			console.log('Loading files for project:', targetProjectId);
+			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/files`), {
+				credentials: 'include'
+			});
 			if (!response.ok) throw new Error('Failed to load files');
 
 			const data = await response.json();
 			console.log('Loaded files:', data.files);
-			files = data.files;
+			return data.files;
 		} catch (error) {
 			console.error('Error loading files:', error);
+			return [];
 		}
 	}
 
 	async function onFileSelect(filePath: string) {
 		if (!projectId) return;
+		const didFlushPendingSave = await flushPendingSave();
+		if (!didFlushPendingSave) return;
 
 		try {
 			console.log('Loading file:', filePath);
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`));
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`), {
+				credentials: 'include'
+			});
 			if (!response.ok) throw new Error('Failed to load file');
 
 			const data = await response.json();
@@ -126,21 +173,40 @@
 	}
 
 	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+	let queuedSave: SaveSnapshot | null = null;
+	let saveLoopPromise: Promise<boolean> | null = null;
 	let isSaving = $state(false);
 
-	async function saveFile() {
-		if (!projectId || !currentFile || !fileContent) return;
+	function clearSaveTimeout() {
+		if (saveTimeout) {
+			clearTimeout(saveTimeout);
+			saveTimeout = null;
+		}
+	}
+
+	function getCurrentSaveSnapshot(): SaveSnapshot | null {
+		if (!projectId || !currentFile) return null;
+
+		return {
+			projectId,
+			filePath: currentFile,
+			content: fileContent
+		};
+	}
+
+	async function persistFile(snapshot: SaveSnapshot): Promise<boolean> {
+		const { projectId: targetProjectId, filePath, content } = snapshot;
 
 		try {
-			isSaving = true;
-			console.log('Saving file:', currentFile);
+			console.log('Saving file:', filePath);
 
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/file`), {
+			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
 				body: JSON.stringify({
-					path: currentFile,
-					content: fileContent
+					path: filePath,
+					content
 				})
 			});
 
@@ -148,30 +214,138 @@
 			console.log('File saved successfully');
 
 			// Refresh preview after save
-			if (previewComponent) {
+			if (
+				previewComponent &&
+				targetProjectId === projectId &&
+				filePath === currentFile &&
+				content === fileContent
+			) {
 				previewComponent.refresh();
 			}
+			return true;
 		} catch (error) {
 			console.error('Error saving file:', error);
 			alert('Failed to save file');
-		} finally {
-			isSaving = false;
+			return false;
 		}
+	}
+
+	async function persistQueuedSaves(): Promise<boolean> {
+		if (saveLoopPromise) {
+			return saveLoopPromise;
+		}
+
+		saveLoopPromise = (async () => {
+			let allSucceeded = true;
+			isSaving = true;
+
+			try {
+				while (queuedSave) {
+					const snapshot = queuedSave;
+					queuedSave = null;
+
+					const didSave = await persistFile(snapshot);
+					if (!didSave) {
+						allSucceeded = false;
+						break;
+					}
+				}
+
+				return allSucceeded;
+			} finally {
+				isSaving = false;
+				saveLoopPromise = null;
+
+				if (queuedSave && allSucceeded) {
+					void persistQueuedSaves();
+				}
+			}
+		})();
+
+		return saveLoopPromise;
+	}
+
+	async function flushPendingSave(): Promise<boolean> {
+		clearSaveTimeout();
+
+		while (queuedSave || saveLoopPromise) {
+			const didPersist = await persistQueuedSaves();
+			if (!didPersist) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	function onEditorChange(content: string) {
 		fileContent = content;
+		const snapshot = getCurrentSaveSnapshot();
+		if (!snapshot) return;
 
 		// Auto-save after 1 second of no typing
-		if (saveTimeout) clearTimeout(saveTimeout);
+		queuedSave = snapshot;
+		clearSaveTimeout();
 		saveTimeout = setTimeout(() => {
-			saveFile();
+			saveTimeout = null;
+			void persistQueuedSaves();
 		}, 1000);
 	}
 
+	async function refreshProjectState(targetProjectId: string) {
+		const loadVersion = ++projectLoadVersion;
+		const [loadedFiles, loadedProjects] = await Promise.all([
+			loadFiles(targetProjectId),
+			loadAllProjects()
+		]);
+
+		if (loadVersion !== projectLoadVersion || targetProjectId !== projectId) {
+			return;
+		}
+
+		files = loadedFiles;
+		allProjects = loadedProjects;
+		currentProject = loadedProjects.find((project) => project.id === targetProjectId) || null;
+		stableProjectId = targetProjectId;
+	}
+
+	async function navigateToProject(targetProjectId: string) {
+		if (!targetProjectId || targetProjectId === projectId) return;
+
+		const didFlushPendingSave = await flushPendingSave();
+		if (!didFlushPendingSave) return;
+
+		await goto(`${base}/editor/${targetProjectId}`);
+	}
+
+	async function handleProjectChange(targetProjectId: string, fallbackProjectId: string | null) {
+		const didFlushPendingSave = await flushPendingSave();
+		if (!didFlushPendingSave) {
+			if (fallbackProjectId && fallbackProjectId !== targetProjectId) {
+				await goto(`${base}/editor/${fallbackProjectId}`, { replaceState: true });
+			}
+			return;
+		}
+
+		currentFile = '';
+		fileContent = '';
+		files = [];
+		currentProject = null;
+
+		await refreshProjectState(targetProjectId);
+	}
+
+	$effect(() => {
+		if (!projectId || projectId === previousProjectId) return;
+		const fallbackProjectId = stableProjectId;
+		previousProjectId = projectId;
+
+		void handleProjectChange(projectId, fallbackProjectId);
+	});
+
 	async function onAgentUpdate() {
 		// Reload files when agent makes changes
-		await loadFiles();
+		files = await loadFiles(projectId);
 
 		// Reload current file if it's open
 		if (currentFile) {
@@ -196,6 +370,9 @@
 
     function toggleCodePane() {
         isCodeCollapsed = !isCodeCollapsed;
+		if (!isCodeCollapsed) {
+			void ensureCodeViewLoaded();
+		}
     }
 
 	function handleRenameProject() {
@@ -206,6 +383,38 @@
 	function handleDeleteProject() {
 		if (!currentProject) return;
 		showDeleteDialog = true;
+	}
+
+	async function handleRenameSuccess(renamedProject: Project) {
+		allProjects = await loadAllProjects();
+		currentProject = renamedProject;
+		stableProjectId = renamedProject.id;
+
+		if (renamedProject.id !== projectId) {
+			await goto(`${base}/editor/${renamedProject.id}`, { replaceState: true });
+		}
+	}
+
+	async function handleDeleteSuccess(deletedProjectId: string) {
+		const remainingProjects = await loadAllProjects();
+		allProjects = remainingProjects;
+
+		if (deletedProjectId !== projectId) {
+			return;
+		}
+
+		currentProject = null;
+		currentFile = '';
+		fileContent = '';
+		files = [];
+		stableProjectId = null;
+
+		if (remainingProjects.length > 0) {
+			await goto(`${base}/editor/${remainingProjects[0].id}`, { replaceState: true });
+			return;
+		}
+
+		await goto(base || '/', { replaceState: true });
 	}
 
 	async function handlePublishProject() {
@@ -294,7 +503,10 @@
 	selectedProject={currentProject}
 	onRenameOpenChange={(open) => (showRenameDialog = open)}
 	onDeleteOpenChange={(open) => (showDeleteDialog = open)}
-	onSuccess={loadAllProjects}
+	onBeforeRename={flushPendingSave}
+	onBeforeDelete={flushPendingSave}
+	onRenameSuccess={handleRenameSuccess}
+	onDeleteSuccess={handleDeleteSuccess}
 />
 
 <div class="app">
@@ -325,7 +537,7 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<h1 class="logo">Site Studio</h1>
-                    <Button variant="ghost" size="sm" href="{base || '/'}">
+	                    <Button variant="ghost" size="sm" href={base || '/'}>
                         <LayoutDashboard size={18} />
                     </Button>
                 </div>
@@ -343,7 +555,7 @@
 								{#if allProjects.length > 0}
 									{#each allProjects as project (project.id)}
 										<DropdownMenu.Item
-											onclick={() => goto(`${base}/editor/${project.id}`)}
+											onclick={() => navigateToProject(project.id)}
 											class={project.id === projectId ? 'active-project' : ''}
 										>
 											{project.name}
@@ -471,16 +683,23 @@
 					<button class="close-editor-button" onclick={toggleCodePane} title="Close Editor">
 						<PanelRightClose size={20} />
 					</button>
-					<CodeView
-						{projectId}
-						{files}
-						{currentFile}
-						{fileContent}
-						{isSaving}
-						onFileSelect={onFileSelect}
-						onEditorChange={onEditorChange}
-						onRefreshFiles={loadFiles}
-					/>
+					{#if codeViewComponent}
+						{@const CodeView = codeViewComponent}
+						<CodeView
+							{projectId}
+							{files}
+							{currentFile}
+							{fileContent}
+							{isSaving}
+							onFileSelect={onFileSelect}
+							onEditorChange={onEditorChange}
+							onRefreshFiles={loadFiles}
+						/>
+					{:else}
+						<div class="code-loading">
+							<span>{isLoadingCodeView ? 'Loading editor...' : 'Open the editor to load code tools.'}</span>
+						</div>
+					{/if}
 				</aside>
 			</Resizable.Pane>
 		</Resizable.PaneGroup>
@@ -752,6 +971,17 @@
 		position: relative;
 		pointer-events: auto;
 		border-left: 1px solid var(--color-border);
+	}
+
+	.code-loading {
+		height: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1.5rem;
+		color: var(--color-text-secondary);
+		font-size: 0.9375rem;
+		background: var(--color-bg-primary);
 	}
 
 	.close-editor-button {

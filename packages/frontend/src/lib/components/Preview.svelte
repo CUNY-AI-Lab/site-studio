@@ -1,6 +1,5 @@
 <script lang="ts">
     import { RefreshCw } from 'lucide-svelte';
-    import { toPng } from 'html-to-image';
     import { uploadThumbnail } from '$lib/api/projects';
     import { resolvePath } from '$lib/utils/paths';
     import { Skeleton } from '$lib/components/ui/skeleton';
@@ -24,6 +23,15 @@
     const CAPTURE_THROTTLE_MS = 60_000; // 1 minute
     let capturing = false;
     let forceNextCapture = false;
+    let toPngPromise: Promise<typeof import('html-to-image').toPng> | null = null;
+
+    async function getToPng() {
+        if (!toPngPromise) {
+            toPngPromise = import('html-to-image').then((module) => module.toPng);
+        }
+
+        return toPngPromise;
+    }
 
     // Dual iframe swap technique to prevent white flash
     export function refresh() {
@@ -57,6 +65,7 @@
         try {
             // Give the page a moment to settle for consistent thumbnails
             await new Promise((r) => setTimeout(r, 250));
+            const toPng = await getToPng();
             const dataUrl = await toPng(root, {
                 cacheBust: true,
                 pixelRatio: 1,

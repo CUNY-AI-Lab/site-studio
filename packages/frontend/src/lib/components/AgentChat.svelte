@@ -3,7 +3,9 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Send, Loader2, Wrench, X, Paperclip, Square } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
+	import { getErrorMessage, handleApiError } from '$lib/api/errors';
 	import PlanApprovalCard from './PlanApprovalCard.svelte';
+	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
 
@@ -35,6 +37,37 @@
 		elapsedTime?: number; // Current elapsed time in seconds
 	}
 
+	interface PendingToolInteraction {
+		requestId: string;
+		requestKind: 'approval' | 'question';
+		toolName: string;
+		input: Record<string, any>;
+	}
+
+	interface UserQuestionOption {
+		label: string;
+		description?: string;
+		preview?: string;
+	}
+
+	interface UserQuestionAnnotation {
+		preview?: string;
+		notes?: string;
+	}
+
+	interface UserQuestionPrompt {
+		header?: string;
+		question: string;
+		options?: UserQuestionOption[];
+		multiSelect?: boolean;
+		placeholder?: string;
+	}
+
+	interface UserQuestionSubmission {
+		answers: Record<string, string>;
+		annotations?: Record<string, UserQuestionAnnotation>;
+	}
+
 	let {
 		projectId,
 		onUpdate
@@ -47,7 +80,7 @@
 	let input = $state('');
 	let isLoading = $state(false);
 	let sessionId = $state<string | null>(null);
-	let pendingToolApproval = $state<{ requestId: string; toolName: string; input: Record<string, any> } | null>(null);
+	let pendingToolInteraction = $state<PendingToolInteraction | null>(null);
 	let messagesContainer: HTMLDivElement;
 	let planMode = $state(true); // true = plan mode (interactive), false = direct execution
 	let fileInput: HTMLInputElement;
@@ -105,7 +138,7 @@
 			// Project changed - reset all chat state
 			messages = [];
 			sessionId = null;
-			pendingToolApproval = null;
+			pendingToolInteraction = null;
 			input = '';
 			isLoading = false;
 			currentStatus = '';
@@ -130,6 +163,7 @@
 		stopToolTimer();
 		isLoading = false;
 		currentStatus = '';
+		pendingToolInteraction = null;
 
 		// Mark any running tools as stopped
 		runningTools.forEach((tool) => {
@@ -174,10 +208,7 @@
 		}
 	}
 
-	async function sendMessage(retryCount = 0, previousUploadedFilename?: string) {
-		const MAX_RETRIES = 2;
-		const RETRY_DELAY_MS = 1000;
-
+	async function sendMessage() {
 		if (!input.trim() || isLoading) return;
 
 		const userMessage = input.trim();
@@ -191,14 +222,15 @@
 
 		// Upload file FIRST if attached (skip on retry - already uploaded)
 		// This ensures we don't show user message if upload fails
-		let uploadedFilename: string | undefined = previousUploadedFilename;
-		if (fileToUpload && retryCount === 0) {
+		let uploadedFilename: string | undefined;
+		if (fileToUpload) {
 			try {
 				isUploading = true;
 				uploadedFilename = await uploadFile(fileToUpload);
 				onUpdate(); // Refresh preview - uploaded file may be referenced
 			} catch (error) {
 				console.error('File upload failed:', error);
+				abortController = null;
 				messages = [...messages, {
 					role: 'assistant',
 					content: 'Sorry, the file upload failed. Please try again.'
@@ -211,17 +243,15 @@
 			}
 		}
 
-		// Add user message AFTER successful upload (only on first attempt, not retries)
-		if (retryCount === 0) {
-			let messageContent = userMessage;
-			if (fileToUpload) {
-				messageContent += ` [Attached: ${fileToUpload.name}]`;
-			}
-			if (uploadedFilename) {
-				messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
-			}
-			messages = [...messages, { role: 'user', content: messageContent }];
+		// Add user message AFTER successful upload so failed uploads don't create a chat turn
+		let messageContent = userMessage;
+		if (fileToUpload) {
+			messageContent += ` [Attached: ${fileToUpload.name}]`;
 		}
+		if (uploadedFilename) {
+			messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
+		}
+		messages = [...messages, { role: 'user', content: messageContent }];
 
 		// Scroll to bottom
 		scrollToBottom();
@@ -241,7 +271,9 @@
 				signal: abortController?.signal // Enable request cancellation
 			});
 
-			if (!response.ok) throw new Error('Request failed');
+			if (!response.ok) {
+				await handleApiError(response);
+			}
 			if (!response.body) throw new Error('No response body');
 
 			// Read SSE stream
@@ -328,17 +360,46 @@
 
 							// Handle tool approval requests (canUseTool callback)
 							if (event.type === 'tool_approval_request') {
-								pendingToolApproval = {
+								pendingToolInteraction = {
 									requestId: event.request_id,
+									requestKind: event.request_kind || 'approval',
 									toolName: event.tool_name,
 									input: event.input
 								};
-								currentStatus = 'Waiting for approval...';
+								currentStatus = event.request_kind === 'question'
+									? 'Waiting for your answer...'
+									: 'Waiting for approval...';
 								// Wait for DOM to update before scrolling
 								await tick();
 								scrollToBottom();
 								// Double scroll after a short delay to ensure approval card is fully rendered
 								setTimeout(scrollToBottom, 100);
+							}
+
+							if (event.type === 'error') {
+								const errorText = typeof event.error === 'string'
+									? event.error
+									: 'Sorry, there was an error processing your request.';
+								currentStatus = '';
+
+								const lastMessage = messages[messages.length - 1];
+								if (lastMessage?.role === 'assistant') {
+									if (contentBlocks.length > 0) {
+										contentBlocks.push({ type: 'text', text: errorText });
+										lastMessage.blocks = [...contentBlocks];
+									} else {
+										lastMessage.blocks = [{ type: 'text', text: errorText }];
+									}
+									lastMessage.content = errorText;
+									messages = [...messages];
+								} else {
+									messages = [...messages, {
+										role: 'assistant',
+										content: errorText,
+										blocks: [{ type: 'text', text: errorText }]
+									}];
+								}
+								scrollToBottom();
 							}
 
 							// Handle assistant messages
@@ -475,6 +536,11 @@
 
 		} catch (error: any) {
 			console.error('Error sending message:', error);
+			const lastMessage = messages[messages.length - 1];
+			if (lastMessage?.role === 'assistant' && !lastMessage.content && !lastMessage.blocks?.length) {
+				messages = messages.slice(0, -1);
+			}
+
 			// Check if it was aborted
 			if (error.name === 'AbortError' || abortController?.signal.aborted) {
 				messages = [
@@ -489,23 +555,13 @@
 				const isNetworkError = error.name === 'TypeError' &&
 					(error.message?.includes('network') || error.message?.includes('fetch'));
 
-				if (isNetworkError && retryCount < MAX_RETRIES) {
-					console.log(`Network error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
-					isLoading = false;
-					currentStatus = `Connection lost, retrying...`;
-					await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-					// Restore input for retry
-					input = userMessage;
-					return sendMessage(retryCount + 1, uploadedFilename);
-				}
-
 				messages = [
 					...messages,
 					{
 						role: 'assistant',
 						content: isNetworkError
-							? 'Connection lost. Please check your network and try again.'
-							: 'Sorry, there was an error processing your request.'
+							? 'Connection lost. The request was not retried automatically because it may already have started changing files.'
+							: getErrorMessage(error)
 					}
 				];
 			}
@@ -513,6 +569,7 @@
 			isLoading = false;
 			currentStatus = '';
 			abortController = null;
+			pendingToolInteraction = null;
 			stopToolTimer();
 			// Mark any tools still showing as 'running' as cancelled
 			for (const tool of runningTools.values()) {
@@ -529,56 +586,104 @@
 	}
 
 	// Approve a tool operation (canUseTool callback flow)
-	async function approveToolOperation() {
-		if (!pendingToolApproval) return;
+	async function resolveToolInteraction(
+		requestId: string,
+		payload: {
+			approved: boolean;
+			updatedInput?: Record<string, unknown>;
+			message?: string;
+			interrupt?: boolean;
+		}
+	) {
+		const response = await fetch(resolvePath('/api/query/tool-approve'), {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			credentials: 'include',
+			body: JSON.stringify({
+				requestId,
+				...payload
+			})
+		});
 
-		const requestId = pendingToolApproval.requestId;
-		pendingToolApproval = null;
+		if (!response.ok) {
+			await handleApiError(response);
+		}
+	}
+
+	// Approve a tool operation (canUseTool callback flow)
+	async function approveToolOperation() {
+		const interaction = pendingToolInteraction;
+		if (!interaction) return;
+
+		const requestId = interaction.requestId;
+		pendingToolInteraction = null;
 		currentStatus = 'Executing...';
 
 		try {
-			const response = await fetch(resolvePath('/api/query/tool-approve'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({
-					requestId,
-					approved: true
-				})
+			await resolveToolInteraction(requestId, {
+				approved: true
 			});
-
-			if (!response.ok) {
-				console.error('Tool approval failed:', response.status);
-			}
 		} catch (error) {
 			console.error('Error approving tool:', error);
+			pendingToolInteraction = interaction;
+			currentStatus = 'Approval failed.';
 		}
 	}
 
 	// Deny a specific tool operation (for canUseTool callback flow)
 	async function denyToolOperation() {
-		if (!pendingToolApproval) return;
+		const interaction = pendingToolInteraction;
+		if (!interaction) return;
 
-		const requestId = pendingToolApproval.requestId;
-		pendingToolApproval = null;
+		const requestId = interaction.requestId;
+		pendingToolInteraction = null;
 		currentStatus = '';
 
 		try {
-			const response = await fetch(resolvePath('/api/query/tool-approve'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({
-					requestId,
-					approved: false
-				})
+			await resolveToolInteraction(requestId, {
+				approved: false,
+				message: interaction.requestKind === 'question'
+					? 'User declined to answer the question'
+					: 'User declined the operation'
 			});
-
-			if (!response.ok) {
-				console.error('Tool denial failed:', response.status);
-			}
 		} catch (error) {
 			console.error('Error denying tool:', error);
+			pendingToolInteraction = interaction;
+			currentStatus = 'Unable to send response.';
+		}
+	}
+
+	function getPendingQuestions(input: Record<string, any>): UserQuestionPrompt[] {
+		if (!Array.isArray(input.questions)) {
+			return [];
+		}
+
+		return input.questions.filter((question): question is UserQuestionPrompt => {
+			return typeof question?.question === 'string' && question.question.length > 0;
+		});
+	}
+
+	async function submitUserQuestionAnswers({ answers, annotations }: UserQuestionSubmission) {
+		const interaction = pendingToolInteraction;
+		if (!interaction) return;
+
+		const requestId = interaction.requestId;
+		pendingToolInteraction = null;
+		currentStatus = 'Continuing...';
+
+		try {
+			await resolveToolInteraction(requestId, {
+				approved: true,
+				updatedInput: {
+					...interaction.input,
+					answers,
+					...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
+				}
+			});
+		} catch (error) {
+			console.error('Error answering question:', error);
+			pendingToolInteraction = interaction;
+			currentStatus = 'Unable to send your answer.';
 		}
 	}
 
@@ -664,14 +769,22 @@
 
 		{/if}
 
-		<!-- Tool approval card - {#key} forces re-render on async state changes -->
-		{#key pendingToolApproval}
-			{#if pendingToolApproval}
-				<PlanApprovalCard
-					plan={[{ name: pendingToolApproval.toolName, input: pendingToolApproval.input }]}
-					onApprove={approveToolOperation}
-					onReject={denyToolOperation}
-				/>
+		<!-- Pending tool interaction card - {#key} forces re-render on async state changes -->
+		{#key pendingToolInteraction}
+			{#if pendingToolInteraction}
+				{#if pendingToolInteraction.requestKind === 'question'}
+					<AskUserQuestionCard
+						questions={getPendingQuestions(pendingToolInteraction.input)}
+						onSubmit={submitUserQuestionAnswers}
+						onReject={denyToolOperation}
+					/>
+				{:else}
+					<PlanApprovalCard
+						plan={[{ name: pendingToolInteraction.toolName, input: pendingToolInteraction.input }]}
+						onApprove={approveToolOperation}
+						onReject={denyToolOperation}
+					/>
+				{/if}
 			{/if}
 		{/key}
 

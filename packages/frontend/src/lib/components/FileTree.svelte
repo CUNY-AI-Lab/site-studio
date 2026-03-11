@@ -37,6 +37,7 @@
 
 			const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
 				method: 'POST',
+				credentials: 'include',
 				body: formData
 			});
 
@@ -57,7 +58,9 @@
 
 	async function handleDownload(filePath: string) {
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`));
+			const response = await fetch(resolvePath(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`), {
+				credentials: 'include'
+			});
 
 			if (!response.ok) throw new Error('Download failed');
 
@@ -82,7 +85,8 @@
 
 		try {
 			const response = await fetch(resolvePath(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`), {
-				method: 'DELETE'
+				method: 'DELETE',
+				credentials: 'include'
 			});
 
 			if (!response.ok) {
@@ -113,6 +117,7 @@
 			const response = await fetch(resolvePath(`/api/projects/${projectId}/files/rename`), {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
+				credentials: 'include',
 				body: JSON.stringify({ oldPath: filePath, newPath })
 			});
 

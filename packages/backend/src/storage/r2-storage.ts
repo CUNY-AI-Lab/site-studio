@@ -105,6 +105,53 @@ export class R2Storage implements IStorage {
   }
 
   /**
+   * Generate the object-prefix for all non-metadata files in a project.
+   * The trailing slash ensures we don't match sibling project IDs with the same prefix.
+   */
+  private getProjectPrefix(userId: string, projectId: string): string {
+    return `${this.getKey(userId, projectId)}/`;
+  }
+
+  /**
+   * Collect all paginated results for a ListObjectsV2 query.
+   */
+  private async listAllObjects(params: {
+    Prefix: string;
+    Delimiter?: string;
+  }): Promise<{
+    contents: Array<{ Key?: string; Size?: number; LastModified?: Date }>;
+    commonPrefixes: Array<{ Prefix?: string }>;
+  }> {
+    const contents: Array<{ Key?: string; Size?: number; LastModified?: Date }> = [];
+    const commonPrefixes: Array<{ Prefix?: string }> = [];
+    let continuationToken: string | undefined;
+
+    do {
+      const response = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucketName,
+          ...params,
+          ContinuationToken: continuationToken,
+        })
+      );
+
+      if (response.Contents) {
+        contents.push(...response.Contents);
+      }
+
+      if (response.CommonPrefixes) {
+        commonPrefixes.push(...response.CommonPrefixes);
+      }
+
+      continuationToken = response.IsTruncated
+        ? response.NextContinuationToken
+        : undefined;
+    } while (continuationToken);
+
+    return { contents, commonPrefixes };
+  }
+
+  /**
    * Generate key for uploads
    */
   private getUploadKey(userId: string, fileName: string): string {
@@ -157,6 +204,56 @@ export class R2Storage implements IStorage {
    */
   private invalidateCache(key: string): void {
     this.cache.delete(key);
+  }
+
+  private summarizeObjectErrors(action: string, projectId: string, errors: string[]): Error {
+    const preview = errors.slice(0, 3).join('; ');
+    const suffix = errors.length > 3 ? `; and ${errors.length - 3} more` : '';
+    return new Error(`Failed to ${action} project ${projectId}: ${preview}${suffix}`);
+  }
+
+  private async copyObject(sourceKey: string, destKey: string): Promise<void> {
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        CopySource: `${this.bucketName}/${sourceKey}`,
+        Key: destKey,
+      })
+    );
+
+    const cached = this.getCachedBuffer(sourceKey);
+    if (cached) {
+      this.cacheBuffer(destKey, cached);
+    }
+  }
+
+  private async deleteKeys(keys: string[]): Promise<string[]> {
+    const errors: string[] = [];
+
+    for (const key of keys) {
+      try {
+        await this.client.send(
+          new DeleteObjectCommand({
+            Bucket: this.bucketName,
+            Key: key,
+          })
+        );
+        this.invalidateCache(key);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        errors.push(`${key}: ${errorMessage}`);
+      }
+    }
+
+    return errors;
+  }
+
+  private async getProjectObjectKeys(userId: string, projectId: string): Promise<string[]> {
+    const files = await this.listFiles(userId, projectId);
+    return [
+      ...files.map((file) => this.getKey(userId, projectId, file.path)),
+      this.getMetadataKey(userId, projectId),
+    ];
   }
 
   async writeFile(
@@ -266,46 +363,29 @@ export class R2Storage implements IStorage {
     const sourceKey = this.getKey(userId, projectId, sourcePath);
     const destKey = this.getKey(userId, projectId, destPath);
 
-    await this.client.send(
-      new CopyObjectCommand({
-        Bucket: this.bucketName,
-        CopySource: `${this.bucketName}/${sourceKey}`,
-        Key: destKey,
-      })
-    );
-
-    // Cache the destination file by copying from source cache if available
-    const cached = this.getCachedBuffer(sourceKey);
-    if (cached) {
-      this.cacheBuffer(destKey, cached);
-    }
+    await this.copyObject(sourceKey, destKey);
   }
 
   async listFiles(userId: string, projectId: string, prefix: string = ''): Promise<StorageFile[]> {
-    const baseKey = this.getKey(userId, projectId, prefix);
+    const projectKeyPrefix = this.getProjectPrefix(userId, projectId);
+    const normalizedPrefix = prefix ? validateFilePath(prefix) : '';
+    const baseKey = normalizedPrefix
+      ? `${projectKeyPrefix}${normalizedPrefix}/`
+      : projectKeyPrefix;
 
-    const response = await this.client.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucketName,
-        Prefix: baseKey,
-      })
-    );
+    const response = await this.listAllObjects({
+      Prefix: baseKey,
+    });
 
-    if (!response.Contents) {
+    if (response.contents.length === 0) {
       return [];
     }
 
-    const projectKeyPrefix = this.getKey(userId, projectId, '');
-    const files: StorageFile[] = response.Contents.filter(
+    const files: StorageFile[] = response.contents.filter(
       (obj) => obj.Key && obj.Key !== this.getMetadataKey(userId, projectId)
     ).map((obj) => {
       // Remove the project prefix to get relative path
-      // Note: projectKeyPrefix doesn't have trailing slash, so slice gives "/file.html"
-      // We need to remove the leading slash to get "file.html"
       let relativePath = obj.Key!.slice(projectKeyPrefix.length);
-      if (relativePath.startsWith('/')) {
-        relativePath = relativePath.slice(1);
-      }
       const pathParts = relativePath.split('/');
 
       return {
@@ -334,22 +414,12 @@ export class R2Storage implements IStorage {
   }
 
   async deleteProject(userId: string, projectId: string): Promise<void> {
-    // List all files in the project
-    const files = await this.listFiles(userId, projectId);
+    const keys = await this.getProjectObjectKeys(userId, projectId);
+    const errors = await this.deleteKeys(keys);
 
-    // Delete all files
-    for (const file of files) {
-      await this.deleteFile(userId, projectId, file.path);
+    if (errors.length > 0) {
+      throw this.summarizeObjectErrors('delete', projectId, errors);
     }
-
-    // Delete metadata
-    const metadataKey = this.getMetadataKey(userId, projectId);
-    await this.client.send(
-      new DeleteObjectCommand({
-        Bucket: this.bucketName,
-        Key: metadataKey,
-      })
-    );
   }
 
   async projectExists(userId: string, projectId: string): Promise<boolean> {
@@ -374,25 +444,22 @@ export class R2Storage implements IStorage {
   async listProjects(userId: string): Promise<string[]> {
     const prefix = `projects/${userId}/`;
 
-    const response = await this.client.send(
-      new ListObjectsV2Command({
-        Bucket: this.bucketName,
-        Prefix: prefix,
-        Delimiter: '/',
-      })
-    );
+    const response = await this.listAllObjects({
+      Prefix: prefix,
+      Delimiter: '/',
+    });
 
-    if (!response.CommonPrefixes) {
+    if (response.commonPrefixes.length === 0) {
       return [];
     }
 
     // Extract project IDs from common prefixes
-    const projects = response.CommonPrefixes.map((prefix) => {
+    const projects = response.commonPrefixes.map((prefix) => {
       const parts = prefix.Prefix!.split('/');
       return parts[parts.length - 2]; // Get project ID
     });
 
-    return projects;
+    return [...new Set(projects)];
   }
 
   async renameProject(
@@ -400,35 +467,55 @@ export class R2Storage implements IStorage {
     oldProjectId: string,
     newProjectId: string
   ): Promise<void> {
+    if (oldProjectId === newProjectId) {
+      return;
+    }
+
     // List all files in old project
     const files = await this.listFiles(userId, oldProjectId);
+    const copiedKeys: string[] = [];
+    let startedDeletingOldProject = false;
 
-    // Copy each file to new location
-    for (const file of files) {
-      const oldKey = this.getKey(userId, oldProjectId, file.path);
-      const newKey = this.getKey(userId, newProjectId, file.path);
+    try {
+      // Copy each file to new location
+      for (const file of files) {
+        const oldKey = this.getKey(userId, oldProjectId, file.path);
+        const newKey = this.getKey(userId, newProjectId, file.path);
 
-      await this.client.send(
-        new CopyObjectCommand({
-          Bucket: this.bucketName,
-          CopySource: `${this.bucketName}/${oldKey}`,
-          Key: newKey,
-        })
-      );
+        await this.copyObject(oldKey, newKey);
+        copiedKeys.push(newKey);
+      }
+
+      // Copy and update metadata
+      const oldMetadata = await this.getProjectMetadata(userId, oldProjectId);
+      if (oldMetadata) {
+        await this.updateProjectMetadata(userId, newProjectId, {
+          ...oldMetadata,
+          id: newProjectId,
+        });
+        copiedKeys.push(this.getMetadataKey(userId, newProjectId));
+      }
+
+      startedDeletingOldProject = true;
+      const deleteErrors = await this.deleteKeys(await this.getProjectObjectKeys(userId, oldProjectId));
+      if (deleteErrors.length > 0) {
+        throw new Error(
+          `Project files were copied to ${newProjectId}, but cleanup of ${oldProjectId} failed: ${deleteErrors.slice(0, 3).join('; ')}${deleteErrors.length > 3 ? `; and ${deleteErrors.length - 3} more` : ''}`
+        );
+      }
+    } catch (error) {
+      if (!startedDeletingOldProject && copiedKeys.length > 0) {
+        const rollbackErrors = await this.deleteKeys(copiedKeys);
+        if (rollbackErrors.length > 0) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `Failed to rename project ${oldProjectId} to ${newProjectId}: ${errorMessage}. Rollback also failed: ${rollbackErrors.slice(0, 3).join('; ')}${rollbackErrors.length > 3 ? `; and ${rollbackErrors.length - 3} more` : ''}`
+          );
+        }
+      }
+
+      throw error;
     }
-
-    // Copy and update metadata
-    const oldMetadata = await this.getProjectMetadata(userId, oldProjectId);
-    if (oldMetadata) {
-      await this.updateProjectMetadata(userId, newProjectId, {
-        ...oldMetadata,
-        id: newProjectId,
-        name: newProjectId,
-      });
-    }
-
-    // Delete old project
-    await this.deleteProject(userId, oldProjectId);
   }
 
   async getProjectMetadata(
@@ -543,20 +630,17 @@ export class R2Storage implements IStorage {
   async findProjectOwner(projectId: string): Promise<string | null> {
     try {
       // List all user prefixes in projects/
-      const response = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.bucketName,
-          Prefix: 'projects/',
-          Delimiter: '/',
-        })
-      );
+      const response = await this.listAllObjects({
+        Prefix: 'projects/',
+        Delimiter: '/',
+      });
 
-      if (!response.CommonPrefixes) {
+      if (response.commonPrefixes.length === 0) {
         return null;
       }
 
       // Check each user to see if they own this project
-      for (const prefix of response.CommonPrefixes) {
+      for (const prefix of response.commonPrefixes) {
         // Extract userId from prefix: projects/user_xxx/
         const userId = prefix.Prefix!.split('/')[1];
 

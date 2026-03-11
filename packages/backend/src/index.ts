@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import express from 'express';
+import express, { type Response } from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
@@ -8,7 +8,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
-import { runSiteAgent, type ToolApprovalRequest } from './agent.js';
+import { runSiteAgent, type ToolInteractionRequest, type ToolInteractionResolution } from './agent.js';
 import { authenticateUser, type AuthenticatedRequest } from './middleware/auth.js';
 import { errorHandler, ApiError, asyncHandler } from './middleware/error-handler.js';
 import { getSandboxManager } from './sandbox/manager.js';
@@ -45,19 +45,25 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 validateEnvironment();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT || 3001);
 
 // Sandboxes directory (where user projects are stored in isolation)
 // NOTE: This is only used for filesystem storage mode
 const SANDBOXES_DIR = process.env.SANDBOXES_DIR || path.join(__dirname, '../sandboxes');
 
-// Store pending tool approval requests
+// Store pending tool interaction requests
 // Key: requestId, Value: resolve function to call when approved/denied
-const pendingToolApprovals = new Map<string, ToolApprovalRequest>();
+const pendingToolApprovals = new Map<string, ToolInteractionRequest>();
 // Store timeouts for pending approvals (auto-deny after timeout)
 const approvalTimeouts = new Map<string, NodeJS.Timeout>();
 // Approval timeout: 5 minutes
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const SSE_HEARTBEAT_MS = 15 * 1000;
+
+function summarizeErrors(errors: string[]): string {
+  const preview = errors.slice(0, 3).join('; ');
+  return errors.length > 3 ? `${preview}; and ${errors.length - 3} more` : preview;
+}
 
 /**
  * Convert a string to a URL-friendly slug
@@ -79,6 +85,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '50mb' })); // Increased for PDF attachments in chat
 app.use(cookieParser());
+app.use(requestLogger());
 
 // Health check endpoints (no auth or rate limiting required)
 app.get('/health', healthCheck);
@@ -141,6 +148,15 @@ function getProjectPath(userId: string, projectId: string): string {
   return getUserProjectPath(userId, projectId);
 }
 
+async function ensureProjectExists(userId: string, projectId: string, res: Response): Promise<boolean> {
+  if (!(await storage.projectExists(userId, projectId))) {
+    res.status(404).json({ error: 'Project not found' });
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * GET /api/projects
  * List all projects for the authenticated user
@@ -199,6 +215,7 @@ app.post('/api/projects', validateBody(createProjectSchema), async (req, res, ne
 
     // Create project
     await storage.createProject(userId, sanitized);
+    await storage.updateProjectMetadata(userId, sanitized, { name });
 
     // Apply template if provided
     if (template) {
@@ -274,6 +291,8 @@ app.patch('/api/projects/:id', validateBody(renameProjectSchema), async (req, re
     if (newId !== id) {
       await storage.renameProject(userId, id, newId);
     }
+
+    await storage.updateProjectMetadata(userId, newId, { name });
 
     res.json({
       id: newId,
@@ -526,6 +545,10 @@ app.get('/api/projects/:id/files', async (req, res, next) => {
     const userId = authReq.user.id;
     const { id } = req.params;
 
+    if (!(await ensureProjectExists(userId, id, res))) {
+      return;
+    }
+
     // Get flat list of files from storage
     const flatFiles = await storage.listFiles(userId, id);
 
@@ -623,6 +646,10 @@ app.get('/api/projects/:id/file', async (req, res, next) => {
       return;
     }
 
+    if (!(await ensureProjectExists(userId, id, res))) {
+      return;
+    }
+
     const content = await storage.readFile(userId, id, filePath);
 
     res.json({
@@ -651,6 +678,10 @@ app.post('/api/projects/:id/file', validateBody(saveFileSchema), async (req, res
     // Security: basic path validation (prevent directory traversal)
     if (filePath.includes('..')) {
       res.status(403).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    if (!(await ensureProjectExists(userId, id, res))) {
       return;
     }
 
@@ -686,6 +717,10 @@ app.post('/api/projects/:id/revert', validateBody(revertFileSchema), async (req,
     // Security: basic path validation (prevent directory traversal)
     if (file_path.includes('..')) {
       res.status(403).json({ error: 'Invalid file path' });
+      return;
+    }
+
+    if (!(await ensureProjectExists(userId, id, res))) {
       return;
     }
 
@@ -725,6 +760,10 @@ app.post('/api/projects/:id/upload', uploadLimiter, upload.single('file'), fileU
 
     if (!req.file) {
       res.status(400).json({ error: 'No file uploaded' });
+      return;
+    }
+
+    if (!(await ensureProjectExists(userId, projectId, res))) {
       return;
     }
 
@@ -784,6 +823,10 @@ app.get('/api/projects/:id/download', async (req, res, next) => {
       return;
     }
 
+    if (!(await ensureProjectExists(userId, id, res))) {
+      return;
+    }
+
     // Read file as buffer
     const buffer = await storage.readFileBuffer(userId, id, filePath);
 
@@ -833,6 +876,10 @@ app.delete('/api/projects/:id/files', async (req, res, next) => {
       return;
     }
 
+    if (!(await ensureProjectExists(userId, id, res))) {
+      return;
+    }
+
     // Delete the file
     await storage.deleteFile(userId, id, filePath);
 
@@ -869,6 +916,10 @@ app.put('/api/projects/:id/files/rename', validateBody(renameFileSchema), async 
     // Prevent renaming certain protected files
     if (oldPath === '.thumbnail.png' || oldPath === '.metadata.json') {
       res.status(403).json({ error: 'Cannot rename protected files' });
+      return;
+    }
+
+    if (!(await ensureProjectExists(userId, id, res))) {
       return;
     }
 
@@ -913,11 +964,18 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
   const startTime = Date.now();
   let agentSessionId: string | undefined;
   let eventCount = 0;
+  let connectionClosed = false;
+  let heartbeatInterval: NodeJS.Timeout | null = null;
+  let stream: Awaited<ReturnType<typeof runSiteAgent>> | null = null;
 
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
     const { prompt, projectId, sessionId, mode, uploadedFile } = req.body;
+
+    if (!(await ensureProjectExists(userId, projectId, res))) {
+      return;
+    }
 
     // Log query start with full context
     log.info({
@@ -932,20 +990,31 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 
     // Get or create sandboxed session (Zod already validated prompt and projectId)
     const session = await sandboxManager.getOrCreateSession(userId, projectId, sessionId);
+    const agentResumeSessionId = sessionId && session.sessionId === sessionId ? sessionId : undefined;
     const projectPath = session.projectPath;
+
+    if (sessionId && !agentResumeSessionId) {
+      log.warn({
+        userId,
+        projectId,
+        requestedSessionId: sessionId,
+        sandboxSessionId: session.sessionId,
+      }, 'Ignoring requested agent session ID because it did not match the active project session');
+    }
 
     log.info({
       sessionId: session.sessionId,
       projectPath,
-      isNewSession: !sessionId,
+      isNewSession: !agentResumeSessionId,
     }, 'Sandbox session ready');
 
     // Ensure project directory exists
     await fs.mkdir(projectPath, { recursive: true });
 
-    // Hydrate local filesystem from R2 (download files for agent to work on)
-    // This is needed for standard tools (Edit, Write, Bash) which operate on local files
-    if (process.env.STORAGE_TYPE === 'r2') {
+    const sandboxConfig = getSandboxConfig();
+
+    // Hydrate local filesystem from R2 only when sandbox mode needs a local working copy.
+    if (process.env.STORAGE_TYPE === 'r2' && sandboxConfig.enabled) {
       log.info({ userId, projectId, projectPath }, 'Hydrating project from R2');
       const hydrateResult = await syncService.hydrate(userId, projectId, projectPath);
       log.info({
@@ -954,6 +1023,14 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
         filesDownloaded: hydrateResult.filesDownloaded,
         errors: hydrateResult.errors.length,
       }, 'Project hydration complete');
+
+      if (hydrateResult.errors.length > 0) {
+        throw new ApiError(
+          502,
+          `Project files could not be loaded from storage: ${summarizeErrors(hydrateResult.errors)}`,
+          'PROJECT_HYDRATION_FAILED'
+        );
+      }
     }
 
     // Handle uploaded file if present - build mode-aware prompt
@@ -967,8 +1044,6 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
         }
 
         const fileType = getFileTypeDescription(uploadedFile);
-        const sandboxConfig = getSandboxConfig();
-
         log.info({
           fileType,
           fileName: uploadedFile,
@@ -1019,13 +1094,101 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 
     log.info({ userId, projectId, sessionId }, 'SSE connection established');
 
+    const clearHeartbeat = () => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+    };
+
+    const cleanupPendingApprovals = (sessionApprovalIds: string[]) => {
+      for (const requestId of sessionApprovalIds) {
+        const pendingRequest = pendingToolApprovals.get(requestId);
+        if (!pendingRequest) {
+          continue;
+        }
+
+        log.info({ requestId, toolName: pendingRequest.toolName }, 'Cleaning up pending interaction on disconnect');
+        pendingToolApprovals.delete(requestId);
+        const timeout = approvalTimeouts.get(requestId);
+        if (timeout) {
+          clearTimeout(timeout);
+          approvalTimeouts.delete(requestId);
+        }
+        pendingRequest.resolve({
+          approved: false,
+          message: 'Client disconnected before responding',
+        });
+      }
+    };
+
+    const closeAgentStream = () => {
+      if (!stream) {
+        return;
+      }
+
+      try {
+        stream.close();
+      } catch (error) {
+        log.debug({
+          error,
+          userId,
+          projectId,
+          sessionId: agentSessionId || sessionId,
+        }, 'Error closing agent stream after disconnect');
+      } finally {
+        stream = null;
+      }
+    };
+
+    heartbeatInterval = setInterval(() => {
+      if (connectionClosed || res.writableEnded || res.destroyed) {
+        clearHeartbeat();
+        return;
+      }
+
+      res.write(': heartbeat\n\n');
+      if (typeof (res as any).flush === 'function') {
+        (res as any).flush();
+      }
+    }, SSE_HEARTBEAT_MS);
+
     // Track pending approval IDs for this request (for cleanup on disconnect)
     const sessionApprovalIds: string[] = [];
 
-    // Create tool approval callback for plan mode
-    // When the agent wants to use a write/edit tool, this sends an event to the frontend
-    const toolApprovalCallback = (request: ToolApprovalRequest) => {
-      // Store the pending approval
+    const handleClientDisconnect = () => {
+      if (connectionClosed || res.writableEnded) {
+        return;
+      }
+
+      connectionClosed = true;
+      clearHeartbeat();
+      cleanupPendingApprovals(sessionApprovalIds);
+      closeAgentStream();
+
+      log.warn({
+        userId,
+        projectId,
+        sessionId: agentSessionId || sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Client disconnected before stream completed');
+    };
+
+    res.on('close', handleClientDisconnect);
+
+    // Create tool interaction callback.
+    // This covers both plan-mode approvals and AskUserQuestion requests.
+    const toolInteractionCallback = (request: ToolInteractionRequest) => {
+      if (connectionClosed || res.writableEnded) {
+        request.resolve({
+          approved: false,
+          message: 'Connection closed before the request could be shown',
+        });
+        return;
+      }
+
+      // Store the pending request
       pendingToolApprovals.set(request.id, request);
       sessionApprovalIds.push(request.id);
 
@@ -1038,10 +1201,14 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
             projectId,
             requestId: request.id,
             toolName: request.toolName,
-          }, 'Tool approval timed out, auto-denying');
+            requestKind: request.kind,
+          }, 'Tool interaction timed out, auto-denying');
           pendingToolApprovals.delete(request.id);
           approvalTimeouts.delete(request.id);
-          pendingRequest.resolve(false);
+          pendingRequest.resolve({
+            approved: false,
+            message: 'Request timed out',
+          });
         }
       }, APPROVAL_TIMEOUT_MS);
       approvalTimeouts.set(request.id, timeout);
@@ -1051,12 +1218,14 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
         projectId,
         requestId: request.id,
         toolName: request.toolName,
-      }, 'Tool approval request created');
+        requestKind: request.kind,
+      }, 'Tool interaction request created');
 
       // Send event to frontend
       const approvalEvent = {
         type: 'tool_approval_request',
         request_id: request.id,
+        request_kind: request.kind,
         tool_name: request.toolName,
         input: request.input,
       };
@@ -1068,52 +1237,28 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 
     // Run agent with sandboxed session (mode: 'plan' or 'execute')
     // Only pass sessionId for resume if client explicitly provided one
-    const stream = await runSiteAgent(
+    stream = await runSiteAgent(
       enhancedPrompt,
       projectPath,
-      sessionId, // Use the sessionId from request body, not the generated one
+      agentResumeSessionId,
       mode || 'plan',
       session, // Pass sandbox session context
       userId, // Pass userId for storage abstraction
       projectId, // Pass projectId for storage abstraction
-      mode === 'plan' ? toolApprovalCallback : undefined // Pass callback for plan mode
+      toolInteractionCallback
     );
+
+    if (connectionClosed) {
+      closeAgentStream();
+      return;
+    }
 
     log.info({
       userId,
       projectId,
-      sessionId,
+      sessionId: agentResumeSessionId || session.sessionId,
       mode: mode || 'plan'
     }, 'Agent stream started');
-
-    // Track connection state
-    let connectionClosed = false;
-    req.on('close', () => {
-      connectionClosed = true;
-
-      // Clean up any pending approvals for this session
-      for (const requestId of sessionApprovalIds) {
-        const pendingRequest = pendingToolApprovals.get(requestId);
-        if (pendingRequest) {
-          log.info({ requestId, toolName: pendingRequest.toolName }, 'Cleaning up pending approval on disconnect');
-          pendingToolApprovals.delete(requestId);
-          const timeout = approvalTimeouts.get(requestId);
-          if (timeout) {
-            clearTimeout(timeout);
-            approvalTimeouts.delete(requestId);
-          }
-          pendingRequest.resolve(false); // Deny on disconnect
-        }
-      }
-
-      log.warn({
-        userId,
-        projectId,
-        sessionId: agentSessionId || sessionId,
-        eventCount,
-        duration: Date.now() - startTime,
-      }, 'Client disconnected before stream completed');
-    });
 
     // Stream events to client
     for await (const event of stream) {
@@ -1141,21 +1286,7 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
       }
 
       // Log important events
-      if (event.type === 'permission_request') {
-        log.info({
-          userId,
-          projectId,
-          sessionId: agentSessionId || sessionId,
-          toolCallCount: event.tool_calls?.length || 0,
-        }, 'Agent requesting permission for tool calls');
-      } else if (event.type === 'error') {
-        log.error({
-          userId,
-          projectId,
-          sessionId: agentSessionId || sessionId,
-          error: event.error,
-        }, 'Agent returned error event');
-      } else if (event.type === 'tool_progress') {
+      if (event.type === 'tool_progress') {
         log.debug({
           toolName: (event as any).tool_name,
           elapsedSeconds: (event as any).elapsed_time_seconds,
@@ -1170,17 +1301,46 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
       }
     }
 
-    res.write('data: [DONE]\n\n');
-    res.end();
+    clearHeartbeat();
 
-    log.info({
-      userId,
-      projectId,
-      sessionId: agentSessionId || sessionId,
-      eventCount,
-      duration: Date.now() - startTime,
-    }, 'Agent query completed successfully');
+    if (!connectionClosed) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+
+      log.info({
+        userId,
+        projectId,
+        sessionId: agentSessionId || sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Agent query completed successfully');
+    } else {
+      log.warn({
+        userId,
+        projectId,
+        sessionId: agentSessionId || sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Agent query ended after client disconnect');
+    }
   } catch (error) {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+
+    if (connectionClosed) {
+      log.warn({
+        error,
+        userId: (req as any).user?.id,
+        projectId: req.body?.projectId,
+        sessionId: agentSessionId || req.body?.sessionId,
+        eventCount,
+        duration: Date.now() - startTime,
+      }, 'Agent query ended after client disconnect');
+      return;
+    }
+
     log.error({
       error,
       userId: (req as any).user?.id,
@@ -1204,13 +1364,13 @@ app.post('/api/query', agentLimiter, validateBody(querySchema), async (req, res,
 
 /**
  * POST /api/query/tool-approve
- * Approve or deny a specific tool operation in plan mode
+ * Resolve a pending tool interaction in the active agent stream
  */
 app.post('/api/query/tool-approve', authenticateUser, async (req, res, next) => {
   try {
     const authReq = req as unknown as AuthenticatedRequest;
     const userId = authReq.user.id;
-    const { requestId, approved } = req.body;
+    const { requestId, approved, updatedInput, message, interrupt } = req.body;
 
     if (!requestId || typeof requestId !== 'string') {
       res.status(400).json({ error: 'Request ID is required' });
@@ -1222,13 +1382,13 @@ app.post('/api/query/tool-approve', authenticateUser, async (req, res, next) => 
       return;
     }
 
-    // Find and resolve the pending approval
+    // Find and resolve the pending interaction
     const pendingRequest = pendingToolApprovals.get(requestId);
     if (!pendingRequest) {
       log.warn({
         userId,
         requestId,
-      }, 'Tool approval request not found');
+      }, 'Tool interaction request not found');
       res.status(404).json({ error: 'Approval request not found or expired' });
       return;
     }
@@ -1240,18 +1400,30 @@ app.post('/api/query/tool-approve', authenticateUser, async (req, res, next) => 
       clearTimeout(timeout);
       approvalTimeouts.delete(requestId);
     }
-    pendingRequest.resolve(approved);
+    const resolution: ToolInteractionResolution = approved
+      ? {
+          approved: true,
+          updatedInput: updatedInput && typeof updatedInput === 'object' ? updatedInput : undefined,
+        }
+      : {
+          approved: false,
+          message: typeof message === 'string' ? message : undefined,
+          interrupt: typeof interrupt === 'boolean' ? interrupt : undefined,
+        };
+    pendingRequest.resolve(resolution);
 
     log.info({
       userId,
       requestId,
       toolName: pendingRequest.toolName,
+      requestKind: pendingRequest.kind,
       approved,
-    }, 'Tool approval resolved');
+      hasUpdatedInput: resolution.approved && !!resolution.updatedInput,
+    }, 'Tool interaction resolved');
 
     res.json({ success: true, approved });
   } catch (error) {
-    log.error({ error }, 'Tool approval failed');
+    log.error({ error }, 'Tool interaction resolution failed');
     next(error);
   }
 });
@@ -1592,9 +1764,6 @@ try {
   log.info('ℹ️ Frontend build not found; API-only mode');
 }
 
-// HTTP request logging middleware
-app.use(requestLogger());
-
 // Global error handling middleware (must be registered last)
 app.use(errorHandler);
 
@@ -1604,6 +1773,21 @@ const server = app.listen(PORT as number, '0.0.0.0', () => {
   log.info({ sandboxesDir: SANDBOXES_DIR }, '🔒 Sandboxed projects directory');
   log.info('🛡️  Multi-user isolation enabled');
 });
+
+export { app, server };
+
+export async function closeServer(): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
 
 // Graceful shutdown handler
 function gracefulShutdown(signal: string) {
@@ -1633,6 +1817,8 @@ function gracefulShutdown(signal: string) {
   }, 10000).unref();
 }
 
-// Register signal handlers for graceful shutdown
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Register signal handlers for graceful shutdown outside the test environment.
+if (process.env.NODE_ENV !== 'test') {
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+}

@@ -1,14 +1,14 @@
-@import "tailwindcss";
-
-/* === Open Studio Design System === */
-/* A warm, approachable interface for CUNY students and academics */
-/* First-time friendly, clear affordances, educational warmth */
-
 /* === Custom Fonts === */
 /* Lora: Academic warmth with character for headings */
 /* Source Sans 3: Highly readable, friendly for UI */
 /* JetBrains Mono: Excellent for code */
 @import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Source+Sans+3:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@import "tailwindcss";
+
+/* === Open Studio Design System === */
+/* A warm, approachable interface for CUNY students and academics */
+/* First-time friendly, clear affordances, educational warmth */
 
 * {
 	margin: 0;

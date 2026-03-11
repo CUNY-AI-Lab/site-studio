@@ -1,9 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { EditorView, basicSetup } from 'codemirror';
-	import { html } from '@codemirror/lang-html';
-	import { css } from '@codemirror/lang-css';
-	import { javascript } from '@codemirror/lang-javascript';
+	import { createEditorInstance } from './editor-instance';
 
 	let { currentFile = '', content = '', onChange }: {
 		currentFile: string;
@@ -11,26 +7,28 @@
 		onChange: (content: string) => void;
 	} = $props();
 
-	let editorElement: HTMLDivElement;
-	let editorView: EditorView | null = null;
+	let editorElement = $state<HTMLDivElement | null>(null);
+	let editorView: ReturnType<typeof createEditorInstance> | null = null;
+	let mountedFile = '';
 
 	$effect(() => {
-		// Only initialize editor when we have a file and an element to attach to
-		if (currentFile && editorElement && !editorView) {
-			editorView = new EditorView({
-				doc: content,
-				extensions: [
-					basicSetup,
-					getLanguageExtension(currentFile),
-					EditorView.updateListener.of((update) => {
-						if (update.docChanged) {
-							onChange(update.state.doc.toString());
-						}
-					})
-				],
-				parent: editorElement
-			});
-		} else if (editorView && content !== editorView.state.doc.toString()) {
+		if (!currentFile || !editorElement) {
+			if (editorView) {
+				editorView.destroy();
+				editorView = null;
+				mountedFile = '';
+			}
+			return;
+		}
+
+		if (!editorView || mountedFile !== currentFile) {
+			editorView?.destroy();
+			editorView = createEditorInstance(editorElement, currentFile, content, onChange);
+			mountedFile = currentFile;
+			return;
+		}
+
+		if (content !== editorView.state.doc.toString()) {
 			// Update content if it changed
 			editorView.dispatch({
 				changes: {
@@ -40,22 +38,17 @@
 				}
 			});
 		}
+	});
 
-		// Cleanup when component unmounts or file changes
+	$effect(() => {
 		return () => {
-			if (editorView && !currentFile) {
+			if (editorView) {
 				editorView.destroy();
 				editorView = null;
+				mountedFile = '';
 			}
 		};
 	});
-
-	function getLanguageExtension(filename: string) {
-		if (filename.endsWith('.html')) return html();
-		if (filename.endsWith('.css')) return css();
-		if (filename.endsWith('.js')) return javascript();
-		return html(); // default
-	}
 </script>
 
 <div class="editor">

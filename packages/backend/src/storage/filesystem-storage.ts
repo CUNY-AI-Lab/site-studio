@@ -147,7 +147,9 @@ export class FilesystemStorage implements IStorage {
   }
 
   async listFiles(userId: string, projectId: string, prefix: string = ''): Promise<StorageFile[]> {
-    const basePath = this.getFilePath(userId, projectId, prefix);
+    const basePath = prefix
+      ? this.getFilePath(userId, projectId, prefix)
+      : this.getProjectPath(userId, projectId);
     const files: StorageFile[] = [];
 
     async function walk(dir: string, baseDir: string): Promise<void> {
@@ -254,7 +256,6 @@ export class FilesystemStorage implements IStorage {
     const metadata = await this.getProjectMetadata(userId, newProjectId);
     if (metadata) {
       metadata.id = newProjectId;
-      metadata.name = newProjectId;
       await this.updateProjectMetadata(userId, newProjectId, metadata);
     }
   }

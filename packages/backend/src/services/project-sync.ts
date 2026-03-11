@@ -8,6 +8,7 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { createHash } from 'crypto';
 import { glob } from 'glob';
 import type { IStorage } from '../storage/types.js';
 import { getLogger } from '../config/logger.js';
@@ -27,6 +28,43 @@ export interface HydrateResult {
 
 export class ProjectSyncService {
   private lastSyncTime: Map<string, Date> = new Map();
+  private lastSyncHashes: Map<string, Map<string, string>> = new Map();
+  // Keep sync conservative: ignore system metadata and known local-only build/cache artifacts,
+  // but do not treat ordinary dotfiles as disposable project state.
+  private readonly internalStoragePaths = new Set(['.metadata.json', '.thumbnail.png']);
+  private readonly ignoredDirectoryNames = new Set([
+    'node_modules',
+    '.git',
+    '.svelte-kit',
+    '.vite',
+    '.next',
+    '.nuxt',
+    '.cache',
+    '.parcel-cache',
+    'coverage',
+  ]);
+  private readonly ignoredBaseNames = new Set([
+    '.DS_Store',
+    'Thumbs.db',
+  ]);
+  private readonly ignoredDebugLogPattern = /^(npm|pnpm|yarn)-(debug|error)\.log/i;
+  private readonly globIgnorePatterns = [
+    '**/node_modules/**',
+    '**/.git/**',
+    '**/.svelte-kit/**',
+    '**/.vite/**',
+    '**/.next/**',
+    '**/.nuxt/**',
+    '**/.cache/**',
+    '**/.parcel-cache/**',
+    '**/coverage/**',
+    '**/.DS_Store',
+    '**/Thumbs.db',
+    '**/npm-debug.log*',
+    '**/pnpm-debug.log*',
+    '**/yarn-debug.log*',
+    '**/yarn-error.log*',
+  ];
 
   constructor(private storage: IStorage) {}
 
@@ -35,6 +73,59 @@ export class ProjectSyncService {
    */
   private getProjectKey(userId: string, projectId: string): string {
     return `${userId}/${projectId}`;
+  }
+
+  private markSyncComplete(
+    projectKey: string,
+    errors: string[],
+    snapshot?: Map<string, string>
+  ): boolean {
+    if (errors.length > 0) {
+      return false;
+    }
+
+    this.lastSyncTime.set(projectKey, new Date());
+    if (snapshot) {
+      this.lastSyncHashes.set(projectKey, new Map(snapshot));
+    }
+    return true;
+  }
+
+  private hashBuffer(content: Buffer): string {
+    return createHash('sha256').update(content).digest('hex');
+  }
+
+  private normalizePath(filePath: string): string {
+    return filePath.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  }
+
+  private isInternalStoragePath(filePath: string): boolean {
+    return this.internalStoragePaths.has(this.normalizePath(filePath));
+  }
+
+  private shouldIgnoreSyncPath(filePath: string): boolean {
+    const normalizedPath = this.normalizePath(filePath);
+
+    if (!normalizedPath) {
+      return false;
+    }
+
+    if (this.isInternalStoragePath(normalizedPath)) {
+      return true;
+    }
+
+    const segments = normalizedPath.split('/').filter(Boolean);
+    const baseName = segments[segments.length - 1];
+
+    if (!baseName) {
+      return false;
+    }
+
+    if (this.ignoredBaseNames.has(baseName) || this.ignoredDebugLogPattern.test(baseName)) {
+      return true;
+    }
+
+    return segments.some(segment => this.ignoredDirectoryNames.has(segment));
   }
 
   /**
@@ -48,6 +139,7 @@ export class ProjectSyncService {
   ): Promise<HydrateResult> {
     const result: HydrateResult = { filesDownloaded: 0, errors: [] };
     const projectKey = this.getProjectKey(userId, projectId);
+    const hydratedHashes = new Map<string, string>();
 
     log.info({ userId, projectId, projectPath }, 'Starting project hydration');
 
@@ -57,17 +149,19 @@ export class ProjectSyncService {
 
       // Get list of all files in R2
       const r2FileList = await this.storage.listFiles(userId, projectId);
-      const r2Files = r2FileList.map(f => f.path);
+      const r2Files = r2FileList
+        .map(f => f.path)
+        .filter(filePath => !this.shouldIgnoreSyncPath(filePath));
 
       log.info({ userId, projectId, fileCount: r2Files.length }, 'Found files in R2');
 
+      const staleFilesRemoved = await this.removeStaleLocalFiles(projectPath, new Set(r2Files), result.errors);
+      if (staleFilesRemoved > 0) {
+        log.info({ userId, projectId, staleFilesRemoved }, 'Removed stale local files before hydration');
+      }
+
       // Download each file
       for (const filePath of r2Files) {
-        // Skip metadata files
-        if (filePath.startsWith('.metadata') || filePath === '.thumbnail.png') {
-          continue;
-        }
-
         try {
           const content = await this.storage.readFileBuffer(userId, projectId, filePath);
           const localPath = path.join(projectPath, filePath);
@@ -77,6 +171,7 @@ export class ProjectSyncService {
 
           // Write file to local filesystem
           await fs.writeFile(localPath, content);
+          hydratedHashes.set(filePath, this.hashBuffer(content));
           result.filesDownloaded++;
 
           log.debug({ userId, projectId, filePath }, 'Downloaded file');
@@ -88,8 +183,10 @@ export class ProjectSyncService {
         }
       }
 
-      // Record sync time
-      this.lastSyncTime.set(projectKey, new Date());
+      // Only treat hydration as a valid baseline if it completed without gaps.
+      if (!this.markSyncComplete(projectKey, result.errors, hydratedHashes)) {
+        this.clearSyncState(userId, projectId);
+      }
 
       log.info({
         userId,
@@ -119,6 +216,7 @@ export class ProjectSyncService {
     const result: SyncResult = { filesUploaded: 0, filesDeleted: 0, errors: [] };
     const projectKey = this.getProjectKey(userId, projectId);
     const lastSync = this.lastSyncTime.get(projectKey) || new Date(0);
+    const previousSnapshot = this.lastSyncHashes.get(projectKey);
 
     log.info({ userId, projectId, projectPath, lastSync }, 'Starting sync to R2');
 
@@ -126,8 +224,12 @@ export class ProjectSyncService {
       // Find all local files
       const localFiles = await this.getLocalFiles(projectPath);
 
-      // Find changed files (by mtime)
-      const changedFiles = await this.detectChanges(projectPath, localFiles, lastSync);
+      // Build a content-based snapshot so we do not miss edits when mtimes are preserved.
+      const localSnapshot = await this.buildLocalSnapshot(projectPath, localFiles);
+      result.errors.push(...localSnapshot.errors);
+
+      // Find changed files by comparing content hashes against the last successful sync.
+      const changedFiles = this.detectChanges(localSnapshot.hashes, previousSnapshot);
 
       log.info({
         userId,
@@ -158,8 +260,8 @@ export class ProjectSyncService {
       result.filesDeleted = deletionResult.filesDeleted;
       result.errors.push(...deletionResult.errors);
 
-      // Update sync time
-      this.lastSyncTime.set(projectKey, new Date());
+      // Keep the previous successful baseline if any upload/delete step failed.
+      this.markSyncComplete(projectKey, result.errors, localSnapshot.hashes);
 
       log.info({
         userId,
@@ -186,10 +288,10 @@ export class ProjectSyncService {
       const files = await glob('**/*', {
         cwd: projectPath,
         nodir: true,
-        dot: false, // Exclude dotfiles
-        ignore: ['.metadata.json', '.thumbnail.png'],
+        dot: true,
+        ignore: this.globIgnorePatterns,
       });
-      return files;
+      return files.filter(filePath => !this.shouldIgnoreSyncPath(filePath));
     } catch (error) {
       log.error({ projectPath, error }, 'Failed to list local files');
       return [];
@@ -197,26 +299,72 @@ export class ProjectSyncService {
   }
 
   /**
+   * Remove local files that no longer exist in storage so hydration starts from a clean cache.
+   */
+  private async removeStaleLocalFiles(
+    projectPath: string,
+    validFiles: Set<string>,
+    errors: string[]
+  ): Promise<number> {
+    let filesRemoved = 0;
+    const localFiles = await this.getLocalFiles(projectPath);
+
+    for (const filePath of localFiles) {
+      if (validFiles.has(filePath)) {
+        continue;
+      }
+
+      try {
+        await fs.rm(path.join(projectPath, filePath), { force: true });
+        filesRemoved++;
+      } catch (error) {
+        const errorMsg = `Failed to remove stale local file ${filePath}: ${error}`;
+        errors.push(errorMsg);
+        log.error({ projectPath, filePath, error }, 'Failed to remove stale local file');
+      }
+    }
+
+    return filesRemoved;
+  }
+
+  /**
    * Detect which files have changed since last sync
    */
-  private async detectChanges(
+  private async buildLocalSnapshot(
     projectPath: string,
-    localFiles: string[],
-    since: Date
-  ): Promise<string[]> {
-    const changed: string[] = [];
+    localFiles: string[]
+  ): Promise<{ hashes: Map<string, string>; errors: string[] }> {
+    const hashes = new Map<string, string>();
+    const errors: string[] = [];
 
     for (const filePath of localFiles) {
       try {
         const fullPath = path.join(projectPath, filePath);
-        const stat = await fs.stat(fullPath);
-
-        if (stat.mtime > since) {
-          changed.push(filePath);
-        }
+        const content = await fs.readFile(fullPath);
+        hashes.set(filePath, this.hashBuffer(content));
       } catch (error) {
-        // File might have been deleted, skip
-        log.debug({ filePath, error }, 'Could not stat file');
+        const errorMsg = `Failed to read ${filePath} for sync: ${error}`;
+        errors.push(errorMsg);
+        log.error({ filePath, error }, 'Could not read file for sync');
+      }
+    }
+
+    return { hashes, errors };
+  }
+
+  private detectChanges(
+    currentSnapshot: Map<string, string>,
+    previousSnapshot?: Map<string, string>
+  ): string[] {
+    if (!previousSnapshot) {
+      return Array.from(currentSnapshot.keys());
+    }
+
+    const changed: string[] = [];
+
+    for (const [filePath, hash] of currentSnapshot.entries()) {
+      if (previousSnapshot.get(filePath) !== hash) {
+        changed.push(filePath);
       }
     }
 
@@ -237,12 +385,9 @@ export class ProjectSyncService {
     try {
       // Get files in R2
       const r2FileList = await this.storage.listFiles(userId, projectId);
-      const r2Files = r2FileList.map(f => f.path);
-
-      // Filter out metadata files
-      const r2ContentFiles = r2Files.filter(
-        f => !f.startsWith('.metadata') && f !== '.thumbnail.png'
-      );
+      const r2ContentFiles = r2FileList
+        .map(f => f.path)
+        .filter(filePath => !this.isInternalStoragePath(filePath));
 
       // Find files that exist in R2 but not locally (deleted)
       const localFileSet = new Set(localFiles);
@@ -285,8 +430,9 @@ export class ProjectSyncService {
   ): Promise<SyncResult> {
     const projectKey = this.getProjectKey(userId, projectId);
 
-    // Reset last sync time to epoch to force all files to be considered changed
+    // Clear the hash baseline so every current file is treated as changed.
     this.lastSyncTime.set(projectKey, new Date(0));
+    this.lastSyncHashes.delete(projectKey);
 
     return this.sync(userId, projectId, projectPath);
   }
@@ -297,6 +443,7 @@ export class ProjectSyncService {
   clearSyncState(userId: string, projectId: string): void {
     const projectKey = this.getProjectKey(userId, projectId);
     this.lastSyncTime.delete(projectKey);
+    this.lastSyncHashes.delete(projectKey);
     log.debug({ userId, projectId }, 'Cleared sync state');
   }
 }

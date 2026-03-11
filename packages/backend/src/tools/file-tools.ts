@@ -22,6 +22,7 @@ export function createFileTools(
 ) {
   const storage: IStorage = getStorage();
   const useStorage = userId && projectId;
+  const supportsEmptyDirectories = !useStorage || process.env.STORAGE_TYPE !== 'r2';
   /**
    * Tool: list_files
    * List all files in the current project
@@ -727,7 +728,7 @@ or updates it if it does. Parent directories are created automatically.`,
     readFile,
     writeFile,
     deleteFile,
-    createDirectory,
+    ...(supportsEmptyDirectories ? [createDirectory] : []),
     viewFile,
     editFile,
     searchFiles,

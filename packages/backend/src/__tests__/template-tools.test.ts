@@ -146,5 +146,14 @@ describe('Template Tools', () => {
       expect(pageContent).toContain('<title>Our Team</title>');
       expect(pageContent).toContain('<h1>Our Team</h1>');
     });
+
+    it('should reject path traversal in page names', async () => {
+      const [, addPage] = tools;
+
+      const result = await addPage.handler({ page_name: '../escape', title: 'Escape' });
+
+      expect(result.content[0].text).toContain('Failed to create page');
+      await expect(fs.access(path.join(testDir, '../escape.html'))).rejects.toThrow();
+    });
   });
 });

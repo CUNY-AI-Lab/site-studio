@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle, MessageSquare } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
 
 	interface ToolExecution {
@@ -40,7 +40,8 @@
 		read_file: FolderOpen,
 		create_directory: FolderPlus,
 		add_page: FileEdit,
-		list_files: FolderOpen
+		list_files: FolderOpen,
+		AskUserQuestion: MessageSquare
 	};
 
 	const toolLabels: Record<string, string> = {
@@ -50,10 +51,15 @@
 		read_file: 'Reading file',
 		create_directory: 'Creating directory',
 		add_page: 'Adding page',
-		list_files: 'Listing files'
+		list_files: 'Listing files',
+		AskUserQuestion: 'Asking for clarification'
 	};
 
 	function getToolLabel(name: string): string {
+		if (toolLabels[name]) {
+			return toolLabels[name];
+		}
+
 		// Strip MCP server prefix patterns:
 		// - "mcp__site-studio__list_files" -> "list_files"
 		// - "mcp site-studio list files" -> "list files"
@@ -66,6 +72,10 @@
 	}
 
 	function getToolIcon(name: string) {
+		if (toolIcons[name]) {
+			return toolIcons[name];
+		}
+
 		// Normalize name to match icon keys
 		const cleanName = name
 			.replace(/^mcp[\s_-]+[\w-]+[\s_-]+/, '')
@@ -87,6 +97,9 @@
 		if (input.directory_path) return input.directory_path;
 		if (input.template) return `Template: ${input.template}`;
 		if (input.page_name) return input.page_name;
+		if (Array.isArray(input.questions) && input.questions.length > 0) {
+			return input.questions[0]?.header || input.questions[0]?.question || '';
+		}
 		return Object.keys(input).length > 0 ? JSON.stringify(input, null, 2) : '';
 	}
 
@@ -122,6 +135,9 @@
 
 	let parsedOutput = $derived(extractDiffData(tool.output));
 	let hasDiff = $derived(parsedOutput.diffData !== null);
+	let ToolIcon = $derived(getToolIcon(tool.name));
+	let StatusIcon = $derived(getStatusIcon());
+	let ChevronIcon = $derived(expanded ? ChevronDown : ChevronRight);
 </script>
 
 <button class="tool-card {getStatusClass()}" class:expanded={expanded} onclick={() => {
@@ -130,7 +146,7 @@
 	<div class="tool-header">
 		<div class="tool-info">
 			<div class="tool-icon-wrapper">
-				<svelte:component this={getToolIcon(tool.name)} size={14} class="tool-icon" />
+				<ToolIcon size={14} class="tool-icon" />
 			</div>
 			<span class="tool-label">{getToolLabel(tool.name)}</span>
 			{#if formatInput(tool.input)}
@@ -141,9 +157,9 @@
 			{#if tool.status === 'running' && tool.elapsedTime !== undefined}
 				<span class="elapsed-time">{tool.elapsedTime.toFixed(1)}s</span>
 			{/if}
-			<svelte:component this={getStatusIcon()} size={14} class="status-icon" />
+			<StatusIcon size={14} class="status-icon" />
 			{#if tool.output}
-				<svelte:component this={expanded ? ChevronDown : ChevronRight} size={14} class="chevron-icon" />
+				<ChevronIcon size={14} class="chevron-icon" />
 			{/if}
 		</div>
 	</div>

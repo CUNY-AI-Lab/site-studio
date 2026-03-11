@@ -2,14 +2,38 @@ import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import fs from 'fs/promises';
 import path from 'path';
+import { getStorage } from '../storage/index.js';
 
 /**
  * Create template tools with projectPath baked in
  */
-export function createTemplateTools(projectPath: string) {
+export function createTemplateTools(projectPath: string, userId?: string, projectId?: string) {
+  const useStorage = !!(userId && projectId);
+  const storage = useStorage ? getStorage() : null;
+  const resolvedProjectPath = path.resolve(projectPath);
 
-// HTML starter templates
-const templates = {
+  async function writeProjectFile(filePath: string, content: string) {
+    if (useStorage && storage && userId && projectId) {
+      await storage.writeFile(userId, projectId, filePath, content);
+    }
+
+    const fullPath = resolveProjectPath(filePath);
+    await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    await fs.writeFile(fullPath, content, 'utf-8');
+  }
+
+  function resolveProjectPath(filePath: string): string {
+    const fullPath = path.resolve(resolvedProjectPath, filePath);
+
+    if (fullPath !== resolvedProjectPath && !fullPath.startsWith(`${resolvedProjectPath}${path.sep}`)) {
+      throw new Error('Access denied: path outside project directory');
+    }
+
+    return fullPath;
+  }
+
+  // HTML starter templates
+  const templates = {
   blank: {
     'index.html': `<!DOCTYPE html>
 <html lang="en">
@@ -541,7 +565,7 @@ footer {
     color: #6b7280;
 }`,
   },
-};
+  };
 
   /**
    * Tool: scaffold_template
@@ -559,31 +583,30 @@ footer {
     }).shape,
     async (params) => {
       try {
-      const template = templates[params.template];
+        const template = templates[params.template];
 
-      // Write all template files
-      for (const [filename, content] of Object.entries(template)) {
-        const fullPath = path.join(projectPath, filename);
-        await fs.writeFile(fullPath, content, 'utf-8');
+        // Write all template files through storage and mirror them locally for the active session.
+        for (const [filename, content] of Object.entries(template)) {
+          await writeProjectFile(filename, content);
+        }
+
+        const fileCount = Object.keys(template).length;
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `✓ Created ${params.template} template with ${fileCount} file${fileCount !== 1 ? 's' : ''}`,
+          }],
+        };
+      } catch (error: any) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `✗ Failed to create template: ${error.message}`,
+          }],
+        };
       }
-
-      const fileCount = Object.keys(template).length;
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `✓ Created ${params.template} template with ${fileCount} file${fileCount !== 1 ? 's' : ''}`,
-        }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `✗ Failed to create template: ${error.message}`,
-        }],
-      };
     }
-  }
-);
+  );
 
   /**
    * Tool: add_page
@@ -598,12 +621,11 @@ footer {
     }).shape,
     async (params) => {
       try {
-      const filename = params.page_name.endsWith('.html')
-        ? params.page_name
-        : `${params.page_name}.html`;
-      const fullPath = path.join(projectPath, filename);
+        const filename = params.page_name.endsWith('.html')
+          ? params.page_name
+          : `${params.page_name}.html`;
 
-      const content = `<!DOCTYPE html>
+        const content = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -619,24 +641,24 @@ footer {
 </body>
 </html>`;
 
-      await fs.writeFile(fullPath, content, 'utf-8');
+        await writeProjectFile(filename, content);
 
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `✓ Created ${filename}`,
-        }],
-      };
-    } catch (error: any) {
-      return {
-        content: [{
-          type: 'text' as const,
-          text: `✗ Failed to create page: ${error.message}`,
-        }],
-      };
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `✓ Created ${filename}`,
+          }],
+        };
+      } catch (error: any) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `✗ Failed to create page: ${error.message}`,
+          }],
+        };
+      }
     }
-  }
-);
+  );
 
   return [
     scaffoldTemplate,

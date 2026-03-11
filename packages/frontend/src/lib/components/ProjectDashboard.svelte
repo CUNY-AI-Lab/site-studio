@@ -142,7 +142,8 @@
 	{selectedProject}
 	onRenameOpenChange={(open) => (showRenameDialog = open)}
 	onDeleteOpenChange={(open) => (showDeleteDialog = open)}
-	onSuccess={loadProjects}
+	onRenameSuccess={loadProjects}
+	onDeleteSuccess={loadProjects}
 />
 
 <div class="project-dashboard">

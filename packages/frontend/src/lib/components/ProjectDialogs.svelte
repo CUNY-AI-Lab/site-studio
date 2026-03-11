@@ -11,7 +11,10 @@
 		selectedProject: Project | null;
 		onRenameOpenChange: (open: boolean) => void;
 		onDeleteOpenChange: (open: boolean) => void;
-		onSuccess: () => void;
+		onBeforeRename?: () => Promise<boolean>;
+		onBeforeDelete?: () => Promise<boolean>;
+		onRenameSuccess: (project: Project) => void | Promise<void>;
+		onDeleteSuccess: (projectId: string) => void | Promise<void>;
 	}
 
 	let {
@@ -20,7 +23,10 @@
 		selectedProject,
 		onRenameOpenChange,
 		onDeleteOpenChange,
-		onSuccess
+		onBeforeRename,
+		onBeforeDelete,
+		onRenameSuccess,
+		onDeleteSuccess
 	}: Props = $props();
 
 	let newName = $state('');
@@ -37,12 +43,14 @@
 	async function handleRename() {
 		if (!selectedProject || !newName.trim() || isRenaming) return;
 
-		isRenaming = true;
-
 		try {
-			await renameProject(selectedProject.id, newName.trim());
+			const canRename = onBeforeRename ? await onBeforeRename() : true;
+			if (!canRename) return;
+
+			isRenaming = true;
+			const renamedProject = await renameProject(selectedProject.id, newName.trim());
 			onRenameOpenChange(false);
-			onSuccess();
+			await onRenameSuccess(renamedProject);
 		} catch (error) {
 			console.error('Error renaming project:', error);
 			alert('Failed to rename project. Please try again.');
@@ -54,12 +62,15 @@
 	async function handleDelete() {
 		if (!selectedProject || isDeleting) return;
 
-		isDeleting = true;
-
 		try {
+			const canDelete = onBeforeDelete ? await onBeforeDelete() : true;
+			if (!canDelete) return;
+
+			isDeleting = true;
+			const deletedProjectId = selectedProject.id;
 			await deleteProject(selectedProject.id);
 			onDeleteOpenChange(false);
-			onSuccess();
+			await onDeleteSuccess(deletedProjectId);
 		} catch (error) {
 			console.error('Error deleting project:', error);
 			alert('Failed to delete project. Please try again.');

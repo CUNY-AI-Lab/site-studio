@@ -1,4 +1,11 @@
-import { query, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import {
+  query,
+  createSdkMcpServer,
+  type HookJSONOutput,
+  type Options,
+  type PostToolUseHookInput,
+  type Query,
+} from '@anthropic-ai/claude-agent-sdk';
 import { createFileTools } from './tools/file-tools.js';
 import { createTemplateTools } from './tools/template-tools.js';
 import type { SandboxSession } from './sandbox/manager.js';
@@ -6,25 +13,53 @@ import { SITE_BUILDER_PROMPT } from './prompts/site-builder.js';
 import { getLogger } from './config/logger.js';
 import { getSandboxConfig, buildSandboxSettings } from './config/sandbox-config.js';
 import { getSyncService } from './services/project-sync.js';
-import fs from 'fs/promises';
 
 const log = getLogger('agent');
 
 /**
- * Pending tool approval request
+ * Pending tool interaction request surfaced to the frontend.
  */
-export interface ToolApprovalRequest {
+export type ToolInteractionKind = 'approval' | 'question';
+
+export type ToolInteractionResolution = {
+  approved: true;
+  updatedInput?: Record<string, unknown>;
+} | {
+  approved: false;
+  message?: string;
+  interrupt?: boolean;
+};
+
+export interface ToolInteractionRequest {
   id: string;
+  kind: ToolInteractionKind;
   toolName: string;
   input: Record<string, unknown>;
-  resolve: (approved: boolean) => void;
+  resolve: (resolution: ToolInteractionResolution) => void;
 }
 
 /**
- * Callback for handling tool approval requests
- * Called when the agent wants to execute a write/edit tool in plan mode
+ * Callback for handling tool interaction requests.
+ * Used for write approvals in plan mode and AskUserQuestion in all modes.
  */
-export type ToolApprovalCallback = (request: ToolApprovalRequest) => void;
+export type ToolInteractionCallback = (request: ToolInteractionRequest) => void;
+
+function summarizeSyncErrors(errors: string[]): string {
+  const preview = errors.slice(0, 3).join('; ');
+  return errors.length > 3 ? `${preview}; and ${errors.length - 3} more` : preview;
+}
+
+function buildSyncFailureOutput(message: string): HookJSONOutput {
+  return {
+    continue: false,
+    stopReason: 'Project sync failed',
+    systemMessage: message,
+    hookSpecificOutput: {
+      hookEventName: 'PostToolUse',
+      additionalContext: message,
+    },
+  };
+}
 
 /**
  * Create and run a site building session with sandbox support
@@ -35,7 +70,7 @@ export type ToolApprovalCallback = (request: ToolApprovalRequest) => void;
  * @param sandboxSession - Optional sandbox session context for isolation
  * @param userId - User ID (for storage abstraction)
  * @param projectId - Project ID (for storage abstraction)
- * @param toolApprovalCallback - Callback for tool approval in plan mode
+ * @param toolInteractionCallback - Callback for tool approvals and AskUserQuestion prompts
  */
 export async function runSiteAgent(
   prompt: string,
@@ -45,8 +80,8 @@ export async function runSiteAgent(
   sandboxSession?: SandboxSession,
   userId?: string,
   projectId?: string,
-  toolApprovalCallback?: ToolApprovalCallback
-): Promise<AsyncIterable<any>> {
+  toolInteractionCallback?: ToolInteractionCallback
+): Promise<Query> {
   log.info({
     userId,
     projectId,
@@ -69,7 +104,7 @@ export async function runSiteAgent(
   // Create tools with projectPath and optional sandbox context
   // When sandbox is enabled, skip MCP file tools (use standard tools + sync instead)
   const fileTools = sandboxEnabled ? [] : createFileTools(projectPath, sandboxSession, userId, projectId);
-  const templateTools = createTemplateTools(projectPath);
+  const templateTools = createTemplateTools(projectPath, userId, projectId);
   const allTools = [...fileTools, ...templateTools];
 
   log.debug({
@@ -89,17 +124,22 @@ export async function runSiteAgent(
   });
 
   // Query options for standalone server with direct API calls
-  const queryOptions: any = {
-    // Use 'default' permissionMode to allow canUseTool callback to be invoked
-    // The canUseTool callback handles approval logic for plan mode
-    // For execute mode, we allow all tools without approval
-    permissionMode: mode === 'plan' ? 'default' : 'bypassPermissions',
+  const queryOptions: Options = {
+    cwd: projectPath,
+    // Keep permission callbacks active in both modes so AskUserQuestion can round-trip through the UI.
+    permissionMode: 'default',
     systemPrompt: SITE_BUILDER_PROMPT,
-    // Set higher maxThinkingTokens to give agent more thinking capacity
-    // SDK automatically enables interleaved thinking via beta header
-    maxThinkingTokens: 32000,
+    thinking: {
+      type: 'enabled',
+      budgetTokens: 32000,
+    },
     // Enable streaming for real-time text display
     includePartialMessages: true,
+    toolConfig: {
+      askUserQuestion: {
+        previewFormat: 'html',
+      },
+    },
     mcpServers: {
       'site-studio': server,
     },
@@ -143,8 +183,6 @@ export async function runSiteAgent(
       // Other tools not needed for site building
       'NotebookEdit',        // Jupyter notebooks not relevant to static sites
 
-      // App internals (would reveal our architecture to users)
-      'AskUserQuestion',     // Agent should build sites, not ask meta-questions
     ],
     // NOTE: TodoWrite is ALLOWED - it helps users see what the agent is planning to do
 
@@ -168,7 +206,7 @@ export async function runSiteAgent(
     // Remove standard file tools from disallowed list when sandbox is enabled
     // These tools will write to local filesystem, then sync to R2 via PostToolUse hooks
     const sandboxEnabledTools = ['Edit', 'Write', 'Glob', 'Grep'];
-    queryOptions.disallowedTools = queryOptions.disallowedTools.filter(
+    queryOptions.disallowedTools = (queryOptions.disallowedTools ?? []).filter(
       (tool: string) => !sandboxEnabledTools.includes(tool)
     );
 
@@ -196,8 +234,11 @@ All paths must be absolute paths within this directory.
 
 **Important:**
 - All file paths must be absolute (e.g., \`${projectPath}/index.html\`)
+- Writing to a nested path creates parent directories automatically
 - Changes are automatically synced to cloud storage
 - Use these tools instead of MCP file tools
+- For narrow requests, prefer the smallest possible edit and avoid rewriting whole files unless necessary
+- Prefer \`Edit\` over \`Write\` when changing existing content
 
 **Examples:**
 - Edit: \`file_path="${projectPath}/index.html"\`, old_string="...", new_string="..."
@@ -211,7 +252,7 @@ All paths must be absolute paths within this directory.
     // Remove Bash tools from disallowed list if sandbox is enabled with autoAllowBash
     if (sandboxConfig.autoAllowBash) {
       const bashTools = ['Bash', 'BashOutput', 'KillShell'];
-      queryOptions.disallowedTools = queryOptions.disallowedTools.filter(
+      queryOptions.disallowedTools = (queryOptions.disallowedTools ?? []).filter(
         (tool: string) => !bashTools.includes(tool)
       );
 
@@ -256,16 +297,20 @@ You: \`cd ${projectPath} && hugo --minify\`
     }
   }
 
-  // Add canUseTool callback for plan mode approval
-  // This intercepts tool calls and allows the frontend to approve/deny them
-  if (mode === 'plan' && toolApprovalCallback) {
-    // Tools that require approval before execution
+  // Add canUseTool callback for runtime approvals and AskUserQuestion handling.
+  if (toolInteractionCallback) {
+    const askUserQuestionTool = 'AskUserQuestion';
+
+    // Tools that require approval before execution in plan mode.
     const toolsRequiringApproval = [
       // MCP tools (custom file operations)
       'mcp__site-studio__write_file',
       'mcp__site-studio__edit_file',
       'mcp__site-studio__delete_file',
+      'mcp__site-studio__rename_file',
+      'mcp__site-studio__create_directory',
       'mcp__site-studio__scaffold_template',
+      'mcp__site-studio__add_page',
       // Standard Claude Code tools (when sandbox enabled)
       'Edit',
       'Write',
@@ -273,16 +318,20 @@ You: \`cd ${projectPath} && hugo --minify\`
     ];
 
     queryOptions.canUseTool = async (toolName: string, input: Record<string, unknown>) => {
+      const requiresApproval = mode === 'plan' && toolsRequiringApproval.includes(toolName);
+      const isUserQuestion = toolName === askUserQuestionTool;
+
       // Log ALL tool calls to debug tool name format
       log.info({
         userId,
         projectId,
         toolName,
-        requiresApproval: toolsRequiringApproval.includes(toolName),
+        requiresApproval,
+        isUserQuestion,
+        mode,
       }, 'canUseTool called');
 
-      // Only require approval for write/edit operations
-      if (!toolsRequiringApproval.includes(toolName)) {
+      if (!requiresApproval && !isUserQuestion) {
         return { behavior: 'allow', updatedInput: input };
       }
 
@@ -290,36 +339,45 @@ You: \`cd ${projectPath} && hugo --minify\`
         userId,
         projectId,
         toolName,
+        interactionKind: isUserQuestion ? 'question' : 'approval',
         inputKeys: Object.keys(input),
-      }, 'Tool requires approval');
+      }, 'Tool requires user interaction');
 
-      // Create approval request and wait for response
+      // Create interaction request and wait for frontend response
       return new Promise((resolve) => {
         const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-        const request: ToolApprovalRequest = {
+        const request: ToolInteractionRequest = {
           id: requestId,
+          kind: isUserQuestion ? 'question' : 'approval',
           toolName,
           input,
-          resolve: (approved: boolean) => {
+          resolve: (resolution: ToolInteractionResolution) => {
             log.info({
               userId,
               projectId,
               requestId,
               toolName,
-              approved,
-            }, 'Tool approval resolved');
+              approved: resolution.approved,
+              hasUpdatedInput: resolution.approved && !!resolution.updatedInput,
+            }, 'Tool interaction resolved');
 
-            if (approved) {
-              resolve({ behavior: 'allow', updatedInput: input });
+            if (resolution.approved) {
+              resolve({
+                behavior: 'allow',
+                updatedInput: resolution.updatedInput ?? input,
+              });
             } else {
-              resolve({ behavior: 'deny', message: 'User declined the operation', interrupt: false });
+              resolve({
+                behavior: 'deny',
+                message: resolution.message || 'User declined the operation',
+                interrupt: resolution.interrupt ?? false,
+              });
             }
           },
         };
 
-        // Notify the caller about the pending approval
-        toolApprovalCallback(request);
+        toolInteractionCallback(request);
       });
     };
 
@@ -327,18 +385,20 @@ You: \`cd ${projectPath} && hugo --minify\`
       userId,
       projectId,
       mode,
-    }, 'Plan mode enabled with canUseTool callback');
+    }, 'canUseTool callback enabled');
   }
 
   // Add PostToolUse hooks for syncing local changes to R2
   // This ensures files written by standard tools (Edit, Write, Bash) are synced
-  if (process.env.STORAGE_TYPE === 'r2' && userId && projectId) {
+  if (process.env.STORAGE_TYPE === 'r2' && sandboxEnabled && userId && projectId) {
     const fileModifyingTools = ['Edit', 'Write', 'Bash'];
 
     queryOptions.hooks = {
       PostToolUse: [{
         matcher: fileModifyingTools.join('|'),
-        hooks: [async (input: any, toolUseId: string | undefined, options: { signal: AbortSignal }) => {
+        hooks: [async (hookInput, toolUseId): Promise<HookJSONOutput> => {
+          const input = hookInput as PostToolUseHookInput;
+
           try {
             const syncService = getSyncService();
             log.info({
@@ -350,6 +410,12 @@ You: \`cd ${projectPath} && hugo --minify\`
 
             const result = await syncService.sync(userId, projectId, projectPath);
 
+            if (result.errors.length > 0) {
+              return buildSyncFailureOutput(
+                `Project changes could not be synced back to storage: ${summarizeSyncErrors(result.errors)}`
+              );
+            }
+
             log.info({
               userId,
               projectId,
@@ -358,12 +424,19 @@ You: \`cd ${projectPath} && hugo --minify\`
               errors: result.errors.length,
             }, 'R2 sync complete');
           } catch (error) {
+            const message = error instanceof Error
+              ? error.message
+              : 'Project changes could not be synced back to storage.';
+
             log.error({
               userId,
               projectId,
               error,
             }, 'R2 sync failed after tool use');
+
+            return buildSyncFailureOutput(message);
           }
+
           return {};
         }],
       }],
@@ -380,7 +453,7 @@ You: \`cd ${projectPath} && hugo --minify\`
     userId,
     projectId,
     sessionId,
-    disallowedToolCount: queryOptions.disallowedTools.length,
+    disallowedToolCount: queryOptions.disallowedTools?.length ?? 0,
     includePartialMessages: queryOptions.includePartialMessages,
     hasStderrCallback: !!queryOptions.stderr,
     hasCanUseTool: !!queryOptions.canUseTool,

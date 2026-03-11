@@ -35,38 +35,24 @@ export class SandboxSessionManager {
   private activeSessions: Map<string, SandboxSession> = new Map();
   private readonly SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
-  /**
-   * Get or create a session for a user's project
-   */
-  async getOrCreateSession(userId: string, projectId: string, sessionId?: string): Promise<SandboxSession> {
-    const key = sessionId || randomUUID();
-
-    // Check if session exists and is still valid
-    let session = this.activeSessions.get(key);
-    if (session) {
-      session.lastActivity = new Date();
-      log.debug({
-        sessionId: key,
-        userId,
-        projectId,
-        age: Date.now() - session.createdAt.getTime(),
-      }, 'Resuming existing session');
-      return session;
-    }
-
-    // Create new session
+  private async createAndStoreSession(
+    userId: string,
+    projectId: string,
+    sessionId: string,
+    isProvided: boolean
+  ): Promise<SandboxSession> {
     log.info({
-      sessionId: key,
+      sessionId,
       userId,
       projectId,
-      isProvided: !!sessionId,
+      isProvided,
     }, 'Creating new session');
 
-    session = await this.createSession(userId, projectId, key);
-    this.activeSessions.set(key, session);
+    const session = await this.createSession(userId, projectId, sessionId);
+    this.activeSessions.set(sessionId, session);
 
     log.info({
-      sessionId: key,
+      sessionId,
       userId,
       projectId,
       projectPath: session.projectPath,
@@ -74,6 +60,42 @@ export class SandboxSessionManager {
     }, 'Session created');
 
     return session;
+  }
+
+  /**
+   * Get or create a session for a user's project
+   */
+  async getOrCreateSession(userId: string, projectId: string, sessionId?: string): Promise<SandboxSession> {
+    if (sessionId) {
+      const existingSession = this.activeSessions.get(sessionId);
+
+      if (existingSession) {
+        if (existingSession.userId === userId && existingSession.projectId === projectId) {
+          existingSession.lastActivity = new Date();
+          log.debug({
+            sessionId,
+            userId,
+            projectId,
+            age: Date.now() - existingSession.createdAt.getTime(),
+          }, 'Resuming existing session');
+          return existingSession;
+        }
+
+        log.warn({
+          requestedSessionId: sessionId,
+          requestedUserId: userId,
+          requestedProjectId: projectId,
+          existingUserId: existingSession.userId,
+          existingProjectId: existingSession.projectId,
+        }, 'Requested session belongs to a different project context; creating a fresh session');
+
+        return this.createAndStoreSession(userId, projectId, randomUUID(), false);
+      }
+
+      return this.createAndStoreSession(userId, projectId, sessionId, true);
+    }
+
+    return this.createAndStoreSession(userId, projectId, randomUUID(), false);
   }
 
   /**

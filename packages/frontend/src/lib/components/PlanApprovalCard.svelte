@@ -144,6 +144,7 @@
 	<div class="changes-list">
 		{#each plan as step, i}
 			{@const config = getConfig(step.name)}
+			{@const StepIcon = config.icon}
 			{@const diff = getDiffContent(step)}
 			{@const diffLines = generateDiffLines(diff.before, diff.after)}
 			{@const isExpanded = expandedSteps.has(i)}
@@ -156,7 +157,7 @@
 				>
 					<div class="change-info">
 						<span class="change-icon" class:is-delete={getBaseName(step.name) === 'delete_file'}>
-							<svelte:component this={config.icon} size={14} />
+							<StepIcon size={14} />
 						</span>
 						<span class="change-action">{config.verb}</span>
 						<code class="change-file">{getFileName(step.input)}</code>

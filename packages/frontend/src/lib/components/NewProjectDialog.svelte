@@ -167,15 +167,16 @@
 							</div>
 							<div class="templates-grid">
 								{#each category.templates as template (template.id)}
+									{@const TemplateIcon = getIcon(template.icon)}
 									<button
 										class="template-card"
 										onclick={() => selectTemplate(template)}
 									>
 										<div class="template-preview">
-											<img src="{base}/template-previews/{template.id}.png" alt="{template.title} preview" />
+											<img src={`${base}/template-previews/${template.id}.png`} alt={`${template.title} preview`} />
 											<div class="template-overlay">
 												<div class="template-icon">
-													<svelte:component this={getIcon(template.icon)} size={20} />
+													<TemplateIcon size={20} />
 												</div>
 											</div>
 										</div>
@@ -194,7 +195,10 @@
 			<div class="selected-template">
 				<div class="selected-header">
 					<div class="selected-preview">
-						<img src="{base}/template-previews/{selectedTemplate.id}.png" alt="{selectedTemplate.title} preview" />
+						<img
+							src={`${base}/template-previews/${selectedTemplate.id}.png`}
+							alt={`${selectedTemplate.title} preview`}
+						/>
 					</div>
 					<div class="selected-info">
 						<div class="selected-category">{selectedTemplate.categoryName}</div>
