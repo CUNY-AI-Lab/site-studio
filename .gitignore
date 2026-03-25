@@ -5,16 +5,13 @@ node_modules/
 dist/
 build/
 .svelte-kit/
+.wrangler/
 
 # Environment files
 .env
 .env.local
-
-# User projects (optional - you may want to commit these)
-packages/backend/projects/
-
-# Sandboxes (user runtime directories)
-packages/backend/sandboxes/
+.dev.vars
+.dev.vars.*
 
 # Generated JS files from TS
 *.js
@@ -23,7 +20,6 @@ packages/backend/sandboxes/
 # Logs
 *.log
 npm-debug.log*
-backend.log
 frontend.log
 
 # Process management

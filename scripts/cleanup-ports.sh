@@ -70,8 +70,8 @@ kill_port() {
   fi
 }
 
-# Clean up backend port (3001)
-kill_port 3001 "Backend"
+# Clean up app port (8792)
+kill_port 8792 "App"
 echo ""
 
 # Clean up frontend port (5173)
@@ -80,7 +80,7 @@ echo ""
 
 # Also check for any stray npm/node processes related to site-studio
 echo -e "${BLUE}Checking for other site-studio processes...${NC}"
-orphans=$(ps aux | grep -E "(npm|node).*(site-studio|packages/(backend|frontend))" | grep -v grep | grep -v "cleanup-ports" | awk '{print $2}' || true)
+orphans=$(ps aux | grep -E "(npm|node).*(site-studio|packages/(app|frontend))" | grep -v grep | grep -v "cleanup-ports" | awk '{print $2}' || true)
 
 if [ -n "$orphans" ]; then
   echo -e "${YELLOW}  Found additional processes: $orphans${NC}"

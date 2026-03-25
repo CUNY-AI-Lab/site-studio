@@ -5,7 +5,6 @@ packages/*/node_modules
 packages/*/dist
 packages/frontend/.svelte-kit
 packages/frontend/build
-packages/backend/sandboxes
 .DS_Store
 .env
 **/.env

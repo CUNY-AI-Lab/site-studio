@@ -1,9 +1,6 @@
 <script lang="ts">
 	import { diffLines, type Change } from 'diff';
-	import { Button } from './ui/button';
-	import { Undo2, Redo2 } from 'lucide-svelte';
-	import { resolvePath } from '$lib/utils/paths';
-	import { onMount } from 'svelte';
+	import { History } from 'lucide-svelte';
 
 	interface DiffData {
 		type: 'file_write' | 'file_edit' | 'file_delete';
@@ -14,80 +11,13 @@
 	}
 
 	let {
-		diffData,
-		projectId,
-		toolId,
-		onRevert
+		diffData
 	}: {
 		diffData: DiffData;
 		projectId: string;
 		toolId?: string;
 		onRevert?: () => void;
 	} = $props();
-
-	let isReverting = $state(false);
-	let reverted = $state(false);
-
-	// Session storage utilities - use toolId if available for unique identification
-	const STORAGE_KEY = `site-studio-reverts-${projectId}`;
-
-	// Create a unique key for this specific diff (combines file path + tool ID or content hash)
-	function getDiffKey(): string {
-		if (toolId) {
-			return `${diffData.file_path}::${toolId}`;
-		}
-		// Fallback: create a simple hash from before/after content
-		const content = `${diffData.before || ''}::${diffData.after || ''}`;
-		let hash = 0;
-		for (let i = 0; i < content.length && i < 100; i++) {
-			hash = ((hash << 5) - hash) + content.charCodeAt(i);
-			hash = hash & hash;
-		}
-		return `${diffData.file_path}::${hash}`;
-	}
-
-	interface RevertState {
-		[filePath: string]: {
-			reverted: boolean;
-			before: string | null;
-			after: string | null;
-		};
-	}
-
-	function loadRevertState(): RevertState {
-		try {
-			const stored = sessionStorage.getItem(STORAGE_KEY);
-			return stored ? JSON.parse(stored) : {};
-		} catch (e) {
-			console.error('Error loading revert state:', e);
-			return {};
-		}
-	}
-
-	function saveRevertState(isReverted: boolean) {
-		try {
-			const state = loadRevertState();
-			const key = getDiffKey();
-			state[key] = {
-				reverted: isReverted,
-				before: diffData.before,
-				after: diffData.after,
-			};
-			sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-		} catch (e) {
-			console.error('Error saving revert state:', e);
-		}
-	}
-
-	// Load initial state from sessionStorage
-	onMount(() => {
-		const state = loadRevertState();
-		const key = getDiffKey();
-		const fileState = state[key];
-		if (fileState) {
-			reverted = fileState.reverted;
-		}
-	});
 
 	// Compute the diff
 	let changes = $derived.by(() => {
@@ -119,85 +49,6 @@
 		return { additions, deletions };
 	});
 
-	async function handleRevert() {
-		if (reverted) return; // Already reverted
-		if (!projectId || projectId.trim() === '') {
-			console.error('Project ID is required for revert operation');
-			return;
-		}
-
-		isReverting = true;
-		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/revert`), {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				credentials: 'include',
-				body: JSON.stringify({
-					file_path: diffData.file_path,
-					content: diffData.before, // Restore to before state
-				}),
-			});
-
-			if (!response.ok) {
-				throw new Error('Failed to revert file');
-			}
-
-			reverted = true;
-			saveRevertState(true);
-
-			// Notify parent component if callback provided
-			if (onRevert) {
-				onRevert();
-			}
-		} catch (error) {
-			console.error('Error reverting file:', error);
-			// Error logged to console for debugging
-		} finally {
-			isReverting = false;
-		}
-	}
-
-	async function handleRestore() {
-		if (!reverted) return; // Not reverted yet
-		if (!projectId || projectId.trim() === '') {
-			console.error('Project ID is required for restore operation');
-			return;
-		}
-
-		isReverting = true;
-		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/revert`), {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				credentials: 'include',
-				body: JSON.stringify({
-					file_path: diffData.file_path,
-					content: diffData.after, // Restore to after state (undo the revert)
-				}),
-			});
-
-			if (!response.ok) {
-				throw new Error('Failed to restore file');
-			}
-
-			reverted = false;
-			saveRevertState(false);
-
-			// Notify parent component if callback provided
-			if (onRevert) {
-				onRevert();
-			}
-		} catch (error) {
-			console.error('Error restoring file:', error);
-			// Error logged to console for debugging
-		} finally {
-			isReverting = false;
-		}
-	}
 </script>
 
 <div class="diff-display">
@@ -219,28 +70,12 @@
 			{#if stats.deletions > 0}
 				<span class="stat deletions">-{stats.deletions}</span>
 			{/if}
-			{#if reverted}
-				<Button
-					variant="default"
-					size="sm"
-					onclick={handleRestore}
-					disabled={isReverting}
-				>
-					<Redo2 size={14} />
-					{isReverting ? 'Restoring...' : 'Restore'}
-				</Button>
-			{:else}
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={handleRevert}
-					disabled={isReverting}
-				>
-					<Undo2 size={14} />
-					{isReverting ? 'Reverting...' : 'Revert'}
-				</Button>
-			{/if}
 		</div>
+	</div>
+
+	<div class="diff-note">
+		<History size={14} />
+		<span>Use Version History from the project menu to restore earlier states.</span>
 	</div>
 
 	<div class="diff-content">
@@ -357,6 +192,17 @@
 		font-size: 0.75rem;
 		line-height: 1.6;
 		background: var(--color-bg-tertiary);
+	}
+
+	.diff-note {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.625rem 0.75rem;
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-primary);
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
 	}
 
 	.diff-line {

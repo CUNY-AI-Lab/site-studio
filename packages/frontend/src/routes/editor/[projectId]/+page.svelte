@@ -9,9 +9,10 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2 } from 'lucide-svelte';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw } from 'lucide-svelte';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
+	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import { Pane } from 'paneforge';
 
 	type CodeViewComponentType = typeof import('$lib/components/CodeView.svelte').default;
@@ -51,6 +52,7 @@
 	// Dialog states
 	let showRenameDialog = $state(false);
 	let showDeleteDialog = $state(false);
+	let showHistoryDialog = $state(false);
 	let publishingProjectId = $state<string | null>(null);
 
 	function handleDragChange(dragging: boolean) {
@@ -385,6 +387,11 @@
 		showDeleteDialog = true;
 	}
 
+	function handleOpenHistory() {
+		if (!currentProject) return;
+		showHistoryDialog = true;
+	}
+
 	async function handleRenameSuccess(renamedProject: Project) {
 		allProjects = await loadAllProjects();
 		currentProject = renamedProject;
@@ -509,6 +516,16 @@
 	onDeleteSuccess={handleDeleteSuccess}
 />
 
+<ProjectHistoryDialog
+	open={showHistoryDialog}
+	projectId={projectId}
+	projectName={currentProject?.name}
+	onOpenChange={(open) => (showHistoryDialog = open)}
+	onBeforeCreateSnapshot={flushPendingSave}
+	onBeforeRestore={flushPendingSave}
+	onRestoreSuccess={onAgentUpdate}
+/>
+
 <div class="app">
 	<!-- Toggle buttons for collapsed panels -->
 	{#if isChatCollapsed}
@@ -536,7 +553,7 @@
 			<aside class="chat-sidebar">
 				<div class="chat-header">
 					<div class="header-top">
-						<h1 class="logo">Site Studio</h1>
+						<a href={base || '/'} class="logo">Site Studio</a>
 	                    <Button variant="ghost" size="sm" href={base || '/'}>
                         <LayoutDashboard size={18} />
                     </Button>
@@ -632,6 +649,10 @@
 									<DropdownMenu.Item onclick={handleExportProject}>
 										<Download size={14} />
 										<span>Export as ZIP</span>
+									</DropdownMenu.Item>
+									<DropdownMenu.Item onclick={handleOpenHistory}>
+										<RotateCcw size={14} />
+										<span>Version History</span>
 									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleRenameProject}>
 										Rename
@@ -781,6 +802,7 @@
 		font-size: 1.25rem;
 		font-weight: 600;
 		color: var(--color-text-primary);
+		text-decoration: none;
 		margin-bottom: 0.5rem;
 	}
 

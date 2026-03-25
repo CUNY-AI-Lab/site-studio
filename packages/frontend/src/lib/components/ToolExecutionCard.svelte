@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle, MessageSquare } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle, MessageSquare, Blocks } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
 
 	interface ToolExecution {
+		id?: string;
 		name: string;
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
@@ -34,24 +35,34 @@
 	let expanded = $state(false);
 
 	const toolIcons: Record<string, any> = {
+		codemode: Blocks,
 		write_file: FileEdit,
+		edit_file: FileEdit,
+		rename_file: FileEdit,
 		scaffold_template: FolderPlus,
 		delete_file: Trash2,
 		read_file: FolderOpen,
+		search_files: FolderOpen,
 		create_directory: FolderPlus,
 		add_page: FileEdit,
 		list_files: FolderOpen,
+		ask_user_question: MessageSquare,
 		AskUserQuestion: MessageSquare
 	};
 
 	const toolLabels: Record<string, string> = {
+		codemode: 'Running sandbox',
 		write_file: 'Writing file',
+		edit_file: 'Editing file',
+		rename_file: 'Renaming file',
 		scaffold_template: 'Creating from template',
 		delete_file: 'Deleting file',
 		read_file: 'Reading file',
+		search_files: 'Searching files',
 		create_directory: 'Creating directory',
 		add_page: 'Adding page',
 		list_files: 'Listing files',
+		ask_user_question: 'Asking for clarification',
 		AskUserQuestion: 'Asking for clarification'
 	};
 
@@ -84,6 +95,9 @@
 	}
 
 	function formatInput(input: Record<string, any>): string {
+		if (tool.name === 'codemode') {
+			return 'Dynamic Worker sandbox';
+		}
 		if (input.file_path) {
 			// Show only filename, not full path
 			const parts = input.file_path.split('/');
@@ -96,10 +110,13 @@
 		}
 		if (input.directory_path) return input.directory_path;
 		if (input.template) return `Template: ${input.template}`;
+		if (input.templateId) return `Template: ${input.templateId}`;
 		if (input.page_name) return input.page_name;
+		if (input.oldPath) return input.oldPath;
 		if (Array.isArray(input.questions) && input.questions.length > 0) {
 			return input.questions[0]?.header || input.questions[0]?.question || '';
 		}
+		if (input.question) return input.question;
 		return Object.keys(input).length > 0 ? JSON.stringify(input, null, 2) : '';
 	}
 
@@ -366,5 +383,6 @@
 		font-family: var(--font-mono);
 		color: var(--color-text-secondary);
 		line-height: 1.5;
+		white-space: pre-wrap;
 	}
 </style>

@@ -152,7 +152,7 @@
 			<h1 class="dashboard-title">Site Studio</h1>
 			<p class="dashboard-subtitle">Create websites with your AI assistant</p>
 		</div>
-		<Button onclick={handleNewProject}>
+		<Button onclick={handleNewProject} data-tour="new-project">
 			<Plus size={18} />
 			New Project
 		</Button>
@@ -172,7 +172,7 @@
 			<FolderOpen size={48} />
 			<h2>No projects yet</h2>
 			<p>Create your first project to get started</p>
-			<Button onclick={handleNewProject}>
+			<Button onclick={handleNewProject} data-tour="new-project">
 				<Plus size={20} />
 				Create Project
 			</Button>

@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Store PIDs for cleanup
-BACKEND_PID=""
+APP_PID=""
 FRONTEND_PID=""
 CLEANUP_DONE=false
 
@@ -27,21 +27,21 @@ cleanup() {
   echo ""
   echo -e "${YELLOW}🛑 Shutting down dev servers...${NC}"
 
-  # Kill backend
-  if [ -n "$BACKEND_PID" ] && ps -p "$BACKEND_PID" > /dev/null 2>&1; then
-    echo -e "${BLUE}  Stopping backend (PID $BACKEND_PID)...${NC}"
-    kill "$BACKEND_PID" 2>/dev/null || true
+  # Kill app
+  if [ -n "$APP_PID" ] && ps -p "$APP_PID" > /dev/null 2>&1; then
+    echo -e "${BLUE}  Stopping app (PID $APP_PID)...${NC}"
+    kill "$APP_PID" 2>/dev/null || true
     # Wait up to 5 seconds for graceful shutdown
     for i in {1..10}; do
-      if ! ps -p "$BACKEND_PID" > /dev/null 2>&1; then
+      if ! ps -p "$APP_PID" > /dev/null 2>&1; then
         break
       fi
       sleep 0.5
     done
     # Force kill if still running
-    if ps -p "$BACKEND_PID" > /dev/null 2>&1; then
-      echo -e "${RED}  Force killing backend...${NC}"
-      kill -9 "$BACKEND_PID" 2>/dev/null || true
+    if ps -p "$APP_PID" > /dev/null 2>&1; then
+      echo -e "${RED}  Force killing app...${NC}"
+      kill -9 "$APP_PID" 2>/dev/null || true
     fi
   fi
 
@@ -87,8 +87,8 @@ echo -e "${BLUE}🚀 Starting Site Studio development servers...${NC}"
 echo ""
 
 # Check for port conflicts
-if check_port 3001; then
-  echo -e "${RED}✗ Port 3001 is already in use!${NC}"
+if check_port 8792; then
+  echo -e "${RED}✗ Port 8792 is already in use!${NC}"
   echo -e "${YELLOW}  Run './scripts/cleanup-ports.sh' to clean up orphan processes${NC}"
   exit 1
 fi
@@ -99,38 +99,38 @@ if check_port 5173; then
   exit 1
 fi
 
-# Start backend
-echo -e "${BLUE}📦 Starting backend...${NC}"
-cd packages/backend
-npm run dev > ../../backend.log 2>&1 &
-BACKEND_PID=$!
+# Start app
+echo -e "${BLUE}📦 Starting app...${NC}"
+cd packages/app
+npm run dev > ../../app.log 2>&1 &
+APP_PID=$!
 cd ../..
 
-# Wait for backend to be ready (check port 3001)
-echo -e "${YELLOW}  Waiting for backend on port 3001...${NC}"
+# Wait for app to be ready (check port 8792)
+echo -e "${YELLOW}  Waiting for app on port 8792...${NC}"
 WAIT_COUNT=0
 MAX_WAIT=60  # 30 seconds (60 * 0.5s)
 
-while ! check_port 3001; do
-  if ! ps -p "$BACKEND_PID" > /dev/null 2>&1; then
-    echo -e "${RED}✗ Backend process died during startup${NC}"
-    echo -e "${YELLOW}  Check backend.log for errors${NC}"
-    tail -n 20 backend.log
+while ! check_port 8792; do
+  if ! ps -p "$APP_PID" > /dev/null 2>&1; then
+    echo -e "${RED}✗ App process died during startup${NC}"
+    echo -e "${YELLOW}  Check app.log for errors${NC}"
+    tail -n 20 app.log
     exit 1
   fi
 
   WAIT_COUNT=$((WAIT_COUNT + 1))
   if [ $WAIT_COUNT -ge $MAX_WAIT ]; then
-    echo -e "${RED}✗ Backend failed to start within 30 seconds${NC}"
-    echo -e "${YELLOW}  Check backend.log for errors${NC}"
-    tail -n 20 backend.log
+    echo -e "${RED}✗ App failed to start within 30 seconds${NC}"
+    echo -e "${YELLOW}  Check app.log for errors${NC}"
+    tail -n 20 app.log
     exit 1
   fi
 
   sleep 0.5
 done
 
-echo -e "${GREEN}  ✓ Backend ready (PID $BACKEND_PID)${NC}"
+echo -e "${GREEN}  ✓ App ready (PID $APP_PID)${NC}"
 
 # Start frontend
 echo -e "${BLUE}🎨 Starting frontend...${NC}"
@@ -167,11 +167,11 @@ echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}✓ Development servers are running:${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "  ${BLUE}Backend:${NC}  http://localhost:3001 ${YELLOW}(PID $BACKEND_PID)${NC}"
+echo -e "  ${BLUE}App:${NC}      http://localhost:8792 ${YELLOW}(PID $APP_PID)${NC}"
 echo -e "  ${BLUE}Frontend:${NC} http://localhost:5173 ${YELLOW}(PID $FRONTEND_PID)${NC}"
 echo ""
 echo -e "  ${BLUE}Logs:${NC}"
-echo -e "    Backend:  ${YELLOW}backend.log${NC}"
+echo -e "    App:      ${YELLOW}app.log${NC}"
 echo -e "    Frontend: ${YELLOW}frontend.log${NC}"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all servers${NC}"
@@ -181,10 +181,10 @@ echo ""
 # Wait for user interrupt or process death
 while true; do
   # Check if either process has died
-  if ! ps -p "$BACKEND_PID" > /dev/null 2>&1; then
-    echo -e "${RED}✗ Backend process died unexpectedly${NC}"
-    echo -e "${YELLOW}  Last 20 lines of backend.log:${NC}"
-    tail -n 20 backend.log
+  if ! ps -p "$APP_PID" > /dev/null 2>&1; then
+    echo -e "${RED}✗ App process died unexpectedly${NC}"
+    echo -e "${YELLOW}  Last 20 lines of app.log:${NC}"
+    tail -n 20 app.log
     exit 1
   fi
 

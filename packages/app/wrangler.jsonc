@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "site-studio-app",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SITE_BUILDER_AGENT",
+        "class_name": "SiteBuilderAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SiteBuilderAgent"]
+    }
+  ],
+  "vars": {
+    "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
+    "LEGACY_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
+    "OPENROUTER_MODEL": "anthropic/claude-sonnet-4.6"
+  },
+  "worker_loaders": [
+    {
+      "binding": "LOADER"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SITE_STUDIO_BUCKET",
+      "bucket_name": "site-studio"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSION_KV",
+      "id": "00000000000000000000000000000000",
+      "preview_id": "00000000000000000000000000000000"
+    }
+  ]
+}

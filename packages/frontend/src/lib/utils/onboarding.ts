@@ -32,7 +32,7 @@ export function createDashboardTour() {
 			}
 		},
 		{
-			element: '.dashboard-header button, .empty-state button',
+			element: '[data-tour="new-project"]',
 			popover: {
 				title: 'Create Your First Project',
 				description:

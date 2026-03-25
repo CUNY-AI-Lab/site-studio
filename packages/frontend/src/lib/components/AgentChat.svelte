@@ -1,13 +1,24 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Send, Loader2, Wrench, X, Paperclip, Square } from 'lucide-svelte';
+	import { Send, Loader2, X, Paperclip, Square } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
-	import { getErrorMessage, handleApiError } from '$lib/api/errors';
-	import PlanApprovalCard from './PlanApprovalCard.svelte';
+	import { resolveWebSocketPath } from '$lib/utils/ws';
+	import { getErrorMessage } from '$lib/api/errors';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
+	import {
+		AgentMessageType,
+		applyChunkToParts,
+		applyLocalToolOutput,
+		cloneParts,
+		isToolPart,
+		mergeUpdatedMessage,
+		type ActiveStreamMessage,
+		type UIChatMessage,
+		type UIMessagePart,
+		type UIStreamChunk
+	} from '$lib/agents/chat';
 
 	interface ContentBlock {
 		type: 'text' | 'tools';
@@ -22,24 +33,16 @@
 		tools?: ToolExecution[]; // Deprecated, keeping for backwards compat
 	}
 
-	interface ToolCall {
-		name: string;
-		input: Record<string, any>;
-	}
-
 	interface ToolExecution {
-		id?: string;  // tool_use id for matching results
+		id?: string;
 		name: string;
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
-		startTime?: number;  // Track when tool started for elapsed time
-		elapsedTime?: number; // Current elapsed time in seconds
 	}
 
 	interface PendingToolInteraction {
-		requestId: string;
-		requestKind: 'approval' | 'question';
+		toolCallId: string;
 		toolName: string;
 		input: Record<string, any>;
 	}
@@ -76,103 +79,558 @@
 		onUpdate: () => void;
 	} = $props();
 
-	let messages = $state<Message[]>([]);
+	let uiMessages = $state<UIChatMessage[]>([]);
 	let input = $state('');
 	let isLoading = $state(false);
-	let sessionId = $state<string | null>(null);
-	let pendingToolInteraction = $state<PendingToolInteraction | null>(null);
 	let messagesContainer: HTMLDivElement;
-	let planMode = $state(true); // true = plan mode (interactive), false = direct execution
 	let fileInput: HTMLInputElement;
-	let currentStatus = $state<string>(''); // For showing contextual status
-	let attachedFile = $state<File | null>(null); // Track attached file
-	let isUploading = $state(false); // Track upload state
-	let filesModifiedDuringExecution = $state(false); // Track if files were modified
-	let abortController = $state<AbortController | null>(null); // For canceling requests
-	let toolTimerInterval = $state<ReturnType<typeof setInterval> | null>(null); // Timer for tool elapsed time
+	let currentStatus = $state<string>('');
+	let attachedFile = $state<File | null>(null);
+	let isUploading = $state(false);
+	let socket = $state<WebSocket | null>(null);
+	let socketPromise: Promise<WebSocket> | null = null;
+	let activeStream = $state<ActiveStreamMessage | null>(null);
+	let currentRequestId = $state<string | null>(null);
+	let expectingContinuation = $state(false);
+	let ignoreNextSocketClose = $state(false);
 
-	// Limit displayed messages to most recent 10 to manage context
 	const MAX_DISPLAYED_MESSAGES = 10;
-	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
+	const MUTATING_TOOLS = new Set([
+		'codemode',
+		'write_file',
+		'edit_file',
+		'rename_file',
+		'delete_file',
+		'scaffold_template',
+		'add_page'
+	]);
 
-	// Track running tools for elapsed time updates
-	let runningTools = $state<Map<string, ToolExecution>>(new Map());
-
-	// Start timer to update elapsed time for running tools
-	function startToolTimer() {
-		if (toolTimerInterval) return;
-		toolTimerInterval = setInterval(() => {
-			const now = Date.now();
-			runningTools.forEach((tool) => {
-				if (tool.startTime && tool.status === 'running') {
-					tool.elapsedTime = Math.round((now - tool.startTime) / 100) / 10; // 0.1s precision
-				}
-			});
-			// Trigger reactivity
-			runningTools = new Map(runningTools);
-		}, 100);
+	function generateId(): string {
+		return crypto.randomUUID();
 	}
 
-	// Stop the timer when no tools are running
-	function stopToolTimer() {
-		if (toolTimerInterval) {
-			clearInterval(toolTimerInterval);
-			toolTimerInterval = null;
+	function getTextFromParts(parts: UIMessagePart[]): string {
+		return parts
+			.filter((part): part is Extract<UIMessagePart, { type: 'text' }> => part.type === 'text')
+			.map((part) => part.text)
+			.join('');
+	}
+
+	function serializeToolOutput(output: unknown, errorText?: string, toolName?: string): string {
+		if (typeof output === 'string' && output.trim().length > 0) {
+			return output;
+		}
+
+		if (output && typeof output === 'object') {
+			const record = output as Record<string, unknown>;
+
+			if (toolName === 'codemode' && record.result !== undefined) {
+				const summaryLines: string[] = [];
+				const result = record.result;
+
+				if (result && typeof result === 'object') {
+					const resultRecord = result as Record<string, unknown>;
+					if (typeof resultRecord.summary === 'string' && resultRecord.summary.trim().length > 0) {
+						summaryLines.push(resultRecord.summary.trim());
+					}
+
+					const changedFiles = Array.isArray(resultRecord.changedFiles)
+						? resultRecord.changedFiles.filter(
+								(filePath): filePath is string => typeof filePath === 'string' && filePath.length > 0
+							)
+						: [];
+
+					if (changedFiles.length > 0) {
+						summaryLines.push(`Changed: ${changedFiles.join(', ')}`);
+					}
+				} else if (typeof result === 'string' && result.trim().length > 0) {
+					summaryLines.push(result.trim());
+				}
+
+				const logs = Array.isArray(record.logs)
+					? record.logs.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+					: [];
+
+				if (logs.length > 0) {
+					summaryLines.push(`Logs:\n${logs.join('\n')}`);
+				}
+
+				if (summaryLines.length > 0) {
+					return summaryLines.join('\n');
+				}
+			}
+
+			if (typeof record.message === 'string' && record.message.trim().length > 0) {
+				return record.message;
+			}
+
+			if (typeof record.tree === 'string' && record.tree.trim().length > 0) {
+				return record.tree;
+			}
+
+			if (typeof record.content === 'string' && record.content.trim().length > 0) {
+				return record.content;
+			}
+
+			return JSON.stringify(record, null, 2);
+		}
+
+		if (errorText) {
+			return errorText;
+		}
+
+		if (output == null) {
+			return '';
+		}
+
+		return String(output);
+	}
+
+	function toolStatusFromState(state: string | undefined): ToolExecution['status'] {
+		if (state === 'output-available') return 'success';
+		if (state === 'output-error' || state === 'output-denied') return 'error';
+		return 'running';
+	}
+
+	function toDisplayMessages(source: UIChatMessage[]): Message[] {
+		return source.map((message) => {
+			if (message.role === 'user') {
+				return {
+					role: 'user',
+					content: getTextFromParts(message.parts)
+				};
+			}
+
+			const blocks: ContentBlock[] = [];
+			let currentText = '';
+			let currentTools: ToolExecution[] = [];
+
+			const flushText = () => {
+				if (currentText.trim()) {
+					blocks.push({ type: 'text', text: currentText });
+					currentText = '';
+				}
+			};
+
+			const flushTools = () => {
+				if (currentTools.length > 0) {
+					blocks.push({ type: 'tools', tools: [...currentTools] });
+					currentTools = [];
+				}
+			};
+
+			for (const part of message.parts) {
+				if (part.type === 'text') {
+					flushTools();
+					currentText += part.text;
+					continue;
+				}
+
+				if (isToolPart(part)) {
+					flushText();
+					currentTools.push({
+						id: part.toolCallId,
+						name: part.toolName,
+						input: (part.input as Record<string, any>) || {},
+						status: toolStatusFromState(part.state),
+						output: serializeToolOutput(part.output, part.errorText, part.toolName)
+					});
+				}
+			}
+
+			flushText();
+			flushTools();
+
+			return {
+				role: 'assistant',
+				content: getTextFromParts(message.parts),
+				blocks
+			};
+		});
+	}
+
+	function findLastAssistantMessage(messages: UIChatMessage[]): UIChatMessage | undefined {
+		for (let i = messages.length - 1; i >= 0; i -= 1) {
+			if (messages[i].role === 'assistant') {
+				return messages[i];
+			}
 		}
 	}
 
-	// Cleanup timer on component unmount
+	function getPendingToolInteraction(messages: UIChatMessage[]): PendingToolInteraction | null {
+		const lastAssistant = findLastAssistantMessage(messages);
+		if (!lastAssistant) return null;
+
+		const questionPart = lastAssistant.parts.find(
+			(part) => isToolPart(part) && part.toolName === 'ask_user_question' && part.state === 'input-available'
+		);
+
+		if (questionPart && isToolPart(questionPart)) {
+			return {
+				toolCallId: questionPart.toolCallId,
+				toolName: questionPart.toolName,
+				input: (questionPart.input as Record<string, any>) || {}
+			};
+		}
+
+		return null;
+	}
+
+	function createStreamState(requestId: string, continuation: boolean): ActiveStreamMessage {
+		const lastAssistant = continuation ? findLastAssistantMessage(uiMessages) : undefined;
+
+		return {
+			id: requestId,
+			messageId: lastAssistant?.id || generateId(),
+			continuation,
+			parts: lastAssistant ? cloneParts(lastAssistant.parts) : [],
+			...(lastAssistant?.metadata ? { metadata: { ...lastAssistant.metadata } } : {})
+		};
+	}
+
+	function flushActiveStreamToMessages(stream: ActiveStreamMessage) {
+		const nextMessage: UIChatMessage = {
+			id: stream.messageId,
+			role: 'assistant',
+			parts: cloneParts(stream.parts),
+			...(stream.metadata ? { metadata: { ...stream.metadata } } : {})
+		};
+
+		const existingIndex = uiMessages.findIndex((message) => message.id === nextMessage.id);
+		if (existingIndex >= 0) {
+			uiMessages = uiMessages.map((message, index) => (index === existingIndex ? nextMessage : message));
+		} else {
+			uiMessages = [...uiMessages, nextMessage];
+		}
+
+		scrollToBottom();
+	}
+
+	function getCurrentMessagesForRequest(nextUserMessage?: UIChatMessage): UIChatMessage[] {
+		return nextUserMessage ? [...uiMessages, nextUserMessage] : [...uiMessages];
+	}
+
+	function closeSocket() {
+		if (socket) {
+			ignoreNextSocketClose = true;
+			socket.close();
+		}
+
+		socket = null;
+		socketPromise = null;
+	}
+
+	function handleSocketClose() {
+		socket = null;
+		socketPromise = null;
+
+		if (ignoreNextSocketClose) {
+			ignoreNextSocketClose = false;
+			return;
+		}
+
+		if (isLoading) {
+			isLoading = false;
+			currentStatus = '';
+			currentRequestId = null;
+			activeStream = null;
+			expectingContinuation = false;
+
+			uiMessages = [
+				...uiMessages,
+				{
+					id: generateId(),
+					role: 'assistant',
+					parts: [{ type: 'text', text: 'Connection lost while the agent was responding.' }]
+				}
+			];
+		}
+	}
+
+	function handleSocketError() {
+		if (!socketPromise) {
+			return;
+		}
+	}
+
+	async function ensureSocket(targetProjectId = projectId): Promise<WebSocket> {
+		if (!targetProjectId) {
+			throw new Error('Missing project id');
+		}
+
+		if (socket && socket.readyState === WebSocket.OPEN) {
+			return socket;
+		}
+
+		if (socketPromise) {
+			return socketPromise;
+		}
+
+		const nextSocket = new WebSocket(resolveWebSocketPath(`/api/agents/site-builder/${targetProjectId}`));
+		socket = nextSocket;
+
+		nextSocket.addEventListener('message', handleSocketMessage);
+		nextSocket.addEventListener('close', handleSocketClose);
+		nextSocket.addEventListener('error', handleSocketError);
+
+		socketPromise = new Promise((resolve, reject) => {
+			const onOpen = () => {
+				nextSocket.removeEventListener('error', onError);
+				resolve(nextSocket);
+			};
+
+			const onError = () => {
+				nextSocket.removeEventListener('open', onOpen);
+				socketPromise = null;
+				reject(new Error('Unable to connect to the agent'));
+			};
+
+			nextSocket.addEventListener('open', onOpen, { once: true });
+			nextSocket.addEventListener('error', onError, { once: true });
+		});
+
+		return socketPromise;
+	}
+
+	async function loadChatHistory(targetProjectId: string) {
+		try {
+			const response = await fetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
+				credentials: 'include'
+			});
+
+			if (!response.ok) {
+				uiMessages = [];
+				return;
+			}
+
+			const data = await response.json();
+			uiMessages = Array.isArray(data) ? (data as UIChatMessage[]) : [];
+			await tick();
+			scrollToBottom();
+		} catch {
+			uiMessages = [];
+		}
+	}
+
+	function sendSocketMessage(payload: Record<string, unknown>) {
+		if (!socket || socket.readyState !== WebSocket.OPEN) {
+			throw new Error('Agent connection is not open');
+		}
+
+		socket.send(JSON.stringify(payload));
+	}
+
+	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
+		const ws = await ensureSocket();
+		const requestId = generateId();
+
+		currentRequestId = requestId;
+		currentStatus = 'Thinking...';
+		isLoading = true;
+		activeStream = null;
+
+		ws.send(
+			JSON.stringify({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_REQUEST,
+				id: requestId,
+				init: {
+					method: 'POST',
+					body: JSON.stringify({
+						messages: messagesForRequest,
+						trigger: 'submit-message'
+					})
+				}
+			})
+		);
+	}
+
+	function handleStreamChunk(chunk: UIStreamChunk) {
+		if (!activeStream) {
+			return;
+		}
+
+		if (chunk.type === 'error') {
+			activeStream.parts.push({ type: 'text', text: chunk.errorText, state: 'done' });
+			flushActiveStreamToMessages(activeStream);
+			return;
+		}
+
+		const handled = applyChunkToParts(activeStream.parts, chunk);
+
+		if (!handled) {
+			if (chunk.type === 'start' && chunk.messageId && !activeStream.continuation) {
+				activeStream.messageId = chunk.messageId;
+			}
+
+			if (
+				(chunk.type === 'start' || chunk.type === 'finish' || chunk.type === 'message-metadata') &&
+				chunk.messageMetadata
+			) {
+				activeStream.metadata = activeStream.metadata
+					? { ...activeStream.metadata, ...chunk.messageMetadata }
+					: { ...chunk.messageMetadata };
+			}
+		}
+
+		switch (chunk.type) {
+			case 'text-start':
+			case 'text-delta':
+				currentStatus = 'Responding...';
+				break;
+			case 'tool-input-start':
+			case 'tool-input-available':
+				if (chunk.toolName === 'codemode') {
+					currentStatus = 'Running sandbox...';
+				} else if (chunk.toolName === 'ask_user_question') {
+					currentStatus = 'Waiting for your input...';
+				} else {
+					currentStatus = `Using ${chunk.toolName.replace(/_/g, ' ')}...`;
+				}
+				break;
+			case 'tool-output-available': {
+				const toolPart = activeStream.parts.find(
+					(part) => isToolPart(part) && part.toolCallId === chunk.toolCallId
+				);
+
+				if (toolPart && isToolPart(toolPart) && MUTATING_TOOLS.has(toolPart.toolName)) {
+					onUpdate();
+				}
+				break;
+			}
+		}
+
+		flushActiveStreamToMessages(activeStream);
+	}
+
+	function handleSocketMessage(event: MessageEvent<string>) {
+		if (typeof event.data !== 'string') return;
+
+		let data: any;
+		try {
+			data = JSON.parse(event.data);
+		} catch {
+			return;
+		}
+
+		switch (data.type) {
+			case AgentMessageType.CF_AGENT_CHAT_CLEAR:
+				uiMessages = [];
+				break;
+			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
+				uiMessages = Array.isArray(data.messages) ? (data.messages as UIChatMessage[]) : [];
+				scrollToBottom();
+				break;
+			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
+				uiMessages = mergeUpdatedMessage(uiMessages, data.message as UIChatMessage);
+				scrollToBottom();
+				break;
+			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE:
+				expectingContinuation = false;
+				isLoading = false;
+				currentStatus = '';
+				currentRequestId = null;
+				break;
+			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
+				const continuation = expectingContinuation;
+				expectingContinuation = false;
+				currentRequestId = data.id;
+				activeStream = createStreamState(data.id, continuation);
+				try {
+					sendSocketMessage({
+						type: AgentMessageType.CF_AGENT_STREAM_RESUME_ACK,
+						id: data.id
+					});
+				} catch (error) {
+					console.error('Error acknowledging resumed stream:', error);
+				}
+				break;
+			}
+			case AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE: {
+				if (!activeStream || activeStream.id !== data.id) {
+					const continuation = data.continuation === true || expectingContinuation;
+					activeStream = createStreamState(data.id, continuation);
+				}
+
+				if (data.body?.trim()) {
+					try {
+						handleStreamChunk(JSON.parse(data.body) as UIStreamChunk);
+					} catch (error) {
+						console.warn('Failed to parse stream chunk', error);
+					}
+				}
+
+				if (data.done || data.error) {
+					if (activeStream) {
+						flushActiveStreamToMessages(activeStream);
+					}
+					activeStream = null;
+					isLoading = false;
+					currentStatus = '';
+					currentRequestId = null;
+					expectingContinuation = false;
+				}
+				break;
+			}
+		}
+	}
+
+	let messages = $derived(toDisplayMessages(uiMessages));
+	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
+	let pendingToolInteraction = $derived(getPendingToolInteraction(uiMessages));
+
 	$effect(() => {
 		return () => {
-			stopToolTimer();
-			if (abortController) {
-				abortController.abort();
-			}
+			closeSocket();
 		};
 	});
 
-	// Reset state when projectId changes (e.g., browser back/forward navigation)
 	let previousProjectId = $state<string | null>(null);
 	$effect(() => {
-		if (previousProjectId !== null && previousProjectId !== projectId) {
-			// Project changed - reset all chat state
-			messages = [];
-			sessionId = null;
-			pendingToolInteraction = null;
-			input = '';
-			isLoading = false;
-			currentStatus = '';
-			attachedFile = null;
-			filesModifiedDuringExecution = false;
-			stopToolTimer();
-			runningTools.clear();
-			if (abortController) {
-				abortController.abort();
-				abortController = null;
-			}
+		if (!projectId || projectId === previousProjectId) {
+			return;
 		}
-		previousProjectId = projectId;
-	});
 
-	// Stop the current request
-	function stopRequest() {
-		if (abortController) {
-			abortController.abort();
-			abortController = null;
-		}
-		stopToolTimer();
+		const targetProjectId = projectId;
+		previousProjectId = targetProjectId;
+		input = '';
+		attachedFile = null;
 		isLoading = false;
 		currentStatus = '';
-		pendingToolInteraction = null;
+		currentRequestId = null;
+		activeStream = null;
+		expectingContinuation = false;
+		uiMessages = [];
+		closeSocket();
 
-		// Mark any running tools as stopped
-		runningTools.forEach((tool) => {
-			if (tool.status === 'running') {
-				tool.status = 'error';
-				tool.output = 'Request cancelled by user';
+		void (async () => {
+			await loadChatHistory(targetProjectId);
+			try {
+				await ensureSocket(targetProjectId);
+			} catch (error) {
+				console.error('Failed to connect agent socket:', error);
 			}
-		});
-		runningTools.clear();
+		})();
+	});
+
+	function stopRequest() {
+		if (!currentRequestId) {
+			return;
+		}
+
+		try {
+			sendSocketMessage({
+				type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
+				id: currentRequestId
+			});
+		} catch (error) {
+			console.error('Error stopping request:', error);
+		}
+
+		isLoading = false;
+		currentStatus = '';
+		activeStream = null;
+		currentRequestId = null;
+		expectingContinuation = false;
 	}
 
 	async function uploadFile(file: File): Promise<string> {
@@ -193,21 +651,6 @@
 		return data.filename;
 	}
 
-	// Helper to flush current text block into blocks array
-	function flushTextBlock(blocks: ContentBlock[], currentText: string): string {
-		if (currentText.trim()) {
-			blocks.push({ type: 'text', text: currentText });
-		}
-		return ''; // Reset current text
-	}
-
-	// Helper to add tools block
-	function addToolsBlock(blocks: ContentBlock[], tools: ToolExecution[]) {
-		if (tools.length > 0) {
-			blocks.push({ type: 'tools', tools: [...tools] });
-		}
-	}
-
 	async function sendMessage() {
 		if (!input.trim() || isLoading) return;
 
@@ -217,8 +660,6 @@
 		attachedFile = null;
 		if (fileInput) fileInput.value = '';
 		isLoading = true;
-		filesModifiedDuringExecution = false; // Reset file modification tracking
-		abortController = new AbortController(); // Create new abort controller
 
 		// Upload file FIRST if attached (skip on retry - already uploaded)
 		// This ensures we don't show user message if upload fails
@@ -230,11 +671,14 @@
 				onUpdate(); // Refresh preview - uploaded file may be referenced
 			} catch (error) {
 				console.error('File upload failed:', error);
-				abortController = null;
-				messages = [...messages, {
-					role: 'assistant',
-					content: 'Sorry, the file upload failed. Please try again.'
-				}];
+				uiMessages = [
+					...uiMessages,
+					{
+						id: generateId(),
+						role: 'assistant',
+						parts: [{ type: 'text', text: 'Sorry, the file upload failed. Please try again.' }]
+					}
+				];
 				isLoading = false;
 				isUploading = false;
 				return;
@@ -251,409 +695,85 @@
 		if (uploadedFilename) {
 			messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
 		}
-		messages = [...messages, { role: 'user', content: messageContent }];
+		const nextUserMessage: UIChatMessage = {
+			id: generateId(),
+			role: 'user',
+			parts: [{ type: 'text', text: messageContent }]
+		};
+		uiMessages = [...uiMessages, nextUserMessage];
 
-		// Scroll to bottom
 		scrollToBottom();
 
 		try {
-			const response = await fetch(resolvePath('/api/query'), {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({
-					prompt: userMessage,
-					projectId: projectId,
-					sessionId: sessionId,
-					uploadedFile: uploadedFilename, // Send the uploaded filename to backend
-					mode: planMode ? 'plan' : 'execute' // Send plan mode preference
-				}),
-				signal: abortController?.signal // Enable request cancellation
-			});
-
-			if (!response.ok) {
-				await handleApiError(response);
-			}
-			if (!response.body) throw new Error('No response body');
-
-			// Read SSE stream
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let currentSectionText = '';  // Text for current section (resets after tools)
-		let contentBlocks: ContentBlock[] = [];
-			let currentToolsGroup: ToolExecution[] = [];
-			let processedToolIds = new Set<string>();  // Track which tools we've seen
-			let toolIdMap = new Map<string, ToolExecution>();  // O(1) lookup for tool results
-			let receivedStreamEvents = false;  // Track if we've received stream_event text deltas
-			let currentMessage: Message = { role: 'assistant', content: '', blocks: [] };
-			messages = [...messages, currentMessage];
-
-			// Buffer for incomplete SSE lines that span across chunks
-			let lineBuffer = '';
-
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				const chunk = decoder.decode(value, { stream: true });
-
-				// Prepend any buffered content from previous chunk
-				const fullChunk = lineBuffer + chunk;
-				lineBuffer = '';
-
-				// Split by newline - SSE uses \n\n as message separator
-				const lines = fullChunk.split('\n');
-
-				// If the chunk doesn't end with a newline, the last "line" is incomplete
-				// Save it for the next chunk
-				if (!fullChunk.endsWith('\n')) {
-					lineBuffer = lines.pop() || '';
-				}
-
-				for (const line of lines) {
-					if (line.startsWith('data: ')) {
-						const data = line.slice(6);
-
-						if (data === '[DONE]') {
-							break;
-						}
-
-						try {
-							const event = JSON.parse(data);
-
-							// Capture session ID
-							if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
-								sessionId = event.session_id;
-							}
-
-							// Handle streaming text deltas for real-time display
-							if (event.type === 'stream_event' && event.event) {
-								const streamEvent = event.event;
-								if (streamEvent.type === 'content_block_delta' &&
-									streamEvent.delta?.type === 'text_delta') {
-									const textDelta = streamEvent.delta.text;
-
-									currentStatus = 'Responding...';
-									currentSectionText += textDelta;
-									receivedStreamEvents = true;  // Mark that we're using stream events for text
-
-									// Find or create text block for current section
-									let textBlockIndex = contentBlocks.findIndex((b, i) => {
-										if (b.type === 'text') {
-											const hasToolsAfter = contentBlocks.slice(i + 1).some(cb => cb.type === 'tools');
-											return !hasToolsAfter;
-										}
-										return false;
-									});
-
-									if (textBlockIndex >= 0) {
-										contentBlocks[textBlockIndex].text = currentSectionText;
-									} else {
-										contentBlocks.push({ type: 'text', text: currentSectionText });
-									}
-
-									messages[messages.length - 1].blocks = [...contentBlocks];
-									messages = [...messages];
-									scrollToBottom();
-								}
-							}
-
-							// Handle tool approval requests (canUseTool callback)
-							if (event.type === 'tool_approval_request') {
-								pendingToolInteraction = {
-									requestId: event.request_id,
-									requestKind: event.request_kind || 'approval',
-									toolName: event.tool_name,
-									input: event.input
-								};
-								currentStatus = event.request_kind === 'question'
-									? 'Waiting for your answer...'
-									: 'Waiting for approval...';
-								// Wait for DOM to update before scrolling
-								await tick();
-								scrollToBottom();
-								// Double scroll after a short delay to ensure approval card is fully rendered
-								setTimeout(scrollToBottom, 100);
-							}
-
-							if (event.type === 'error') {
-								const errorText = typeof event.error === 'string'
-									? event.error
-									: 'Sorry, there was an error processing your request.';
-								currentStatus = '';
-
-								const lastMessage = messages[messages.length - 1];
-								if (lastMessage?.role === 'assistant') {
-									if (contentBlocks.length > 0) {
-										contentBlocks.push({ type: 'text', text: errorText });
-										lastMessage.blocks = [...contentBlocks];
-									} else {
-										lastMessage.blocks = [{ type: 'text', text: errorText }];
-									}
-									lastMessage.content = errorText;
-									messages = [...messages];
-								} else {
-									messages = [...messages, {
-										role: 'assistant',
-										content: errorText,
-										blocks: [{ type: 'text', text: errorText }]
-									}];
-								}
-								scrollToBottom();
-							}
-
-							// Handle assistant messages
-							if (event.type === 'assistant' && event.message?.content) {
-								for (const block of event.message.content) {
-									if (block.type === 'text') {
-										// Skip assistant text if we've already processed stream_events for real-time display
-										// The assistant event contains the complete text which would duplicate streamed content
-										if (receivedStreamEvents) {
-											continue;
-										}
-
-										// Reset tools group when starting new text section after tools
-										if (currentToolsGroup.length > 0 && contentBlocks[contentBlocks.length - 1]?.type === 'tools') {
-											currentToolsGroup = [];
-										}
-
-										currentStatus = 'Responding...';
-										currentSectionText += block.text;  // Accumulate for current section
-
-										// Find or create text block for current section
-										let textBlockIndex = contentBlocks.findIndex((b, i) => {
-											// Find the last text block (after last tools block if any)
-											if (b.type === 'text') {
-												const hasToolsAfter = contentBlocks.slice(i + 1).some(cb => cb.type === 'tools');
-												return !hasToolsAfter;
-											}
-											return false;
-										});
-
-										if (textBlockIndex >= 0) {
-											// Update existing text block
-											contentBlocks[textBlockIndex].text = currentSectionText;
-										} else {
-											// Create new text block
-											contentBlocks.push({ type: 'text', text: currentSectionText });
-										}
-
-										messages[messages.length - 1].blocks = [...contentBlocks];
-										messages = [...messages];
-										scrollToBottom();
-									} else if (block.type === 'tool_use') {
-										// Only process if we haven't seen this tool ID before
-										if (!processedToolIds.has(block.id)) {
-											processedToolIds.add(block.id);
-
-											// Flush current text section before starting tools
-											if (currentSectionText.trim()) {
-												// Make sure the text block is finalized
-												const lastBlock = contentBlocks[contentBlocks.length - 1];
-												if (lastBlock?.type === 'text') {
-													lastBlock.text = currentSectionText;
-												}
-											}
-											// Reset for next section
-											currentSectionText = '';
-											receivedStreamEvents = false;  // Reset for next text section after tools
-
-											currentStatus = `Using ${block.name.replace(/_/g, ' ')}...`;
-											const toolExecution: ToolExecution = {
-												id: block.id,
-												name: block.name,
-												input: block.input,
-												status: 'running',
-												startTime: Date.now(),
-												elapsedTime: 0
-											};
-											currentToolsGroup.push(toolExecution);
-											runningTools.set(block.id, toolExecution);
-											toolIdMap.set(block.id, toolExecution);  // O(1) lookup for results
-											startToolTimer();
-
-											// Update or create tools block
-											const toolsBlockIndex = contentBlocks.findIndex(b => b.type === 'tools' &&
-												!contentBlocks.slice(contentBlocks.indexOf(b) + 1).some(cb => cb.type === 'text'));
-											if (toolsBlockIndex >= 0) {
-												contentBlocks[toolsBlockIndex].tools = [...currentToolsGroup];
-											} else {
-												contentBlocks.push({ type: 'tools', tools: [...currentToolsGroup] });
-											}
-											messages[messages.length - 1].blocks = [...contentBlocks];
-											messages = [...messages];
-											scrollToBottom();
-										}
-									}
-								}
-							}
-
-							// Handle user events (tool results)
-							if (event.type === 'user' && event.message?.content) {
-								for (const block of event.message.content) {
-									if (block.type === 'tool_result') {
-										// Always remove from running tools (cleanup timer even if not in currentToolsGroup)
-										runningTools.delete(block.tool_use_id);
-										if (runningTools.size === 0) {
-											stopToolTimer();
-										}
-
-										// Extract output text
-										const output = Array.isArray(block.content)
-											? block.content.map(c => c.text).join('\n')
-											: block.content;
-
-										// Check if this tool modified files - refresh preview immediately
-									// MCP tools include <!-- diff: metadata; standard tools (Edit, Write, Bash) don't
-									const fileModifyingTools = ['Edit', 'Write', 'Bash', 'mcp__site-studio__write_file', 'mcp__site-studio__edit_file', 'mcp__site-studio__delete_file'];
-									const matchedTool = toolIdMap.get(block.tool_use_id);
-									if (!block.is_error && (output.includes('<!-- diff:') || (matchedTool && fileModifyingTools.includes(matchedTool.name)))) {
-											filesModifiedDuringExecution = true;
-											onUpdate(); // Refresh preview immediately after file change
-										}
-
-										// O(1) lookup for tool result matching
-										const tool = toolIdMap.get(block.tool_use_id);
-										if (tool) {
-											tool.status = block.is_error ? 'error' : 'success';
-											tool.output = output;
-										}
-
-										// Update UI
-										messages[messages.length - 1].blocks = [...contentBlocks];
-										messages = [...messages];
-										scrollToBottom();
-										currentStatus = '';
-									}
-								}
-							}
-						} catch (e) {
-							// Ignore parse errors for incomplete JSON
-						}
-					}
-				}
-			}
-
+			await sendChatRequest(getCurrentMessagesForRequest(nextUserMessage));
 		} catch (error: any) {
 			console.error('Error sending message:', error);
-			const lastMessage = messages[messages.length - 1];
-			if (lastMessage?.role === 'assistant' && !lastMessage.content && !lastMessage.blocks?.length) {
-				messages = messages.slice(0, -1);
-			}
-
-			// Check if it was aborted
-			if (error.name === 'AbortError' || abortController?.signal.aborted) {
-				messages = [
-					...messages,
-					{
-						role: 'assistant',
-						content: 'Request cancelled.'
-					}
-				];
-			} else {
-				// Check for network errors (QUIC, connection failures, etc.)
-				const isNetworkError = error.name === 'TypeError' &&
-					(error.message?.includes('network') || error.message?.includes('fetch'));
-
-				messages = [
-					...messages,
-					{
-						role: 'assistant',
-						content: isNetworkError
-							? 'Connection lost. The request was not retried automatically because it may already have started changing files.'
-							: getErrorMessage(error)
-					}
-				];
-			}
-		} finally {
-			isLoading = false;
-			currentStatus = '';
-			abortController = null;
-			pendingToolInteraction = null;
-			stopToolTimer();
-			// Mark any tools still showing as 'running' as cancelled
-			for (const tool of runningTools.values()) {
-				if (tool.status === 'running') {
-					tool.status = 'error';
-					tool.output = tool.output || 'Operation interrupted';
+			uiMessages = [
+				...uiMessages,
+				{
+					id: generateId(),
+					role: 'assistant',
+					parts: [{ type: 'text', text: getErrorMessage(error) }]
 				}
+			];
+		} finally {
+			if (!currentRequestId) {
+				isLoading = false;
+				currentStatus = '';
 			}
-			runningTools.clear();
-			// Update UI to reflect cancelled tools
-			messages = [...messages];
-			scrollToBottom();
 		}
 	}
 
-	// Approve a tool operation (canUseTool callback flow)
-	async function resolveToolInteraction(
-		requestId: string,
-		payload: {
-			approved: boolean;
-			updatedInput?: Record<string, unknown>;
-			message?: string;
-			interrupt?: boolean;
-		}
-	) {
-		const response = await fetch(resolvePath('/api/query/tool-approve'), {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			credentials: 'include',
-			body: JSON.stringify({
-				requestId,
-				...payload
-			})
-		});
-
-		if (!response.ok) {
-			await handleApiError(response);
-		}
-	}
-
-	// Approve a tool operation (canUseTool callback flow)
-	async function approveToolOperation() {
+	async function rejectUserQuestion() {
 		const interaction = pendingToolInteraction;
 		if (!interaction) return;
 
-		const requestId = interaction.requestId;
-		pendingToolInteraction = null;
-		currentStatus = 'Executing...';
-
 		try {
-			await resolveToolInteraction(requestId, {
-				approved: true
+			await ensureSocket();
+			const output = {
+				answer: '',
+				declined: true
+			};
+			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
+			sendSocketMessage({
+				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
+				toolCallId: interaction.toolCallId,
+				toolName: interaction.toolName,
+				output,
+				autoContinue: true
 			});
-		} catch (error) {
-			console.error('Error approving tool:', error);
-			pendingToolInteraction = interaction;
-			currentStatus = 'Approval failed.';
-		}
-	}
 
-	// Deny a specific tool operation (for canUseTool callback flow)
-	async function denyToolOperation() {
-		const interaction = pendingToolInteraction;
-		if (!interaction) return;
-
-		const requestId = interaction.requestId;
-		pendingToolInteraction = null;
-		currentStatus = '';
-
-		try {
-			await resolveToolInteraction(requestId, {
-				approved: false,
-				message: interaction.requestKind === 'question'
-					? 'User declined to answer the question'
-					: 'User declined the operation'
-			});
+			expectingContinuation = true;
+			isLoading = true;
+			currentStatus = 'Continuing...';
 		} catch (error) {
 			console.error('Error denying tool:', error);
-			pendingToolInteraction = interaction;
 			currentStatus = 'Unable to send response.';
 		}
 	}
 
 	function getPendingQuestions(input: Record<string, any>): UserQuestionPrompt[] {
+		if (typeof input.question === 'string' && input.question.length > 0) {
+			return [
+				{
+					header: typeof input.context === 'string' ? 'Clarification' : undefined,
+					question: input.question,
+					options: Array.isArray(input.options)
+						? input.options
+								.map((option) =>
+									typeof option === 'string'
+										? { label: option }
+										: option && typeof option.label === 'string'
+											? option
+											: null
+								)
+								.filter((option): option is UserQuestionOption => option !== null)
+						: undefined,
+					placeholder: 'Write your answer'
+				}
+			];
+		}
+
 		if (!Array.isArray(input.questions)) {
 			return [];
 		}
@@ -665,24 +785,35 @@
 
 	async function submitUserQuestionAnswers({ answers, annotations }: UserQuestionSubmission) {
 		const interaction = pendingToolInteraction;
-		if (!interaction) return;
-
-		const requestId = interaction.requestId;
-		pendingToolInteraction = null;
-		currentStatus = 'Continuing...';
+		if (!interaction || !interaction.toolCallId) return;
 
 		try {
-			await resolveToolInteraction(requestId, {
-				approved: true,
-				updatedInput: {
-					...interaction.input,
-					answers,
-					...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
-				}
+			const questions = getPendingQuestions(interaction.input || {});
+			const primaryQuestion = questions[0]?.question;
+			const answer =
+				(primaryQuestion ? answers[primaryQuestion] : undefined) ||
+				Object.values(answers)[0] ||
+				'';
+			const output = {
+				...(primaryQuestion ? { question: primaryQuestion } : {}),
+				answer,
+				...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
+			};
+
+			await ensureSocket();
+			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
+			sendSocketMessage({
+				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
+				toolCallId: interaction.toolCallId,
+				toolName: interaction.toolName,
+				output,
+				autoContinue: true
 			});
+			expectingContinuation = true;
+			isLoading = true;
+			currentStatus = 'Continuing...';
 		} catch (error) {
 			console.error('Error answering question:', error);
-			pendingToolInteraction = interaction;
 			currentStatus = 'Unable to send your answer.';
 		}
 	}
@@ -701,17 +832,6 @@
 			e.preventDefault();
 			sendMessage();
 		}
-	}
-
-	function togglePlanMode() {
-		planMode = !planMode;
-		messages = [...messages, {
-			role: 'assistant',
-			content: planMode
-				? 'Plan mode enabled. I will show you proposed actions before executing.'
-				: 'Direct execution mode enabled. I will execute actions immediately.'
-		}];
-		scrollToBottom();
 	}
 
 	function handleFileUpload() {
@@ -772,19 +892,11 @@
 		<!-- Pending tool interaction card - {#key} forces re-render on async state changes -->
 		{#key pendingToolInteraction}
 			{#if pendingToolInteraction}
-				{#if pendingToolInteraction.requestKind === 'question'}
-					<AskUserQuestionCard
-						questions={getPendingQuestions(pendingToolInteraction.input)}
-						onSubmit={submitUserQuestionAnswers}
-						onReject={denyToolOperation}
-					/>
-				{:else}
-					<PlanApprovalCard
-						plan={[{ name: pendingToolInteraction.toolName, input: pendingToolInteraction.input }]}
-						onApprove={approveToolOperation}
-						onReject={denyToolOperation}
-					/>
-				{/if}
+				<AskUserQuestionCard
+					questions={getPendingQuestions(pendingToolInteraction.input || {})}
+					onSubmit={submitUserQuestionAnswers}
+					onReject={rejectUserQuestion}
+				/>
 			{/if}
 		{/key}
 
@@ -851,13 +963,6 @@
 			/>
 			<button class="icon-btn" title="Attach file" onclick={handleFileUpload}>
 				<span class="plus-icon">+</span>
-			</button>
-			<button
-				class="plan-btn {planMode ? 'active' : ''}"
-				title={planMode ? 'Plan mode active' : 'Direct execution mode'}
-				onclick={togglePlanMode}
-			>
-				<span class="play-icon">▶</span> {planMode ? 'Plan' : 'Direct'}
 			</button>
 		</div>
 	</div>

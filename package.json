@@ -5,13 +5,14 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/frontend"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "dev:backend": "npm run dev --workspace=packages/backend",
+    "postinstall": "npm --prefix packages/app install",
+    "build": "npm run build --workspaces --if-present && npm --prefix packages/app run build",
+    "dev:app": "npm --prefix packages/app run dev",
     "dev:frontend": "npm run dev --workspace=packages/frontend",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev": "concurrently \"npm run dev:app\" \"npm run dev:frontend\"",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
   },
   "keywords": [
@@ -32,10 +33,5 @@
     "tailwindcss": "^4.1.16",
     "typescript": "^5.5.0",
     "vitest": "^4.0.7"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.73",
-    "pino": "^10.1.0",
-    "pino-pretty": "^13.1.2"
   }
 }

@@ -11,6 +11,18 @@ export interface Project {
 	thumbnailUrl?: string;
 }
 
+export type ProjectSnapshotTrigger = 'agent' | 'manual' | 'restore';
+
+export interface ProjectSnapshot {
+	id: string;
+	createdAt: string;
+	projectId: string;
+	trigger: ProjectSnapshotTrigger;
+	label?: string;
+	fileCount: number;
+	restoredFromSnapshotId?: string;
+}
+
 export interface TemplateMetadata {
 	id: string;
 	title: string;
@@ -192,6 +204,34 @@ export async function unpublishProject(projectId: string): Promise<void> {
 	await apiFetch<void>(`${API_BASE}/projects/${projectId}/unpublish`, {
 		method: 'POST',
 	});
+}
+
+export async function fetchProjectSnapshots(projectId: string): Promise<ProjectSnapshot[]> {
+	const data = await apiFetch<{ snapshots: ProjectSnapshot[] }>(`${API_BASE}/projects/${projectId}/snapshots`);
+	return data.snapshots;
+}
+
+export async function createProjectSnapshot(projectId: string, label?: string): Promise<ProjectSnapshot> {
+	const data = await apiFetch<{ snapshot: ProjectSnapshot }>(`${API_BASE}/projects/${projectId}/snapshots`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+		},
+		body: JSON.stringify(label ? { label } : {}),
+	});
+	return data.snapshot;
+}
+
+export async function restoreProjectSnapshot(
+	projectId: string,
+	snapshotId: string
+): Promise<{ restoredSnapshot: ProjectSnapshot; restorePoint: ProjectSnapshot }> {
+	return apiFetch<{ restoredSnapshot: ProjectSnapshot; restorePoint: ProjectSnapshot }>(
+		`${API_BASE}/projects/${projectId}/snapshots/${snapshotId}/restore`,
+		{
+			method: 'POST',
+		}
+	);
 }
 
 /**

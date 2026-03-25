@@ -1,0 +1,27 @@
+{
+  "name": "@site-studio/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "wrangler dev --port 8792",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@cloudflare/ai-chat": "^0.2.5",
+    "@cloudflare/codemode": "^0.3.1",
+    "@openrouter/ai-sdk-provider": "^2.3.3",
+    "agents": "^0.8.4",
+    "ai": "^6.0.138",
+    "fflate": "^0.8.2",
+    "hono": "^4.12.9",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241127.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.77.0"
+  }
+}

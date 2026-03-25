@@ -9,9 +9,9 @@ When working on this project, always invoke these skills:
 
 ## What Is Site Studio?
 
-Site Studio is an AI-powered web development tool for academics and researchers to build professional static websites through natural language conversation. Users describe what they want, the agent proposes changes with diffs, users approve/reject, and the agent executes.
+Site Studio is an AI-powered web development tool for academics and researchers to build professional static websites through natural language conversation. Users describe what they want, the AI agent executes changes via sandboxed Dynamic Workers, and users see results in a live preview.
 
-**Key Innovation:** The plan/approve/execute workflow gives users transparency and control over AI actions. This is NOT a typical chatbot - it's a collaborative editing tool where the AI proposes and the human decides.
+**Key Innovation:** The agent writes JavaScript that runs in Cloudflare Dynamic Workers (Codemode), with typed project APIs for file operations. Snapshots provide recovery - users can restore to any previous state.
 
 **Target Users:** Students, researchers, academics who want professional websites without coding (research portfolios, publication archives, lab websites, course pages).
 
@@ -20,17 +20,25 @@ Site Studio is an AI-powered web development tool for academics and researchers 
 ```
 site-studio/
 ├── packages/
-│   ├── backend/          # Express + Claude Agent SDK
+│   ├── app/              # Cloudflare Workers (Hono) backend
 │   │   ├── src/
-│   │   │   ├── index.ts           # Express app, SSE endpoints
-│   │   │   ├── agent.ts           # Agent init, sandbox config, hooks
-│   │   │   ├── tools/             # MCP tools (file-tools, template-tools)
-│   │   │   ├── storage/           # Storage abstraction (filesystem/R2)
-│   │   │   ├── services/          # ProjectSyncService (R2 sync)
-│   │   │   ├── config/            # Sandbox config, env validation
-│   │   │   ├── sandbox/           # Session management
-│   │   │   └── middleware/        # Auth, rate limiting, validation
-│   │   └── prompts/               # Agent system prompts
+│   │   │   ├── index.ts           # Hono app, route mounting
+│   │   │   ├── agents/
+│   │   │   │   └── site-builder.ts  # SiteBuilderAgent Durable Object + project tools
+│   │   │   ├── routes/            # API route handlers
+│   │   │   │   ├── agents.ts      # WebSocket proxy to Durable Object
+│   │   │   │   ├── projects.ts    # Project CRUD + snapshots
+│   │   │   │   ├── files.ts       # File read/write/upload/delete
+│   │   │   │   ├── publish.ts     # Publish/unpublish
+│   │   │   │   ├── preview.ts     # Live preview serving
+│   │   │   │   ├── templates.ts   # Template listing
+│   │   │   │   └── health.ts      # Health check
+│   │   │   ├── storage/
+│   │   │   │   └── r2.ts          # R2ProjectStorage (all file + snapshot ops)
+│   │   │   ├── lib/               # Session, path utils, constants, templates
+│   │   │   └── prompts/
+│   │   │       └── site-builder.ts  # Agent system prompt
+│   │   └── wrangler.jsonc         # Cloudflare bindings config
 │   │
 │   └── frontend/         # SvelteKit 5 + Vite
 │       └── src/
@@ -38,223 +46,195 @@ site-studio/
 │           │   ├── +page.svelte              # Dashboard
 │           │   └── editor/[projectId]/       # Main editor
 │           └── lib/
-│               ├── components/               # UI components
-│               │   ├── AgentChat.svelte      # Chat + SSE streaming
-│               │   ├── PlanApprovalCard.svelte
+│               ├── agents/
+│               │   └── chat.ts               # WebSocket message types + streaming state
+│               ├── components/
+│               │   ├── AgentChat.svelte       # Chat + WebSocket streaming
 │               │   ├── ToolExecutionCard.svelte
-│               │   ├── CodeView.svelte       # CodeMirror 6
-│               │   ├── Preview.svelte        # Live preview
-│               │   └── ui/                   # shadcn-svelte
-│               └── api/                      # API client
+│               │   ├── AskUserQuestionCard.svelte
+│               │   ├── ProjectHistoryDialog.svelte  # Snapshot management
+│               │   ├── CodeView.svelte        # CodeMirror 6
+│               │   ├── Preview.svelte         # Live preview iframe
+│               │   ├── ProjectDashboard.svelte
+│               │   ├── NewProjectDialog.svelte
+│               │   └── ui/                    # shadcn-svelte
+│               ├── api/                       # API client
+│               └── utils/
+│                   ├── ws.ts                  # WebSocket URL resolution
+│                   └── onboarding.ts          # Tour/onboarding (driver.js)
 ```
 
-## Two Agent Modes: Standard Tools vs MCP Tools
+## Agent Architecture: Codemode + Dynamic Workers
 
-The agent operates in one of two modes based on `AGENT_SANDBOX_ENABLED`:
+The agent uses a single `codemode` tool backed by Cloudflare Dynamic Workers. Instead of individual MCP tools, the agent writes JavaScript that executes in a sandboxed worker with typed project APIs.
 
-### Mode 1: MCP Tools (Default - Sandbox Disabled)
-When `AGENT_SANDBOX_ENABLED=false` (default):
-- Uses custom MCP tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`
-- MCP tools operate directly on storage (R2 or filesystem)
-- Standard tools (Edit, Write, Bash) are blocked
+### How It Works
 
-### Mode 2: Standard Tools + Sync (Sandbox Enabled)
-When `AGENT_SANDBOX_ENABLED=true`:
-- Uses standard Claude Code tools: `Edit`, `Write`, `Glob`, `Grep`
-- Optionally enables `Bash` if `AGENT_SANDBOX_AUTO_ALLOW_BASH=true`
-- MCP file tools are NOT registered (only template tools remain)
-- **ProjectSyncService** handles R2 synchronization:
-  - **Hydration**: Downloads R2 files to local projectPath before agent starts
-  - **PostToolUse hooks**: Auto-sync local changes to R2 after Edit/Write/Bash
+1. **User sends message** via WebSocket to SiteBuilderAgent Durable Object
+2. **Agent generates JavaScript** using the `codemode` tool
+3. **DynamicWorkerExecutor** runs the code in an isolated Dynamic Worker
+4. **Project APIs** (`project.list_files()`, `project.read_file()`, etc.) are available in the sandbox
+5. **Results flow back** to the agent, which can chain multiple executions
+6. **Preview updates** in real-time after file-modifying operations
+
+### Project APIs (available in sandbox)
+
+All tools have typed `inputSchema` and `outputSchema` (Zod). The `outputSchema` is critical - it generates TypeScript types via `@cloudflare/codemode`'s `generateTypes()` so the LLM knows the return shapes.
 
 ```
-Data Flow (Sandbox Mode with R2):
-┌─────────┐  hydrate   ┌─────────────┐  agent uses   ┌─────────────┐
-│   R2    │ ─────────> │   Local     │ ────────────> │   Local     │
-│ Storage │            │ projectPath │  Edit/Write   │   Changes   │
-└─────────┘            └─────────────┘               └──────┬──────┘
-     ^                                                      │
-     │                    PostToolUse hook                  │
-     └──────────────────── sync() ──────────────────────────┘
+project.list_files({ prefix? })     → { count, tree, paths }
+project.read_file({ path })         → { ok, path, content, truncated } | { ok: false, message }
+project.search_files({ query })     → { query, count, truncated, results[] }
+project.write_file({ path, content })  → { ok, path, created, changed }
+project.edit_file({ path, oldText, newText }) → { ok, path, replacements } | { ok: false, message }
+project.rename_file({ oldPath, newPath })     → { ok, oldPath, newPath } | { ok: false, message }
+project.delete_file({ path })       → { ok, path } | { ok: false, message }
+project.scaffold_template({ templateId })     → { ok, templateId } | { ok: false, message }
+project.add_page({ path, title })   → { ok, path, title } | { ok: false, message }
 ```
 
-## The Plan/Approval Flow
+### SiteBuilderAgent Durable Object
 
-This is what makes Site Studio unusual. The agent uses Claude Agent SDK's `canUseTool` callback:
-
-1. **User sends message** → Backend streams SSE events
-2. **Agent wants to use write/edit/delete tool** → `canUseTool` callback fires
-3. **Callback creates Promise** that blocks the agent, sends `tool_approval_request` event
-4. **Frontend shows PlanApprovalCard** with file operation and diff preview
-5. **User clicks Approve/Reject** → POST to `/api/query/tool-approve`
-6. **Promise resolves** → Agent continues or skips the tool
-
-**Tools requiring approval** (both MCP and standard):
-- MCP: `write_file`, `edit_file`, `delete_file`, `scaffold_template`
-- Standard: `Edit`, `Write`, `Bash`
-
-**Two Execution Modes:**
-- `mode: 'plan'` (default) - Uses canUseTool, requires approval for writes
-- `mode: 'execute'` - Bypasses approval, executes immediately
+Located in `packages/app/src/agents/site-builder.ts`:
+- Extends `AIChatAgent<Env>` from `@cloudflare/ai-chat`
+- Instantiated per project: `${userId}:${projectId}`
+- Uses OpenRouter → Claude Sonnet 4.6 (`anthropic/claude-sonnet-4.6`)
+- Chat history persisted via AIChatAgent (SQLite in Durable Object)
+- Automatic snapshot creation before file-modifying operations
 
 ## Key Technologies
 
-**Backend:**
-- Express.js 5 + TypeScript
-- Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`)
-- Custom MCP tools OR standard tools (based on sandbox config)
-- Storage abstraction: filesystem (dev) or Cloudflare R2 (prod)
-- ProjectSyncService for R2↔filesystem synchronization
-- Pino logging
+**Backend (packages/app):**
+- Cloudflare Workers + Hono framework
+- `@cloudflare/ai-chat` - AIChatAgent base class
+- `@cloudflare/codemode` - Dynamic Worker code execution
+- `@openrouter/ai-sdk-provider` - Model access via OpenRouter
+- Vercel AI SDK (`ai`) - `streamText`, `tool()` definitions
+- Cloudflare R2 - File and snapshot storage
+- Cloudflare KV - Session management
+- Durable Objects - Persistent agent state
 
-**Frontend:**
+**Frontend (packages/frontend):**
 - SvelteKit 5 with runes (NOT Svelte 4 - always use `$state`, `$derived`, etc.)
 - Tailwind CSS v4
 - CodeMirror 6 for code editing
 - shadcn-svelte components (in `lib/components/ui/`)
-- SSE streaming for real-time updates
+- WebSocket streaming for real-time agent communication
+- driver.js for onboarding tour
 
 ## Environment Configuration
 
-### Core Settings
-```bash
-PORT=3001
-STORAGE_TYPE=r2              # 'filesystem' or 'r2'
-AUTH_MODE=anonymous          # 'anonymous' or 'required'
+### Wrangler Bindings (wrangler.jsonc)
+```jsonc
+{
+  "durable_objects": {
+    "bindings": [{ "name": "SITE_BUILDER_AGENT", "class_name": "SiteBuilderAgent" }]
+  },
+  "r2_buckets": [{ "binding": "SITE_STUDIO_BUCKET", "bucket_name": "site-studio" }],
+  "kv_namespaces": [{ "binding": "SESSION_KV", "id": "..." }],
+  "worker_loaders": [{ "binding": "LOADER" }],
+  "vars": {
+    "APP_PUBLIC_DOMAIN": "https://...",
+    "OPENROUTER_MODEL": "anthropic/claude-sonnet-4.6"
+  }
+}
 ```
 
-### R2 Storage (when STORAGE_TYPE=r2)
+### Secrets
 ```bash
-R2_ACCOUNT_ID=...
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
-R2_BUCKET_NAME=site-studio
-R2_PUBLIC_DOMAIN=https://...
+# Set via wrangler secret put
+OPENROUTER_API_KEY=...    # Required - OpenRouter API key for Claude access
 ```
-
-### SDK Sandbox (enables standard tools + build tools)
-```bash
-AGENT_SANDBOX_ENABLED=true           # Enable OS-level sandbox (bubblewrap)
-AGENT_SANDBOX_AUTO_ALLOW_BASH=true   # Allow Bash for Hugo, npm, etc.
-AGENT_SANDBOX_ALLOW_LOCAL_BINDING=false
-```
-
-When sandbox is enabled:
-- Agent can run Hugo, npm, and other build tools
-- Files are synced between local filesystem and R2
-- OS-level isolation via bubblewrap (Linux) or seatbelt (macOS)
 
 ## Important Patterns
 
 ### Svelte 5 Async State Updates
 
-State updates inside async code (like SSE event handlers) may not trigger re-renders for `{#if}` blocks. Use `{#key}` to force re-render:
+State updates inside async code (like WebSocket event handlers) may not trigger re-renders for `{#if}` blocks. Use `{#key}` to force re-render:
 
 ```svelte
-{#key pendingToolApproval}
-  {#if pendingToolApproval}
-    <PlanApprovalCard ... />
+{#key someReactiveValue}
+  {#if someReactiveValue}
+    <Component ... />
   {/if}
 {/key}
 ```
 
-### SSE Event Streaming
+### WebSocket Agent Communication
 
-Frontend connects to `/api/query` which streams events:
-- `tool_approval_request` - Agent needs approval (blocking)
-- `stream_event` - Text deltas for real-time typing
-- `assistant` - Complete message blocks with tool_use
-- `user` - Tool results
-- `system` - Init with session_id
+Frontend connects via WebSocket to `/api/agents/site-builder/{projectId}`:
+- `CF_AGENT_USE_CHAT_REQUEST` - Send user message
+- `CF_AGENT_USE_CHAT_RESPONSE` - Receive stream chunks
+- `CF_AGENT_CHAT_MESSAGES` - Full message history
+- `CF_AGENT_STREAM_RESUMING` - Handle stream continuation
+- `CF_AGENT_REQUEST_CANCEL` - Stop request
 
-### Storage Abstraction
+Chat history loaded via GET `/api/agents/site-builder/{projectId}/get-messages`.
 
-All file operations go through `IStorage` interface:
+### R2 Storage Structure
 
+```
+R2 Key Structure:
+├── projects/{userId}/{projectId}/.metadata.json
+├── projects/{userId}/{projectId}/{filePath}
+├── snapshots/{userId}/{projectId}/{snapshotId}.zip
+├── snapshots/{userId}/{projectId}/{snapshotId}.json
+└── uploads/{userId}/{fileName}
+```
+
+All file operations go through `R2ProjectStorage`:
 ```typescript
-const storage = getStorage(); // Returns singleton (R2 or Filesystem)
+const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
 await storage.writeFile(userId, projectId, path, content);
 await storage.listFiles(userId, projectId);
+await storage.createSnapshot(userId, projectId, { trigger: "agent" });
+await storage.restoreSnapshot(userId, projectId, snapshotId);
 ```
 
-### ProjectSyncService (R2 mode with sandbox)
+### Adding outputSchema to Codemode Tools
+
+When defining project tools with the AI SDK `tool()` function, always include `outputSchema`. Without it, `@cloudflare/codemode`'s `generateTypes()` produces `Promise<unknown>` return types, causing the agent to guess (often wrongly) what tools return.
 
 ```typescript
-// Hydrate: R2 → Local (before agent starts)
-await syncService.hydrate(userId, projectId, projectPath);
-
-// Sync: Local → R2 (after file-modifying tools)
-await syncService.sync(userId, projectId, projectPath);
-```
-
-Sync detects changes by mtime comparison, uploads modified files, handles deletions.
-
-### PostToolUse Hooks
-
-When sandbox is enabled with R2 storage, hooks auto-sync after file operations:
-
-```typescript
-queryOptions.hooks = {
-  PostToolUse: [{
-    matcher: 'Edit|Write|Bash',
-    hooks: [async (input, toolUseId, { signal }) => {
-      await syncService.sync(userId, projectId, projectPath);
-      return {};
-    }],
-  }],
-};
+read_file: tool({
+  description: "Read a text file from the project.",
+  inputSchema: z.object({ path: z.string() }),
+  outputSchema: z.discriminatedUnion("ok", [
+    z.object({ ok: z.literal(true), path: z.string(), content: z.string(), truncated: z.boolean() }),
+    z.object({ ok: z.literal(false), path: z.string(), message: z.string() })
+  ]),
+  execute: async ({ path }) => { ... }
+})
 ```
 
 ## Security Model
-
-### Tool Access Control
-
-**Always Disallowed:**
-- `WebSearch`, `WebFetch` - No web access
-- `Task`, `SlashCommand`, `Skill` - No agent recursion
-- `NotebookEdit`, `AskUserQuestion` - Not needed
-
-**Conditionally Allowed (sandbox mode only):**
-- `Edit`, `Write`, `Glob`, `Grep` - File operations
-- `Bash`, `BashOutput`, `KillShell` - Build tools (if AGENT_SANDBOX_AUTO_ALLOW_BASH)
-
-**Always Allowed:**
-- `TodoWrite` - Helps users see agent planning
-- `Read` - Safe read-only operation
-- MCP template tools - `scaffold_template`, `add_page`
 
 ### Isolation Layers
 
 | Layer | Mechanism |
 |-------|-----------|
-| Tool Access | `disallowedTools` array in agent.ts |
-| Path Traversal | Input validation in storage layer |
-| User Isolation | userId/projectId prefixes in storage keys |
-| File Write Approval | `canUseTool` callback + frontend approval |
-| OS Isolation | Bubblewrap sandbox (when enabled) |
-| Session Limits | 30min inactivity timeout |
+| Code Execution | Dynamic Workers - isolated V8 sandboxes, no network access |
+| Path Traversal | `sanitizeFilePath()` in storage layer |
+| User Isolation | userId/projectId prefixes in R2 keys |
+| Session Management | KV-backed session cookies with TTL |
+| Protected Files | `PROTECTED_FILE_NAMES` set prevents deletion of system files |
+| Snapshots | Auto-created before destructive operations for recovery |
+
+### Agent Tool Access
+
+The agent only has access to the `codemode` tool (for file operations) and `ask_user_question` (for clarifications). No web access, no shell, no direct file system access.
 
 ## Development
 
 ```bash
-./dev.sh          # Start both frontend and backend
-npm run build     # Build both packages
+./dev.sh          # Start both app (Wrangler) and frontend (Vite)
+bun run build     # Build both packages
 ```
 
-Backend: http://localhost:3001
-Frontend: http://localhost:5173
+App (Wrangler): http://localhost:8792
+Frontend (Vite): http://localhost:5173
 
-### Testing Sandbox Mode
-
-1. Set environment variables:
-```bash
-AGENT_SANDBOX_ENABLED=true
-AGENT_SANDBOX_AUTO_ALLOW_BASH=true
-```
-
-2. Restart backend
-3. Ask agent to run Hugo or npm commands
-4. Verify files sync to R2
+The Vite dev server proxies `/api/*` requests to the Wrangler dev server.
 
 ## API Endpoints
 
@@ -265,50 +245,56 @@ AGENT_SANDBOX_AUTO_ALLOW_BASH=true
 - `DELETE /api/projects/:id` - Delete
 - `POST /api/projects/:id/publish` - Publish to public URL
 - `POST /api/projects/:id/unpublish` - Unpublish
+- `GET /api/projects/:id/snapshots` - List snapshots
+- `POST /api/projects/:id/snapshots` - Create snapshot
+- `POST /api/projects/:id/snapshots/:snapshotId/restore` - Restore snapshot
 
 ### Files
 - `GET /api/projects/:id/files` - List files (tree structure)
 - `GET /api/projects/:id/file?path=...` - Read file
 - `POST /api/projects/:id/file` - Write file
-- `DELETE /api/projects/:id/files?path=...` - Delete file
-- `POST /api/projects/:id/upload` - Upload file (32MB limit)
+- `DELETE /api/projects/:id/file?path=...` - Delete file
+- `POST /api/projects/:id/upload` - Upload file
 
 ### Agent
-- `POST /api/query` - SSE stream for agent queries
-- `POST /api/query/tool-approve` - Tool approval callback
+- `GET/POST/WebSocket /api/agents/site-builder/:projectId` - Agent Durable Object gateway
+- `GET /api/agents/site-builder/:projectId/get-messages` - Chat history
+
+### Templates
+- `GET /api/templates` - List available templates
 
 ### Preview
-- `GET /preview/:id` - Live preview (authenticated)
+- `GET /preview/:id/*` - Live preview (authenticated)
 - `GET /sites/:userId/:slug/*` - Published sites (public)
 
 ## Common Gotchas
 
 1. **Always use `credentials: 'include'`** in fetch calls that need auth
-2. **Use `flex-shrink: 0`** on cards in flex containers to prevent squeezing
-3. **Svelte 5 runes only** - no `let x = writable()` or `$:` reactive statements
-4. **Preview refresh** - call `onUpdate()` after file changes to refresh iframe
-5. **Tool IDs** - each tool execution has unique ID for tracking revert state
-6. **Session cookies** - Each browser session gets unique userId; curl without cookies creates new user
-7. **Sandbox paths** - Standard tools need absolute paths (e.g., `/home/.../sandboxes/user/proj/file.html`)
+2. **Svelte 5 runes only** - no `let x = writable()` or `$:` reactive statements
+3. **Preview refresh** - call `onUpdate()` after file changes to refresh iframe
+4. **Session cookies** - Each browser session gets unique userId; curl without cookies creates new user
+5. **outputSchema required** - Always add `outputSchema` to codemode tools or the agent gets `Promise<unknown>` return types
+6. **$effect infinite loops** - Be careful with `$effect` that calls async functions updating reactive state - use guard variables to prevent re-triggering
+7. **WebSocket not SSE** - Agent communication uses WebSocket, not Server-Sent Events
 
-## File Structure Reference
+## Key Files
 
-### Backend Key Files
-- `src/index.ts` - Express app, all endpoints (~1600 lines)
-- `src/agent.ts` - Agent configuration, hooks (~450 lines)
-- `src/services/project-sync.ts` - R2 sync service (~320 lines)
-- `src/config/sandbox-config.ts` - Sandbox env config
-- `src/storage/r2-storage.ts` - R2 implementation
-- `src/tools/file-tools.ts` - MCP file tools
-- `src/tools/template-tools.ts` - MCP template tools
+### App (packages/app)
+- `src/agents/site-builder.ts` - Agent Durable Object, all project tools with schemas
+- `src/index.ts` - Hono app, route mounting, exports
+- `src/routes/projects.ts` - Project CRUD + snapshot endpoints
+- `src/routes/files.ts` - File operations
+- `src/routes/agents.ts` - WebSocket proxy to Durable Object
+- `src/storage/r2.ts` - R2ProjectStorage implementation
+- `src/prompts/site-builder.ts` - Agent system prompt
+- `wrangler.jsonc` - Cloudflare bindings and config
 
-### Frontend Key Files
-- `routes/editor/[projectId]/+page.svelte` - Main editor (~780 lines)
-- `lib/components/AgentChat.svelte` - Chat UI (~1070 lines)
-- `lib/components/PlanApprovalCard.svelte` - Approval UI (~530 lines)
-- `lib/components/Preview.svelte` - Dual-iframe preview
+### Frontend (packages/frontend)
+- `routes/editor/[projectId]/+page.svelte` - Main editor page
+- `lib/components/AgentChat.svelte` - Chat UI + WebSocket streaming
+- `lib/components/ToolExecutionCard.svelte` - Tool execution display
+- `lib/components/ProjectHistoryDialog.svelte` - Snapshot management
+- `lib/components/Preview.svelte` - Live preview iframe
+- `lib/agents/chat.ts` - WebSocket message types and streaming state
 - `lib/api/projects.ts` - API client
-
-### Potentially Unused (candidates for removal)
-- `lib/components/DiffPreview.svelte` - Replaced by DiffDisplay.svelte
-- `lib/components/TemplateCard.svelte` - Unused in current UI
+- `lib/utils/ws.ts` - WebSocket URL resolution

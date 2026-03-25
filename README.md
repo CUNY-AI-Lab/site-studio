@@ -1,186 +1,97 @@
 # Site Studio
 
-AI-powered web development tool for academics. Build professional websites through natural language conversation with an AI agent that proposes changes before executing them.
+Site Studio is a Cloudflare-native AI website builder for academics and researchers. Users describe a site or change in natural language, the agent works directly in a sandboxed Dynamic Worker, and the app updates preview and published output from R2-backed project storage.
 
-## Features
+## Current Stack
 
-- **Plan/Execute AI Agent** - Review and approve proposed changes before execution
-- **Live Code Editor** - CodeMirror 6 with syntax highlighting and auto-save
-- **Live Preview** - Real-time updates with flicker-free dual iframe system
-- **File Management** - Complete project file access and organization
-- **Build Tools** - Run Hugo, npm, and other build tools (sandbox mode)
-- **Cloud Storage** - Cloudflare R2 for production deployments
-- **Modern UI** - SvelteKit 5 with shadcn-svelte components
+- **Frontend:** SvelteKit 5, Tailwind CSS v4, CodeMirror 6
+- **App runtime:** Cloudflare Workers + Hono
+- **Agent runtime:** Cloudflare Agents SDK + `@cloudflare/ai-chat`
+- **Sandbox execution:** Dynamic Worker Loader + `@cloudflare/codemode`
+- **Model provider:** OpenRouter
+- **Storage:** Cloudflare R2 + KV + Durable Objects
 
-## Tech Stack
+## Repo Layout
 
-**Frontend:** SvelteKit 5, Tailwind CSS v4, CodeMirror 6
-**Backend:** Express 5, Claude Agent SDK, MCP Tools
-**AI:** Claude with interactive approval workflow
-**Storage:** Filesystem (dev) or Cloudflare R2 (prod)
-
-## Quick Start
-
-```bash
-# Install dependencies
-npm install
-
-# Start development servers
-./dev.sh
-```
-
-Open http://localhost:5173
-
-### Production Setup
-
-```bash
-# Configure backend
-cd packages/backend
-cp .env.example .env
-# Edit .env with your settings (R2 credentials, etc.)
-npm run build
-
-# Run
-npm start
-```
-
-## Usage
-
-1. **Create Project** - Choose a template or start blank
-2. **Describe** - Tell the agent what you want in natural language
-3. **Review Plan** - See exactly what will be created/modified
-4. **Approve** - Execute the proposed changes
-5. **Iterate** - Refine through conversation
-
-### Example Prompts
-
-- "Create a professional CV page with education, research, and publications sections"
-- "Add a project showcase with filtering by research area"
-- "Build a publications page linking to DOIs and arXiv papers"
-- "Design a lab website with team profiles and current projects"
-- "Initialize a Hugo site and build it" (sandbox mode)
-
-## Architecture
-
-```
+```text
 site-studio/
 ├── packages/
-│   ├── backend/           # Express + Claude Agent SDK
+│   ├── app/                # Cloudflare Worker app + AI chat agent
 │   │   ├── src/
-│   │   │   ├── index.ts       # API server with SSE streaming
-│   │   │   ├── agent.ts       # Agent config, sandbox, hooks
-│   │   │   ├── tools/         # MCP tools (file-tools, template-tools)
-│   │   │   ├── storage/       # Storage abstraction (filesystem/R2)
-│   │   │   └── services/      # ProjectSyncService
-│   │   └── prompts/           # System prompts
-│   │
-│   └── frontend/          # SvelteKit 5
-│       └── src/
-│           ├── routes/        # Dashboard, Editor
-│           └── lib/
-│               ├── components/  # AgentChat, Preview, CodeView
-│               └── api/         # API client
-│
-└── package.json           # npm workspaces
+│   │   │   ├── agents/     # SiteBuilderAgent
+│   │   │   ├── routes/     # Projects, files, preview, publish, agents
+│   │   │   ├── storage/    # R2-backed project storage
+│   │   │   └── lib/        # Auth, paths, templates, HTTP helpers
+│   │   └── wrangler.jsonc
+│   └── frontend/           # SvelteKit dashboard/editor
+└── dynamic-workers-plan.md # Rewrite / cutover plan
 ```
 
-## How It Works
+## What Works
 
-### Plan Phase
-1. User describes desired changes
-2. Agent analyzes and proposes specific actions
-3. Frontend displays plan with file diff preview
-4. User reviews and approves/rejects each action
+- Project CRUD against existing R2 data
+- Legacy anonymous-session recovery for returning users
+- Live preview at `/preview/:projectId/*`
+- Public published sites at `/sites/:userId/:slug/*`
+- Cloudflare Agents chat transport with persisted messages
+- Dynamic Worker sandbox execution for multi-step project edits
+- Clarification questions when a request is materially ambiguous
 
-### Execute Phase
-1. Agent executes approved actions
-2. Results stream via Server-Sent Events
-3. Preview updates in real-time
-
-This ensures transparency, control, and safety—nothing happens without approval.
-
-## Two Agent Modes
-
-### Mode 1: MCP Tools (Default)
-- Uses custom MCP tools for file operations
-- Direct storage access (filesystem or R2)
-- Standard Claude Code tools blocked
-
-### Mode 2: Sandbox + Build Tools
-Enable with `AGENT_SANDBOX_ENABLED=true`:
-- Uses standard tools (Edit, Write, Bash)
-- Can run Hugo, npm, and other build commands
-- OS-level isolation via bubblewrap (Linux)
-- Files auto-sync to R2 via PostToolUse hooks
-
-## Available Tools
-
-The agent can:
-- Create/read/write/delete files
-- Organize project structure
-- Generate templates (portfolio, blog, CV)
-- Add new pages with navigation
-- Run build tools (Hugo, npm) in sandbox mode
-- Explain design decisions
-
-## Configuration
-
-Key environment variables:
+## Local Development
 
 ```bash
-# Storage
-STORAGE_TYPE=r2              # 'filesystem' or 'r2'
-
-# R2 Storage
-R2_ACCOUNT_ID=...
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
-R2_BUCKET_NAME=site-studio
-
-# Sandbox Mode (enables build tools)
-AGENT_SANDBOX_ENABLED=true
-AGENT_SANDBOX_AUTO_ALLOW_BASH=true
-```
-
-See `packages/backend/.env.example` for full configuration.
-
-## API Endpoints
-
-- `GET /api/projects` - List projects
-- `POST /api/projects` - Create project
-- `GET /api/projects/:id/files` - List files
-- `POST /api/query` - Send message (SSE stream)
-- `POST /api/query/tool-approve` - Approve/reject tool
-- `GET /preview/:id/*` - Preview files
-- `POST /api/projects/:id/publish` - Publish site
-
-## Development
-
-```bash
-# Both packages
+npm install
 ./dev.sh
-
-# Backend only
-cd packages/backend && npm run dev    # http://localhost:3001
-
-# Frontend only
-cd packages/frontend && npm run dev   # http://localhost:5173
 ```
 
-## Educational Use
+This starts:
 
-Site Studio demonstrates:
-- **AI Agent Concepts** - Tool use, planning, execution, permissions
-- **Human-AI Collaboration** - Approval workflows, transparency, control
-- **Web Development** - HTML/CSS/JS, project structure, live development
-- **Modern Patterns** - Reactive UI, SSE streaming, component architecture
+- App: [http://localhost:8792](http://localhost:8792)
+- Frontend: [http://localhost:5173](http://localhost:5173)
 
-Perfect for teaching agentic AI and modern web development to students.
+The root `postinstall` installs frontend dependencies and the standalone Worker app dependencies.
+
+## Environment
+
+Local Worker secrets live in:
+
+- [`packages/app/.dev.vars`](/Users/stephenzweibel/Apps/site-studio/packages/app/.dev.vars)
+
+Required local secret:
+
+```bash
+OPENROUTER_API_KEY=...
+```
+
+The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/stephenzweibel/Apps/site-studio/packages/app/wrangler.jsonc):
+
+- `APP_PUBLIC_DOMAIN`
+- `LEGACY_PUBLIC_DOMAIN`
+- `OPENROUTER_MODEL`
+
+For production, configure secrets with Wrangler / Cloudflare, not by committing env files.
+
+## Main Routes
+
+- `GET /api/health`
+- `GET /api/projects`
+- `POST /api/projects`
+- `GET /api/projects/:id/files`
+- `POST /api/projects/:id/file`
+- `POST /api/projects/:id/upload`
+- `GET /preview/:id/*`
+- `POST /api/projects/:id/publish`
+- `POST /api/projects/:id/unpublish`
+- `ALL /api/agents/site-builder/:projectId`
+- `GET /sites/:userId/:slug/*`
+
+## Notes
+
+- The new app is a static-file site builder. Runtime build tools are out of scope.
+- The normal chat path is execute-first, not approve-first.
+- The blank template is the only built-in template currently wired in the Worker app.
+- Old published sites remain readable from the same R2 bucket and legacy `/sites/:userId/:slug/*` shape.
 
 ## License
 
 MIT
-
-## Acknowledgments
-
-Built with Anthropic's Claude Agent SDK. Inspired by Vercel's v0.
