@@ -11,7 +11,7 @@ export function jsonError(message: string, status = 400): never {
 export function jsonHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
   if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
+    headers.set("Content-Type", "application/json; charset=utf-8");
   }
   return headers;
 }

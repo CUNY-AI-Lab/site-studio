@@ -669,7 +669,16 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       });
     }
 
-    const scope = parseScope(this.name);
+    let scope: Scope;
+    try {
+      scope = parseScope(this.name);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid agent scope" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
     const storage = new R2ProjectStorage(this.env.SITE_STUDIO_BUCKET);
 
     if (!(await storage.projectExists(scope.userId, scope.projectId))) {
@@ -679,25 +688,33 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       });
     }
 
-    const provider = createOpenRouter({ apiKey: this.env.OPENROUTER_API_KEY });
-    const model = provider(this.env.OPENROUTER_MODEL || DEFAULT_MODEL);
-    const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
-      || summarizeLatestUserRequest(this.messages);
-    const tools = createChatTools(this.env, scope, latestUserRequest, options?.clientTools);
+    try {
+      const provider = createOpenRouter({ apiKey: this.env.OPENROUTER_API_KEY });
+      const model = provider(this.env.OPENROUTER_MODEL || DEFAULT_MODEL);
+      const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
+        || summarizeLatestUserRequest(this.messages);
+      const tools = createChatTools(this.env, scope, latestUserRequest, options?.clientTools);
 
-    const result = streamText({
-      model,
-      system: SITE_BUILDER_PROMPT,
-      messages: pruneMessages({
-        messages: await convertToModelMessages(this.messages),
-        toolCalls: "before-last-2-messages"
-      }),
-      tools,
-      stopWhen: stepCountIs(12),
-      temperature: 0.2,
-      ...(onFinish ? { onFinish: onFinish as never } : {})
-    });
+      const result = streamText({
+        model,
+        system: SITE_BUILDER_PROMPT,
+        messages: pruneMessages({
+          messages: await convertToModelMessages(this.messages),
+          toolCalls: "before-last-2-messages"
+        }),
+        tools,
+        stopWhen: stepCountIs(12),
+        temperature: 0.2,
+        ...(onFinish ? { onFinish: onFinish as never } : {})
+      });
 
-    return result.toUIMessageStreamResponse();
+      return result.toUIMessageStreamResponse();
+    } catch (error) {
+      console.error("Agent streaming error:", error);
+      return new Response(JSON.stringify({ error: "Failed to process request" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
   }
 }

@@ -22,11 +22,11 @@ const allowedOrigins = new Set([
 ]);
 
 app.use("/api/*", cors({
-  origin: (origin) => (origin && allowedOrigins.has(origin) ? origin : ""),
+  origin: (origin) => (origin && allowedOrigins.has(origin) ? origin : null),
   credentials: true
 }));
 app.use("/preview/*", cors({
-  origin: (origin) => (origin && allowedOrigins.has(origin) ? origin : ""),
+  origin: (origin) => (origin && allowedOrigins.has(origin) ? origin : null),
   credentials: true
 }));
 

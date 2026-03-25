@@ -152,10 +152,14 @@
 		}
 	}
 
+	let fileSelectCounter = 0;
+
 	async function onFileSelect(filePath: string) {
 		if (!projectId) return;
 		const didFlushPendingSave = await flushPendingSave();
 		if (!didFlushPendingSave) return;
+
+		const requestId = ++fileSelectCounter;
 
 		try {
 			console.log('Loading file:', filePath);
@@ -163,6 +167,9 @@
 				credentials: 'include'
 			});
 			if (!response.ok) throw new Error('Failed to load file');
+
+			// Ignore stale response if user selected a different file
+			if (requestId !== fileSelectCounter) return;
 
 			const data = await response.json();
 			console.log('Loaded file content, length:', data.content.length);
@@ -249,6 +256,7 @@
 					const didSave = await persistFile(snapshot);
 					if (!didSave) {
 						allSucceeded = false;
+						queuedSave = null; // Drop queued save on failure to prevent retry loops
 						break;
 					}
 				}
@@ -257,10 +265,6 @@
 			} finally {
 				isSaving = false;
 				saveLoopPromise = null;
-
-				if (queuedSave && allSucceeded) {
-					void persistQueuedSaves();
-				}
 			}
 		})();
 

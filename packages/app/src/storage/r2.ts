@@ -322,7 +322,11 @@ export class R2ProjectStorage {
           continue;
         }
 
-        snapshots.push(JSON.parse(await record.text()) as ProjectSnapshot);
+        try {
+          snapshots.push(JSON.parse(await record.text()) as ProjectSnapshot);
+        } catch {
+          // Skip corrupted snapshot metadata
+        }
       }
 
       cursor = listed.truncated ? listed.cursor : undefined;
@@ -379,19 +383,25 @@ export class R2ProjectStorage {
       throw new Error("Snapshot archive not found");
     }
 
-    const currentFiles = await this.listProjectEntries(userId, projectId);
-    for (const file of currentFiles) {
-      await this.bucket.delete(fileKey(userId, projectId, file.path));
-    }
-
+    // Extract archive first before deleting anything
     const extracted = unzipSync(new Uint8Array(await archiveObject.arrayBuffer()));
+    const restoredPaths = new Set(Object.keys(extracted));
 
+    // Write all restored files first (overwrites existing)
     for (const [path, content] of Object.entries(extracted)) {
       await this.bucket.put(fileKey(userId, projectId, path), content, {
         httpMetadata: {
           contentType: getContentType(path)
         }
       });
+    }
+
+    // Only then delete files that aren't in the snapshot
+    const currentFiles = await this.listProjectEntries(userId, projectId);
+    for (const file of currentFiles) {
+      if (!restoredPaths.has(file.path)) {
+        await this.bucket.delete(fileKey(userId, projectId, file.path));
+      }
     }
 
     await this.updateProjectMetadata(userId, projectId, {});

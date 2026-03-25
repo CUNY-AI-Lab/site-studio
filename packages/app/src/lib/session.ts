@@ -70,7 +70,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     return;
   }
 
-  let sessionId = getCookie(c, SESSION_COOKIE_NAME) || c.req.header("x-session-id") || "";
+  let sessionId = getCookie(c, SESSION_COOKIE_NAME) || "";
   let user: User | null = null;
 
   if (sessionId) {
@@ -88,7 +88,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
       httpOnly: true,
       maxAge: SESSION_TTL_SECONDS,
       path: "/",
-      sameSite: "Lax",
+      sameSite: "Strict",
       secure: new URL(c.req.url).protocol === "https:"
     });
   }

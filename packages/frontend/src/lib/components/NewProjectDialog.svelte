@@ -47,19 +47,27 @@
 	// Fetch template categories from API
 	let templateCategories = $state<TemplateCategory[]>([]);
 	let isLoadingTemplates = $state(true);
+	let templateLoadError = $state(false);
 	let selectedTemplate = $state<TemplateMetadata | null>(null);
 	let projectName = $state('');
 	let isCreating = $state(false);
 	let hasUserEditedName = $state(false);
 
-	onMount(async () => {
+	async function loadTemplates() {
+		isLoadingTemplates = true;
+		templateLoadError = false;
 		try {
 			templateCategories = await fetchTemplateCategories();
 		} catch (error) {
 			console.error('Failed to load templates:', error);
+			templateLoadError = true;
 		} finally {
 			isLoadingTemplates = false;
 		}
+	}
+
+	onMount(() => {
+		void loadTemplates();
 	});
 
 	// Reset state when dialog closes
@@ -156,6 +164,11 @@
 			{#if isLoadingTemplates}
 				<div class="loading-container">
 					<p>Loading templates...</p>
+				</div>
+			{:else if templateLoadError}
+				<div class="loading-container">
+					<p>Failed to load templates.</p>
+					<Button variant="outline" size="sm" onclick={loadTemplates}>Retry</Button>
 				</div>
 			{:else}
 				<div class="categories-container">

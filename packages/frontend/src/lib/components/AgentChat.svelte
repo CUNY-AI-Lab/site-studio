@@ -310,9 +310,22 @@
 		return nextUserMessage ? [...uiMessages, nextUserMessage] : [...uiMessages];
 	}
 
+	let reconnectAttempts = 0;
+	const MAX_RECONNECT_ATTEMPTS = 5;
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
 	function closeSocket() {
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+		}
+		reconnectAttempts = 0;
+
 		if (socket) {
 			ignoreNextSocketClose = true;
+			socket.removeEventListener('message', handleSocketMessage);
+			socket.removeEventListener('close', handleSocketClose);
+			socket.removeEventListener('error', handleSocketError);
 			socket.close();
 		}
 
@@ -321,8 +334,16 @@
 	}
 
 	function handleSocketClose() {
+		const closedSocket = socket;
 		socket = null;
 		socketPromise = null;
+
+		// Clean up listeners on the closed socket
+		if (closedSocket) {
+			closedSocket.removeEventListener('message', handleSocketMessage);
+			closedSocket.removeEventListener('close', handleSocketClose);
+			closedSocket.removeEventListener('error', handleSocketError);
+		}
 
 		if (ignoreNextSocketClose) {
 			ignoreNextSocketClose = false;
@@ -345,12 +366,23 @@
 				}
 			];
 		}
+
+		// Attempt reconnection with exponential backoff
+		if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && projectId) {
+			const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000);
+			reconnectAttempts++;
+			reconnectTimer = setTimeout(() => {
+				reconnectTimer = null;
+				ensureSocket().catch(() => {
+					// Reconnection failed, will retry via handleSocketClose
+				});
+			}, delay);
+		}
 	}
 
-	function handleSocketError() {
-		if (!socketPromise) {
-			return;
-		}
+	function handleSocketError(event: Event) {
+		console.error('WebSocket error:', event);
+		// The close handler will fire after error and handle reconnection
 	}
 
 	async function ensureSocket(targetProjectId = projectId): Promise<WebSocket> {
@@ -376,12 +408,14 @@
 		socketPromise = new Promise((resolve, reject) => {
 			const onOpen = () => {
 				nextSocket.removeEventListener('error', onError);
+				reconnectAttempts = 0; // Reset on successful connection
 				resolve(nextSocket);
 			};
 
 			const onError = () => {
 				nextSocket.removeEventListener('open', onOpen);
 				socketPromise = null;
+				socket = null;
 				reject(new Error('Unable to connect to the agent'));
 			};
 
@@ -717,10 +751,11 @@
 				}
 			];
 		} finally {
-			if (!currentRequestId) {
-				isLoading = false;
-				currentStatus = '';
-			}
+			isLoading = false;
+			currentStatus = '';
+			currentRequestId = null;
+			activeStream = null;
+			expectingContinuation = false;
 		}
 	}
 
