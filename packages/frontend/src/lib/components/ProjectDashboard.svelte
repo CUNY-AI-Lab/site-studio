@@ -23,17 +23,16 @@
 	let showDeleteDialog = $state(false);
 	let selectedProject = $state<Project | null>(null);
 
-	onMount(async () => {
-		await loadProjects();
-
-		// Show onboarding tour for first-time users with no projects
-		if (!loading && projects.length === 0 && !hasCompletedOnboarding()) {
-			// Small delay to ensure DOM is ready
-			setTimeout(() => {
-				const tour = createDashboardTour();
-				tour.drive();
-			}, 500);
-		}
+	onMount(() => {
+		void loadProjects().then(() => {
+			// Show onboarding tour for first-time users with no projects
+			if (!loading && projects.length === 0 && !hasCompletedOnboarding()) {
+				setTimeout(() => {
+					const tour = createDashboardTour();
+					tour.drive();
+				}, 500);
+			}
+		});
 
 		// Add keyboard shortcut to force tutorial (Ctrl+Shift+H or Cmd+Shift+H for Help)
 		const handleKeyPress = (e: KeyboardEvent) => {
@@ -194,14 +193,14 @@
 						<div class="project-header">
 							<h3 class="project-name">{project.name}</h3>
 							<DropdownMenu.Root>
-								<DropdownMenu.Trigger asChild>
+								<DropdownMenu.Trigger>
 									{#snippet child({ props })}
 										<Button
 											{...props}
 											variant="ghost"
 											size="icon-sm"
 											class="project-menu-button"
-											onclick={(e) => e.stopPropagation()}
+											onclick={(e: MouseEvent) => e.stopPropagation()}
 										>
 											<MoreVertical size={16} />
 										</Button>

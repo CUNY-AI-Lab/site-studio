@@ -46,7 +46,7 @@ export function createDashboardTour() {
 				title: 'What Happens Next?',
 				description:
 					'After creating a project, you\'ll enter the editor where you can:\n\n• Chat with AI to build your site\n• Preview changes in real-time\n• Edit code manually if needed',
-				side: 'center',
+				side: 'bottom' as const,
 				align: 'center'
 			}
 		},
@@ -55,7 +55,7 @@ export function createDashboardTour() {
 				title: 'Ready to Start! 🚀',
 				description:
 					'That\'s it! Create your first project and describe what you want to build. The AI will guide you through the process.\n\nClick "Get Started" to begin!',
-				side: 'center',
+				side: 'bottom' as const,
 				align: 'center'
 			}
 		}

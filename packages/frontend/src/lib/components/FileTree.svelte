@@ -1,13 +1,15 @@
-<script lang="ts">
-	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
-	import { resolvePath } from '$lib/utils/paths';
-
-	interface FileNode {
+<script lang="ts" module>
+	export interface FileNode {
 		name: string;
 		path: string;
 		type: 'file' | 'directory';
 		children?: FileNode[];
 	}
+</script>
+
+<script lang="ts">
+	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
+	import { resolvePath } from '$lib/utils/paths';
 
 	let {
 		files = [],

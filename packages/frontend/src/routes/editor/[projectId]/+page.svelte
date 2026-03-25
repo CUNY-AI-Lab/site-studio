@@ -34,7 +34,7 @@
 	};
 
 	// Get projectId from URL params
-	let projectId = $derived($page.params.projectId);
+	let projectId = $derived($page.params.projectId ?? '');
 	let currentFile = $state('');
 	let fileContent = $state('');
 	let files = $state([]);
@@ -435,10 +435,11 @@
 			const result = await publishProject(currentProject.id);
 
 			// Update the current project
-			currentProject = { ...currentProject, published: true, publishedUrl: result.url };
+			const updated = { ...currentProject, published: true, publishedUrl: result.url };
+			currentProject = updated;
 			// Update in allProjects list too
 			allProjects = allProjects.map(p =>
-				p.id === currentProject.id ? currentProject : p
+				p.id === updated.id ? updated : p
 			);
 		} catch (e) {
 			alert(e instanceof Error ? e.message : 'Failed to publish project');
@@ -454,10 +455,11 @@
 			await unpublishProject(currentProject.id);
 
 			// Update the current project
-			currentProject = { ...currentProject, published: false, publishedUrl: undefined };
+			const updated = { ...currentProject, published: false, publishedUrl: undefined };
+			currentProject = updated;
 			// Update in allProjects list too
 			allProjects = allProjects.map(p =>
-				p.id === currentProject.id ? currentProject : p
+				p.id === updated.id ? updated : p
 			);
 		} catch (e) {
 			alert(e instanceof Error ? e.message : 'Failed to unpublish project');
@@ -564,7 +566,7 @@
                 </div>
 					<div class="project-selectors">
 						<DropdownMenu.Root>
-							<DropdownMenu.Trigger asChild>
+							<DropdownMenu.Trigger>
 								{#snippet child({ props })}
 									<button {...props} class="project-selector">
 										<span class="project-name">{projectId}</span>
@@ -596,7 +598,7 @@
 							{#if currentProject.published && currentProject.publishedUrl}
 								<button
 									class="publish-button published"
-									onclick={() => openPublishedSite(currentProject.publishedUrl!)}
+									onclick={() => openPublishedSite(currentProject!.publishedUrl!)}
 									title="View published site"
 								>
 									<Check size={14} class="publish-icon" />
@@ -623,7 +625,7 @@
 						<!-- Project Options Menu -->
 						{#if currentProject}
 							<DropdownMenu.Root>
-								<DropdownMenu.Trigger asChild>
+								<DropdownMenu.Trigger>
 									{#snippet child({ props })}
 										<Button
 											{...props}
@@ -637,7 +639,7 @@
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content align="end">
 									{#if currentProject.published && currentProject.publishedUrl}
-										<DropdownMenu.Item onclick={() => openPublishedSite(currentProject.publishedUrl!)}>
+										<DropdownMenu.Item onclick={() => openPublishedSite(currentProject!.publishedUrl!)}>
 											<ExternalLink size={14} />
 											<span>View Published Site</span>
 										</DropdownMenu.Item>

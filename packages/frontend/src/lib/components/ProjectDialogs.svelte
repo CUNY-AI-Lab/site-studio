@@ -97,7 +97,7 @@
 				bind:value={newName}
 				placeholder="my-project"
 				disabled={isRenaming}
-				onkeydown={(e) => e.key === 'Enter' && handleRename()}
+				onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleRename()}
 			/>
 		</div>
 
