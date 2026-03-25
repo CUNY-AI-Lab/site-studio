@@ -14,9 +14,6 @@
 		diffData
 	}: {
 		diffData: DiffData;
-		projectId: string;
-		toolId?: string;
-		onRevert?: () => void;
 	} = $props();
 
 	// Compute the diff

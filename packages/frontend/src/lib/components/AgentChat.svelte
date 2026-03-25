@@ -47,29 +47,7 @@
 		input: Record<string, any>;
 	}
 
-	interface UserQuestionOption {
-		label: string;
-		description?: string;
-		preview?: string;
-	}
-
-	interface UserQuestionAnnotation {
-		preview?: string;
-		notes?: string;
-	}
-
-	interface UserQuestionPrompt {
-		header?: string;
-		question: string;
-		options?: UserQuestionOption[];
-		multiSelect?: boolean;
-		placeholder?: string;
-	}
-
-	interface UserQuestionSubmission {
-		answers: Record<string, string>;
-		annotations?: Record<string, UserQuestionAnnotation>;
-	}
+	import type { QuestionOption, UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
 		projectId,
@@ -802,7 +780,7 @@
 											? option
 											: null
 								)
-								.filter((option): option is UserQuestionOption => option !== null)
+								.filter((option): option is QuestionOption => option !== null)
 						: undefined,
 					placeholder: 'Write your answer'
 				}

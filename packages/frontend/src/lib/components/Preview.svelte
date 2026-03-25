@@ -74,10 +74,8 @@
                 // width/height omitted to use node size
             });
             const blob = await (await fetch(dataUrl)).blob();
-            // Must be PNG to match backend expectations
             if (blob.type !== 'image/png') {
-                // Convert by re-encoding: create canvas from image
-                // Fallback: still upload; backend enforces PNG and will reject
+                return; // Skip upload if not PNG — toPng should always produce PNG
             }
             await uploadThumbnail(projectId, blob);
             lastCaptureAt = Date.now();

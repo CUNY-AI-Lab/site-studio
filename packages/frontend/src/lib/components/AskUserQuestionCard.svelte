@@ -1,13 +1,11 @@
-<script lang="ts">
-	import { Check, MessageSquare, Send, X } from 'lucide-svelte';
-
-	interface QuestionOption {
+<script lang="ts" module>
+	export interface QuestionOption {
 		label: string;
 		description?: string;
 		preview?: string;
 	}
 
-	interface QuestionAnnotation {
+	export interface QuestionAnnotation {
 		preview?: string;
 		notes?: string;
 	}
@@ -24,6 +22,10 @@
 		answers: Record<string, string>;
 		annotations?: Record<string, QuestionAnnotation>;
 	}
+</script>
+
+<script lang="ts">
+	import { Check, MessageSquare, Send, X } from 'lucide-svelte';
 
 	let {
 		questions = [],

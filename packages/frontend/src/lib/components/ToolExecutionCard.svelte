@@ -184,7 +184,7 @@
 	{#if expanded && (hasDiff || parsedOutput.cleanOutput)}
 		<div class="tool-output">
 			{#if hasDiff && parsedOutput.diffData}
-				<DiffDisplay diffData={parsedOutput.diffData} {projectId} toolId={tool.id} {onRevert} />
+				<DiffDisplay diffData={parsedOutput.diffData} />
 			{/if}
 			{#if parsedOutput.cleanOutput}
 				<div class="output-message">
