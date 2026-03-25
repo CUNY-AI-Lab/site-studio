@@ -7,7 +7,9 @@
     "build": "tsc --noEmit",
     "dev": "wrangler dev --port 8792",
     "deploy": "wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@cloudflare/ai-chat": "^0.2.5",
