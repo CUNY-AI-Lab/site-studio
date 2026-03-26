@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Climate Migration Story</title>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-content">
+            <h1>The Climate Migration Story</h1>
+            <p class="subtitle">How rising temperatures are reshaping where Americans live</p>
+            <p class="byline">Data analysis by Jordan Kim | January 2024</p>
+        </div>
+        <div class="scroll-prompt">Scroll to explore ↓</div>
+    </header>
+
+    <main>
+        <section class="narrative-section">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>A Nation on the Move</h2>
+                    <p>
+                        Over the past two decades, millions of Americans have relocated in response to
+                        changing climate conditions. Rising temperatures, increased wildfire risk, and
+                        water scarcity are driving migration patterns not seen since the Dust Bowl era.
+                    </p>
+                    <p>
+                        This data story explores these movements and what they mean for American cities
+                        and communities.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section with-viz">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>Temperature Rise Across the U.S.</h2>
+                    <p>
+                        Average temperatures have increased significantly across all regions since 2000.
+                        The Southwest has experienced the most dramatic warming, with average summer
+                        temperatures rising by 3.2°F.
+                    </p>
+                </div>
+                <div class="viz-block">
+                    <canvas id="tempRiseChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section">
+            <div class="content-container">
+                <div class="highlight-stat">
+                    <div class="big-number">24 million</div>
+                    <p>Americans moved between states from 2010-2020, many citing climate concerns as a factor</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section with-viz">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>Where People Are Leaving</h2>
+                    <p>
+                        The Southwest and Southeast have seen the largest outmigration numbers. While economic
+                        factors play a role, surveys show climate concerns—particularly heat, drought, and
+                        hurricane risk—are increasingly important in relocation decisions.
+                    </p>
+                </div>
+                <div class="viz-block">
+                    <canvas id="outmigrationChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section with-viz reverse">
+            <div class="content-container">
+                <div class="viz-block">
+                    <canvas id="destinationChart"></canvas>
+                </div>
+                <div class="text-block">
+                    <h2>New Destinations</h2>
+                    <p>
+                        The Pacific Northwest, Upper Midwest, and New England have seen population increases
+                        as people seek cooler climates and lower climate risk. Cities like Duluth, Minnesota
+                        and Portland, Maine are marketing themselves as "climate havens."
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section">
+            <div class="content-container">
+                <div class="quote-block">
+                    <blockquote>
+                        "We left Phoenix after the summer of 2023 when we had 55 days over 110°F.
+                        It wasn't just uncomfortable—it felt dangerous. We couldn't let our kids play
+                        outside for months."
+                    </blockquote>
+                    <cite>— Maria Gonzalez, Phoenix → Minneapolis migrant</cite>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section with-viz">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>The Economics of Climate Migration</h2>
+                    <p>
+                        Climate migration comes with costs. Housing prices in climate-advantaged cities
+                        have risen faster than the national average, while property values in high-risk
+                        areas face uncertainty. Insurance costs in vulnerable regions have increased by
+                        50-200% since 2015.
+                    </p>
+                </div>
+                <div class="viz-block">
+                    <canvas id="housingCostChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>Unequal Adaptation</h2>
+                    <p>
+                        Not everyone can afford to move. Lower-income households and communities of color
+                        are more likely to live in climate-vulnerable areas and less able to relocate.
+                        This raises profound questions about environmental justice and who bears the
+                        burden of climate adaptation.
+                    </p>
+                    <p>
+                        Federal disaster aid and climate adaptation funding often fails to reach the
+                        communities that need it most, creating a cycle of vulnerability.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <section class="narrative-section with-viz">
+            <div class="content-container">
+                <div class="text-block">
+                    <h2>Looking Ahead</h2>
+                    <p>
+                        Climate models predict these migration patterns will accelerate. By 2050, an
+                        estimated 50-100 million Americans could be living in areas with significantly
+                        higher climate risk than today.
+                    </p>
+                    <p>
+                        The question isn't whether climate will reshape where Americans live, but how
+                        we ensure this transition is just and equitable.
+                    </p>
+                </div>
+                <div class="viz-block">
+                    <canvas id="projectionChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <section class="methodology-section">
+            <div class="content-container">
+                <h2>Data & Methodology</h2>
+                <p>
+                    This analysis combines data from U.S. Census Bureau migration statistics, NOAA climate
+                    records, real estate data from Zillow and CoreLogic, and survey data from the Yale
+                    Program on Climate Change Communication.
+                </p>
+                <p>
+                    Temperature data is averaged over 5-year periods to smooth year-to-year variation.
+                    Migration numbers include both international and domestic moves. All dollar amounts
+                    are inflation-adjusted to 2023 dollars.
+                </p>
+                <div class="download-data">
+                    <a href="#" class="btn">Download Full Dataset</a>
+                    <a href="#" class="btn btn-outline">View Technical Notes</a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>The Climate Migration Story | Data journalism project by Jordan Kim | <a href="#">Contact</a></p>
+        </div>
+    </footer>
+
+    <script>
+        // Temperature Rise Chart
+        const ctx1 = document.getElementById('tempRiseChart').getContext('2d');
+        new Chart(ctx1, {
+            type: 'bar',
+            data: {
+                labels: ['Southwest', 'Southeast', 'Great Plains', 'West Coast', 'Midwest', 'Northeast'],
+                datasets: [{
+                    label: 'Temperature Increase (°F) 2000-2023',
+                    data: [3.2, 2.8, 2.5, 2.3, 2.1, 1.9],
+                    backgroundColor: [
+                        'rgba(220, 38, 38, 0.8)',
+                        'rgba(239, 68, 68, 0.8)',
+                        'rgba(249, 115, 22, 0.8)',
+                        'rgba(251, 191, 36, 0.8)',
+                        'rgba(132, 204, 22, 0.8)',
+                        'rgba(34, 197, 94, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Outmigration Chart
+        const ctx2 = document.getElementById('outmigrationChart').getContext('2d');
+        new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: ['Arizona', 'Nevada', 'Florida', 'Texas', 'California'],
+                datasets: [{
+                    label: 'Net Outmigration (thousands)',
+                    data: [185, 142, 238, 195, 382],
+                    backgroundColor: 'rgba(239, 68, 68, 0.8)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Destination Chart
+        const ctx3 = document.getElementById('destinationChart').getContext('2d');
+        new Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels: ['Oregon', 'Minnesota', 'Vermont', 'Maine', 'Washington'],
+                datasets: [{
+                    label: 'Net Inmigration (thousands)',
+                    data: [92, 78, 45, 38, 156],
+                    backgroundColor: 'rgba(34, 197, 94, 0.8)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Housing Cost Chart
+        const ctx4 = document.getElementById('housingCostChart').getContext('2d');
+        new Chart(ctx4, {
+            type: 'line',
+            data: {
+                labels: ['2015', '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023'],
+                datasets: [{
+                    label: 'Climate Haven Cities',
+                    data: [100, 108, 118, 130, 142, 155, 172, 188, 205],
+                    borderColor: 'rgba(34, 197, 94, 1)',
+                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'National Average',
+                    data: [100, 105, 111, 118, 125, 132, 145, 158, 170],
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'High Risk Areas',
+                    data: [100, 103, 107, 110, 112, 113, 118, 122, 125],
+                    borderColor: 'rgba(239, 68, 68, 1)',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        title: { display: true, text: 'Index (2015 = 100)' }
+                    }
+                }
+            }
+        });
+
+        // Projection Chart
+        const ctx5 = document.getElementById('projectionChart').getContext('2d');
+        new Chart(ctx5, {
+            type: 'line',
+            data: {
+                labels: ['2020', '2025', '2030', '2035', '2040', '2045', '2050'],
+                datasets: [{
+                    label: 'Americans in High Climate Risk Areas',
+                    data: [125, 132, 138, 145, 155, 168, 185],
+                    borderColor: 'rgba(239, 68, 68, 1)',
+                    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        title: { display: true, text: 'Millions of people' }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Env, ProjectMetadata } from "../types";
 import { getUser } from "../lib/session";
 import { R2ProjectStorage } from "../storage/r2";
-import { createBlankIndexHtml } from "../lib/templates";
+import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 
@@ -50,8 +50,8 @@ export function createProjectRouter() {
     const { name, template } = createProjectSchema.parse(await c.req.json());
     const projectId = sanitizeProjectId(name);
 
-    if (template && template !== "blank") {
-      jsonError("Only the blank template is available in the new app right now", 400);
+    if (template && template !== "blank" && !isValidTemplate(template)) {
+      jsonError(`Unknown template: ${template}`, 400);
     }
 
     if (await storage.projectExists(user.id, projectId)) {
@@ -59,7 +59,15 @@ export function createProjectRouter() {
     }
 
     await storage.createProject(user.id, projectId, name);
-    await storage.writeFile(user.id, projectId, "index.html", createBlankIndexHtml(name));
+
+    const templateFiles = template ? getTemplateFiles(template) : null;
+    if (templateFiles) {
+      for (const [filePath, content] of Object.entries(templateFiles)) {
+        await storage.writeFile(user.id, projectId, filePath, content);
+      }
+    } else {
+      await storage.writeFile(user.id, projectId, "index.html", createBlankIndexHtml(name));
+    }
 
     return c.json({
       id: projectId,

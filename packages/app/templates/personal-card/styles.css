@@ -1,0 +1,401 @@
+/* Academic Personal Page - Card Layout
+   Design Concept: "Serif Scholar" - Classic editorial meets modern grid
+   Typography: Crimson Text (serif) + Work Sans (sans-serif)
+   Palette: Warm neutrals with burgundy accents
+   Character: Refined, literary, timeless
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&family=Work+Sans:wght@400;500;600;700&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --serif: 'Crimson Text', Georgia, serif;
+    --sans: 'Work Sans', -apple-system, sans-serif;
+
+    --ink: #1a1614;
+    --ink-light: #4a4340;
+    --burgundy: #8b3a3a;
+    --burgundy-muted: #a85959;
+    --cream: #f9f6f2;
+    --paper: #fefdfb;
+    --sand: #e8e3db;
+    --border: #d4cec3;
+
+    --shadow-sm: 0 1px 3px rgba(26, 22, 20, 0.08);
+    --shadow-md: 0 4px 12px rgba(26, 22, 20, 0.12);
+    --shadow-lg: 0 8px 24px rgba(26, 22, 20, 0.15);
+}
+
+body {
+    font-family: var(--serif);
+    line-height: 1.7;
+    color: var(--ink);
+    background: var(--cream);
+    background-image:
+        repeating-linear-gradient(
+            0deg,
+            transparent,
+            transparent 2px,
+            rgba(26, 22, 20, 0.015) 2px,
+            rgba(26, 22, 20, 0.015) 4px
+        );
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.container {
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    max-width: 1480px;
+    margin: 0 auto;
+    min-height: 100vh;
+    gap: 3rem;
+    padding: 4rem 3rem;
+}
+
+.profile-card {
+    background: var(--paper);
+    padding: 3rem 2.5rem;
+    box-shadow: var(--shadow-lg);
+    height: fit-content;
+    position: sticky;
+    top: 4rem;
+    border: 1px solid var(--border);
+    border-top: 6px solid var(--burgundy);
+}
+
+.profile-photo {
+    width: 220px;
+    height: 220px;
+    border-radius: 2px;
+    object-fit: cover;
+    margin: 0 auto 2rem;
+    display: block;
+    border: 8px solid var(--sand);
+    box-shadow: var(--shadow-md);
+    filter: grayscale(0.15) contrast(1.05);
+}
+
+.profile-card h1 {
+    font-family: var(--serif);
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    color: var(--ink);
+    text-align: center;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+
+.position {
+    font-family: var(--sans);
+    font-size: 0.95rem;
+    color: var(--burgundy);
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.department {
+    font-family: var(--serif);
+    font-size: 1.05rem;
+    font-style: italic;
+    color: var(--ink-light);
+    text-align: center;
+    margin-bottom: 2.5rem;
+    line-height: 1.6;
+}
+
+.contact {
+    margin-bottom: 2.5rem;
+    padding-top: 2rem;
+    border-top: 2px solid var(--sand);
+}
+
+.contact h3 {
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--burgundy);
+    margin-bottom: 1.25rem;
+    font-weight: 700;
+}
+
+.contact p {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    color: var(--ink-light);
+    margin-bottom: 0.75rem;
+    line-height: 1.6;
+}
+
+.social-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.social-links a {
+    font-family: var(--sans);
+    text-align: left;
+    padding: 0.9rem 1.25rem;
+    background: var(--cream);
+    color: var(--burgundy);
+    text-decoration: none;
+    border: 1px solid var(--border);
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.social-links a::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 3px;
+    background: var(--burgundy);
+    transform: scaleY(0);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transform-origin: bottom;
+}
+
+.social-links a:hover {
+    background: var(--paper);
+    box-shadow: var(--shadow-sm);
+    transform: translateX(4px);
+}
+
+.social-links a:hover::before {
+    transform: scaleY(1);
+    transform-origin: top;
+}
+
+.content {
+    display: flex;
+    flex-direction: column;
+    gap: 2.5rem;
+}
+
+.card {
+    background: var(--paper);
+    padding: 3rem 3.5rem;
+    box-shadow: var(--shadow-md);
+    border: 1px solid var(--border);
+    position: relative;
+}
+
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, var(--burgundy) 0%, var(--burgundy-muted) 100%);
+}
+
+.card h2 {
+    font-family: var(--serif);
+    font-size: 2.25rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 1.75rem;
+    padding-bottom: 0;
+    border-bottom: none;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+
+.card p {
+    font-family: var(--serif);
+    font-size: 1.125rem;
+    color: var(--ink-light);
+    line-height: 1.8;
+    margin-bottom: 1.25rem;
+}
+
+.card p:last-child {
+    margin-bottom: 0;
+}
+
+.interests-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.interests-list li {
+    font-family: var(--sans);
+    padding: 1rem 1.5rem;
+    background: var(--cream);
+    border-left: 4px solid var(--burgundy-muted);
+    color: var(--ink);
+    font-weight: 500;
+    font-size: 0.95rem;
+    border-right: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    transition: all 0.2s ease;
+}
+
+.interests-list li:hover {
+    border-left-color: var(--burgundy);
+    transform: translateX(4px);
+    background: var(--paper);
+}
+
+.news-item {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.75rem;
+    border-bottom: 1px solid var(--sand);
+}
+
+.news-item:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.news-date {
+    font-family: var(--sans);
+    font-weight: 700;
+    color: var(--burgundy);
+    min-width: 90px;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+
+.news-item p {
+    font-size: 1.05rem;
+    color: var(--ink-light);
+    margin: 0;
+    flex: 1;
+}
+
+.publication {
+    margin-bottom: 2rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--sand);
+}
+
+.publication:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.pub-title {
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: var(--ink);
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+}
+
+.pub-venue {
+    font-family: var(--serif);
+    color: var(--burgundy-muted);
+    font-size: 1rem;
+    font-style: italic;
+    margin: 0;
+    margin-bottom: 0.25rem;
+}
+
+.course {
+    margin-bottom: 2rem;
+    padding-left: 1.5rem;
+    border-left: 3px solid var(--sand);
+    transition: border-color 0.2s ease;
+}
+
+.course:hover {
+    border-left-color: var(--burgundy-muted);
+}
+
+.course:last-child {
+    margin-bottom: 0;
+}
+
+.course h3 {
+    font-family: var(--serif);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.01em;
+}
+
+.course p {
+    font-size: 1.05rem;
+    color: var(--ink-light);
+    margin: 0;
+}
+
+@media (max-width: 1024px) {
+    .container {
+        grid-template-columns: 1fr;
+        padding: 2.5rem 2rem;
+        gap: 2.5rem;
+    }
+
+    .profile-card {
+        position: static;
+        top: 0;
+    }
+
+    .interests-list {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .container {
+        padding: 1.5rem 1rem;
+    }
+
+    .profile-card,
+    .card {
+        padding: 2rem 1.5rem;
+    }
+
+    .profile-card h1 {
+        font-size: 1.75rem;
+    }
+
+    .card h2 {
+        font-size: 1.75rem;
+    }
+
+    .news-item {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .news-date {
+        min-width: auto;
+    }
+
+    .profile-photo {
+        width: 180px;
+        height: 180px;
+    }
+}

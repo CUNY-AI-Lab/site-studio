@@ -1,0 +1,10 @@
+year,headline,text,color
+1949,Father Busa's Index Thomisticus,"Father Roberto Busa begins creating a computerized concordance of Thomas Aquinas's writings, often considered the birth of humanities computing.",#4a5568
+1966,Computers and the Humanities Journal,"The first academic journal dedicated to computing in humanities research is established, providing a forum for early digital humanists.",#4299e1
+1987,Text Encoding Initiative Founded,"TEI develops standardized guidelines for encoding humanities texts in XML, becoming fundamental infrastructure for digital text analysis.",#48bb78
+1994,The Victorian Web Launches,"One of the first major hypertext scholarly resources, demonstrating the potential of linked digital scholarship beyond print constraints.",#ed8936
+2004,Google Books Project Announced,"Google begins mass digitization of library collections, making millions of books searchable and readable online, sparking debates about copyright and access.",#9f7aea
+2010,HathiTrust Research Center Opens,"Launches providing computational access to millions of digitized volumes for text mining and analysis, enabling large-scale digital humanities research.",#f56565
+2013,Voyant Tools Reaches Maturity,"This web-based text analysis environment becomes widely adopted for exploratory text mining, making computational methods accessible to humanities scholars.",#38b2ac
+2020,AI Language Models in DH,"Large language models like GPT-3 begin being explored for humanities applications including translation, text generation, and historical document analysis.",#667eea
+2024,Multimodal Digital Scholarship,"Integration of text, image, audio, and video analysis using AI, creating new possibilities for cross-media humanities research.",#e53e3e

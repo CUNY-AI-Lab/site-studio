@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { Env } from "../types";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
-import { createBlankIndexHtml } from "../lib/templates";
+import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
 import { R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 
@@ -527,13 +527,14 @@ function createProjectTools(
     scaffold_template: tool({
       description: "Apply a starter template to the project. Use with care because it writes multiple files.",
       inputSchema: z.object({
-        templateId: z.enum(["blank"]).describe("Template to apply."),
+        templateId: z.enum(TEMPLATE_IDS).describe("Template to apply."),
         replaceExisting: z.boolean().optional().default(false).describe("Whether to replace existing project files.")
       }),
       outputSchema: z.discriminatedUnion("ok", [
         z.object({
           ok: z.literal(true),
-          templateId: z.string()
+          templateId: z.string(),
+          filesWritten: z.number().describe("Number of template files written.")
         }),
         z.object({
           ok: z.literal(false),
@@ -550,24 +551,27 @@ function createProjectTools(
           };
         }
 
+        await ensureSnapshot();
+
         if (replaceExisting) {
-          await ensureSnapshot();
           for (const file of files) {
             await storage.deleteFile(scope.userId, scope.projectId, file.path);
           }
         }
 
-        if (templateId === "blank") {
-          if (!replaceExisting) {
-            await ensureSnapshot();
+        const templateFiles = getTemplateFiles(templateId);
+        if (templateFiles) {
+          let count = 0;
+          for (const [filePath, content] of Object.entries(templateFiles)) {
+            await storage.writeFile(scope.userId, scope.projectId, filePath, content);
+            count++;
           }
-          await storage.writeFile(scope.userId, scope.projectId, "index.html", createBlankIndexHtml(scope.projectId));
+          return { ok: true as const, templateId, filesWritten: count };
         }
 
-        return {
-          ok: true,
-          templateId
-        };
+        // Fallback for blank if not in bundled templates
+        await storage.writeFile(scope.userId, scope.projectId, "index.html", createBlankIndexHtml(scope.projectId));
+        return { ok: true as const, templateId, filesWritten: 1 };
       }
     }),
     add_page: tool({

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC Housing Data Dashboard</title>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>NYC Housing Affordability Dashboard</h1>
+            <p class="subtitle">Analysis of rent burden and housing costs across NYC neighborhoods</p>
+            <p class="meta">Data Source: NYC Housing & Vacancy Survey 2023 | Updated: January 2024</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">52%</div>
+                <div class="stat-label">Rent-Burdened Households</div>
+                <div class="stat-change">+3% from 2021</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">$2,847</div>
+                <div class="stat-label">Median Monthly Rent</div>
+                <div class="stat-change">+12% from 2021</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">1.4%</div>
+                <div class="stat-label">Vacancy Rate</div>
+                <div class="stat-change">-0.2% from 2021</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">3.2M</div>
+                <div class="stat-label">Rental Housing Units</div>
+                <div class="stat-change">+1.5% from 2021</div>
+            </div>
+        </div>
+
+        <div class="charts-row">
+            <div class="chart-container">
+                <h2>Median Rent by Borough</h2>
+                <canvas id="rentByBoroughChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h2>Rent Burden by Income Level</h2>
+                <canvas id="rentBurdenChart"></canvas>
+            </div>
+        </div>
+
+        <div class="charts-row">
+            <div class="chart-container full-width">
+                <h2>Median Rent Trends (2013-2023)</h2>
+                <canvas id="rentTrendsChart"></canvas>
+            </div>
+        </div>
+
+        <div class="charts-row">
+            <div class="chart-container">
+                <h2>Housing Type Distribution</h2>
+                <canvas id="housingTypeChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h2>Households by Tenure</h2>
+                <canvas id="tenureChart"></canvas>
+            </div>
+        </div>
+
+        <div class="methodology">
+            <h2>Methodology & Notes</h2>
+            <p>
+                <strong>Rent burden</strong> is defined as households paying more than 30% of income on rent.
+                Severe rent burden is defined as paying more than 50% of income on rent.
+            </p>
+            <p>
+                Data is drawn from the NYC Housing & Vacancy Survey, conducted every three years by the
+                U.S. Census Bureau in partnership with NYC Department of Housing Preservation and Development.
+                Sample size: approximately 18,000 housing units.
+            </p>
+            <p>
+                All dollar amounts are adjusted for inflation to 2023 dollars using the Consumer Price Index
+                for All Urban Consumers (CPI-U).
+            </p>
+        </div>
+
+        <div class="data-download">
+            <h3>Download Data</h3>
+            <div class="download-buttons">
+                <a href="#" class="download-btn">CSV Format</a>
+                <a href="#" class="download-btn">Excel Format</a>
+                <a href="#" class="download-btn">Full Report (PDF)</a>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>NYC Housing Affordability Dashboard | Research by Sarah Martinez, CUNY Urban Studies | <a href="#">Contact</a></p>
+        </div>
+    </footer>
+
+    <script>
+        // Chart 1: Rent by Borough
+        const ctx1 = document.getElementById('rentByBoroughChart').getContext('2d');
+        new Chart(ctx1, {
+            type: 'bar',
+            data: {
+                labels: ['Manhattan', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
+                datasets: [{
+                    label: 'Median Monthly Rent',
+                    data: [4250, 2950, 2650, 1850, 2100],
+                    backgroundColor: [
+                        'rgba(99, 102, 241, 0.8)',
+                        'rgba(236, 72, 153, 0.8)',
+                        'rgba(16, 185, 129, 0.8)',
+                        'rgba(245, 158, 11, 0.8)',
+                        'rgba(139, 92, 246, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Chart 2: Rent Burden by Income
+        const ctx2 = document.getElementById('rentBurdenChart').getContext('2d');
+        new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: ['Under $25K', '$25K-$50K', '$50K-$75K', '$75K-$100K', 'Over $100K'],
+                datasets: [{
+                    label: 'Rent Burdened (>30%)',
+                    data: [82, 65, 42, 25, 12],
+                    backgroundColor: 'rgba(239, 68, 68, 0.8)'
+                }, {
+                    label: 'Severely Burdened (>50%)',
+                    data: [67, 38, 18, 8, 3],
+                    backgroundColor: 'rgba(220, 38, 38, 0.8)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Chart 3: Rent Trends
+        const ctx3 = document.getElementById('rentTrendsChart').getContext('2d');
+        new Chart(ctx3, {
+            type: 'line',
+            data: {
+                labels: ['2013', '2014', '2015', '2016', '2017', '2018', '2019', '2020', '2021', '2022', '2023'],
+                datasets: [{
+                    label: 'Manhattan',
+                    data: [3200, 3350, 3500, 3650, 3800, 3950, 4100, 3900, 3950, 4100, 4250],
+                    borderColor: 'rgba(99, 102, 241, 1)',
+                    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'Brooklyn',
+                    data: [2100, 2200, 2350, 2450, 2550, 2650, 2750, 2650, 2700, 2850, 2950],
+                    borderColor: 'rgba(236, 72, 153, 1)',
+                    backgroundColor: 'rgba(236, 72, 153, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'Queens',
+                    data: [1900, 1980, 2050, 2150, 2250, 2350, 2450, 2400, 2450, 2550, 2650],
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        ticks: {
+                            callback: function(value) {
+                                return '$' + value.toLocaleString();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Chart 4: Housing Type
+        const ctx4 = document.getElementById('housingTypeChart').getContext('2d');
+        new Chart(ctx4, {
+            type: 'doughnut',
+            data: {
+                labels: ['Walkup (5+ floors)', 'Elevator Building', 'Walkup (2-4 floors)', 'Single Family', 'Other'],
+                datasets: [{
+                    data: [32, 28, 25, 10, 5],
+                    backgroundColor: [
+                        'rgba(99, 102, 241, 0.8)',
+                        'rgba(236, 72, 153, 0.8)',
+                        'rgba(16, 185, 129, 0.8)',
+                        'rgba(245, 158, 11, 0.8)',
+                        'rgba(139, 92, 246, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+
+        // Chart 5: Tenure
+        const ctx5 = document.getElementById('tenureChart').getContext('2d');
+        new Chart(ctx5, {
+            type: 'pie',
+            data: {
+                labels: ['Renter-Occupied', 'Owner-Occupied', 'Vacant'],
+                datasets: [{
+                    data: [67, 31, 2],
+                    backgroundColor: [
+                        'rgba(59, 130, 246, 0.8)',
+                        'rgba(16, 185, 129, 0.8)',
+                        'rgba(156, 163, 175, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

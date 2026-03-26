@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/bundle-templates.ts",
     "build": "tsc --noEmit",
     "dev": "wrangler dev --port 8792",
     "deploy": "wrangler deploy",

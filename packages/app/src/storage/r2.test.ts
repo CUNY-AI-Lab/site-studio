@@ -30,7 +30,7 @@ function createMockBucket() {
       } else if (data instanceof ArrayBuffer) {
         stored = data;
       } else if (data instanceof Uint8Array) {
-        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
       } else {
         stored = String(data);
       }
