@@ -47,6 +47,7 @@
 	// Panel collapse state
 	let isChatCollapsed = $state(false);
 	let isCodeCollapsed = $state(true); // Start collapsed
+	let hasAutoCollapsed = false;
 	let isDragging = $state(false);
 
 	// Dialog states
@@ -99,6 +100,12 @@
 	}
 
 	onMount(() => {
+		// Auto-collapse chat on small screens so preview gets full width
+		if (!hasAutoCollapsed && window.innerWidth < 768 && chatPane) {
+			hasAutoCollapsed = true;
+			chatPane.collapse();
+		}
+
 		// Show onboarding tour for first-time users after the editor layout settles.
 		setTimeout(() => {
 			void maybeStartEditorTour();
@@ -1034,5 +1041,53 @@
 		background: var(--color-bg-tertiary);
 		border-color: var(--color-primary);
 		color: var(--color-primary);
+	}
+
+	/* Responsive: tablet and below */
+	@media (max-width: 768px) {
+		.chat-sidebar {
+			min-width: 0;
+		}
+
+		.chat-header {
+			padding: 0.625rem 0.75rem;
+		}
+
+		.header-top {
+			margin-bottom: 0.375rem;
+		}
+
+		.chat-header .logo {
+			font-size: 1rem;
+		}
+
+		.project-selectors {
+			gap: 0.25rem;
+		}
+
+		.project-selector {
+			padding: 0.375rem 0.5rem;
+			font-size: 0.8125rem;
+		}
+
+		.publish-button {
+			padding: 0.375rem 0.625rem;
+			font-size: 0.75rem;
+		}
+	}
+
+	/* Responsive: mobile */
+	@media (max-width: 480px) {
+		.chat-sidebar {
+			min-width: 0;
+		}
+
+		.publish-button span {
+			display: none;
+		}
+
+		.publish-button {
+			padding: 0.375rem;
+		}
 	}
 </style>

@@ -1030,7 +1030,6 @@
 	}
 
 	.message {
-		max-width: 90%;
 		padding: 0;
 		display: flex;
 		flex-direction: column;
@@ -1039,28 +1038,29 @@
 
 	.message.user {
 		align-self: flex-end;
+		max-width: 85%;
 	}
 
 	.message.user :global(.message-content) {
 		background: var(--color-primary-light, #e6f4f4);
 		color: var(--color-text-primary, #1f2937);
-		padding: 0.75rem 1rem;
+		padding: 0.625rem 0.875rem;
 		border-radius: var(--radius-lg);
 		border-bottom-right-radius: var(--radius-sm);
 		border-left: 3px solid var(--color-primary, #0d7377);
+		font-size: 0.9375rem;
 	}
 
 	.message.assistant {
 		align-self: flex-start;
+		width: 100%;
 	}
 
 	.message.assistant :global(.message-content) {
-		background: var(--color-bg-elevated);
 		color: var(--color-text-primary);
-		padding: 0.75rem 1rem;
-		border-radius: var(--radius-lg);
-		border-bottom-left-radius: var(--radius-sm);
-		border: 1px solid var(--color-border);
+		padding: 0.25rem 0;
+		font-size: 0.9375rem;
+		line-height: 1.6;
 	}
 
 	.tools-section {
