@@ -152,7 +152,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={onOpenChange}>
-	<Dialog.Content class="max-w-5xl max-h-[85vh] overflow-y-auto !bg-white dark:!bg-gray-900">
+	<Dialog.Content class="max-w-5xl max-h-[85vh] overflow-y-auto !bg-white dark:!bg-gray-900 !p-8">
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
