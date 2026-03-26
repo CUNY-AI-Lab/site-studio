@@ -115,6 +115,7 @@
 	background-color: var(--color-bg-secondary, #f5f4f1) !important;
 	color: var(--color-text-primary, #1f2937) !important;
 	border-color: var(--color-border, #e2e0db) !important;
+	text-shadow: none !important;
 }
 
 .driver-popover-prev-btn:hover {
@@ -127,6 +128,7 @@
 	background-color: var(--color-primary, #0d7377) !important;
 	color: white !important;
 	border-color: var(--color-primary, #0d7377) !important;
+	text-shadow: none !important;
 }
 
 .driver-popover-next-btn:hover {

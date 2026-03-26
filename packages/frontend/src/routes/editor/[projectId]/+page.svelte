@@ -549,9 +549,9 @@
 		<!-- Left: Agent Chat Sidebar (collapsible) -->
 		<Resizable.Pane
 			bind:this={chatPane}
-			defaultSize={25}
-			minSize={15}
-			maxSize={40}
+			defaultSize={30}
+			minSize={22}
+			maxSize={45}
 			collapsible={true}
 			onCollapse={() => (isChatCollapsed = true)}
 			onExpand={() => (isChatCollapsed = false)}
@@ -683,7 +683,7 @@
 		<Resizable.Handle withHandle />
 
 		<!-- Center: Preview (always visible) -->
-		<Resizable.Pane defaultSize={75} minSize={30}>
+		<Resizable.Pane defaultSize={70} minSize={30}>
 			<main class="preview-area">
 				<Preview bind:this={previewComponent} {projectId} />
 			</main>
@@ -786,6 +786,7 @@
 		flex-direction: column;
 		background: var(--color-bg-secondary);
 		height: 100%;
+		min-width: 280px;
 		overflow: hidden;
 		border-right: 1px solid var(--color-border);
 	}
@@ -798,7 +799,7 @@
 
 	.chat-header {
 		flex-shrink: 0;
-		padding: 1.25rem;
+		padding: 0.875rem 1rem;
 		border-bottom: 1px solid var(--color-border);
 		background: var(--color-bg-elevated);
 	}
@@ -816,7 +817,7 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		margin-bottom: 1rem;
+		margin-bottom: 0.625rem;
 	}
 
 	.header-top .logo {
