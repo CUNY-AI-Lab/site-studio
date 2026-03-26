@@ -152,7 +152,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={onOpenChange}>
-	<Dialog.Content class="max-w-6xl max-h-[90vh] overflow-y-auto !bg-white dark:!bg-gray-900">
+	<Dialog.Content class="max-w-5xl max-h-[85vh] overflow-y-auto !bg-white dark:!bg-gray-900">
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
@@ -268,38 +268,38 @@
 	.categories-container {
 		display: flex;
 		flex-direction: column;
-		gap: 3rem;
-		padding: 1.5rem 0;
+		gap: 2rem;
+		padding: 1rem 0;
 	}
 
 	.category-section {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: 0.875rem;
 	}
 
 	.category-header {
-		border-bottom: 2px solid hsl(var(--border));
-		padding-bottom: 0.75rem;
+		border-bottom: 1px solid hsl(var(--border));
+		padding-bottom: 0.5rem;
 	}
 
 	.category-title {
-		font-size: 1.125rem;
+		font-size: 1rem;
 		font-weight: 700;
-		margin: 0 0 0.25rem;
+		margin: 0 0 0.125rem;
 		color: hsl(var(--foreground));
 	}
 
 	.category-description {
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		color: hsl(var(--muted-foreground));
 		margin: 0;
 	}
 
 	.templates-grid {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-		gap: 1rem;
+		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+		gap: 0.875rem;
 	}
 
 	.template-card {
@@ -361,14 +361,14 @@
 	}
 
 	.template-info {
-		padding: 0.875rem;
+		padding: 0.5rem 0.625rem 0.625rem;
 		flex: 1;
 	}
 
 	.template-title {
-		font-size: 0.875rem;
+		font-size: 0.8125rem;
 		font-weight: 600;
-		margin: 0 0 0.25rem;
+		margin: 0 0 0.125rem;
 		color: hsl(var(--foreground));
 	}
 
