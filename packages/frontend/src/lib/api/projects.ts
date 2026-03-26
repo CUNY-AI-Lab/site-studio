@@ -41,6 +41,8 @@ export interface ProjectFile {
 	name: string;
 	path: string;
 	type: 'file' | 'directory';
+	contentType?: string;
+	isText?: boolean;
 	children?: ProjectFile[];
 }
 

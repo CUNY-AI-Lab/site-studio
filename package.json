@@ -13,6 +13,8 @@
     "dev:app": "npm --prefix packages/app run dev",
     "dev:frontend": "npm run dev --workspace=packages/frontend",
     "dev": "concurrently \"npm run dev:app\" \"npm run dev:frontend\"",
+    "chat:debug": "node ./scripts/project-chat-debug.mjs",
+    "trace": "node ./scripts/project-observability.mjs",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules"
   },
   "keywords": [
@@ -32,6 +34,7 @@
     "concurrently": "^8.2.2",
     "tailwindcss": "^4.1.16",
     "typescript": "^5.5.0",
-    "vitest": "^4.0.7"
+    "vitest": "^4.0.7",
+    "ws": "^8.20.0"
   }
 }

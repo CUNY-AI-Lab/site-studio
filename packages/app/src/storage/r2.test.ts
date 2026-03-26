@@ -163,6 +163,10 @@ describe("R2ProjectStorage", () => {
       const files = await storage.listFiles(userId, projectId);
       expect(files).toHaveLength(2);
       expect(files.map(f => f.path).sort()).toEqual(["index.html", "styles.css"]);
+      expect(files.find((file) => file.path === "index.html")).toMatchObject({
+        contentType: "text/html",
+        isText: true
+      });
     });
 
     it("excludes protected files", async () => {
@@ -173,6 +177,21 @@ describe("R2ProjectStorage", () => {
       const names = files.map(f => f.name);
       expect(names).not.toContain(".metadata.json");
       expect(names).not.toContain(".thumbnail.png");
+    });
+
+    it("marks binary files as non-text", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "paper.pdf", new Uint8Array([1, 2, 3]));
+
+      const files = await storage.listFiles(userId, projectId);
+
+      expect(files).toEqual([
+        expect.objectContaining({
+          path: "paper.pdf",
+          contentType: "application/pdf",
+          isText: false
+        })
+      ]);
     });
   });
 

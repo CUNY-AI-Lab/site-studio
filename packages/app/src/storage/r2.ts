@@ -1,7 +1,7 @@
 import { unzipSync, zipSync, strToU8 } from "fflate";
 import type { Env, ProjectMetadata, ProjectSnapshot, ProjectSnapshotTrigger, StorageFile } from "../types";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
-import { getContentType, sanitizeFilePath } from "../lib/path";
+import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 
 function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
@@ -212,7 +212,9 @@ export class R2ProjectStorage {
           name,
           size: object.size,
           lastModified: toIsoString(object.uploaded),
-          isDirectory: false
+          isDirectory: false,
+          contentType: getContentType(relative),
+          isText: isTextContentType(getContentType(relative))
         });
       }
 

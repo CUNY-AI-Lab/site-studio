@@ -13,7 +13,7 @@ function agentInstanceName(userId: string, projectId: string): string {
 export function createAgentRouter() {
   const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
 
-  async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: { user: { id: string } } }>) {
+  async function loadAgentStub(c: Context<{ Bindings: Env; Variables: { user: { id: string } } }>) {
     const user = getUser(c);
     const rawProjectId = c.req.param("projectId");
 
@@ -28,7 +28,7 @@ export function createAgentRouter() {
       return jsonError("Project not found", 404);
     }
 
-    const stub = await getAgentByName(
+    return getAgentByName(
       c.env.SITE_BUILDER_AGENT,
       agentInstanceName(user.id, projectId),
       {
@@ -38,9 +38,25 @@ export function createAgentRouter() {
         }
       }
     );
+  }
+
+  async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: { user: { id: string } } }>) {
+    const stub = await loadAgentStub(c);
+    if (stub instanceof Response) {
+      return stub;
+    }
 
     return stub.fetch(c.req.raw);
   }
+
+  app.get("/api/projects/:projectId/observability", async (c) => {
+    const stub = await loadAgentStub(c);
+    if (stub instanceof Response) {
+      return stub;
+    }
+
+    return c.json(await stub.getObservability());
+  });
 
   app.all("/api/agents/site-builder/:projectId", handleAgentRequest);
   app.all("/api/agents/site-builder/:projectId/*", handleAgentRequest);

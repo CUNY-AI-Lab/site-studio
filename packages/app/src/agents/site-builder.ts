@@ -1,4 +1,5 @@
 import { AIChatAgent, createToolsFromClientSchemas } from "@cloudflare/ai-chat";
+import { callable } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
@@ -6,6 +7,7 @@ import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } 
 import { z } from "zod";
 import type { Env } from "../types";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
+import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
 import { R2ProjectStorage } from "../storage/r2";
@@ -18,10 +20,66 @@ type Scope = {
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
 
+type SiteBuilderObservabilityToolCall = {
+  toolCallId: string;
+  toolName: string;
+  state: "input-streaming" | "input-available" | "output-available";
+  inputChars: number;
+  deltaCount: number;
+  startedAt: string;
+  updatedAt: string;
+  lastPreview?: string;
+};
+
+type SiteBuilderObservabilityRequest = {
+  requestId: string;
+  status: "streaming" | "finished" | "aborted" | "error";
+  model: string;
+  startedAt: string;
+  updatedAt: string;
+  lastChunkAt?: string;
+  idleMs: number;
+  suspectedStall: boolean;
+  projectId: string;
+  latestUserRequest?: string;
+  steps: number;
+  chunkCounts: {
+    text: number;
+    reasoning: number;
+    toolInput: number;
+    toolResult: number;
+    raw: number;
+  };
+  errors: string[];
+  tools: SiteBuilderObservabilityToolCall[];
+  finishReason?: string;
+  rawFinishReason?: string;
+};
+
+type SiteBuilderObservabilityEvent = {
+  id: string;
+  requestId: string;
+  at: string;
+  level: "info" | "warn" | "error";
+  type: "request-start" | "step-start" | "chunk" | "tool-call" | "tool-result" | "finish" | "abort" | "error";
+  detail: string;
+  data?: Record<string, unknown>;
+};
+
+type SiteBuilderObservabilitySnapshot = {
+  generatedAt: string;
+  requests: SiteBuilderObservabilityRequest[];
+  events: SiteBuilderObservabilityEvent[];
+};
+
 const DEFAULT_MODEL = "anthropic/claude-sonnet-4.6";
 const MAX_FILE_CONTENT_CHARS = 60_000;
+const MAX_DOCUMENT_CONTENT_CHARS = 120_000;
 const MAX_SEARCH_RESULTS = 50;
 const MAX_SNAPSHOT_LABEL_CHARS = 120;
+const MAX_OBSERVABILITY_EVENTS = 400;
+const MAX_OBSERVABILITY_REQUESTS = 20;
+const OBSERVABILITY_STALL_MS = 15_000;
 const CODEMODE_DESCRIPTION = `Inspect and modify the current Site Studio project inside a sandboxed Dynamic Worker.
 
 Project APIs:
@@ -56,6 +114,76 @@ function clipText(text: string, maxChars = MAX_FILE_CONTENT_CHARS): { text: stri
     text: `${text.slice(0, maxChars)}\n\n[truncated ${text.length - maxChars} additional characters]`,
     truncated: true
   };
+}
+
+function clipPreview(value: string, maxChars = 180): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars - 1)}...`;
+}
+
+function summarizeError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return clipPreview(JSON.stringify(error));
+  } catch {
+    return String(error);
+  }
+}
+
+function summarizeUnknown(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return clipPreview(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return clipPreview(JSON.stringify(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function summarizeChunkData(chunk: { type: string } & Record<string, unknown>): Record<string, unknown> | undefined {
+  switch (chunk.type) {
+    case "text-delta":
+    case "reasoning-delta":
+      return { chars: typeof chunk.text === "string" ? chunk.text.length : 0 };
+    case "tool-input-start":
+      return {
+        toolCallId: typeof chunk.id === "string" ? chunk.id : undefined,
+        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined
+      };
+    case "tool-input-delta":
+      return {
+        toolCallId: typeof chunk.id === "string" ? chunk.id : undefined,
+        chars: typeof chunk.delta === "string" ? chunk.delta.length : 0,
+        preview: typeof chunk.delta === "string" ? clipPreview(chunk.delta) : undefined
+      };
+    case "tool-call":
+      return {
+        toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
+        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
+        invalid: Boolean(chunk.invalid),
+        inputPreview: summarizeUnknown(chunk.input)
+      };
+    case "tool-result":
+      return {
+        toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
+        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
+        outputPreview: summarizeUnknown(chunk.output)
+      };
+    case "raw":
+      return {
+        preview: summarizeUnknown(chunk.rawValue)
+      };
+    default:
+      return undefined;
+  }
 }
 
 function simpleGlobToRegExp(pattern: string): RegExp {
@@ -242,7 +370,7 @@ function createProjectTools(
           return {
             ok: false,
             path: filePath,
-            message: "This tool only reads text files. Binary file analysis is not implemented in the new app yet."
+            message: "This tool only reads text files. Use extract_document_text for PDFs and other supported documents."
           };
         }
 
@@ -318,10 +446,11 @@ function createProjectTools(
       }
     }),
     write_file: tool({
-      description: "Create a new text file or fully replace an existing text file.",
+      description: "Create a new text file, fully replace an existing text file, or append more text to an existing file.",
       inputSchema: z.object({
         path: z.string().min(1).describe("Path to write relative to the project root."),
-        content: z.string().describe("Full file contents.")
+        content: z.string().describe("File content to write."),
+        mode: z.enum(["replace", "append"]).optional().default("replace").describe("Replace the full file or append to the end.")
       }),
       outputSchema: z.object({
         ok: z.literal(true),
@@ -329,7 +458,7 @@ function createProjectTools(
         created: z.boolean().describe("True if the file was newly created, false if it existed."),
         changed: z.boolean().describe("True if the content actually changed.")
       }),
-      execute: async ({ path, content }) => {
+      execute: async ({ path, content, mode }) => {
         const filePath = sanitizeFilePath(path);
         let previousContent: string | null = null;
 
@@ -337,7 +466,11 @@ function createProjectTools(
           previousContent = await storage.readFile(scope.userId, scope.projectId, filePath);
         }
 
-        if (previousContent === content) {
+        const nextContent = mode === "append" && previousContent !== null
+          ? `${previousContent}${content}`
+          : content;
+
+        if (previousContent === nextContent) {
           return {
             ok: true,
             path: filePath,
@@ -347,13 +480,13 @@ function createProjectTools(
         }
 
         await ensureSnapshot();
-        await storage.writeFile(scope.userId, scope.projectId, filePath, content);
+        await storage.writeFile(scope.userId, scope.projectId, filePath, nextContent);
 
         return {
           ok: true,
           path: filePath,
           created: previousContent === null,
-          changed: previousContent !== content
+          changed: previousContent !== nextContent
         };
       }
     }),
@@ -626,6 +759,7 @@ function createChatTools(
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
   });
+  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
     globalOutbound: null,
@@ -634,6 +768,61 @@ function createChatTools(
 
   return {
     ...createToolsFromClientSchemas(clientTools),
+    extract_document_text: tool({
+      description: "Extract readable text from a supported uploaded document such as a PDF.",
+      inputSchema: z.object({
+        path: z.string().min(1).describe("Path to the uploaded document relative to the project root."),
+        maxChars: z.number().int().min(1000).max(MAX_DOCUMENT_CONTENT_CHARS).optional().describe("Optional character limit for the extracted text.")
+      }),
+      outputSchema: z.discriminatedUnion("ok", [
+        z.object({
+          ok: z.literal(true),
+          path: z.string(),
+          contentType: z.string(),
+          pageCount: z.number().int().nonnegative(),
+          title: z.string().optional(),
+          author: z.string().optional(),
+          content: z.string(),
+          truncated: z.boolean(),
+          warnings: z.array(z.string())
+        }),
+        z.object({
+          ok: z.literal(false),
+          path: z.string(),
+          contentType: z.string().optional(),
+          message: z.string()
+        })
+      ]),
+      execute: async ({ path, maxChars }) => {
+        const filePath = sanitizeFilePath(path);
+        const contentType = getContentType(filePath);
+
+        try {
+          const data = await storage.readFileBuffer(scope.userId, scope.projectId, filePath);
+          const extracted = await extractDocumentText(filePath, data);
+          const clipped = clipText(extracted.text, maxChars || MAX_DOCUMENT_CONTENT_CHARS);
+
+          return {
+            ok: true as const,
+            path: filePath,
+            contentType: extracted.contentType,
+            pageCount: extracted.pageCount,
+            title: extracted.title,
+            author: extracted.author,
+            content: clipped.text,
+            truncated: clipped.truncated,
+            warnings: extracted.warnings
+          };
+        } catch (error) {
+          return {
+            ok: false as const,
+            path: filePath,
+            contentType,
+            message: summarizeError(error)
+          };
+        }
+      }
+    }),
     codemode: createCodeTool({
       tools: [
         {
@@ -661,11 +850,20 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   };
 
   maxPersistedMessages = 150;
+  private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
+  private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
+  private observabilitySequence = 0;
+
+  @callable()
+  async getObservability(): Promise<SiteBuilderObservabilitySnapshot> {
+    return this.snapshotObservability();
+  }
 
   async onChatMessage(
     onFinish?: Parameters<ChatHandler>[0],
     options?: Parameters<ChatHandler>[1]
   ) {
+    const requestId = options?.requestId ?? "unknown";
     if (!this.env.OPENROUTER_API_KEY) {
       return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY is not configured" }), {
         status: 500,
@@ -694,13 +892,23 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     try {
       const provider = createOpenRouter({ apiKey: this.env.OPENROUTER_API_KEY });
-      const model = provider(this.env.OPENROUTER_MODEL || DEFAULT_MODEL);
+      const modelName = this.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+      const model = provider(modelName);
       const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
         || summarizeLatestUserRequest(this.messages);
       const tools = createChatTools(this.env, scope, latestUserRequest, options?.clientTools);
 
+      this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
+      this.pushObservabilityEvent(requestId, "request-start", "Chat request started", "info", {
+        userId: scope.userId,
+        projectId: scope.projectId,
+        model: modelName,
+        latestUserRequest
+      });
+
       const result = streamText({
         model,
+        abortSignal: options?.abortSignal,
         system: SITE_BUILDER_PROMPT,
         messages: pruneMessages({
           messages: await convertToModelMessages(this.messages),
@@ -709,16 +917,313 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         tools,
         stopWhen: stepCountIs(12),
         temperature: 0.2,
-        ...(onFinish ? { onFinish: onFinish as never } : {})
+        includeRawChunks: true,
+        experimental_onStepStart: () => {
+          const request = this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
+          request.steps += 1;
+          this.markObservabilityUpdated(request, false);
+          this.pushObservabilityEvent(requestId, "step-start", `Model step ${request.steps} started`, "info");
+        },
+        onChunk: ({ chunk }) => {
+          this.recordChunkObservability(
+            requestId,
+            modelName,
+            scope.projectId,
+            latestUserRequest,
+            chunk as { type: string } & Record<string, unknown>
+          );
+        },
+        onFinish: (event) => {
+          this.finalizeObservabilityRequest(requestId, "finished", "Chat request finished", {
+            finishReason: event.finishReason,
+            rawFinishReason: event.rawFinishReason,
+            totalUsage: event.totalUsage,
+            responseId: event.response?.id
+          });
+          if (onFinish) {
+            (onFinish as (event: unknown) => unknown)(event);
+          }
+        },
+        onAbort: ({ steps }) => {
+          this.finalizeObservabilityRequest(requestId, "aborted", "Chat request aborted", {
+            steps: steps.length
+          }, "warn");
+        },
+        onError: (error) => {
+          this.finalizeObservabilityRequest(requestId, "error", "streamText reported an error", {
+            error: summarizeError(error.error)
+          }, "error");
+          console.error("SiteBuilderAgent streamText error", {
+            userId: scope.userId,
+            projectId: scope.projectId,
+            requestId,
+            error
+          });
+        }
       });
 
-      return result.toUIMessageStreamResponse();
+      return result.toUIMessageStreamResponse({
+        onError: (error) => {
+          this.finalizeObservabilityRequest(requestId, "error", "UI message stream failed", {
+            error: summarizeError(error)
+          }, "error");
+          console.error("SiteBuilderAgent chat stream failed", {
+            userId: scope.userId,
+            projectId: scope.projectId,
+            requestId,
+            error
+          });
+          return "Site Studio hit an internal error while streaming this response.";
+        }
+      });
     } catch (error) {
-      console.error("Agent streaming error:", error);
+      this.finalizeObservabilityRequest(requestId, "error", "Chat failed before streaming began", {
+        error: summarizeError(error)
+      }, "error");
+      console.error("Agent streaming error:", {
+        userId: scope.userId,
+        projectId: scope.projectId,
+        requestId,
+        error
+      });
       return new Response(JSON.stringify({ error: "Failed to process request" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
       });
     }
+  }
+
+  private snapshotObservability(now = Date.now()): SiteBuilderObservabilitySnapshot {
+    const requests = [...this.observabilityRequests.values()]
+      .slice(-MAX_OBSERVABILITY_REQUESTS)
+      .map((request) => {
+        const updatedAtMs = Date.parse(request.updatedAt);
+        const idleMs = Number.isFinite(updatedAtMs) ? Math.max(0, now - updatedAtMs) : 0;
+        return {
+          ...request,
+          idleMs,
+          suspectedStall: request.status === "streaming" && idleMs >= OBSERVABILITY_STALL_MS,
+          tools: request.tools.map((toolCall) => ({ ...toolCall })),
+          errors: [...request.errors]
+        };
+      })
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+
+    return {
+      generatedAt: new Date(now).toISOString(),
+      requests,
+      events: [...this.observabilityEvents]
+    };
+  }
+
+  private ensureObservabilityRequest(
+    requestId: string,
+    model: string,
+    projectId: string,
+    latestUserRequest?: string
+  ): SiteBuilderObservabilityRequest {
+    const existing = this.observabilityRequests.get(requestId);
+    if (existing) {
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const request: SiteBuilderObservabilityRequest = {
+      requestId,
+      status: "streaming",
+      model,
+      startedAt: now,
+      updatedAt: now,
+      lastChunkAt: undefined,
+      idleMs: 0,
+      suspectedStall: false,
+      projectId,
+      latestUserRequest,
+      steps: 0,
+      chunkCounts: {
+        text: 0,
+        reasoning: 0,
+        toolInput: 0,
+        toolResult: 0,
+        raw: 0
+      },
+      errors: [],
+      tools: []
+    };
+    this.observabilityRequests.set(requestId, request);
+    while (this.observabilityRequests.size > MAX_OBSERVABILITY_REQUESTS) {
+      const oldestKey = this.observabilityRequests.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.observabilityRequests.delete(oldestKey);
+    }
+    return request;
+  }
+
+  private pushObservabilityEvent(
+    requestId: string,
+    type: SiteBuilderObservabilityEvent["type"],
+    detail: string,
+    level: SiteBuilderObservabilityEvent["level"] = "info",
+    data?: Record<string, unknown>
+  ) {
+    const event: SiteBuilderObservabilityEvent = {
+      id: `${Date.now()}-${this.observabilitySequence += 1}`,
+      requestId,
+      at: new Date().toISOString(),
+      level,
+      type,
+      detail,
+      ...(data ? { data } : {})
+    };
+    this.observabilityEvents.push(event);
+    if (this.observabilityEvents.length > MAX_OBSERVABILITY_EVENTS) {
+      this.observabilityEvents.splice(0, this.observabilityEvents.length - MAX_OBSERVABILITY_EVENTS);
+    }
+  }
+
+  private markObservabilityUpdated(request: SiteBuilderObservabilityRequest, chunk = false) {
+    const now = new Date().toISOString();
+    request.updatedAt = now;
+    if (chunk) {
+      request.lastChunkAt = now;
+    }
+  }
+
+  private getOrCreateToolTrace(
+    request: SiteBuilderObservabilityRequest,
+    toolCallId: string,
+    toolName: string
+  ): SiteBuilderObservabilityToolCall {
+    const existing = request.tools.find((toolCall) => toolCall.toolCallId === toolCallId);
+    if (existing) {
+      if (!existing.toolName && toolName) {
+        existing.toolName = toolName;
+      }
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const toolTrace: SiteBuilderObservabilityToolCall = {
+      toolCallId,
+      toolName,
+      state: "input-streaming",
+      inputChars: 0,
+      deltaCount: 0,
+      startedAt: now,
+      updatedAt: now
+    };
+    request.tools.push(toolTrace);
+    return toolTrace;
+  }
+
+  private recordChunkObservability(
+    requestId: string,
+    model: string,
+    projectId: string,
+    latestUserRequest: string | undefined,
+    chunk: { type: string } & Record<string, unknown>
+  ) {
+    const request = this.ensureObservabilityRequest(requestId, model, projectId, latestUserRequest);
+    this.markObservabilityUpdated(request, true);
+
+    switch (chunk.type) {
+      case "text-delta":
+        request.chunkCounts.text += 1;
+        if (request.chunkCounts.text <= 3 || request.chunkCounts.text % 50 === 0) {
+          this.pushObservabilityEvent(requestId, "chunk", "Text delta received", "info", summarizeChunkData(chunk));
+        }
+        break;
+      case "reasoning-delta":
+        request.chunkCounts.reasoning += 1;
+        if (request.chunkCounts.reasoning <= 2 || request.chunkCounts.reasoning % 25 === 0) {
+          this.pushObservabilityEvent(requestId, "chunk", "Reasoning delta received", "info", summarizeChunkData(chunk));
+        }
+        break;
+      case "tool-input-start": {
+        const toolCallId = typeof chunk.id === "string" ? chunk.id : crypto.randomUUID();
+        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
+        toolTrace.state = "input-streaming";
+        toolTrace.updatedAt = new Date().toISOString();
+        this.pushObservabilityEvent(requestId, "tool-call", `Tool input started: ${toolName}`, "info", summarizeChunkData(chunk));
+        break;
+      }
+      case "tool-input-delta": {
+        request.chunkCounts.toolInput += 1;
+        const toolCallId = typeof chunk.id === "string" ? chunk.id : "unknown";
+        const toolTrace = this.getOrCreateToolTrace(request, toolCallId, "unknown");
+        const delta = typeof chunk.delta === "string" ? chunk.delta : "";
+        toolTrace.inputChars += delta.length;
+        toolTrace.deltaCount += 1;
+        toolTrace.updatedAt = new Date().toISOString();
+        toolTrace.lastPreview = clipPreview(delta);
+        const shouldLogProgress = toolTrace.deltaCount <= 3
+          || toolTrace.deltaCount % 10 === 0
+          || toolTrace.inputChars % 1000 < delta.length;
+        if (shouldLogProgress) {
+          this.pushObservabilityEvent(requestId, "chunk", `Tool input delta for ${toolTrace.toolName}`, "info", {
+            toolCallId,
+            deltaChars: delta.length,
+            inputChars: toolTrace.inputChars,
+            deltaCount: toolTrace.deltaCount,
+            preview: toolTrace.lastPreview
+          });
+        }
+        break;
+      }
+      case "tool-call": {
+        const toolCallId = typeof chunk.toolCallId === "string" ? chunk.toolCallId : "unknown";
+        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
+        toolTrace.state = "input-available";
+        toolTrace.updatedAt = new Date().toISOString();
+        toolTrace.lastPreview = summarizeUnknown(chunk.input);
+        this.pushObservabilityEvent(requestId, "tool-call", `Tool call ready: ${toolName}`, "info", summarizeChunkData(chunk));
+        break;
+      }
+      case "tool-result": {
+        request.chunkCounts.toolResult += 1;
+        const toolCallId = typeof chunk.toolCallId === "string" ? chunk.toolCallId : "unknown";
+        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
+        toolTrace.state = "output-available";
+        toolTrace.updatedAt = new Date().toISOString();
+        toolTrace.lastPreview = summarizeUnknown(chunk.output);
+        this.pushObservabilityEvent(requestId, "tool-result", `Tool result available: ${toolName}`, "info", summarizeChunkData(chunk));
+        break;
+      }
+      case "raw":
+        request.chunkCounts.raw += 1;
+        if (request.chunkCounts.raw <= 3 || request.chunkCounts.raw % 20 === 0) {
+          this.pushObservabilityEvent(requestId, "chunk", "Raw provider chunk received", "info", summarizeChunkData(chunk));
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  private finalizeObservabilityRequest(
+    requestId: string,
+    status: SiteBuilderObservabilityRequest["status"],
+    detail: string,
+    data?: Record<string, unknown>,
+    level: SiteBuilderObservabilityEvent["level"] = "info"
+  ) {
+    const request = this.observabilityRequests.get(requestId);
+    if (request) {
+      request.status = status;
+      this.markObservabilityUpdated(request, false);
+      if (status === "error" && data?.error) {
+        request.errors.push(String(data.error));
+      }
+      if (typeof data?.finishReason === "string") {
+        request.finishReason = data.finishReason;
+      }
+      if (typeof data?.rawFinishReason === "string") {
+        request.rawFinishReason = data.rawFinishReason;
+      }
+    }
+    this.pushObservabilityEvent(requestId, status === "finished" ? "finish" : status === "aborted" ? "abort" : "error", detail, level, data);
   }
 }

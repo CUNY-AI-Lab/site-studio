@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Env } from "../types";
 import { MAX_UPLOAD_BYTES, PROTECTED_FILE_NAMES } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
-import { sanitizeFilePath } from "../lib/path";
+import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
 import { R2ProjectStorage } from "../storage/r2";
 import { buildFileTree, getContentType } from "../lib/path";
@@ -67,8 +67,17 @@ export function createFileRouter() {
       jsonError("Project not found", 404);
     }
 
+    if (!isTextContentType(getContentType(filePath))) {
+      jsonError("Binary files cannot be opened in the text editor. Download the file instead.", 415);
+    }
+
     const content = await storage.readFile(user.id, projectId, filePath);
-    return c.json({ path: filePath, content });
+    return c.json({
+      path: filePath,
+      contentType: getContentType(filePath),
+      isText: true,
+      content
+    });
   });
 
   app.post("/api/projects/:id/file", async (c) => {
@@ -80,6 +89,10 @@ export function createFileRouter() {
 
     if (!(await storage.projectExists(user.id, projectId))) {
       jsonError("Project not found", 404);
+    }
+
+    if (!isTextContentType(getContentType(filePath))) {
+      jsonError("Binary files cannot be saved through the text editor endpoint.", 415);
     }
 
     await storage.writeFile(user.id, projectId, filePath, content);

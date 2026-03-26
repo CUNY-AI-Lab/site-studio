@@ -10,7 +10,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw } from 'lucide-svelte';
-	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
+	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type Project, type ProjectFile } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import { Pane } from 'paneforge';
@@ -37,7 +37,9 @@
 	let projectId = $derived($page.params.projectId ?? '');
 	let currentFile = $state('');
 	let fileContent = $state('');
-	let files = $state([]);
+	let currentFileIsText = $state(true);
+	let currentFileContentType = $state('');
+	let files = $state<ProjectFile[]>([]);
 	let allProjects = $state<Project[]>([]);
 	let currentProject = $state<Project | null>(null);
 
@@ -140,7 +142,7 @@
 		}
 	}
 
-	async function loadFiles(targetProjectId = projectId) {
+	async function loadFiles(targetProjectId = projectId): Promise<ProjectFile[]> {
 		if (!targetProjectId) return [];
 
 		try {
@@ -152,11 +154,31 @@
 
 			const data = await response.json();
 			console.log('Loaded files:', data.files);
-			return data.files;
+			return data.files as ProjectFile[];
 		} catch (error) {
 			console.error('Error loading files:', error);
 			return [];
 		}
+	}
+
+	function findFileByPath(nodes: ProjectFile[], filePath: string): ProjectFile | null {
+		for (const node of nodes) {
+			if (node.type === 'file' && node.path === filePath) {
+				return node;
+			}
+			if (node.type === 'directory' && node.children) {
+				const nested = findFileByPath(node.children, filePath);
+				if (nested) {
+					return nested;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	function inferIsTextFile(filePath: string): boolean {
+		return /\.(html?|css|js|json|xml|txt|md|csv)$/i.test(filePath);
 	}
 
 	let fileSelectCounter = 0;
@@ -167,12 +189,28 @@
 		if (!didFlushPendingSave) return;
 
 		const requestId = ++fileSelectCounter;
+		const selectedFile = findFileByPath(files, filePath);
+		const nextIsText = selectedFile?.isText ?? inferIsTextFile(filePath);
+
+		currentFile = filePath;
+		currentFileIsText = nextIsText;
+		currentFileContentType = selectedFile?.contentType || '';
+
+		if (!nextIsText) {
+			fileContent = '';
+			return;
+		}
 
 		try {
 			console.log('Loading file:', filePath);
 			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`), {
 				credentials: 'include'
 			});
+			if (response.status === 415) {
+				currentFileIsText = false;
+				fileContent = '';
+				return;
+			}
 			if (!response.ok) throw new Error('Failed to load file');
 
 			// Ignore stale response if user selected a different file
@@ -180,7 +218,8 @@
 
 			const data = await response.json();
 			console.log('Loaded file content, length:', data.content.length);
-			currentFile = filePath;
+			currentFileContentType = data.contentType || selectedFile?.contentType || '';
+			currentFileIsText = data.isText ?? true;
 			fileContent = data.content;
 			console.log('Set currentFile and fileContent state');
 		} catch (error) {
@@ -201,7 +240,7 @@
 	}
 
 	function getCurrentSaveSnapshot(): SaveSnapshot | null {
-		if (!projectId || !currentFile) return null;
+		if (!projectId || !currentFile || !currentFileIsText) return null;
 
 		return {
 			projectId,
@@ -342,6 +381,8 @@
 
 		currentFile = '';
 		fileContent = '';
+		currentFileIsText = true;
+		currentFileContentType = '';
 		files = [];
 		currentProject = null;
 
@@ -369,6 +410,11 @@
 		if (previewComponent) {
 			previewComponent.refresh();
 		}
+	}
+
+	async function handleCurrentFileDownload(filePath: string) {
+		if (!projectId || !filePath) return;
+		await downloadProjectFile(projectId, filePath);
 	}
 
 	function toggleChatPane() {
@@ -424,6 +470,8 @@
 		currentProject = null;
 		currentFile = '';
 		fileContent = '';
+		currentFileIsText = true;
+		currentFileContentType = '';
 		files = [];
 		stableProjectId = null;
 
@@ -724,9 +772,12 @@
 							{files}
 							{currentFile}
 							{fileContent}
+							{currentFileIsText}
+							{currentFileContentType}
 							{isSaving}
 							onFileSelect={onFileSelect}
 							onEditorChange={onEditorChange}
+							onDownloadFile={handleCurrentFileDownload}
 							onRefreshFiles={loadFiles}
 						/>
 					{:else}

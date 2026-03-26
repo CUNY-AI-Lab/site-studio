@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ProjectFile } from '$lib/api/projects';
 	import FileTree from './FileTree.svelte';
 	import Editor from './Editor.svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
@@ -9,17 +10,23 @@
 		files = [],
 		currentFile = '',
 		fileContent = '',
+		currentFileIsText = true,
+		currentFileContentType = '',
 		onFileSelect,
 		onEditorChange,
+		onDownloadFile,
 		onRefreshFiles,
 		isSaving = false
 	}: {
 		projectId: string;
-		files: any[];
+		files: ProjectFile[];
 		currentFile: string;
 		fileContent: string;
+		currentFileIsText: boolean;
+		currentFileContentType: string;
 		onFileSelect: (path: string) => void;
 		onEditorChange: (content: string) => void;
+		onDownloadFile: (path: string) => void;
 		onRefreshFiles: () => void;
 		isSaving: boolean;
 	} = $props();
@@ -52,10 +59,27 @@
 		<!-- Editor Panel -->
 		<Resizable.Pane defaultSize={75} minSize={40}>
 			<div class="editor-panel">
-				{#if isSaving}
+				{#if isSaving && currentFileIsText}
 					<div class="save-indicator">Saving...</div>
 				{/if}
-				<Editor {currentFile} content={fileContent} onChange={onEditorChange} />
+				{#if currentFile && !currentFileIsText}
+					<div class="binary-view">
+						<div class="binary-header">
+							<span class="binary-filename">{currentFile}</span>
+						</div>
+						<div class="binary-body">
+							<p class="binary-title">This file is not editable as text.</p>
+							<p class="binary-description">
+								{currentFileContentType || 'Binary content'} files open as assets or downloads. Use the agent's document tool for PDFs, or download the file directly.
+							</p>
+							<button class="download-current-file" type="button" onclick={() => onDownloadFile(currentFile)}>
+								Download file
+							</button>
+						</div>
+					</div>
+				{:else}
+					<Editor {currentFile} content={fileContent} onChange={onEditorChange} />
+				{/if}
 			</div>
 		</Resizable.Pane>
 	</Resizable.PaneGroup>
@@ -115,6 +139,65 @@
 		height: 100%;
 		position: relative;
 		overflow: hidden;
+	}
+
+	.binary-view {
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		background: var(--color-bg-primary);
+	}
+
+	.binary-header {
+		padding: 0.75rem 1rem;
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+	}
+
+	.binary-filename {
+		font-size: 0.875rem;
+		font-family: monospace;
+		color: var(--color-text-secondary);
+	}
+
+	.binary-body {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 2rem;
+		text-align: center;
+		gap: 0.75rem;
+	}
+
+	.binary-title {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+
+	.binary-description {
+		max-width: 28rem;
+		margin: 0;
+		color: var(--color-text-secondary);
+		line-height: 1.5;
+	}
+
+	.download-current-file {
+		padding: 0.625rem 0.95rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		cursor: pointer;
+		transition: background 0.15s ease, border-color 0.15s ease;
+	}
+
+	.download-current-file:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-border-hover);
 	}
 
 	.save-indicator {

@@ -80,6 +80,8 @@ export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
           name: file.name,
           path: file.path,
           type: "file",
+          contentType: file.contentType,
+          isText: file.isText
         });
         return;
       }

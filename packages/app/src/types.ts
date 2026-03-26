@@ -53,11 +53,15 @@ export interface StorageFile {
   size: number;
   lastModified: string;
   isDirectory: boolean;
+  contentType?: string;
+  isText?: boolean;
 }
 
 export interface ProjectTreeNode {
   name: string;
   path: string;
   type: "file" | "directory";
+  contentType?: string;
+  isText?: boolean;
   children?: ProjectTreeNode[];
 }

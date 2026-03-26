@@ -3,6 +3,8 @@
 		name: string;
 		path: string;
 		type: 'file' | 'directory';
+		contentType?: string;
+		isText?: boolean;
 		children?: FileNode[];
 	}
 </script>
