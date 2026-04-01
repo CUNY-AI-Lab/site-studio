@@ -15,17 +15,13 @@ export default defineConfig({
 
 					if (
 						normalizedId.includes('/node_modules/@codemirror/lang-') ||
-						normalizedId.includes('/node_modules/@lezer/')
+						normalizedId.includes('/node_modules/@codemirror/') ||
+						normalizedId.includes('/node_modules/@lezer/') ||
+						normalizedId.includes('/node_modules/codemirror/')
 					) {
-						return 'vendor-codemirror-lang';
-					}
-
-					if (normalizedId.includes('/node_modules/@codemirror/')) {
-						return 'vendor-codemirror-core';
-					}
-
-					if (normalizedId.includes('/node_modules/codemirror/')) {
-						return 'vendor-codemirror-kit';
+						// Keep the CodeMirror stack together. Splitting lang/core/kit separately
+						// produced circular chunk imports in the built editor bundle.
+						return 'vendor-codemirror';
 					}
 
 					if (

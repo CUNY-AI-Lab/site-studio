@@ -55,7 +55,15 @@ app.onError((error, c) => {
 });
 
 app.notFound(async (c) => {
-  if (c.env.ASSETS) {
+  const pathname = new URL(c.req.url).pathname;
+  const isWorkerRoute = pathname === "/api"
+    || pathname.startsWith("/api/")
+    || pathname === "/preview"
+    || pathname.startsWith("/preview/")
+    || pathname === "/sites"
+    || pathname.startsWith("/sites/");
+
+  if (!isWorkerRoute && c.env.ASSETS) {
     return c.env.ASSETS.fetch(c.req.raw);
   }
 

@@ -36,9 +36,12 @@
 	interface ToolExecution {
 		id?: string;
 		name: string;
+		title?: string;
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
+		startTime?: number;
+		elapsedTime?: number;
 	}
 
 	interface PendingToolInteraction {
@@ -47,14 +50,23 @@
 		input: Record<string, any>;
 	}
 
+	interface RunningToolState {
+		toolCallId: string;
+		name: string;
+		title?: string;
+		input: Record<string, any>;
+	}
+
 	import type { QuestionOption, UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
 		projectId,
-		onUpdate
+		onUpdate,
+		onBeforeSend
 	}: {
 		projectId: string;
 		onUpdate: () => void;
+		onBeforeSend?: () => Promise<boolean> | boolean;
 	} = $props();
 
 	let uiMessages = $state<UIChatMessage[]>([]);
@@ -71,6 +83,9 @@
 	let currentRequestId = $state<string | null>(null);
 	let expectingContinuation = $state(false);
 	let ignoreNextSocketClose = $state(false);
+	let requestStartedAt = $state<number | null>(null);
+	let clockNow = $state(Date.now());
+	let toolStartTimes = $state<Record<string, number>>({});
 
 	const MAX_DISPLAYED_MESSAGES = 10;
 	const MUTATING_TOOLS = new Set([
@@ -170,7 +185,185 @@
 		return 'running';
 	}
 
-	function toDisplayMessages(source: UIChatMessage[]): Message[] {
+	function isToolStateRunning(state: string | undefined): boolean {
+		return state !== 'output-available' && state !== 'output-error' && state !== 'output-denied';
+	}
+
+	function normalizeToolName(name: string): string {
+		return name
+			.replace(/^mcp[\s_-]+[\w-]+[\s_-]+/, '')
+			.replace(/-/g, '_');
+	}
+
+	function formatElapsedTime(milliseconds: number): string {
+		const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+		if (totalSeconds < 60) {
+			return `${totalSeconds}s`;
+		}
+
+		const minutes = Math.floor(totalSeconds / 60);
+		const seconds = totalSeconds % 60;
+		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+	}
+
+	function trackToolStart(toolCallId: string) {
+		if (toolStartTimes[toolCallId]) {
+			return;
+		}
+
+		toolStartTimes = {
+			...toolStartTimes,
+			[toolCallId]: Date.now()
+		};
+	}
+
+	function resetRequestState() {
+		isLoading = false;
+		currentStatus = '';
+		currentRequestId = null;
+		activeStream = null;
+		expectingContinuation = false;
+		requestStartedAt = null;
+		toolStartTimes = {};
+	}
+
+	function getRunningToolFromParts(parts: UIMessagePart[]): RunningToolState | null {
+		for (let i = parts.length - 1; i >= 0; i -= 1) {
+			const part = parts[i];
+			if (isToolPart(part) && isToolStateRunning(part.state)) {
+				return {
+					toolCallId: part.toolCallId,
+					name: part.toolName,
+					title: part.title,
+					input: ((part.input as Record<string, any>) || {}) as Record<string, any>
+				};
+			}
+		}
+
+		return null;
+	}
+
+	function getCurrentRunningTool(
+		stream: ActiveStreamMessage | null,
+		messages: UIChatMessage[]
+	): RunningToolState | null {
+		if (stream) {
+			const toolFromStream = getRunningToolFromParts(stream.parts);
+			if (toolFromStream) {
+				return toolFromStream;
+			}
+		}
+
+		const lastAssistant = findLastAssistantMessage(messages);
+		if (!lastAssistant) {
+			return null;
+		}
+
+		return getRunningToolFromParts(lastAssistant.parts);
+	}
+
+	function getActivityTarget(tool: RunningToolState | null): string {
+		if (!tool) return '';
+
+		const { input } = tool;
+		const pathValue =
+			typeof input.file_path === 'string'
+				? input.file_path
+				: typeof input.path === 'string'
+					? input.path
+					: typeof input.directory_path === 'string'
+						? input.directory_path
+						: typeof input.oldPath === 'string'
+							? input.oldPath
+							: typeof input.page_name === 'string'
+								? input.page_name
+								: '';
+
+		if (!pathValue) return '';
+
+		const parts = pathValue.split('/');
+		return parts[parts.length - 1] || pathValue;
+	}
+
+	function getActivitySummary(
+		tool: RunningToolState | null,
+		status: string,
+		elapsedMs: number
+	): { headline: string; detail: string } {
+		const headline = status || 'Thinking...';
+
+		if (!tool) {
+			if (headline === 'Responding...') {
+				return {
+					headline,
+					detail: 'Writing the response back into the chat.'
+				};
+			}
+
+			return {
+				headline,
+				detail:
+					elapsedMs > 20000
+						? 'Still working through the next step. Larger requests can take a bit.'
+						: 'Staying connected while the next step finishes.'
+			};
+		}
+
+		switch (normalizeToolName(tool.name)) {
+			case 'codemode':
+				return {
+					headline,
+					detail:
+						elapsedMs < 8000
+							? 'Reviewing the current project and planning the next edits.'
+							: elapsedMs < 20000
+								? 'Editing project files and checking the result.'
+								: 'Still working through project changes. Larger site updates can take a bit.'
+				};
+			case 'extract_document_text':
+				return {
+					headline,
+					detail: 'Reading the uploaded document so the agent can use that content in the site.'
+				};
+			case 'list_files':
+			case 'search_files':
+			case 'read_file':
+				return {
+					headline,
+					detail: 'Inspecting the current project files before making changes.'
+				};
+			case 'write_file':
+			case 'edit_file':
+			case 'rename_file':
+			case 'delete_file':
+			case 'add_page':
+				return {
+					headline,
+					detail: 'Updating project files for this request.'
+				};
+			case 'scaffold_template':
+				return {
+					headline,
+					detail: 'Setting up the requested starting structure.'
+				};
+			case 'ask_user_question':
+				return {
+					headline,
+					detail: 'The agent is waiting for your answer before it can continue.'
+				};
+			default:
+				return {
+					headline,
+					detail: 'Running the next step for your request.'
+				};
+		}
+	}
+
+	function toDisplayMessages(
+		source: UIChatMessage[],
+		startTimes: Record<string, number>,
+		nowMs: number
+	): Message[] {
 		return source.map((message) => {
 			if (message.role === 'user') {
 				return {
@@ -206,12 +399,18 @@
 
 				if (isToolPart(part)) {
 					flushText();
+					const status = toolStatusFromState(part.state);
+					const startTime = part.toolCallId ? startTimes[part.toolCallId] : undefined;
 					currentTools.push({
 						id: part.toolCallId,
 						name: part.toolName,
+						title: part.title,
 						input: (part.input as Record<string, any>) || {},
-						status: toolStatusFromState(part.state),
-						output: serializeToolOutput(part.output, part.errorText, part.toolName)
+						status,
+						output: serializeToolOutput(part.output, part.errorText, part.toolName),
+						startTime,
+						elapsedTime:
+							status === 'running' && startTime ? (nowMs - startTime) / 1000 : undefined
 					});
 				}
 			}
@@ -329,11 +528,7 @@
 		}
 
 		if (isLoading) {
-			isLoading = false;
-			currentStatus = '';
-			currentRequestId = null;
-			activeStream = null;
-			expectingContinuation = false;
+			resetRequestState();
 
 			uiMessages = [
 				...uiMessages,
@@ -435,11 +630,16 @@
 	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
 		const ws = await ensureSocket();
 		const requestId = generateId();
+		const startedAt = Date.now();
 
 		currentRequestId = requestId;
+		requestStartedAt = startedAt;
+		clockNow = startedAt;
+		toolStartTimes = {};
 		currentStatus = 'Thinking...';
 		isLoading = true;
 		activeStream = null;
+		expectingContinuation = false;
 
 		ws.send(
 			JSON.stringify({
@@ -491,8 +691,11 @@
 				break;
 			case 'tool-input-start':
 			case 'tool-input-available':
+				trackToolStart(chunk.toolCallId);
 				if (chunk.toolName === 'codemode') {
-					currentStatus = 'Running sandbox...';
+					currentStatus = 'Working on your site...';
+				} else if (chunk.toolName === 'extract_document_text') {
+					currentStatus = 'Reading your document...';
 				} else if (chunk.toolName === 'ask_user_question') {
 					currentStatus = 'Waiting for your input...';
 				} else {
@@ -538,9 +741,7 @@
 				break;
 			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE:
 				expectingContinuation = false;
-				isLoading = false;
-				currentStatus = '';
-				currentRequestId = null;
+				resetRequestState();
 				break;
 			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
 				const continuation = expectingContinuation;
@@ -575,24 +776,40 @@
 					if (activeStream) {
 						flushActiveStreamToMessages(activeStream);
 					}
-					activeStream = null;
-					isLoading = false;
-					currentStatus = '';
-					currentRequestId = null;
-					expectingContinuation = false;
+					resetRequestState();
 				}
 				break;
 			}
 		}
 	}
 
-	let messages = $derived(toDisplayMessages(uiMessages));
+	let messages = $derived(toDisplayMessages(uiMessages, toolStartTimes, clockNow));
 	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
 	let pendingToolInteraction = $derived(getPendingToolInteraction(uiMessages));
+	let requestElapsedMs = $derived(requestStartedAt ? Math.max(0, clockNow - requestStartedAt) : 0);
+	let requestElapsedLabel = $derived(formatElapsedTime(requestElapsedMs));
+	let currentRunningTool = $derived(getCurrentRunningTool(activeStream, uiMessages));
+	let activitySummary = $derived(getActivitySummary(currentRunningTool, currentStatus, requestElapsedMs));
+	let activeToolTarget = $derived(getActivityTarget(currentRunningTool));
 
 	$effect(() => {
 		return () => {
 			closeSocket();
+		};
+	});
+
+	$effect(() => {
+		if (!isLoading) {
+			return;
+		}
+
+		clockNow = Date.now();
+		const intervalId = setInterval(() => {
+			clockNow = Date.now();
+		}, 500);
+
+		return () => {
+			clearInterval(intervalId);
 		};
 	});
 
@@ -606,11 +823,7 @@
 		previousProjectId = targetProjectId;
 		input = '';
 		attachedFile = null;
-		isLoading = false;
-		currentStatus = '';
-		currentRequestId = null;
-		activeStream = null;
-		expectingContinuation = false;
+		resetRequestState();
 		uiMessages = [];
 		closeSocket();
 
@@ -638,11 +851,7 @@
 			console.error('Error stopping request:', error);
 		}
 
-		isLoading = false;
-		currentStatus = '';
-		activeStream = null;
-		currentRequestId = null;
-		expectingContinuation = false;
+		resetRequestState();
 	}
 
 	async function uploadFile(file: File): Promise<string> {
@@ -663,8 +872,25 @@
 		return data.filename;
 	}
 
+	async function ensureReadyForRequest(): Promise<boolean> {
+		if (!onBeforeSend) {
+			return true;
+		}
+
+		try {
+			return await onBeforeSend();
+		} catch (error) {
+			console.error('Error preparing agent request:', error);
+			currentStatus = 'Unable to prepare request.';
+			return false;
+		}
+	}
+
 	async function sendMessage() {
 		if (!input.trim() || isLoading) return;
+
+		const ready = await ensureReadyForRequest();
+		if (!ready) return;
 
 		const userMessage = input.trim();
 		const fileToUpload = attachedFile;
@@ -720,6 +946,7 @@
 			await sendChatRequest(getCurrentMessagesForRequest(nextUserMessage));
 		} catch (error: any) {
 			console.error('Error sending message:', error);
+			resetRequestState();
 			uiMessages = [
 				...uiMessages,
 				{
@@ -728,18 +955,15 @@
 					parts: [{ type: 'text', text: getErrorMessage(error) }]
 				}
 			];
-		} finally {
-			isLoading = false;
-			currentStatus = '';
-			currentRequestId = null;
-			activeStream = null;
-			expectingContinuation = false;
 		}
 	}
 
 	async function rejectUserQuestion() {
 		const interaction = pendingToolInteraction;
 		if (!interaction) return;
+
+		const ready = await ensureReadyForRequest();
+		if (!ready) return;
 
 		try {
 			await ensureSocket();
@@ -756,8 +980,12 @@
 				autoContinue: true
 			});
 
+			const startedAt = Date.now();
 			expectingContinuation = true;
 			isLoading = true;
+			requestStartedAt = startedAt;
+			clockNow = startedAt;
+			toolStartTimes = {};
 			currentStatus = 'Continuing...';
 		} catch (error) {
 			console.error('Error denying tool:', error);
@@ -800,6 +1028,9 @@
 		const interaction = pendingToolInteraction;
 		if (!interaction || !interaction.toolCallId) return;
 
+		const ready = await ensureReadyForRequest();
+		if (!ready) return;
+
 		try {
 			const questions = getPendingQuestions(interaction.input || {});
 			const primaryQuestion = questions[0]?.question;
@@ -822,8 +1053,12 @@
 				output,
 				autoContinue: true
 			});
+			const startedAt = Date.now();
 			expectingContinuation = true;
 			isLoading = true;
+			requestStartedAt = startedAt;
+			clockNow = startedAt;
+			toolStartTimes = {};
 			currentStatus = 'Continuing...';
 		} catch (error) {
 			console.error('Error answering question:', error);
@@ -914,9 +1149,26 @@
 		{/key}
 
 		{#if isLoading}
-			<div class="thinking-indicator">
-				<Loader2 size={14} class="animate-spin" />
-				<span class="thinking-text">{currentStatus || 'Thinking...'}</span>
+			<div class="active-status-card" aria-live="polite">
+				<div class="active-status-header">
+					<div class="active-status-heading">
+						<div class="active-status-title-row">
+							<Loader2 size={16} class="animate-spin" />
+							<span class="active-status-title">{activitySummary.headline}</span>
+						</div>
+						<p class="active-status-detail">{activitySummary.detail}</p>
+					</div>
+					<span class="active-status-time">{requestElapsedLabel}</span>
+				</div>
+				<div class="active-status-meta">
+					<span class="status-pill">Live activity</span>
+					{#if activeToolTarget}
+						<span class="status-pill muted">{activeToolTarget}</span>
+					{/if}
+				</div>
+				<div class="active-status-bar" aria-hidden="true">
+					<span class="active-status-bar-fill"></span>
+				</div>
 			</div>
 		{/if}
 	</div>
@@ -1071,19 +1323,103 @@
 		margin-top: 0.25rem;
 	}
 
-	.thinking-indicator {
+	.active-status-card {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+		padding: 0.875rem 1rem;
+		background:
+			linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 8%, transparent), transparent 55%),
+			var(--color-bg-elevated);
+		border: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
+		border-radius: var(--radius-lg);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.active-status-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.active-status-heading {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		min-width: 0;
+	}
+
+	.active-status-title-row {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 0.5rem 0.75rem;
-		width: fit-content;
-		background: var(--color-bg-tertiary);
-		border-radius: var(--radius-full);
+		font-size: 0.9375rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
 	}
 
-	.thinking-text {
+	.active-status-title {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.active-status-detail {
+		margin: 0;
 		font-size: 0.8125rem;
+		line-height: 1.5;
 		color: var(--color-text-secondary);
+	}
+
+	.active-status-time {
+		font-family: var(--font-mono);
+		font-size: 0.75rem;
+		color: var(--color-text-secondary);
+		padding: 0.25rem 0.5rem;
+		border-radius: var(--radius-full);
+		background: var(--color-bg-secondary);
+		border: 1px solid var(--color-border);
+		flex-shrink: 0;
+	}
+
+	.active-status-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+	}
+
+	.status-pill {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.25rem 0.625rem;
+		border-radius: var(--radius-full);
+		background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+		color: var(--color-primary);
+		font-size: 0.75rem;
+		font-weight: 500;
+	}
+
+	.status-pill.muted {
+		background: var(--color-bg-secondary);
+		color: var(--color-text-secondary);
+		border: 1px solid var(--color-border);
+	}
+
+	.active-status-bar {
+		height: 0.375rem;
+		background: var(--color-bg-secondary);
+		border-radius: var(--radius-full);
+		overflow: hidden;
+	}
+
+	.active-status-bar-fill {
+		display: block;
+		width: 32%;
+		height: 100%;
+		border-radius: inherit;
+		background: linear-gradient(90deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 45%, white));
+		animation: status-slide 1.4s ease-in-out infinite;
 	}
 
 	.input-container {
@@ -1307,6 +1643,18 @@
 		}
 		to {
 			transform: rotate(360deg);
+		}
+	}
+
+	@keyframes status-slide {
+		0% {
+			transform: translateX(-110%);
+		}
+		50% {
+			transform: translateX(140%);
+		}
+		100% {
+			transform: translateX(320%);
 		}
 	}
 </style>

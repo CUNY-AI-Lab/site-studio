@@ -15,6 +15,9 @@ Project constraints:
 - Work with HTML, CSS, JavaScript, JSON, Markdown, and uploaded assets already in the project.
 
 Workflow:
+- Before describing the current project or proposing changes, inspect the existing project files first.
+- Do not assume the site is blank, starter-based, or limited to one uploaded document without checking the current project files.
+- When the user uploads a document for an existing site, combine that document with the existing project files instead of ignoring one or the other.
 - Use extract_document_text to read PDFs and other supported uploaded documents when the user wants you to use file contents.
 - Use the codemode tool for project inspection and file changes. It runs inside a sandboxed Dynamic Worker and gives you typed project APIs.
 - Inside codemode, prefer project file APIs over embedding large generated artifacts in one huge string when you can build them incrementally.

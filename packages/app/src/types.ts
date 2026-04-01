@@ -3,6 +3,8 @@ import type { SiteBuilderAgent } from "./agents/site-builder";
 export interface Env {
   APP_PUBLIC_DOMAIN?: string;
   LEGACY_PUBLIC_DOMAIN?: string;
+  R2_PUBLIC_DOMAIN?: string;
+  PUBLISHED_BASE_URL?: string;
   LOADER: WorkerLoader;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_MODEL?: string;

@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Play, CheckCircle2, AlertCircle, MessageSquare, Blocks } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
 
 	interface ToolExecution {
 		id?: string;
 		name: string;
+		title?: string;
 		input: Record<string, any>;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
@@ -46,12 +47,13 @@
 		create_directory: FolderPlus,
 		add_page: FileEdit,
 		list_files: FolderOpen,
+		extract_document_text: FolderOpen,
 		ask_user_question: MessageSquare,
 		AskUserQuestion: MessageSquare
 	};
 
 	const toolLabels: Record<string, string> = {
-		codemode: 'Running sandbox',
+		codemode: 'Working on your site',
 		write_file: 'Writing file',
 		edit_file: 'Editing file',
 		rename_file: 'Renaming file',
@@ -62,11 +64,21 @@
 		create_directory: 'Creating directory',
 		add_page: 'Adding page',
 		list_files: 'Listing files',
+		extract_document_text: 'Reading document',
 		ask_user_question: 'Asking for clarification',
 		AskUserQuestion: 'Asking for clarification'
 	};
 
-	function getToolLabel(name: string): string {
+	function humanizeToolName(name: string): string {
+		return name.replace(/_/g, ' ');
+	}
+
+	function getToolLabel(tool: ToolExecution): string {
+		if (tool.title && tool.title.trim().length > 0) {
+			return tool.title.trim();
+		}
+
+		const name = tool.name;
 		if (toolLabels[name]) {
 			return toolLabels[name];
 		}
@@ -79,7 +91,7 @@
 			.replace(/^mcp[\s_-]+[\w-]+[\s_-]+/, '')  // Remove MCP prefix
 			.replace(/-/g, '_');  // Normalize hyphens to underscores
 
-		return toolLabels[cleanName] || cleanName.replace(/_/g, ' ');
+		return toolLabels[cleanName] || humanizeToolName(cleanName);
 	}
 
 	function getToolIcon(name: string) {
@@ -96,7 +108,20 @@
 
 	function formatInput(input: Record<string, any>): string {
 		if (tool.name === 'codemode') {
-			return 'Dynamic Worker sandbox';
+			if (tool.status === 'success') {
+				return 'Reviewed or updated project files';
+			}
+			if (tool.status === 'error') {
+				return 'Project action';
+			}
+			return 'Reviewing and editing project files';
+		}
+		if (tool.name === 'extract_document_text') {
+			if (input.path) {
+				const parts = input.path.split('/');
+				return parts[parts.length - 1];
+			}
+			return 'Uploaded document';
 		}
 		if (input.file_path) {
 			// Show only filename, not full path
@@ -121,15 +146,27 @@
 	}
 
 	function getStatusIcon() {
+		if (tool.status === 'running') return Loader2;
 		if (tool.status === 'success') return CheckCircle2;
 		if (tool.status === 'error') return AlertCircle;
-		return Play;
+		return Loader2;
 	}
 
 	function getStatusClass() {
 		if (tool.status === 'success') return 'status-success';
 		if (tool.status === 'error') return 'status-error';
 		return 'status-running';
+	}
+
+	function formatElapsedTime(elapsedSeconds: number): string {
+		const totalSeconds = Math.max(0, Math.floor(elapsedSeconds));
+		if (totalSeconds < 60) {
+			return `${totalSeconds}s`;
+		}
+
+		const minutes = Math.floor(totalSeconds / 60);
+		const seconds = totalSeconds % 60;
+		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 	}
 
 	// Extract diff data from output
@@ -165,16 +202,19 @@
 			<div class="tool-icon-wrapper">
 				<ToolIcon size={14} class="tool-icon" />
 			</div>
-			<span class="tool-label">{getToolLabel(tool.name)}</span>
+			<span class="tool-label">{getToolLabel(tool)}</span>
 			{#if formatInput(tool.input)}
 				<span class="tool-target">{formatInput(tool.input)}</span>
 			{/if}
 		</div>
 		<div class="tool-status">
 			{#if tool.status === 'running' && tool.elapsedTime !== undefined}
-				<span class="elapsed-time">{tool.elapsedTime.toFixed(1)}s</span>
+				<span class="elapsed-time">{formatElapsedTime(tool.elapsedTime)}</span>
 			{/if}
-			<StatusIcon size={14} class="status-icon" />
+			<StatusIcon
+				size={14}
+				class={`status-icon ${tool.status === 'running' ? 'spinning' : ''}`.trim()}
+			/>
 			{#if tool.output}
 				<ChevronIcon size={14} class="chevron-icon" />
 			{/if}
@@ -346,6 +386,10 @@
 		flex-shrink: 0;
 	}
 
+	:global(.status-icon.spinning) {
+		animation: spin 1s linear infinite;
+	}
+
 	:global(.chevron-icon) {
 		color: var(--color-text-tertiary);
 		flex-shrink: 0;
@@ -384,5 +428,14 @@
 		color: var(--color-text-secondary);
 		line-height: 1.5;
 		white-space: pre-wrap;
+	}
+
+	@keyframes spin {
+		from {
+			transform: rotate(0deg);
+		}
+		to {
+			transform: rotate(360deg);
+		}
 	}
 </style>

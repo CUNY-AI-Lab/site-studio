@@ -24,6 +24,7 @@
   "vars": {
     "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
     "LEGACY_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
+    "R2_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
     "OPENROUTER_MODEL": "anthropic/claude-sonnet-4.6"
   },
   "worker_loaders": [
@@ -31,6 +32,12 @@
       "binding": "LOADER"
     }
   ],
+  "assets": {
+    "directory": "../frontend/build",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
   "r2_buckets": [
     {
       "binding": "SITE_STUDIO_BUCKET",
@@ -40,8 +47,8 @@
   "kv_namespaces": [
     {
       "binding": "SESSION_KV",
-      "id": "00000000000000000000000000000000",
-      "preview_id": "00000000000000000000000000000000"
+      "id": "76d51fbed2074ae6a91c21c70f810a25",
+      "preview_id": "76d51fbed2074ae6a91c21c70f810a25"
     }
   ]
 }

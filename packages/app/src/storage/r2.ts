@@ -3,6 +3,13 @@ import type { Env, ProjectMetadata, ProjectSnapshot, ProjectSnapshotTrigger, Sto
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 
+export class FileNotFoundError extends Error {
+  constructor(public readonly filePath: string) {
+    super("File not found");
+    this.name = "FileNotFoundError";
+  }
+}
+
 function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
 }
@@ -30,6 +37,19 @@ function snapshotMetadataKey(userId: string, projectId: string, snapshotId: stri
 
 function toIsoString(date: Date | undefined): string {
   return (date || new Date()).toISOString();
+}
+
+function publishedSortKey(metadata: ProjectMetadata): string {
+  return metadata.publishedAt || metadata.updatedAt || metadata.createdAt;
+}
+
+function safeParseJson<T>(value: string, label: string, key: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    console.warn(`Skipping invalid ${label}: ${key}`, error);
+    return null;
+  }
 }
 
 export class R2ProjectStorage {
@@ -156,12 +176,13 @@ export class R2ProjectStorage {
   }
 
   async getProjectMetadata(userId: string, projectId: string): Promise<ProjectMetadata | null> {
-    const object = await this.bucket.get(metadataKey(userId, projectId));
+    const key = metadataKey(userId, projectId);
+    const object = await this.bucket.get(key);
     if (!object) {
       return null;
     }
 
-    return JSON.parse(await object.text()) as ProjectMetadata;
+    return safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key);
   }
 
   async updateProjectMetadata(
@@ -232,7 +253,7 @@ export class R2ProjectStorage {
   async readFile(userId: string, projectId: string, filePath: string): Promise<string> {
     const object = await this.bucket.get(fileKey(userId, projectId, filePath));
     if (!object) {
-      throw new Error("File not found");
+      throw new FileNotFoundError(filePath);
     }
 
     return object.text();
@@ -241,7 +262,7 @@ export class R2ProjectStorage {
   async readFileBuffer(userId: string, projectId: string, filePath: string): Promise<Uint8Array> {
     const object = await this.bucket.get(fileKey(userId, projectId, filePath));
     if (!object) {
-      throw new Error("File not found");
+      throw new FileNotFoundError(filePath);
     }
 
     return new Uint8Array(await object.arrayBuffer());
@@ -411,25 +432,80 @@ export class R2ProjectStorage {
   }
 
   async getSnapshot(userId: string, projectId: string, snapshotId: string): Promise<ProjectSnapshot | null> {
-    const object = await this.bucket.get(snapshotMetadataKey(userId, projectId, snapshotId));
+    const key = snapshotMetadataKey(userId, projectId, snapshotId);
+    const object = await this.bucket.get(key);
     if (!object) {
       return null;
     }
 
-    return JSON.parse(await object.text()) as ProjectSnapshot;
+    return safeParseJson<ProjectSnapshot>(await object.text(), "snapshot metadata", key);
+  }
+
+  async resolvePublishedSlug(userId: string, desiredSlug: string, excludeProjectId?: string): Promise<string> {
+    const normalized = desiredSlug
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    if (!normalized) {
+      throw new Error("Published slug is required");
+    }
+
+    const projectIds = await this.listProjects(userId);
+    const usedSlugs = new Set<string>();
+
+    for (const projectId of projectIds) {
+      if (projectId === excludeProjectId) {
+        continue;
+      }
+
+      const metadata = await this.getProjectMetadata(userId, projectId);
+      if (metadata?.published && metadata.slug) {
+        usedSlugs.add(metadata.slug);
+      }
+    }
+
+    if (!usedSlugs.has(normalized)) {
+      return normalized;
+    }
+
+    let suffix = 2;
+    let candidate = `${normalized}-${suffix}`;
+    while (usedSlugs.has(candidate)) {
+      suffix += 1;
+      candidate = `${normalized}-${suffix}`;
+    }
+
+    return candidate;
   }
 
   async findPublishedProjectBySlug(userId: string, slug: string): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {
     const projectIds = await this.listProjects(userId);
+    const matches: Array<{ projectId: string; metadata: ProjectMetadata }> = [];
 
     for (const projectId of projectIds) {
       const metadata = await this.getProjectMetadata(userId, projectId);
       if (metadata?.published && metadata.slug === slug) {
-        return { projectId, metadata };
+        matches.push({ projectId, metadata });
       }
     }
 
-    return null;
+    if (matches.length === 0) {
+      return null;
+    }
+
+    matches.sort((left, right) => {
+      const publishedOrder = publishedSortKey(right.metadata).localeCompare(publishedSortKey(left.metadata));
+      if (publishedOrder !== 0) {
+        return publishedOrder;
+      }
+
+      return right.projectId.localeCompare(left.projectId);
+    });
+
+    return matches[0];
   }
 
   private async putJson(key: string, value: unknown): Promise<void> {

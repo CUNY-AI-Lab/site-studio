@@ -7,6 +7,7 @@
     "prebuild": "node scripts/bundle-templates.ts",
     "build": "tsc --noEmit",
     "dev": "wrangler dev --port 8792",
+    "predeploy": "npm --prefix ../frontend run build && npm run prebuild",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",

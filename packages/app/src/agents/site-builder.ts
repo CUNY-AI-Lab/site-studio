@@ -12,6 +12,7 @@ import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
 import { R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
+import { buildProjectContext } from "./project-context";
 
 type Scope = {
   userId: string;
@@ -896,6 +897,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       const model = provider(modelName);
       const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
         || summarizeLatestUserRequest(this.messages);
+      const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
+      const systemPrompt = `${SITE_BUILDER_PROMPT}\n\n${buildProjectContext(projectFiles)}`;
       const tools = createChatTools(this.env, scope, latestUserRequest, options?.clientTools);
 
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
@@ -909,7 +912,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       const result = streamText({
         model,
         abortSignal: options?.abortSignal,
-        system: SITE_BUILDER_PROMPT,
+        system: systemPrompt,
         messages: pruneMessages({
           messages: await convertToModelMessages(this.messages),
           toolCalls: "before-last-2-messages"

@@ -14,8 +14,22 @@ function slugify(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function getPublishedDomain(env: Env): string {
-  return env.APP_PUBLIC_DOMAIN || "https://tools.ailab.gc.cuny.edu";
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function getPublishedBaseUrl(c: AppContext): string {
+  const legacyConfiguredBaseUrl = c.env.R2_PUBLIC_DOMAIN?.trim();
+  if (legacyConfiguredBaseUrl) {
+    return normalizeBaseUrl(legacyConfiguredBaseUrl);
+  }
+
+  const configuredBaseUrl = c.env.PUBLISHED_BASE_URL?.trim();
+  if (configuredBaseUrl) {
+    return normalizeBaseUrl(configuredBaseUrl);
+  }
+
+  return normalizeBaseUrl(new URL(c.req.url).origin);
 }
 
 type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
@@ -33,8 +47,9 @@ export function createPublishRouter() {
       jsonError("Project not found", 404);
     }
 
-    const slug = metadata.slug || slugify(metadata.name || projectId);
-    const url = `${getPublishedDomain(c.env)}/sites/${user.id}/${slug}/`;
+    const desiredSlug = metadata.slug || slugify(metadata.name || projectId) || projectId;
+    const slug = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
+    const url = `${getPublishedBaseUrl(c)}/sites/${user.id}/${slug}/`;
 
     await storage.updateProjectMetadata(user.id, projectId, {
       published: true,

@@ -5,7 +5,7 @@ import { MAX_UPLOAD_BYTES, PROTECTED_FILE_NAMES } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
-import { R2ProjectStorage } from "../storage/r2";
+import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 import { buildFileTree, getContentType } from "../lib/path";
 
 const saveFileSchema = z.object({
@@ -71,7 +71,16 @@ export function createFileRouter() {
       jsonError("Binary files cannot be opened in the text editor. Download the file instead.", 415);
     }
 
-    const content = await storage.readFile(user.id, projectId, filePath);
+    let content: string;
+    try {
+      content = await storage.readFile(user.id, projectId, filePath);
+    } catch (error) {
+      if (error instanceof FileNotFoundError) {
+        jsonError("File not found", 404);
+      }
+      throw error;
+    }
+
     return c.json({
       path: filePath,
       contentType: getContentType(filePath),
@@ -195,7 +204,16 @@ export function createFileRouter() {
       jsonError("Project not found", 404);
     }
 
-    const buffer = await storage.readFileBuffer(user.id, projectId, filePath);
+    let buffer: Uint8Array;
+    try {
+      buffer = await storage.readFileBuffer(user.id, projectId, filePath);
+    } catch (error) {
+      if (error instanceof FileNotFoundError) {
+        jsonError("File not found", 404);
+      }
+      throw error;
+    }
+
     return new Response(binaryBody(buffer), {
       headers: {
         "Content-Disposition": `attachment; filename="${filePath.split("/").pop() || "download"}"`,

@@ -1,0 +1,26 @@
+{
+  "$schema": "../app/node_modules/wrangler/config-schema.json",
+  "name": "site-studio-publisher",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "tools.cuny.qzz.io/sites/*",
+      "zone_name": "cuny.qzz.io"
+    }
+  ],
+  "vars": {
+    "PUBLIC_DOMAIN": "https://tools.cuny.qzz.io"
+  },
+  "r2_buckets": [
+    {
+      "binding": "SITE_STUDIO_BUCKET",
+      "bucket_name": "site-studio"
+    }
+  ]
+}

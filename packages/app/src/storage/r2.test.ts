@@ -233,6 +233,12 @@ describe("R2ProjectStorage", () => {
       expect(metadata?.published).toBe(false);
     });
 
+    it("returns null for malformed metadata", async () => {
+      await bucket.put(`projects/${userId}/${projectId}/.metadata.json`, "{not valid json");
+
+      await expect(storage.getProjectMetadata(userId, projectId)).resolves.toBeNull();
+    });
+
     it("updates metadata fields", async () => {
       await storage.createProject(userId, projectId, "My Project");
       const updated = await storage.updateProjectMetadata(userId, projectId, {

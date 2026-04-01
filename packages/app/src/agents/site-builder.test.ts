@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { generateTypes } from "@cloudflare/codemode/ai";
 import { tool } from "ai";
 import { z } from "zod";
+import { buildProjectContext } from "./project-context";
 
 // We can't easily test the full agent (needs Durable Object runtime),
 // but we can verify the tool schemas generate proper types for the LLM.
@@ -122,5 +123,43 @@ describe("codemode tool type generation", () => {
     const types = generateTypes(tools);
 
     expect(types).toContain("MyToolOutput = unknown");
+  });
+
+  it("buildProjectContext includes existing files and uploaded documents", () => {
+    const context = buildProjectContext([
+      {
+        path: "index.html",
+        name: "index.html",
+        size: 100,
+        lastModified: "2026-04-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "text/html",
+        isText: true
+      },
+      {
+        path: "assets/cv.pdf",
+        name: "cv.pdf",
+        size: 1000,
+        lastModified: "2026-04-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "application/pdf",
+        isText: false
+      },
+      {
+        path: "styles.css",
+        name: "styles.css",
+        size: 200,
+        lastModified: "2026-04-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "text/css",
+        isText: true
+      }
+    ]);
+
+    expect(context).toContain("index.html");
+    expect(context).toContain("styles.css");
+    expect(context).toContain("assets/");
+    expect(context).toContain("assets/cv.pdf");
+    expect(context).toContain("extract_document_text");
   });
 });

@@ -28,9 +28,13 @@ function isSessionRecord(value: unknown): value is LegacySessionRecord {
 }
 
 async function readCurrentSession(env: Env, sessionId: string): Promise<User | null> {
-  const fromKv = await env.SESSION_KV.get(sessionKey(sessionId), "json");
-  if (fromKv && typeof fromKv === "object" && typeof (fromKv as Record<string, unknown>).id === "string") {
-    return fromKv as User;
+  try {
+    const fromKv = await env.SESSION_KV.get(sessionKey(sessionId), "json");
+    if (fromKv && typeof fromKv === "object" && typeof (fromKv as Record<string, unknown>).id === "string") {
+      return fromKv as User;
+    }
+  } catch (error) {
+    console.warn(`Ignoring invalid KV session for ${sessionId}`, error);
   }
 
   const legacy = await env.SITE_STUDIO_BUCKET.get(`sessions/${sessionId}.json`);
@@ -38,7 +42,14 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
     return null;
   }
 
-  const parsed = JSON.parse(await legacy.text()) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await legacy.text()) as unknown;
+  } catch (error) {
+    console.warn(`Ignoring invalid legacy session for ${sessionId}`, error);
+    return null;
+  }
+
   if (!isSessionRecord(parsed)) {
     return null;
   }

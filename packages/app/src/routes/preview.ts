@@ -3,7 +3,7 @@ import type { Env } from "../types";
 import { addCacheBusterToHtml, getContentType, isTextContentType } from "../lib/path";
 import { binaryBody, jsonError } from "../lib/http";
 import { getUser } from "../lib/session";
-import { R2ProjectStorage } from "../storage/r2";
+import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
 type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
 
@@ -44,16 +44,35 @@ async function servePreviewFile(
     filePath = `${filePath}index.html`;
   }
 
-  let content = await storage.readFileBuffer(user.id, projectId, filePath).catch(async () => {
-    if (!filePath.includes(".")) {
-      return storage.readFileBuffer(user.id, projectId, `${filePath}/index.html`);
-    }
-    throw new Error("Not found");
-  });
+  const primaryPath = filePath;
+  const fallbackPath = !filePath.includes(".") ? `${filePath}/index.html` : null;
 
-  const resolvedPath = (await storage.fileExists(user.id, projectId, filePath))
-    ? filePath
-    : `${filePath}/index.html`;
+  let content: Uint8Array | null = null;
+  let resolvedPath = primaryPath;
+
+  try {
+    content = await storage.readFileBuffer(user.id, projectId, primaryPath);
+  } catch (error) {
+    if (!(error instanceof FileNotFoundError)) {
+      throw error;
+    }
+  }
+
+  if (!content && fallbackPath) {
+    try {
+      content = await storage.readFileBuffer(user.id, projectId, fallbackPath);
+      resolvedPath = fallbackPath;
+    } catch (error) {
+      if (!(error instanceof FileNotFoundError)) {
+        throw error;
+      }
+    }
+  }
+
+  if (!content) {
+    jsonError("Not found", 404);
+  }
+
   const contentType = getContentType(resolvedPath);
 
   c.header("Content-Type", isTextContentType(contentType) ? `${contentType}; charset=utf-8` : contentType);

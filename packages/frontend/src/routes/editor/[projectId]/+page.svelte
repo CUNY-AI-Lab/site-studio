@@ -6,6 +6,7 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
+	import CodeView from '$lib/components/CodeView.svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
@@ -15,7 +16,6 @@
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import { Pane } from 'paneforge';
 
-	type CodeViewComponentType = typeof import('$lib/components/CodeView.svelte').default;
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
 	let previewComponent: Preview;
@@ -23,9 +23,6 @@
 	let projectLoadVersion = 0;
 	let previousProjectId = $state<string | null>(null);
 	let stableProjectId = $state<string | null>(null);
-	let codeViewComponent = $state<CodeViewComponentType | null>(null);
-	let isLoadingCodeView = $state(false);
-	let codeViewModulePromise: Promise<CodeViewComponentType> | null = null;
 	let onboardingModulePromise: Promise<OnboardingModule> | null = null;
 	type SaveSnapshot = {
 		projectId: string;
@@ -81,24 +78,6 @@
 		}
 
 		onboarding.createEditorTour().drive();
-	}
-
-	async function ensureCodeViewLoaded() {
-		if (codeViewComponent) {
-			return codeViewComponent;
-		}
-
-		if (!codeViewModulePromise) {
-			isLoadingCodeView = true;
-			codeViewModulePromise = import('$lib/components/CodeView.svelte')
-				.then((module) => module.default)
-				.finally(() => {
-					isLoadingCodeView = false;
-				});
-		}
-
-		codeViewComponent = await codeViewModulePromise;
-		return codeViewComponent;
 	}
 
 	onMount(() => {
@@ -429,9 +408,6 @@
 
     function toggleCodePane() {
         isCodeCollapsed = !isCodeCollapsed;
-		if (!isCodeCollapsed) {
-			void ensureCodeViewLoaded();
-		}
     }
 
 	function handleRenameProject() {
@@ -730,7 +706,7 @@
 					</div>
 				</div>
 				<div class="chat-wrapper">
-					<AgentChat {projectId} onUpdate={onAgentUpdate} />
+					<AgentChat {projectId} onUpdate={onAgentUpdate} onBeforeSend={flushPendingSave} />
 				</div>
 			</aside>
 		</Resizable.Pane>
@@ -765,26 +741,19 @@
 					<button class="close-editor-button" onclick={toggleCodePane} title="Close Editor">
 						<PanelRightClose size={20} />
 					</button>
-					{#if codeViewComponent}
-						{@const CodeView = codeViewComponent}
-						<CodeView
-							{projectId}
-							{files}
-							{currentFile}
-							{fileContent}
-							{currentFileIsText}
-							{currentFileContentType}
-							{isSaving}
-							onFileSelect={onFileSelect}
-							onEditorChange={onEditorChange}
-							onDownloadFile={handleCurrentFileDownload}
-							onRefreshFiles={loadFiles}
-						/>
-					{:else}
-						<div class="code-loading">
-							<span>{isLoadingCodeView ? 'Loading editor...' : 'Open the editor to load code tools.'}</span>
-						</div>
-					{/if}
+					<CodeView
+						{projectId}
+						{files}
+						{currentFile}
+						{fileContent}
+						{currentFileIsText}
+						{currentFileContentType}
+						{isSaving}
+						onFileSelect={onFileSelect}
+						onEditorChange={onEditorChange}
+						onDownloadFile={handleCurrentFileDownload}
+						onRefreshFiles={loadFiles}
+					/>
 				</aside>
 			</Resizable.Pane>
 		</Resizable.PaneGroup>
