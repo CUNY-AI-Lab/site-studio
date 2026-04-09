@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, MessageSquare, Send, X } from 'lucide-svelte';
+	import { Check, MessageCircleQuestion, Send, X, Pencil } from 'lucide-svelte';
 
 	interface QuestionOption {
 		label: string;
@@ -37,8 +37,7 @@
 
 	let selectedAnswers = $state<Record<number, string[]>>({});
 	let customAnswers = $state<Record<number, string>>({});
-	let notesByIndex = $state<Record<number, string>>({});
-	let activeOptionByIndex = $state<Record<number, string>>({});
+	let showCustomInput = $state<Record<number, boolean>>({});
 	let validationMessage = $state('');
 
 	function getSelectedAnswers(index: number): string[] {
@@ -47,19 +46,6 @@
 
 	function isSelected(index: number, label: string): boolean {
 		return getSelectedAnswers(index).includes(label);
-	}
-
-	function getOption(question: UserQuestionPrompt, label: string): QuestionOption | undefined {
-		return question.options?.find((option) => option.label === label);
-	}
-
-	function focusPreview(index: number, label: string) {
-		activeOptionByIndex[index] = label;
-	}
-
-	function resetPreview(index: number) {
-		const selected = getSelectedAnswers(index);
-		activeOptionByIndex[index] = selected[selected.length - 1] || '';
 	}
 
 	function chooseOption(index: number, question: UserQuestionPrompt, label: string) {
@@ -71,9 +57,25 @@
 		} else {
 			selectedAnswers[index] = [label];
 			customAnswers[index] = '';
+			showCustomInput[index] = false;
 		}
+		validationMessage = '';
+	}
 
-		focusPreview(index, label);
+	function toggleCustom(index: number, question: UserQuestionPrompt) {
+		showCustomInput[index] = !showCustomInput[index];
+		if (showCustomInput[index]) {
+			if (!question.multiSelect) {
+				selectedAnswers[index] = [];
+			}
+			// Focus the input after it renders
+			requestAnimationFrame(() => {
+				const input = document.getElementById(`custom-${index}`);
+				input?.focus();
+			});
+		} else {
+			customAnswers[index] = '';
+		}
 		validationMessage = '';
 	}
 
@@ -83,10 +85,6 @@
 			selectedAnswers[index] = [];
 		}
 		validationMessage = '';
-	}
-
-	function updateNotes(index: number, value: string) {
-		notesByIndex[index] = value;
 	}
 
 	function getAnswer(question: UserQuestionPrompt, index: number): string {
@@ -105,109 +103,17 @@
 	}
 
 	function getSelectedPreview(question: UserQuestionPrompt, index: number): string | undefined {
+		if (!question.options) return undefined;
 		const previews = getSelectedAnswers(index)
-			.map((label) => getOption(question, label)?.preview)
-			.filter((preview): preview is string => typeof preview === 'string' && preview.length > 0);
-
-		if (previews.length === 0) {
-			return undefined;
-		}
-
-		return previews.join('\n<hr />\n');
-	}
-
-	function getVisiblePreview(question: UserQuestionPrompt, index: number): string | undefined {
-		const activeOption = activeOptionByIndex[index];
-		const activePreview = activeOption ? getOption(question, activeOption)?.preview : undefined;
-
-		return activePreview || getSelectedPreview(question, index);
-	}
-
-	function hasPreviewOptions(question: UserQuestionPrompt): boolean {
-		return question.options?.some((option) => !!option.preview) ?? false;
+			.map((label) => question.options?.find((o) => o.label === label)?.preview)
+			.filter((p): p is string => typeof p === 'string' && p.length > 0);
+		return previews.length > 0 ? previews.join('\n') : undefined;
 	}
 
 	function buildAnnotation(question: UserQuestionPrompt, index: number): QuestionAnnotation | undefined {
 		const preview = getSelectedPreview(question, index);
-		const notes = notesByIndex[index]?.trim();
-
-		if (!preview && !notes) {
-			return undefined;
-		}
-
-		return {
-			...(preview ? { preview } : {}),
-			...(notes ? { notes } : {})
-		};
-	}
-
-	function looksLikeHtml(content: string): boolean {
-		return /<\/?[a-z][\s\S]*>/i.test(content);
-	}
-
-	function escapeHtml(content: string): string {
-		return content
-			.replaceAll('&', '&amp;')
-			.replaceAll('<', '&lt;')
-			.replaceAll('>', '&gt;')
-			.replaceAll('"', '&quot;')
-			.replaceAll("'", '&#39;');
-	}
-
-	function buildPreviewMarkup(content: string): string {
-		if (looksLikeHtml(content)) {
-			return content;
-		}
-
-		return `<pre class="plain-preview">${escapeHtml(content)}</pre>`;
-	}
-
-	function buildPreviewDocument(content: string): string {
-		return `<!doctype html>
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<style>
-			:root {
-				color-scheme: light;
-				font-family: "Georgia", "Iowan Old Style", serif;
-			}
-
-			* {
-				box-sizing: border-box;
-			}
-
-			body {
-				margin: 0;
-				padding: 1rem;
-				background: linear-gradient(180deg, #fbfaf6 0%, #f4f0e6 100%);
-				color: #1f2933;
-			}
-
-			img,
-			video,
-			iframe {
-				max-width: 100%;
-			}
-
-			hr {
-				border: 0;
-				border-top: 1px solid rgba(31, 41, 51, 0.12);
-				margin: 1rem 0;
-			}
-
-			.plain-preview {
-				margin: 0;
-				font-family: "SFMono-Regular", "Menlo", monospace;
-				font-size: 0.9rem;
-				line-height: 1.5;
-				white-space: pre-wrap;
-			}
-		</style>
-	</head>
-	<body>${buildPreviewMarkup(content)}</body>
-</html>`;
+		if (!preview) return undefined;
+		return { preview };
 	}
 
 	let canSubmit = $derived(
@@ -225,7 +131,6 @@
 
 		for (const [index, question] of questions.entries()) {
 			answers[question.question] = getAnswer(question, index);
-
 			const annotation = buildAnnotation(question, index);
 			if (annotation) {
 				annotations[question.question] = annotation;
@@ -237,400 +142,351 @@
 			...(Object.keys(annotations).length > 0 ? { annotations } : {})
 		});
 	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey && canSubmit) {
+			event.preventDefault();
+			submitAnswers();
+		}
+	}
 </script>
 
-<div class="question-card">
-	<div class="card-header">
-		<div class="header-icon">
-			<MessageSquare size={18} />
-		</div>
-		<div class="header-copy">
-			<h3>Question</h3>
-			<p>The agent needs clarification before it continues.</p>
-		</div>
-	</div>
-
-	<div class="questions">
-		{#each questions as question, index}
-			{@const previewContent = getVisiblePreview(question, index)}
-			<div class="question-block">
-				{#if question.header}
-					<div class="question-header">{question.header}</div>
-				{/if}
-
-				<label class="question-label" for={`question-${index}`}>
-					{question.question}
-				</label>
-
-				{#if question.options && question.options.length > 0}
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="question-card" onkeydown={handleKeydown}>
+	{#each questions as question, index}
+		<div class="question-section">
+			<div class="question-row">
+				<span class="q-icon">
+					<MessageCircleQuestion size={16} />
+				</span>
+				<div class="q-text">
+					{#if question.header}
+						<span class="q-tag">{question.header}</span>
+					{/if}
+					<p class="q-label">{question.question}</p>
 					{#if question.multiSelect}
-						<p class="question-meta">You can choose more than one option.</p>
+						<span class="q-hint">Select multiple</span>
 					{/if}
-
-					<div class="options">
-						{#each question.options as option}
-							<button
-								type="button"
-								class="option-button"
-								class:selected={isSelected(index, option.label)}
-								class:active={activeOptionByIndex[index] === option.label}
-								aria-pressed={isSelected(index, option.label)}
-								onclick={() => chooseOption(index, question, option.label)}
-								onmouseenter={() => focusPreview(index, option.label)}
-								onmouseleave={() => resetPreview(index)}
-								onfocus={() => focusPreview(index, option.label)}
-								onblur={() => resetPreview(index)}
-							>
-								<span class="option-header">
-									<span class="selection-indicator" class:selected={isSelected(index, option.label)}>
-										{#if isSelected(index, option.label)}
-											<Check size={12} />
-										{/if}
-									</span>
-									<span class="option-label">{option.label}</span>
-								</span>
-								{#if option.description}
-									<span class="option-description">{option.description}</span>
-								{/if}
-							</button>
-						{/each}
-					</div>
-
-					{#if previewContent}
-						<div class="preview-panel">
-							<div class="preview-label">Preview</div>
-							<div class="preview-surface">
-								<iframe
-									class="preview-frame"
-									title={`Preview for ${question.header || question.question}`}
-									sandbox=""
-									srcdoc={buildPreviewDocument(previewContent)}
-								></iframe>
-							</div>
-						</div>
-					{/if}
-
-					<div class="freeform">
-						<label class="field-label" for={`question-${index}`}>
-							Other
-						</label>
-						<input
-							id={`question-${index}`}
-							type="text"
-							class="answer-input"
-							placeholder={question.placeholder || 'Add a custom answer'}
-							value={customAnswers[index] || ''}
-							oninput={(event) => updateCustomAnswer(index, question, (event.currentTarget as HTMLInputElement).value)}
-						/>
-					</div>
-
-					{#if hasPreviewOptions(question)}
-						<div class="notes">
-							<label class="field-label" for={`notes-${index}`}>
-								Notes for the agent
-							</label>
-							<textarea
-								id={`notes-${index}`}
-								class="notes-textarea"
-								rows="2"
-								placeholder="Optional notes about the preview or your choice"
-								value={notesByIndex[index] || ''}
-								oninput={(event) => updateNotes(index, (event.currentTarget as HTMLTextAreaElement).value)}
-							></textarea>
-						</div>
-					{/if}
-				{:else}
-					<textarea
-						id={`question-${index}`}
-						class="answer-textarea"
-						rows="3"
-						placeholder={question.placeholder || 'Type your answer'}
-						value={customAnswers[index] || ''}
-						oninput={(event) => updateCustomAnswer(index, question, (event.currentTarget as HTMLTextAreaElement).value)}
-					></textarea>
-				{/if}
+				</div>
 			</div>
-		{/each}
-	</div>
+
+			{#if question.options && question.options.length > 0}
+				<div class="options-row">
+					{#each question.options as option}
+						<button
+							type="button"
+							class="option-chip"
+							class:selected={isSelected(index, option.label)}
+							aria-pressed={isSelected(index, option.label)}
+							onclick={() => chooseOption(index, question, option.label)}
+							title={option.description || ''}
+						>
+							{#if isSelected(index, option.label)}
+								<Check size={12} strokeWidth={3} />
+							{/if}
+							<span>{option.label}</span>
+						</button>
+					{/each}
+
+					<button
+						type="button"
+						class="option-chip other-chip"
+						class:selected={showCustomInput[index]}
+						onclick={() => toggleCustom(index, question)}
+					>
+						<Pencil size={11} />
+						<span>Other</span>
+					</button>
+				</div>
+
+				{#if showCustomInput[index]}
+					<input
+						id={`custom-${index}`}
+						type="text"
+						class="custom-input"
+						placeholder={question.placeholder || 'Type your answer…'}
+						value={customAnswers[index] || ''}
+						oninput={(e) => updateCustomAnswer(index, question, (e.currentTarget as HTMLInputElement).value)}
+					/>
+				{/if}
+			{:else}
+				<textarea
+					id={`freeform-${index}`}
+					class="freeform-input"
+					rows="2"
+					placeholder={question.placeholder || 'Type your answer…'}
+					value={customAnswers[index] || ''}
+					oninput={(e) => updateCustomAnswer(index, question, (e.currentTarget as HTMLTextAreaElement).value)}
+				></textarea>
+			{/if}
+		</div>
+	{/each}
 
 	{#if validationMessage}
-		<p class="validation-message">{validationMessage}</p>
+		<p class="validation">{validationMessage}</p>
 	{/if}
 
-	<div class="actions">
-		<button type="button" class="action-button reject" onclick={onReject}>
+	<div class="card-actions">
+		<button type="button" class="action-btn reject" onclick={onReject}>
 			<X size={15} />
-			<span>Cancel</span>
+			<span>Skip</span>
 		</button>
-		<button type="button" class="action-button submit" onclick={submitAnswers}>
-			<Send size={15} />
-			<span>Send answer</span>
+		<button type="button" class="action-btn submit" disabled={!canSubmit} onclick={submitAnswers}>
+			<Send size={14} />
+			<span>Reply</span>
 		</button>
 	</div>
 </div>
 
 <style>
 	.question-card {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-		padding: 1rem;
-		border-radius: var(--radius-lg);
-		border: 1px solid color-mix(in srgb, var(--color-border) 72%, white 28%);
-		background:
-			linear-gradient(160deg, color-mix(in srgb, var(--color-bg-elevated) 88%, white 12%) 0%, var(--color-bg-elevated) 100%);
-		box-shadow: 0 14px 32px rgba(12, 16, 24, 0.14);
-	}
-
-	.card-header {
-		display: flex;
-		align-items: flex-start;
-		gap: 0.875rem;
-	}
-
-	.header-icon {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 2.25rem;
-		height: 2.25rem;
-		border-radius: 0.85rem;
-		background: color-mix(in srgb, var(--color-primary) 16%, white 84%);
-		color: var(--color-primary);
-		flex-shrink: 0;
-	}
-
-	.header-copy h3 {
-		margin: 0;
-		font-size: 0.95rem;
-		font-weight: 600;
-	}
-
-	.header-copy p {
-		margin: 0.2rem 0 0;
-		font-size: 0.84rem;
-		color: var(--color-text-secondary);
-	}
-
-	.questions {
-		display: flex;
-		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.question-block {
-		display: flex;
-		flex-direction: column;
-		gap: 0.65rem;
-		padding: 0.85rem;
-		border-radius: var(--radius-md);
-		background: color-mix(in srgb, var(--color-bg) 76%, white 24%);
-		border: 1px solid color-mix(in srgb, var(--color-border) 84%, white 16%);
-	}
-
-	.question-header {
-		font-size: 0.72rem;
-		font-weight: 700;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--color-text-tertiary);
-	}
-
-	.question-label {
-		font-size: 0.93rem;
-		font-weight: 600;
-		line-height: 1.4;
-	}
-
-	.question-meta {
-		margin: -0.15rem 0 0;
-		font-size: 0.8rem;
-		color: var(--color-text-secondary);
-	}
-
-	.options {
-		display: grid;
-		gap: 0.55rem;
-	}
-
-	.option-button {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.3rem;
-		padding: 0.75rem 0.85rem;
-		border-radius: var(--radius-md);
-		border: 1px solid color-mix(in srgb, var(--color-border) 80%, white 20%);
-		background: var(--color-bg-elevated);
-		color: inherit;
-		text-align: left;
-		cursor: pointer;
-		transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
-	}
-
-	.option-button:hover,
-	.option-button.active {
-		transform: translateY(-1px);
-		border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-border) 45%);
-	}
-
-	.option-button.selected {
-		border-color: var(--color-primary);
-		background: color-mix(in srgb, var(--color-primary) 10%, white 90%);
-	}
-
-	.option-header {
-		display: flex;
-		align-items: center;
-		gap: 0.65rem;
-	}
-
-	.selection-indicator {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 1rem;
-		height: 1rem;
-		border-radius: 999px;
-		border: 1px solid color-mix(in srgb, var(--color-border) 80%, white 20%);
-		background: color-mix(in srgb, var(--color-bg) 88%, white 12%);
-		color: transparent;
-		flex-shrink: 0;
-	}
-
-	.selection-indicator.selected {
-		border-color: var(--color-primary);
-		background: var(--color-primary);
-		color: white;
-	}
-
-	.option-label {
-		font-size: 0.88rem;
-		font-weight: 600;
-	}
-
-	.option-description {
-		font-size: 0.8rem;
-		color: var(--color-text-secondary);
-	}
-
-	.preview-panel {
-		display: flex;
-		flex-direction: column;
-		gap: 0.45rem;
-		padding: 0.75rem;
-		border-radius: var(--radius-md);
-		border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--color-border) 72%);
-		background: color-mix(in srgb, var(--color-primary) 6%, white 94%);
-	}
-
-	.preview-label,
-	.field-label {
-		font-size: 0.76rem;
-		font-weight: 700;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-		color: var(--color-text-tertiary);
-	}
-
-	.preview-surface {
-		border-radius: calc(var(--radius-md) - 2px);
+		background: linear-gradient(
+			145deg,
+			rgba(30, 32, 38, 0.98) 0%,
+			rgba(24, 26, 32, 0.98) 100%
+		);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 12px;
 		overflow: hidden;
-		border: 1px solid color-mix(in srgb, var(--color-border) 68%, white 32%);
-		background: white;
+		box-shadow:
+			0 4px 24px rgba(0, 0, 0, 0.3),
+			0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+		margin: 0.75rem 0;
+		animation: cardIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+		flex-shrink: 0;
 	}
 
-	.preview-frame {
-		display: block;
-		width: 100%;
-		min-height: 16rem;
-		border: 0;
-		background: white;
+	@keyframes cardIn {
+		from {
+			opacity: 0;
+			transform: translateY(-8px) scale(0.98);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
 	}
 
-	.freeform,
-	.notes {
+	/* ── Question section ── */
+	.question-section {
+		padding: 1rem 1.25rem;
 		display: flex;
 		flex-direction: column;
-		gap: 0.45rem;
-	}
-
-	.answer-input,
-	.answer-textarea,
-	.notes-textarea {
-		width: 100%;
-		padding: 0.75rem 0.85rem;
-		border-radius: var(--radius-md);
-		border: 1px solid color-mix(in srgb, var(--color-border) 78%, white 22%);
-		background: var(--color-bg-elevated);
-		color: var(--color-text);
-		font: inherit;
-	}
-
-	.answer-input:focus,
-	.answer-textarea:focus,
-	.notes-textarea:focus {
-		outline: none;
-		border-color: color-mix(in srgb, var(--color-primary) 58%, var(--color-border) 42%);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 14%, transparent 86%);
-	}
-
-	.answer-textarea,
-	.notes-textarea {
-		resize: vertical;
-		min-height: 5.5rem;
-	}
-
-	.notes-textarea {
-		min-height: 4rem;
-	}
-
-	.validation-message {
-		margin: 0;
-		font-size: 0.82rem;
-		color: #b42318;
-	}
-
-	.actions {
-		display: flex;
-		justify-content: flex-end;
 		gap: 0.75rem;
 	}
 
-	.action-button {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.45rem;
-		padding: 0.65rem 1rem;
-		border: none;
-		border-radius: var(--radius-md);
-		font-weight: 600;
-		cursor: pointer;
-		transition: transform 0.15s ease, opacity 0.15s ease;
+	.question-section + .question-section {
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
 	}
 
-	.action-button:hover {
+	.question-row {
+		display: flex;
+		gap: 0.75rem;
+		align-items: flex-start;
+	}
+
+	.q-icon {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border-radius: 7px;
+		background: rgba(13, 115, 119, 0.18);
+		color: #5eead4;
+		flex-shrink: 0;
+		margin-top: 1px;
+	}
+
+	.q-text {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		min-width: 0;
+	}
+
+	.q-tag {
+		font-size: 0.625rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: #71717a;
+	}
+
+	.q-label {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: #e4e4e7;
+		line-height: 1.45;
+	}
+
+	.q-hint {
+		font-size: 0.6875rem;
+		color: #71717a;
+	}
+
+	/* ── Option chips ── */
+	.options-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		padding-left: calc(28px + 0.75rem); /* align with question text */
+	}
+
+	.option-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		padding: 0.4rem 0.75rem;
+		border-radius: 999px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(255, 255, 255, 0.04);
+		color: #d4d4d8;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		cursor: pointer;
+		transition: all 0.15s ease;
+		white-space: nowrap;
+	}
+
+	.option-chip:hover {
+		background: rgba(255, 255, 255, 0.08);
+		border-color: rgba(255, 255, 255, 0.16);
+	}
+
+	.option-chip.selected {
+		background: rgba(13, 115, 119, 0.22);
+		border-color: rgba(13, 115, 119, 0.5);
+		color: #5eead4;
+	}
+
+	.other-chip {
+		border-style: dashed;
+	}
+
+	.other-chip.selected {
+		border-style: solid;
+		background: rgba(255, 255, 255, 0.08);
+		border-color: rgba(255, 255, 255, 0.18);
+		color: #d4d4d8;
+	}
+
+	/* ── Inputs ── */
+	.custom-input,
+	.freeform-input {
+		margin-left: calc(28px + 0.75rem);
+		width: calc(100% - 28px - 0.75rem);
+		padding: 0.5rem 0.75rem;
+		border-radius: 8px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(0, 0, 0, 0.25);
+		color: #e4e4e7;
+		font: inherit;
+		font-size: 0.8125rem;
+		transition: border-color 0.15s ease;
+		animation: inputFade 0.15s ease;
+	}
+
+	@keyframes inputFade {
+		from { opacity: 0; transform: translateY(-4px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+
+	.custom-input:focus,
+	.freeform-input:focus {
+		outline: none;
+		border-color: rgba(13, 115, 119, 0.5);
+		box-shadow: 0 0 0 2px rgba(13, 115, 119, 0.15);
+	}
+
+	.custom-input::placeholder,
+	.freeform-input::placeholder {
+		color: #52525b;
+	}
+
+	.freeform-input {
+		resize: vertical;
+		min-height: 3rem;
+	}
+
+	/* ── Validation ── */
+	.validation {
+		margin: 0;
+		padding: 0 1.25rem;
+		font-size: 0.75rem;
+		color: #ef4444;
+	}
+
+	/* ── Actions ── */
+	.card-actions {
+		display: flex;
+		gap: 0.625rem;
+		padding: 0.875rem 1rem;
+		background: rgba(0, 0, 0, 0.2);
+		border-top: 1px solid rgba(255, 255, 255, 0.05);
+	}
+
+	.action-btn {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.45rem;
+		padding: 0.6rem 1rem;
+		border-radius: 8px;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		border: none;
+		cursor: pointer;
+		transition: all 0.15s ease;
+	}
+
+	.action-btn:hover:not(:disabled) {
 		transform: translateY(-1px);
 	}
 
-	.action-button.reject {
-		background: color-mix(in srgb, var(--color-border) 68%, white 32%);
-		color: var(--color-text);
+	.action-btn:active {
+		transform: translateY(0);
 	}
 
-	.action-button.submit {
-		background: var(--color-primary);
+	.action-btn.reject {
+		background: rgba(255, 255, 255, 0.06);
+		color: #a1a1aa;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.action-btn.reject:hover {
+		background: rgba(255, 255, 255, 0.1);
+		color: #d4d4d8;
+	}
+
+	.action-btn.submit {
+		background: linear-gradient(135deg, #0d7377 0%, #0a5c5f 100%);
 		color: white;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		box-shadow: 0 2px 8px rgba(13, 115, 119, 0.3);
+	}
+
+	.action-btn.submit:hover:not(:disabled) {
+		background: linear-gradient(135deg, #0a5c5f 0%, #084547 100%);
+		box-shadow: 0 4px 12px rgba(13, 115, 119, 0.4);
+	}
+
+	.action-btn.submit:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 
 	@media (max-width: 640px) {
-		.actions {
-			flex-direction: column-reverse;
+		.options-row {
+			padding-left: 0;
 		}
 
-		.action-button {
+		.custom-input,
+		.freeform-input {
+			margin-left: 0;
 			width: 100%;
-			justify-content: center;
 		}
 	}
 </style>
