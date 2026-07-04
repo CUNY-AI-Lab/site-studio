@@ -111,6 +111,40 @@ describe("codemode tool type generation", () => {
     expect(types).toContain("line: number");
   });
 
+  it("generates typed output for generate_image (discriminated union)", () => {
+    const tools = {
+      generate_image: tool({
+        description: "Generate an image and save it to images/.",
+        inputSchema: z.object({
+          prompt: z.string().min(1),
+          filename: z.string().optional(),
+          width: z.number().int().optional(),
+          height: z.number().int().optional()
+        }),
+        outputSchema: z.discriminatedUnion("ok", [
+          z.object({
+            ok: z.literal(true),
+            path: z.string(),
+            message: z.string()
+          }),
+          z.object({
+            ok: z.literal(false),
+            message: z.string()
+          })
+        ]),
+        execute: async () => ({ ok: true as const, path: "images/x.png", message: "saved" })
+      })
+    };
+
+    const types = generateTypes(tools);
+
+    expect(types).not.toContain("GenerateImageOutput = unknown");
+    expect(types).toContain("ok: true");
+    expect(types).toContain("ok: false");
+    expect(types).toContain("path: string");
+    expect(types).toContain("message: string");
+  });
+
   it("without outputSchema, generates unknown return type", () => {
     const tools = {
       my_tool: tool({

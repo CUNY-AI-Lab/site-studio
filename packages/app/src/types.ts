@@ -13,6 +13,14 @@ export interface Env {
   // Model id, expressed for AI Gateway's OpenAI-compatible path. See the
   // model-availability flag: confirm the gateway-supported id at launch.
   CAIL_MODEL?: string;
+  // Text-to-image model id (Workers AI native path). CAIL policy: `@cf/...`
+  // only. Default @cf/black-forest-labs/flux-2-klein-4b; budget alternative
+  // @cf/black-forest-labs/flux-1-schnell.
+  CAIL_IMAGE_MODEL?: string;
+  // Vision model used as the REQUIRED image moderation gate (no dedicated NSFW
+  // classifier exists in Workers AI). `@cf/...` only. Default
+  // @cf/google/gemma-4-26b-a4b-it; fallback @cf/meta/llama-3.2-11b-vision-instruct.
+  CAIL_IMAGE_CLASSIFIER?: string;
   // Shared HS256 secret used to verify X-CAIL-Identity-JWT. Wrangler secret;
   // ops-managed. Unset => identity disabled (every request anonymous).
   CAIL_IDENTITY_JWT_SECRET?: string;

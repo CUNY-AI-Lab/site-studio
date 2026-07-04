@@ -6,6 +6,8 @@ import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } 
 import { z } from "zod";
 import type { Env, SiteBuilderAgentProps } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
+import { generateImage, screenImage } from "../lib/image-generation";
+import { sniffImageType } from "../lib/image-validation";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
@@ -264,6 +266,19 @@ function isTextFile(filePath: string): boolean {
   return isTextContentType(getContentType(filePath));
 }
 
+/**
+ * Turn a caller-supplied filename into a safe PNG basename under images/.
+ * Strips any directory parts, keeps only [A-Za-z0-9._-], and forces a single
+ * .png extension. Empty/degenerate input falls back to a timestamped name.
+ */
+function sanitizeGeneratedImageName(raw: string | undefined): string {
+  const base = (raw || "").split("/").pop()?.split("\\").pop() ?? "";
+  const withoutExt = base.replace(/\.png$/i, "");
+  const cleaned = withoutExt.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^_+|_+$/g, "");
+  const stem = cleaned.length > 0 ? cleaned : `generated-${Date.now()}`;
+  return `${stem}.png`;
+}
+
 function summarizeLatestUserRequest(messages: unknown): string | undefined {
   if (!Array.isArray(messages)) {
     return undefined;
@@ -305,6 +320,7 @@ function summarizeLatestUserRequest(messages: unknown): string | undefined {
 function createProjectTools(
   env: Env,
   scope: Scope,
+  identityJwt: string | null,
   snapshotOptions?: {
     label?: string;
     trigger?: "agent";
@@ -785,16 +801,82 @@ function createProjectTools(
         };
       }
     }),
+    generate_image: tool({
+      description: "Generate an image with AI and save it into the project's images/ folder. Use when the user wants visuals they do not already have. Every generated image passes a required content-safety check before it is saved; rejected images are not written. Agree on descriptive alt text with the user before or right after inserting the image.",
+      inputSchema: z.object({
+        prompt: z.string().min(1).describe("What to depict. Style guidance (medium, mood, composition) is welcome."),
+        filename: z.string().optional().describe("Optional basename for the saved file; sanitized and given a .png extension. Saved under images/."),
+        width: z.number().int().optional().describe("Optional width in pixels (default 1024; clamped to a multiple of 64 in [64, 2048])."),
+        height: z.number().int().optional().describe("Optional height in pixels (default 1024; clamped to a multiple of 64 in [64, 2048]).")
+      }),
+      outputSchema: z.discriminatedUnion("ok", [
+        z.object({
+          ok: z.literal(true),
+          path: z.string().describe("Project-relative path of the saved image under images/."),
+          message: z.string().describe("Short confirmation for the assistant to relay.")
+        }),
+        z.object({
+          ok: z.literal(false),
+          message: z.string().describe("Why the image could not be generated or saved.")
+        })
+      ]),
+      execute: async ({ prompt, filename, width, height }) => {
+        // Writes a project file, so snapshot first (mutation, unlike audit_accessibility).
+        await ensureSnapshot();
+
+        const generated = await generateImage(env, identityJwt, { prompt, width, height });
+        if (!generated.ok) {
+          // CAIL error envelope passed through unmodified.
+          return { ok: false as const, message: generated.message };
+        }
+
+        // Sanity check the bytes really are an image before screening/saving.
+        if (!sniffImageType(generated.bytes)) {
+          return {
+            ok: false as const,
+            message: "The generator did not return a valid image. Try again in a moment."
+          };
+        }
+
+        const screen = await screenImage(env, identityJwt, generated.bytes);
+        if (!screen.allowed) {
+          // Calm, non-shaming copy. Do not echo the classifier's reason.
+          return {
+            ok: false as const,
+            message: "I couldn't use that image — it didn't pass the content check for published sites. Try rephrasing what you'd like."
+          };
+        }
+
+        // Collision-suffix within images/, mirroring the upload route.
+        const safeName = sanitizeGeneratedImageName(filename);
+        let path = `images/${safeName}`;
+        let counter = 1;
+        while (await storage.fileExists(scope.userId, scope.projectId, path)) {
+          const stem = safeName.replace(/\.png$/i, "");
+          path = `images/${stem}_${counter}.png`;
+          counter += 1;
+        }
+
+        await storage.uploadToProject(scope.userId, scope.projectId, path, generated.bytes);
+
+        return {
+          ok: true as const,
+          path,
+          message: `Saved a generated image to ${path}. Agree on descriptive alt text before or right after inserting it.`
+        };
+      }
+    }),
   };
 }
 
 function createChatTools(
   env: Env,
   scope: Scope,
+  identityJwt: string | null,
   latestUserRequest: string | undefined,
   clientTools?: Parameters<typeof createToolsFromClientSchemas>[0]
 ) {
-  const projectTools = createProjectTools(env, scope, {
+  const projectTools = createProjectTools(env, scope, identityJwt, {
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
   });
@@ -1006,7 +1088,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
       const systemPrompt = `${SITE_BUILDER_PROMPT}\n\n${buildProjectContext(projectFiles)}`;
-      const tools = createChatTools(this.env, scope, latestUserRequest, options?.clientTools);
+      const tools = createChatTools(this.env, scope, this.identityJwt, latestUserRequest, options?.clientTools);
 
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
       this.pushObservabilityEvent(requestId, "request-start", "Chat request started", "info", {
