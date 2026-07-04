@@ -6,6 +6,7 @@ import { authMiddleware } from "./lib/session";
 import { SiteBuilderAgent } from "./agents/site-builder";
 import { createAgentRouter } from "./routes/agents";
 import { createFileRouter } from "./routes/files";
+import { createHandleRouter } from "./routes/handles";
 import { createHealthRouter } from "./routes/health";
 import { createPreviewRouter } from "./routes/preview";
 import { createProjectRouter } from "./routes/projects";
@@ -32,6 +33,8 @@ app.use("/preview/*", cors({
 
 app.use("/api/projects", authMiddleware);
 app.use("/api/projects/*", authMiddleware);
+app.use("/api/handle", authMiddleware);
+app.use("/api/handle/*", authMiddleware);
 app.use("/api/agents/site-builder/*", authMiddleware);
 app.use("/api/agents/site-builder/:projectId", authMiddleware);
 app.use("/preview/*", authMiddleware);
@@ -42,6 +45,7 @@ app.route("/", createTemplateRouter());
 app.route("/", createAgentRouter());
 app.route("/", createProjectRouter());
 app.route("/", createFileRouter());
+app.route("/", createHandleRouter());
 app.route("/", createPublishRouter());
 app.route("/", createPreviewRouter());
 
@@ -61,7 +65,9 @@ app.notFound(async (c) => {
     || pathname === "/preview"
     || pathname.startsWith("/preview/")
     || pathname === "/sites"
-    || pathname.startsWith("/sites/");
+    || pathname.startsWith("/sites/")
+    || pathname === "/u"
+    || pathname.startsWith("/u/");
 
   if (!isWorkerRoute && c.env.ASSETS) {
     return c.env.ASSETS.fetch(c.req.raw);

@@ -9,6 +9,7 @@
 	import { MoreVertical, Plus, FolderOpen, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
+	import HandleClaimDialog from './HandleClaimDialog.svelte';
 	import { hasCompletedOnboarding, createDashboardTour } from '$lib/utils/onboarding';
 	import { toast } from '$lib/toast.svelte';
 	import 'driver.js/dist/driver.css';
@@ -23,6 +24,11 @@
 	let showRenameDialog = $state(false);
 	let showDeleteDialog = $state(false);
 	let selectedProject = $state<Project | null>(null);
+
+	// Handle-claim dialog, shown when publishing requires a public handle. The
+	// project whose publish triggered it, so we can retry after claiming.
+	let showHandleDialog = $state(false);
+	let pendingPublishProject = $state<Project | null>(null);
 
 	onMount(() => {
 		void loadProjects().then(() => {
@@ -93,6 +99,15 @@
 			publishingProjectId = project.id;
 			const result = await publishProject(project.id);
 
+			if (!result.ok) {
+				// No public handle yet — collect one, then retry this publish.
+				if (result.reason === 'handle_required') {
+					pendingPublishProject = project;
+					showHandleDialog = true;
+				}
+				return;
+			}
+
 			// Update the project in the list
 			projects = projects.map(p =>
 				p.id === project.id
@@ -103,6 +118,15 @@
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
 			publishingProjectId = null;
+		}
+	}
+
+	async function handleHandleClaimed(_handle: string) {
+		showHandleDialog = false;
+		const project = pendingPublishProject;
+		pendingPublishProject = null;
+		if (project) {
+			await handlePublishProject(project);
 		}
 	}
 
@@ -130,6 +154,15 @@
 </script>
 
 <!-- Dialogs -->
+<HandleClaimDialog
+	open={showHandleDialog}
+	onOpenChange={(open) => {
+		showHandleDialog = open;
+		if (!open) pendingPublishProject = null;
+	}}
+	onClaimed={handleHandleClaimed}
+/>
+
 <NewProjectDialog
 	bind:open={showNewProjectDialog}
 	onOpenChange={(open) => (showNewProjectDialog = open)}

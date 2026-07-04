@@ -266,9 +266,15 @@ The Vite dev server proxies `/api/*` requests to the Wrangler dev server.
 ### Templates
 - `GET /api/templates` - List available templates
 
+### Handles
+- `GET /api/handle` - Current user's public handle (or null)
+- `GET /api/handle/check?handle=x` - Validate + availability check
+- `POST /api/handle` - Claim a handle (claim-once, immutable)
+
 ### Preview
 - `GET /preview/:id/*` - Live preview (authenticated)
-- `GET /sites/:userId/:slug/*` - Published sites (public)
+- `GET /u/:handle/:slug/*` - Published sites, canonical (public; keyed by user-chosen handle so the owner/subject id never appears in the URL)
+- `GET /sites/:userId/:slug/*` - Published sites, legacy (301s to `/u/…` when the owner has a handle, else serves content directly). Publishing returns 409 `handle_required` until the user claims a handle.
 
 ## Common Gotchas
 

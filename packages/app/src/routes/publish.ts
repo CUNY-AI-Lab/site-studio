@@ -3,6 +3,7 @@ import type { Env } from "../types";
 import { getContentType } from "../lib/path";
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
+import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
@@ -127,9 +128,24 @@ export function createPublishRouter() {
       jsonError("Project not found", 404);
     }
 
+    // Published URLs live under the user's chosen handle: /u/{handle}/{slug}/.
+    // Without a handle there is no canonical address to publish to, so ask the
+    // client to claim one first. The handle keeps the CAIL subject out of the
+    // public URL entirely.
+    const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, user.id);
+    if (!handle) {
+      return c.json(
+        {
+          error: "handle_required",
+          message: "Choose your public handle before publishing."
+        },
+        409
+      );
+    }
+
     const desiredSlug = metadata.slug || slugify(metadata.name || projectId) || projectId;
     const slug = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
-    const url = `${getPublishedBaseUrl(c)}/sites/${user.id}/${slug}/`;
+    const url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
 
     await storage.updateProjectMetadata(user.id, projectId, {
       published: true,
@@ -217,71 +233,150 @@ export function createPublishRouter() {
     });
   });
 
+  // Canonical published URL: /u/{handle}/{slug}/*. Resolve the handle to its
+  // owner and serve. The owner id (CAIL subject) never appears in the URL.
+  app.get("/u/:handle/:slug", async (c) => {
+    return serveByHandle(c, "index.html");
+  });
+
+  app.get("/u/:handle/:slug/*", async (c) => {
+    const base = `/u/${c.req.param("handle")}/${c.req.param("slug")}/`;
+    const url = new URL(c.req.url);
+    const filePath = url.pathname.slice(base.length) || "index.html";
+    return serveByHandle(c, filePath);
+  });
+
+  // Legacy published URL: /sites/{ownerId}/{slug}/*. Kept working. If the
+  // resolved owner has a handle we 301 to the equivalent /u/ address;
+  // otherwise (pre-handle sites) we serve content directly.
   app.get("/sites/:userId/:slug", async (c) => {
-    return servePublishedFile(c, "index.html");
+    return serveLegacySite(c, "index.html");
   });
 
   app.get("/sites/:userId/:slug/*", async (c) => {
     const base = `/sites/${c.req.param("userId")}/${c.req.param("slug")}/`;
     const url = new URL(c.req.url);
     const filePath = url.pathname.slice(base.length) || "index.html";
-    return servePublishedFile(c, filePath);
+    return serveLegacySite(c, filePath);
   });
 
   return app;
 }
 
-async function servePublishedFile(
-  c: AppContext,
-  rawPath: string
-) {
-  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
-  const requestedUserId = c.req.param("userId");
-  const slug = c.req.param("slug");
-  if (!requestedUserId || !slug) {
-    // No site context to link back to — terse/styled 404 with no home link.
-    return publishedNotFound(c, rawPath);
-  }
-
-  const siteRootPath = `/sites/${requestedUserId}/${slug}/`;
-
+/**
+ * Resolve a published project under `userId`, following the migration
+ * forwarding pointer (lib/migration.ts) so re-homed anonymous namespaces keep
+ * serving. Returns the effective owner id (post-migration) and the resolved
+ * project, or null when nothing matches.
+ */
+async function resolvePublishedSite(
+  storage: R2ProjectStorage,
+  bucket: R2Bucket,
+  requestedUserId: string,
+  slug: string
+): Promise<{ ownerId: string; resolved: { projectId: string } } | null> {
   let userId = requestedUserId;
   let resolved = await storage.findPublishedProjectBySlug(userId, slug);
 
   if (!resolved) {
-    // The owner id in the URL may be an anonymous namespace that was migrated
-    // to a CAIL subject (lib/migration.ts). Follow the forwarding pointer so
-    // previously shared /sites/<anon>/<slug>/ links keep serving the live,
-    // migrated site.
-    const pointer = await loadMigrationPointer(c.env.SITE_STUDIO_BUCKET, userId);
+    const pointer = await loadMigrationPointer(bucket, userId);
     if (pointer) {
       userId = pointer.subject;
       resolved = await storage.findPublishedProjectBySlug(userId, pointer.slugs[slug] ?? slug);
     }
   }
 
-  if (!resolved) {
-    // Unknown site: the slug does not resolve, so we cannot promise the home
-    // link points at a live page. Serve the styled 404 without a home link.
+  return resolved ? { ownerId: userId, resolved } : null;
+}
+
+/** Serve a file for a canonical /u/{handle}/{slug}/ request. */
+async function serveByHandle(c: AppContext, rawPath: string) {
+  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+  const handle = c.req.param("handle");
+  const slug = c.req.param("slug");
+  if (!handle || !slug) {
     return publishedNotFound(c, rawPath);
   }
 
+  const siteRootPath = `/u/${handle}/${slug}/`;
+
+  const ownerId = await resolveHandleOwner(c.env.SITE_STUDIO_BUCKET, handle);
+  if (!ownerId) {
+    return publishedNotFound(c, rawPath);
+  }
+
+  const site = await resolvePublishedSite(storage, c.env.SITE_STUDIO_BUCKET, ownerId, slug);
+  if (!site) {
+    return publishedNotFound(c, rawPath);
+  }
+
+  return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
+}
+
+/**
+ * Serve a legacy /sites/{ownerId}/{slug}/ request. If the (post-migration)
+ * owner has a handle, 301 to the equivalent /u/{handle}/{slug}/{filePath}
+ * preserving the sub-path and query string. Only owners with NO handle serve
+ * content directly, so pre-handle published sites keep working unchanged.
+ */
+async function serveLegacySite(c: AppContext, rawPath: string) {
+  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+  const requestedUserId = c.req.param("userId");
+  const slug = c.req.param("slug");
+  if (!requestedUserId || !slug) {
+    return publishedNotFound(c, rawPath);
+  }
+
+  const siteRootPath = `/sites/${requestedUserId}/${slug}/`;
+
+  const site = await resolvePublishedSite(storage, c.env.SITE_STUDIO_BUCKET, requestedUserId, slug);
+  if (!site) {
+    return publishedNotFound(c, rawPath);
+  }
+
+  // If the resolved owner has a handle, the canonical home is /u/{handle}/…;
+  // redirect there so a single public address wins and the owner id stops
+  // appearing in the URL. `slug` is the legacy-URL slug; keep it as the /u/
+  // slug so shared deep links resolve unchanged (the /u/ handler re-resolves).
+  const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, site.ownerId);
+  if (handle) {
+    const url = new URL(c.req.url);
+    // Preserve the exact sub-path from the request (not the "index.html"
+    // default) and the query string, so deep links redirect faithfully.
+    const base = `/sites/${requestedUserId}/${slug}/`;
+    const subPath = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : "";
+    const location = `/u/${handle}/${slug}/${subPath}${url.search}`;
+    return c.redirect(location, 301);
+  }
+
+  return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
+}
+
+/** Read and return a file within an already-resolved published project. */
+async function servePublishedFile(
+  c: AppContext,
+  storage: R2ProjectStorage,
+  userId: string,
+  projectId: string,
+  rawPath: string,
+  siteRootPath: string
+) {
   let filePath = rawPath || "index.html";
 
-  if (!(await storage.fileExists(userId, resolved.projectId, filePath))) {
+  if (!(await storage.fileExists(userId, projectId, filePath))) {
     if (!filePath.endsWith(".html")) {
       const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
-      if (await storage.fileExists(userId, resolved.projectId, indexPath)) {
+      if (await storage.fileExists(userId, projectId, indexPath)) {
         filePath = indexPath;
       } else {
-        return missingPublishedFile(c, storage, userId, resolved.projectId, rawPath, siteRootPath);
+        return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
       }
     } else {
-      return missingPublishedFile(c, storage, userId, resolved.projectId, rawPath, siteRootPath);
+      return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
     }
   }
 
-  const content = await storage.readFileBuffer(userId, resolved.projectId, filePath);
+  const content = await storage.readFileBuffer(userId, projectId, filePath);
   const contentType = getContentType(filePath);
   const headers = new Headers({
     "Content-Type": contentType

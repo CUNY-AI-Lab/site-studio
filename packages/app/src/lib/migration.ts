@@ -34,6 +34,7 @@
  */
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
+import { getUserHandle, migrateHandle } from "./handles";
 
 export interface MigrationClaim {
   subject: string;
@@ -109,6 +110,15 @@ function uploadsPrefix(userId: string): string {
 
 function isAnonymousUserId(id: string): boolean {
   return id.startsWith("user_");
+}
+
+/**
+ * Rewrite a stored published URL to the canonical /u/{handle}/{slug}/ form,
+ * preserving the origin. Handles both the legacy /sites/{owner}/{slug}/ shape
+ * and an already-/u/ shape, so this is safe to run on any stored URL.
+ */
+function rewritePublishedUrl(publishedUrl: string, handle: string, slug: string): string {
+  return publishedUrl.replace(/\/(?:sites|u)\/[^/]+\/[^/]+/, `/u/${handle}/${slug}`);
 }
 
 async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
@@ -296,6 +306,14 @@ export async function migrateAnonymousData(options: {
     return { status, projects } as MigrationResult;
   };
 
+  // ---- Handle re-homing (before inventory so published URLs can use it) ----
+  // Move the anon user's public handle to the subject: the handle record is
+  // always re-pointed (so shared /u/{handle}/ links keep resolving), and the
+  // reverse record is promoted only when the subject has no handle of its own.
+  // Idempotent and non-destructive, matching this module's ordering.
+  await migrateHandle({ bucket, anonUserId, subject, now });
+  const subjectHandle = await getUserHandle(bucket, subject);
+
   // ---- Inventory ----
   const anonProjectIds = await listProjectIds(bucket, anonUserId);
   const uploadKeys = await listKeys(bucket, uploadsPrefix(anonUserId));
@@ -346,10 +364,19 @@ export async function migrateAnonymousData(options: {
         ...(plan.newSlug ? { slug: plan.newSlug } : {}),
         ...(plan.metadata.publishedUrl && plan.newSlug
           ? {
-              publishedUrl: plan.metadata.publishedUrl.replace(
-                /\/sites\/[^/]+\/[^/]+/,
-                `/sites/${subject}/${plan.newSlug}`
-              )
+              // Never let the subject id into a client-visible URL. When the
+              // subject has a handle, rewrite to the canonical /u/{handle}/
+              // form; otherwise drop the stored URL (it will be regenerated on
+              // the next publish once a handle exists).
+              ...(subjectHandle
+                ? {
+                    publishedUrl: rewritePublishedUrl(
+                      plan.metadata.publishedUrl,
+                      subjectHandle,
+                      plan.newSlug
+                    )
+                  }
+                : { publishedUrl: undefined })
             }
           : {})
       };

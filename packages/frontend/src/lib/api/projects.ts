@@ -201,18 +201,53 @@ export interface A11yFinding {
 	message: string;
 }
 
-export interface PublishResult {
+export interface PublishSuccess {
+	ok: true;
 	url: string;
 	a11yFindings?: A11yFinding[];
 }
 
 /**
- * Publish a project to make it publicly accessible
+ * The publish endpoint returns 409 { error: "handle_required" } when the user
+ * has not yet claimed a public handle. Surfaced as a typed result so the caller
+ * can open the handle-claim dialog instead of showing a raw error string.
+ */
+export interface PublishNeedsHandle {
+	ok: false;
+	reason: 'handle_required';
+	message: string;
+}
+
+export type PublishResult = PublishSuccess | PublishNeedsHandle;
+
+/**
+ * Publish a project to make it publicly accessible. Resolves to a typed result;
+ * only unexpected failures throw.
  */
 export async function publishProject(projectId: string): Promise<PublishResult> {
-	return apiFetch<PublishResult>(`${API_BASE}/projects/${projectId}/publish`, {
+	const response = await fetch(`${API_BASE}/projects/${projectId}/publish`, {
 		method: 'POST',
+		credentials: 'include',
 	});
+
+	if (response.status === 409) {
+		const data = await response.json().catch(() => ({}) as Record<string, unknown>);
+		if ((data as { error?: string }).error === 'handle_required') {
+			return {
+				ok: false,
+				reason: 'handle_required',
+				message:
+					(data as { message?: string }).message || 'Choose a public handle before publishing.',
+			};
+		}
+	}
+
+	if (!response.ok) {
+		await handleApiError(response);
+	}
+
+	const data = (await response.json()) as { url: string; a11yFindings?: A11yFinding[] };
+	return { ok: true, url: data.url, a11yFindings: data.a11yFindings };
 }
 
 /**

@@ -100,7 +100,7 @@ CAIL_REQUIRE_IDENTITY=false    # flip to true with gateway SSO enforce
 
 This is a rewrite, not a migration, but two compatibility layers matter:
 
-- Old published sites must still resolve from the same R2 content and `/sites/:userId/:slug/*`
+- Canonical published URLs are `/u/:handle/:slug/*` (user-chosen handle; the owner/subject id never appears in a public URL). Old published sites must still resolve from the same R2 content and the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves directly.
 - Returning anonymous users should still see prior projects when their legacy `site-studio-session` cookie can be resolved from R2 session records
 
 ## Development

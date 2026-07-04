@@ -116,8 +116,20 @@ function createEnv(bucket: R2Bucket): Env {
   };
 }
 
+/** Give an owner a claimed public handle (both mapping records). */
+function seedHandle(
+  bucket: ReturnType<typeof createMockBucket>,
+  ownerId: string,
+  handle: string
+) {
+  const claimedAt = "2026-01-01T00:00:00.000Z";
+  bucket.store.set(`handles/${handle}.json`, { data: JSON.stringify({ ownerId, claimedAt }) });
+  bucket.store.set(`userhandles/${ownerId}.json`, { data: JSON.stringify({ handle, claimedAt }) });
+}
+
 describe("route regressions", () => {
   const userId = "user_test123";
+  const handle = "janedoe";
   let bucket: ReturnType<typeof createMockBucket>;
   let storage: R2ProjectStorage;
   let app: ReturnType<typeof createTestApp>;
@@ -126,6 +138,9 @@ describe("route regressions", () => {
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
+    // The publish flow now requires a public handle; give the test user one so
+    // the existing publish/serve regressions exercise the /u/{handle}/ path.
+    seedHandle(bucket, userId, handle);
   });
 
   it("returns a terse 404 for missing preview assets", async () => {
@@ -169,7 +184,7 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_test123/pub/missing.html",
+      "http://site-studio.test/u/janedoe/pub/missing.html",
       { headers: { Accept: "text/html" } },
       createEnv(bucket)
     );
@@ -178,7 +193,7 @@ describe("route regressions", () => {
     expect(response.headers.get("Content-Type") || "").toContain("text/html");
     const body = await response.text();
     expect(body).toContain("Page not found");
-    expect(body).toContain('href="/sites/user_test123/pub/"');
+    expect(body).toContain('href="/u/janedoe/pub/"');
   });
 
   it("honors a project 404.html for missing published navigations", async () => {
@@ -191,7 +206,7 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_test123/pub2/nope.html",
+      "http://site-studio.test/u/janedoe/pub2/nope.html",
       { headers: { Accept: "text/html" } },
       createEnv(bucket)
     );
@@ -209,7 +224,7 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_test123/pub3/missing.png",
+      "http://site-studio.test/u/janedoe/pub3/missing.png",
       undefined,
       createEnv(bucket)
     );
@@ -246,7 +261,7 @@ describe("route regressions", () => {
       published: true,
       slug: "foo",
       publishedAt: "2026-04-01T00:00:00.000Z",
-      publishedUrl: "https://tools.cuny.qzz.io/sites/user_test123/foo/"
+      publishedUrl: "https://tools.cuny.qzz.io/u/janedoe/foo/"
     });
 
     await storage.createProject(userId, "foo", "Foo");
@@ -262,15 +277,17 @@ describe("route regressions", () => {
     const publishBody = await publishResponse.json() as { success: boolean; url: string; a11yFindings: unknown[] };
     expect(publishBody).toMatchObject({
       success: true,
-      url: "http://site-studio.test/sites/user_test123/foo-2/"
+      url: "http://site-studio.test/u/janedoe/foo-2/"
     });
+    // The canonical URL carries the handle, never the owner/subject id.
+    expect(publishBody.url).not.toContain("user_test123");
     // The publish response includes an accessibility findings array; the bare
     // "<h1>Beta</h1>" fragment has no <html>/<head>, so nothing to report.
     expect(Array.isArray(publishBody.a11yFindings)).toBe(true);
     expect(publishBody.a11yFindings).toEqual([]);
 
     const publishedSiteResponse = await app.request(
-      "http://site-studio.test/sites/user_test123/foo-2/",
+      "http://site-studio.test/u/janedoe/foo-2/",
       undefined,
       createEnv(bucket)
     );
@@ -294,7 +311,7 @@ describe("route regressions", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       success: true,
-      url: "https://publish.example.edu/sites/user_test123/configured-url/"
+      url: "https://publish.example.edu/u/janedoe/configured-url/"
     });
   });
 
@@ -314,7 +331,7 @@ describe("route regressions", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       success: true,
-      url: "https://tools.cuny.qzz.io/sites/user_test123/legacy-domain/"
+      url: "https://tools.cuny.qzz.io/u/janedoe/legacy-domain/"
     });
   });
 
@@ -367,11 +384,63 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_test123/foo/",
+      "http://site-studio.test/u/janedoe/foo/",
       undefined,
       createEnv(bucket)
     );
 
     expect(await response.text()).toContain("<h1>Beta</h1>");
+  });
+
+  it("returns 409 handle_required when publishing without a handle", async () => {
+    // A user with no handle record cannot publish until they claim one.
+    bucket.store.delete(`userhandles/${userId}.json`);
+    bucket.store.delete(`handles/${handle}.json`);
+
+    await storage.createProject(userId, "nohandle", "No Handle");
+    await storage.writeFile(userId, "nohandle", "index.html", "<h1>Hi</h1>");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/nohandle/publish",
+      { method: "POST" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: "handle_required" });
+  });
+
+  it("301s a legacy /sites/{owner}/{slug} URL to /u/{handle}/ preserving path and query", async () => {
+    await storage.createProject(userId, "port", "Portfolio");
+    await storage.writeFile(userId, "port", "index.html", "<h1>Home</h1>");
+    await storage.writeFile(userId, "port", "about/index.html", "<h1>About</h1>");
+    await storage.updateProjectMetadata(userId, "port", { published: true, slug: "port" });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_test123/port/about/?ref=x",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("/u/janedoe/port/about/?ref=x");
+  });
+
+  it("serves a legacy /sites/{owner}/{slug} URL directly when the owner has no handle", async () => {
+    // A different owner with published content but no handle: content serves,
+    // no redirect (zero breakage for pre-handle sites).
+    bucket.store.set(`projects/user_other/legacy/.metadata.json`, {
+      data: JSON.stringify({ id: "legacy", name: "legacy", published: true, slug: "legacy" })
+    });
+    bucket.store.set(`projects/user_other/legacy/index.html`, { data: "<h1>Legacy Home</h1>" });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_other/legacy/",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<h1>Legacy Home</h1>");
   });
 });

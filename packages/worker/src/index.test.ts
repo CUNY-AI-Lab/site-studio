@@ -104,6 +104,17 @@ function publishProject(
   }
 }
 
+/** Give an owner a claimed public handle (both mapping records). */
+function seedHandle(
+  bucket: ReturnType<typeof createMockBucket>,
+  ownerId: string,
+  handle: string
+) {
+  const claimedAt = "2026-01-01T00:00:00.000Z";
+  bucket.store.set(`handles/${handle}.json`, { data: JSON.stringify({ ownerId, claimedAt }) });
+  bucket.store.set(`userhandles/${ownerId}.json`, { data: JSON.stringify({ handle, claimedAt }) });
+}
+
 function navRequest(url: string): Request {
   return new Request(url, { headers: { Accept: "text/html" } });
 }
@@ -150,8 +161,9 @@ describe("getContentType", () => {
 });
 
 describe("parsePublishedRequest", () => {
-  it("parses /sites/:userId/:slug/* URLs", () => {
+  it("parses legacy /sites/:userId/:slug/* URLs", () => {
     expect(parsePublishedRequest(new URL("https://x.test/sites/u/blog/posts/a.html"))).toEqual({
+      kind: "legacy",
       userId: "u",
       slug: "blog",
       filePath: "posts/a.html"
@@ -160,15 +172,26 @@ describe("parsePublishedRequest", () => {
 
   it("defaults to index.html when no file path is given", () => {
     expect(parsePublishedRequest(new URL("https://x.test/sites/u/blog"))).toEqual({
+      kind: "legacy",
       userId: "u",
       slug: "blog",
       filePath: "index.html"
     });
   });
 
-  it("supports the bare /:userId/:slug shape", () => {
-    expect(parsePublishedRequest(new URL("https://x.test/u/blog/style.css"))).toEqual({
-      userId: "u",
+  it("parses canonical /u/:handle/:slug/* URLs", () => {
+    expect(parsePublishedRequest(new URL("https://x.test/u/jane/blog/style.css"))).toEqual({
+      kind: "handle",
+      handle: "jane",
+      slug: "blog",
+      filePath: "style.css"
+    });
+  });
+
+  it("supports the bare /:userId/:slug legacy shape", () => {
+    expect(parsePublishedRequest(new URL("https://x.test/owner/blog/style.css"))).toEqual({
+      kind: "legacy",
+      userId: "owner",
       slug: "blog",
       filePath: "style.css"
     });
@@ -338,6 +361,67 @@ describe("worker.fetch (integration)", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<h1>Migrated</h1>");
+  });
+
+  it("serves a canonical /u/{handle}/{slug}/ URL by resolving the handle", async () => {
+    publishProject(bucket, "cail-subj", "blog", { "index.html": "<h1>By Handle</h1>" });
+    seedHandle(bucket, "cail-subj", "jane");
+
+    const res = await worker.fetch(navRequest("https://x.test/u/jane/blog/"), createEnv(bucket));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<h1>By Handle</h1>");
+  });
+
+  it("404s a /u/{handle}/ URL when the handle resolves to nobody", async () => {
+    const res = await worker.fetch(navRequest("https://x.test/u/ghost/blog/"), createEnv(bucket));
+    expect(res.status).toBe(404);
+  });
+
+  it("301s a legacy /sites/{owner}/{slug} URL to /u/{handle}/ preserving path and query", async () => {
+    publishProject(bucket, "cail-subj", "blog", {
+      "index.html": "<h1>Home</h1>",
+      "posts/a.html": "<h1>A</h1>"
+    });
+    seedHandle(bucket, "cail-subj", "jane");
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/cail-subj/blog/posts/a.html?ref=x", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://x.test/u/jane/blog/posts/a.html?ref=x");
+  });
+
+  it("301s a legacy root /sites/{owner}/{slug}/ to the /u/ root (no index.html)", async () => {
+    publishProject(bucket, "cail-subj", "blog", { "index.html": "<h1>Home</h1>" });
+    seedHandle(bucket, "cail-subj", "jane");
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/cail-subj/blog/", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://x.test/u/jane/blog/");
+  });
+
+  it("serves a legacy /sites/{owner}/{slug} URL directly when the owner has no handle", async () => {
+    publishProject(bucket, "u", "blog", { "index.html": "<h1>Legacy Home</h1>" });
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/u/blog/", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<h1>Legacy Home</h1>");
   });
 
   it("prefers a project-supplied 404.html for missing navigations", async () => {

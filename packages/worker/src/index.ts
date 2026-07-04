@@ -110,10 +110,31 @@ export async function loadMigrationPointer(
   }
 }
 
-export function parsePublishedRequest(url: URL): { userId: string; slug: string; filePath: string } | null {
+/**
+ * A parsed published request. `kind` distinguishes the canonical handle URL
+ * (/u/{handle}/{slug}/) from the legacy owner-id URL (/sites/{userId}/{slug}/
+ * and the bare fallback). For "handle" requests `owner` holds the handle to be
+ * resolved to a subject; for "legacy" requests it holds the owner id directly.
+ */
+export type ParsedPublishedRequest =
+  | { kind: "handle"; handle: string; slug: string; filePath: string }
+  | { kind: "legacy"; userId: string; slug: string; filePath: string };
+
+export function parsePublishedRequest(url: URL): ParsedPublishedRequest | null {
   const parts = url.pathname.split("/").filter(Boolean);
+
+  if (parts.length >= 3 && parts[0] === "u") {
+    return {
+      kind: "handle",
+      handle: parts[1],
+      slug: parts[2],
+      filePath: parts.slice(3).join("/") || "index.html"
+    };
+  }
+
   if (parts.length >= 3 && parts[0] === "sites") {
     return {
+      kind: "legacy",
       userId: parts[1],
       slug: parts[2],
       filePath: parts.slice(3).join("/") || "index.html"
@@ -122,6 +143,7 @@ export function parsePublishedRequest(url: URL): { userId: string; slug: string;
 
   if (parts.length >= 2) {
     return {
+      kind: "legacy",
       userId: parts[0],
       slug: parts[1],
       filePath: parts.slice(2).join("/") || "index.html"
@@ -129,6 +151,33 @@ export function parsePublishedRequest(url: URL): { userId: string; slug: string;
   }
 
   return null;
+}
+
+/**
+ * Two-way handle mapping, read straight from R2 (the publisher has no KV, so
+ * the app worker's KV is not available here — the mapping lives in the bucket).
+ * Keep the shapes in sync with packages/app/src/lib/handles.ts.
+ */
+export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Promise<string | null> {
+  const object = await bucket.get(`handles/${handle}.json`);
+  if (!object) return null;
+  try {
+    const record = JSON.parse(await object.text()) as { ownerId?: unknown };
+    return typeof record.ownerId === "string" && record.ownerId ? record.ownerId : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
+  const object = await bucket.get(`userhandles/${ownerId}.json`);
+  if (!object) return null;
+  try {
+    const record = JSON.parse(await object.text()) as { handle?: unknown };
+    return typeof record.handle === "string" && record.handle ? record.handle : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function listProjects(bucket: R2Bucket, userId: string): Promise<string[]> {
@@ -261,6 +310,17 @@ export function siteRootPath(userId?: string, slug?: string): string | undefined
 }
 
 /**
+ * The raw sub-path of a legacy /sites/{userId}/{slug}/… (or bare
+ * /{userId}/{slug}/…) request — everything after the slug segment, with no
+ * `index.html` default. Used to build a faithful 301 to the /u/ canonical URL.
+ */
+export function legacySubPath(url: URL): string {
+  const parts = url.pathname.split("/").filter(Boolean);
+  const skip = parts[0] === "sites" ? 3 : 2; // drop [sites,]userId,slug
+  return parts.slice(skip).join("/");
+}
+
+/**
  * Styled/terse fallback 404 for the publisher. Page navigations get the
  * dignified HTML document (with a home link when available); asset requests
  * keep a terse plain-text 404.
@@ -314,7 +374,22 @@ export default {
       return fallbackNotFoundResponse(request, url.pathname);
     }
 
-    let ownerId = parsed.userId;
+    // Canonical /u/{handle}/{slug}/ — resolve the handle to its owner id first;
+    // the owner id (CAIL subject) never appears in the URL.
+    let ownerId: string;
+    let rootPath: string | undefined;
+    if (parsed.kind === "handle") {
+      const owner = await resolveHandleOwner(env.SITE_STUDIO_BUCKET, parsed.handle);
+      if (!owner) {
+        return fallbackNotFoundResponse(request, parsed.filePath);
+      }
+      ownerId = owner;
+      rootPath = `/u/${parsed.handle}/${parsed.slug}/`;
+    } else {
+      ownerId = parsed.userId;
+      rootPath = siteRootPath(parsed.userId, parsed.slug);
+    }
+
     let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug);
 
     if (!resolved) {
@@ -334,7 +409,20 @@ export default {
       return fallbackNotFoundResponse(request, parsed.filePath);
     }
 
-    const rootPath = siteRootPath(parsed.userId, parsed.slug);
+    // Legacy /sites/ (and bare) URLs: if the resolved owner has a handle, the
+    // canonical home is /u/{handle}/…; 301 there, preserving sub-path + query.
+    // Owners with no handle keep serving legacy content directly.
+    if (parsed.kind === "legacy") {
+      const handle = await getUserHandle(env.SITE_STUDIO_BUCKET, ownerId);
+      if (handle) {
+        // Preserve the exact sub-path from the request (not the defaulted
+        // filePath) and the query string, so deep links redirect faithfully.
+        const subPath = legacySubPath(url);
+        const location = `/u/${handle}/${parsed.slug}/${subPath}${url.search}`;
+        return Response.redirect(new URL(location, url).toString(), 301);
+      }
+    }
+
     let filePath = parsed.filePath || "index.html";
     let object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, filePath);
 

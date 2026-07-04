@@ -15,6 +15,7 @@
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
+	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
 
@@ -61,6 +62,9 @@
 	// Accessibility findings surfaced after a successful publish
 	let a11yFindings = $state<A11yFinding[]>([]);
 	let showA11yDialog = $state(false);
+
+	// Handle-claim dialog, shown when publishing requires a public handle
+	let showHandleDialog = $state(false);
 
 	function handleDragChange(dragging: boolean) {
 		isDragging = dragging;
@@ -463,22 +467,50 @@
 			publishingProjectId = currentProject.id;
 			const result = await publishProject(currentProject.id);
 
-			// Update the current project
-			const updated = { ...currentProject, published: true, publishedUrl: result.url };
-			currentProject = updated;
-			// Update in allProjects list too
-			allProjects = allProjects.map(p =>
-				p.id === updated.id ? updated : p
-			);
+			if (!result.ok) {
+				// The user has no public handle yet — collect one, then retry the
+				// publish automatically once it's claimed.
+				if (result.reason === 'handle_required') {
+					showHandleDialog = true;
+				}
+				return;
+			}
 
-			const findings = result.a11yFindings ?? [];
-			if (findings.length > 0) {
-				a11yFindings = findings;
-				showA11yDialog = true;
-				toast.success('Site published. A few accessibility notes are ready for you.');
+			applyPublishResult(result.url, result.a11yFindings ?? []);
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
+		} finally {
+			publishingProjectId = null;
+		}
+	}
+
+	function applyPublishResult(url: string, findings: A11yFinding[]) {
+		if (!currentProject) return;
+		const updated = { ...currentProject, published: true, publishedUrl: url };
+		currentProject = updated;
+		allProjects = allProjects.map((p) => (p.id === updated.id ? updated : p));
+
+		if (findings.length > 0) {
+			a11yFindings = findings;
+			showA11yDialog = true;
+			toast.success('Site published. A few accessibility notes are ready for you.');
+		} else {
+			a11yFindings = [];
+			toast.success('Site published. It is now live.');
+		}
+	}
+
+	async function handleClaimed(_handle: string) {
+		// Handle claimed — close the dialog and complete the original publish.
+		showHandleDialog = false;
+		if (!currentProject) return;
+		try {
+			publishingProjectId = currentProject.id;
+			const result = await publishProject(currentProject.id);
+			if (result.ok) {
+				applyPublishResult(result.url, result.a11yFindings ?? []);
 			} else {
-				a11yFindings = [];
-				toast.success('Site published. It is now live.');
+				toast.error('Publishing failed after claiming your handle. Please try again.');
 			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
@@ -587,6 +619,12 @@
 	findings={a11yFindings}
 	onOpenChange={(open) => (showA11yDialog = open)}
 	onAskAssistant={askAssistantToFixA11y}
+/>
+
+<HandleClaimDialog
+	open={showHandleDialog}
+	onOpenChange={(open) => (showHandleDialog = open)}
+	onClaimed={handleClaimed}
 />
 
 <div class="app">

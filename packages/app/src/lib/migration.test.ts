@@ -370,3 +370,60 @@ describe("published-site continuity through migration", () => {
     expect(pointer.slugs).toEqual({ portfolio: "portfolio-2" });
   });
 });
+
+describe("handle re-homing through migration", () => {
+  let bucket: ReturnType<typeof createMockBucket>;
+  let kv: ReturnType<typeof createMockKV>;
+
+  beforeEach(() => {
+    bucket = createMockBucket();
+    kv = createMockKV();
+  });
+
+  function seedHandle(ownerId: string, handle: string) {
+    const claimedAt = "2026-01-01T00:00:00.000Z";
+    bucket.store.set(`handles/${handle}.json`, { data: JSON.stringify({ ownerId, claimedAt }) });
+    bucket.store.set(`userhandles/${ownerId}.json`, { data: JSON.stringify({ handle, claimedAt }) });
+  }
+
+  it("moves the anon handle to a subject with none, and rewrites publishedUrl to /u/", async () => {
+    seedHandle(ANON, "jane-rivera");
+    seedAnonProject(
+      bucket,
+      "portfolio",
+      {
+        published: true,
+        slug: "portfolio",
+        publishedAt: "2026-01-02T00:00:00.000Z",
+        publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+      },
+      "<h1>site</h1>"
+    );
+
+    await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
+
+    // Handle re-homed: record points at subject, reverse record moved.
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+
+    // Migrated project's publishedUrl uses the handle, never the subject id.
+    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
+    expect(meta.publishedUrl).toBe("https://tools.cuny.qzz.io/u/jane-rivera/portfolio/");
+    expect(meta.publishedUrl).not.toContain(SUBJECT);
+  });
+
+  it("keeps the subject's primary handle but re-points the anon handle as an alias", async () => {
+    seedHandle(SUBJECT, "primary");
+    seedHandle(ANON, "anon-alias");
+    seedAnonProject(bucket, "portfolio", { published: true, slug: "portfolio" });
+
+    await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
+
+    // Subject keeps its own primary.
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("primary");
+    // Anon handle survives as an alias pointing at the subject.
+    expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`).data).ownerId).toBe(SUBJECT);
+    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+  });
+});
