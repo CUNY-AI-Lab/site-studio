@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks, Play } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
 
 	interface ToolExecution {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Check, MessageCircleQuestion, Send, X, Pencil } from 'lucide-svelte';
 
-	interface QuestionOption {
+	export interface QuestionOption {
 		label: string;
 		description?: string;
 		preview?: string;
