@@ -8,7 +8,7 @@ Site Studio is a Cloudflare-native AI website builder for academics and research
 - **App runtime:** Cloudflare Workers + Hono
 - **Agent runtime:** Cloudflare Agents SDK + `@cloudflare/ai-chat`
 - **Sandbox execution:** Dynamic Worker Loader + `@cloudflare/codemode`
-- **Model provider:** OpenRouter
+- **Model access:** CAIL model proxy → Cloudflare Workers AI (`@cf/zai-org/glm-5.2` default)
 - **Storage:** Cloudflare R2 + KV + Durable Objects
 
 ## Repo Layout
@@ -57,17 +57,22 @@ Local Worker secrets live in:
 
 - [`packages/app/.dev.vars`](/Users/stephenzweibel/Apps/site-studio/packages/app/.dev.vars)
 
-Required local secret:
+Required local secret (ops-managed; see cail-gateway docs/INTEGRATION.md):
 
 ```bash
-OPENROUTER_API_KEY=...
+CAIL_IDENTITY_JWT_SECRET=...
 ```
+
+Site Studio holds no provider API keys — model calls go through the CAIL
+model proxy, which attaches credentials itself.
 
 The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/stephenzweibel/Apps/site-studio/packages/app/wrangler.jsonc):
 
 - `APP_PUBLIC_DOMAIN`
 - `LEGACY_PUBLIC_DOMAIN`
-- `OPENROUTER_MODEL`
+- `CAIL_API_BASE`
+- `CAIL_MODEL` (Workers AI `@cf/...` id only — CAIL policy is Cloudflare models only)
+- `CAIL_REQUIRE_IDENTITY`
 
 For production, configure secrets with Wrangler / Cloudflare, not by committing env files.
 

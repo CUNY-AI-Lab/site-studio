@@ -98,7 +98,7 @@ project.add_page({ path, title })   → { ok, path, title } | { ok: false, messa
 Located in `packages/app/src/agents/site-builder.ts`:
 - Extends `AIChatAgent<Env>` from `@cloudflare/ai-chat`
 - Instantiated per project: `${userId}:${projectId}`
-- Uses OpenRouter → Claude Sonnet 4.6 (`anthropic/claude-sonnet-4.6`)
+- Model calls go through the CAIL model proxy to Cloudflare Workers AI (`@cf/zai-org/glm-5.2` by default; CAIL policy is Cloudflare models only)
 - Chat history persisted via AIChatAgent (SQLite in Durable Object)
 - Automatic snapshot creation before file-modifying operations
 
@@ -108,7 +108,7 @@ Located in `packages/app/src/agents/site-builder.ts`:
 - Cloudflare Workers + Hono framework
 - `@cloudflare/ai-chat` - AIChatAgent base class
 - `@cloudflare/codemode` - Dynamic Worker code execution
-- `@openrouter/ai-sdk-provider` - Model access via OpenRouter
+- `@ai-sdk/openai-compatible` - Model access via the CAIL model proxy (Workers AI)
 - Vercel AI SDK (`ai`) - `streamText`, `tool()` definitions
 - Cloudflare R2 - File and snapshot storage
 - Cloudflare KV - Session management
@@ -135,15 +135,18 @@ Located in `packages/app/src/agents/site-builder.ts`:
   "worker_loaders": [{ "binding": "LOADER" }],
   "vars": {
     "APP_PUBLIC_DOMAIN": "https://...",
-    "OPENROUTER_MODEL": "anthropic/claude-sonnet-4.6"
+    "CAIL_API_BASE": "https://...",        // CAIL model proxy base URL (set at launch)
+    "CAIL_MODEL": "@cf/zai-org/glm-5.2",   // Workers AI id only (CAIL policy)
+    "CAIL_REQUIRE_IDENTITY": "false"       // flip to "true" with gateway SSO enforce
   }
 }
 ```
 
 ### Secrets
 ```bash
-# Set via wrangler secret put
-OPENROUTER_API_KEY=...    # Required - OpenRouter API key for Claude access
+# Set via wrangler secret put (ops-managed)
+CAIL_IDENTITY_JWT_SECRET=...   # shared HS256 secret to verify X-CAIL-Identity-JWT
+# Site Studio holds NO provider API keys — the CAIL model proxy attaches them.
 ```
 
 ## Important Patterns

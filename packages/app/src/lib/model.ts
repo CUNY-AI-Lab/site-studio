@@ -20,13 +20,17 @@ import type { LanguageModel } from "ai";
 export const CAIL_APP_SLUG = "site-studio";
 
 /**
- * Default model id, expressed as an AI-Gateway/OpenAI-compatible model string.
- * Overridable via the `CAIL_MODEL` var. See the model-availability flag in the
- * PR: the direct-OpenRouter id ("anthropic/claude-sonnet-4.6") is NOT
- * guaranteed to be the id AI Gateway routes; confirm the gateway-supported id
- * at launch and set `CAIL_MODEL` accordingly.
+ * Default model id. CAIL policy (decided 2026-07-04, docs/INTEGRATION.md §1):
+ * Cloudflare models only — every model reference is a Workers AI catalog id
+ * (`@cf/...`); no OpenAI/Anthropic/OpenRouter ids. Overridable via `CAIL_MODEL`,
+ * but the configured value must also be a Workers AI id.
+ *
+ * GLM-5.2 is Workers AI's flagship agentic-coding model (262k context,
+ * function calling, cached-input pricing) — chosen because the codemode loop
+ * is code generation against typed project APIs. `@cf/openai/gpt-oss-120b`
+ * is the cheaper general-reasoning alternative if spend becomes a concern.
  */
-export const DEFAULT_CAIL_MODEL = "anthropic/claude-sonnet-4.6";
+export const DEFAULT_CAIL_MODEL = "@cf/zai-org/glm-5.2";
 
 export interface CailModelEnv {
   CAIL_API_BASE?: string;

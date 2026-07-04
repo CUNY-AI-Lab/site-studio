@@ -31,10 +31,10 @@
     // value from cail-gateway docs/LAUNCH_CHECKLIST.md (institutional Cloudflare
     // account). Model calls hit {CAIL_API_BASE}/v1/compat/chat/completions.
     "CAIL_API_BASE": "https://REPLACE-AT-LAUNCH.example/cail",
-    // CAIL_MODEL: model id for AI Gateway's OpenAI-compatible path. This mirrors
-    // the old OpenRouter id but is NOT guaranteed identical on the gateway —
-    // confirm the gateway-supported id at launch (see PR model-availability flag).
-    "CAIL_MODEL": "anthropic/claude-sonnet-4.6",
+    // CAIL_MODEL: Workers AI catalog id. CAIL policy (2026-07-04): Cloudflare
+    // models only — any override must also be a `@cf/...` id. Default is the
+    // agentic-coding flagship; `@cf/openai/gpt-oss-120b` is the cheaper fallback.
+    "CAIL_MODEL": "@cf/zai-org/glm-5.2",
     // CAIL_REQUIRE_IDENTITY: "false" during pre-SSO rollout (anonymous sessions
     // still allowed). Flip to "true" in lockstep with the gateway's
     // CAIL_SSO_MODE=enforce so the workers.dev URL is not an anonymous bypass.

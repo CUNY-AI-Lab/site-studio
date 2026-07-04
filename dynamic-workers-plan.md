@@ -148,7 +148,7 @@ Acceptance:
 ### Phase 3: Agent plus Codemode
 
 - `SiteBuilderAgent`
-- OpenRouter model wiring
+- Model wiring (now via the CAIL model proxy; Workers AI models only)
 - `codemode` tool backed by `DynamicWorkerExecutor`
 - `ask_user_question`
 - project operations exposed under a `project.*` namespace in the sandbox

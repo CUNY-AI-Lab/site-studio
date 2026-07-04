@@ -46,7 +46,7 @@ site-studio/
 ### Agent Layer
 
 - `SiteBuilderAgent` extends `AIChatAgent`
-- OpenRouter-backed model execution
+- Model execution via the CAIL model proxy (Cloudflare Workers AI models only)
 - Project-scoped instance identity: `userId:projectId`
 - `codemode` wraps project operations so the model can write JavaScript that orchestrates multi-step work in a Dynamic Worker sandbox
 - `ask_user_question` remains available for structured clarification
@@ -69,7 +69,7 @@ The frontend no longer uses the old SSE `/api/query` path.
 - `@cloudflare/ai-chat`
 - `@cloudflare/codemode`
 - `ai`
-- `@openrouter/ai-sdk-provider`
+- `@ai-sdk/openai-compatible` (CAIL model proxy)
 - Cloudflare R2 / KV / Durable Objects
 - Worker Loader
 
@@ -88,10 +88,12 @@ Local development uses:
 Important vars:
 
 ```bash
-OPENROUTER_API_KEY=...
+CAIL_IDENTITY_JWT_SECRET=...   # secret (wrangler secret put / .dev.vars)
 APP_PUBLIC_DOMAIN=https://tools.ailab.gc.cuny.edu
 LEGACY_PUBLIC_DOMAIN=https://tools.cuny.qzz.io
-OPENROUTER_MODEL=anthropic/claude-sonnet-4
+CAIL_API_BASE=...              # CAIL model proxy base URL (set at launch)
+CAIL_MODEL=@cf/zai-org/glm-5.2 # Workers AI id only (CAIL policy, 2026-07-04)
+CAIL_REQUIRE_IDENTITY=false    # flip to true with gateway SSO enforce
 ```
 
 ## Compatibility Requirements

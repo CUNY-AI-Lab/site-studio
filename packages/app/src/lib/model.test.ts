@@ -54,6 +54,10 @@ describe("resolveModelId", () => {
   it("falls back to the default model", () => {
     expect(resolveModelId({})).toBe(DEFAULT_CAIL_MODEL);
   });
+
+  it("defaults to a Workers AI catalog id (CAIL policy: Cloudflare models only)", () => {
+    expect(DEFAULT_CAIL_MODEL).toMatch(/^@cf\//);
+  });
 });
 
 describe("createCailModel", () => {
@@ -63,14 +67,14 @@ describe("createCailModel", () => {
 
   it("builds a language model bound to the proxy compat path", () => {
     const model = createCailModel(
-      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "anthropic/claude-sonnet-4.6" },
+      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
       "jwt-token"
     );
     // createOpenAICompatible returns a model object (not the bare string branch
     // of the LanguageModel union); assert on its metadata.
     expect(typeof model).toBe("object");
     const meta = model as { modelId: string; provider: string };
-    expect(meta.modelId).toBe("anthropic/claude-sonnet-4.6");
+    expect(meta.modelId).toBe("@cf/openai/gpt-oss-120b");
     expect(meta.provider).toContain("cail");
   });
 });
