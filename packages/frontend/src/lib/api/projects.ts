@@ -191,10 +191,26 @@ export async function uploadThumbnail(projectId: string, blob: Blob): Promise<vo
 }
 
 /**
+ * A single accessibility finding surfaced when publishing a project.
+ */
+export interface A11yFinding {
+	file: string;
+	line: number | null;
+	rule: string;
+	severity: 'error' | 'warning';
+	message: string;
+}
+
+export interface PublishResult {
+	url: string;
+	a11yFindings?: A11yFinding[];
+}
+
+/**
  * Publish a project to make it publicly accessible
  */
-export async function publishProject(projectId: string): Promise<{ url: string }> {
-	return apiFetch<{ url: string }>(`${API_BASE}/projects/${projectId}/publish`, {
+export async function publishProject(projectId: string): Promise<PublishResult> {
+	return apiFetch<PublishResult>(`${API_BASE}/projects/${projectId}/publish`, {
 		method: 'POST',
 	});
 }

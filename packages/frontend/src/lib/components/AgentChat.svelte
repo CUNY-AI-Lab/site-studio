@@ -958,6 +958,17 @@
 		}
 	}
 
+	/**
+	 * Programmatically send a message to the agent as if the user typed it.
+	 * Exposed via `bind:this` so the editor page can, e.g., ask the agent to fix
+	 * accessibility findings. No-ops while a request is already in flight.
+	 */
+	export async function sendPrompt(text: string) {
+		if (isLoading) return;
+		input = text;
+		await sendMessage();
+	}
+
 	async function rejectUserQuestion() {
 		const interaction = pendingToolInteraction;
 		if (!interaction) return;

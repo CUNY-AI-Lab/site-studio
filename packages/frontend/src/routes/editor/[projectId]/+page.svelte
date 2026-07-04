@@ -11,14 +11,17 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw } from 'lucide-svelte';
-	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type Project, type ProjectFile } from '$lib/api/projects';
+	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
+	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
+	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
 
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
 	let previewComponent: Preview;
+	let chatComponent: AgentChat;
 	let chatPane: ReturnType<typeof Pane>;
 	let projectLoadVersion = 0;
 	let previousProjectId = $state<string | null>(null);
@@ -54,6 +57,10 @@
 	let showDeleteDialog = $state(false);
 	let showHistoryDialog = $state(false);
 	let publishingProjectId = $state<string | null>(null);
+
+	// Accessibility findings surfaced after a successful publish
+	let a11yFindings = $state<A11yFinding[]>([]);
+	let showA11yDialog = $state(false);
 
 	function handleDragChange(dragging: boolean) {
 		isDragging = dragging;
@@ -125,14 +132,12 @@
 		if (!targetProjectId) return [];
 
 		try {
-			console.log('Loading files for project:', targetProjectId);
 			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/files`), {
 				credentials: 'include'
 			});
 			if (!response.ok) throw new Error('Failed to load files');
 
 			const data = await response.json();
-			console.log('Loaded files:', data.files);
 			return data.files as ProjectFile[];
 		} catch (error) {
 			console.error('Error loading files:', error);
@@ -181,7 +186,6 @@
 		}
 
 		try {
-			console.log('Loading file:', filePath);
 			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`), {
 				credentials: 'include'
 			});
@@ -196,11 +200,9 @@
 			if (requestId !== fileSelectCounter) return;
 
 			const data = await response.json();
-			console.log('Loaded file content, length:', data.content.length);
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
 			currentFileIsText = data.isText ?? true;
 			fileContent = data.content;
-			console.log('Set currentFile and fileContent state');
 		} catch (error) {
 			console.error('Error loading file:', error);
 		}
@@ -232,8 +234,6 @@
 		const { projectId: targetProjectId, filePath, content } = snapshot;
 
 		try {
-			console.log('Saving file:', filePath);
-
 			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -245,7 +245,6 @@
 			});
 
 			if (!response.ok) throw new Error('Failed to save file');
-			console.log('File saved successfully');
 
 			// Refresh preview after save
 			if (
@@ -259,7 +258,7 @@
 			return true;
 		} catch (error) {
 			console.error('Error saving file:', error);
-			alert('Failed to save file');
+			toast.error('Failed to save file. Your latest changes were not saved.');
 			return false;
 		}
 	}
@@ -397,7 +396,6 @@
 	}
 
 	function toggleChatPane() {
-		console.log('toggleChatPane called', { chatPane, isChatCollapsed });
 		if (!chatPane) return;
 		if (isChatCollapsed) {
 			chatPane.expand();
@@ -472,11 +470,32 @@
 			allProjects = allProjects.map(p =>
 				p.id === updated.id ? updated : p
 			);
+
+			const findings = result.a11yFindings ?? [];
+			if (findings.length > 0) {
+				a11yFindings = findings;
+				showA11yDialog = true;
+				toast.success('Site published. A few accessibility notes are ready for you.');
+			} else {
+				a11yFindings = [];
+				toast.success('Site published. It is now live.');
+			}
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to publish project');
+			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
 			publishingProjectId = null;
 		}
+	}
+
+	function askAssistantToFixA11y() {
+		showA11yDialog = false;
+		// Make sure the chat is visible, then hand the request to the agent.
+		if (isChatCollapsed && chatPane) {
+			chatPane.expand();
+		}
+		void chatComponent?.sendPrompt(
+			'Run project.audit_accessibility and fix the issues it reports.'
+		);
 	}
 
 	async function handleUnpublishProject() {
@@ -493,7 +512,7 @@
 				p.id === updated.id ? updated : p
 			);
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to unpublish project');
+			toast.error(e instanceof Error ? e.message : 'Failed to unpublish project.');
 		} finally {
 			publishingProjectId = null;
 		}
@@ -529,7 +548,7 @@
 			window.URL.revokeObjectURL(url);
 			document.body.removeChild(a);
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to export project');
+			toast.error(e instanceof Error ? e.message : 'Failed to export project.');
 		}
 	}
 
@@ -561,6 +580,13 @@
 	onBeforeCreateSnapshot={flushPendingSave}
 	onBeforeRestore={flushPendingSave}
 	onRestoreSuccess={onAgentUpdate}
+/>
+
+<AccessibilityNotesDialog
+	open={showA11yDialog}
+	findings={a11yFindings}
+	onOpenChange={(open) => (showA11yDialog = open)}
+	onAskAssistant={askAssistantToFixA11y}
 />
 
 <div class="app">
@@ -706,7 +732,7 @@
 					</div>
 				</div>
 				<div class="chat-wrapper">
-					<AgentChat {projectId} onUpdate={onAgentUpdate} onBeforeSend={flushPendingSave} />
+					<AgentChat bind:this={chatComponent} {projectId} onUpdate={onAgentUpdate} onBeforeSend={flushPendingSave} />
 				</div>
 			</aside>
 		</Resizable.Pane>

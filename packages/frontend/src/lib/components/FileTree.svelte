@@ -12,6 +12,7 @@
 <script lang="ts">
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
+	import { toast } from '$lib/toast.svelte';
 
 	let {
 		files = [],
@@ -54,7 +55,7 @@
 			input.value = '';
 		} catch (error) {
 			console.error('Error uploading file:', error);
-			alert('Failed to upload file');
+			toast.error('Failed to upload file. Please try again.');
 		} finally {
 			isUploading = false;
 		}
@@ -79,7 +80,7 @@
 			window.URL.revokeObjectURL(url);
 		} catch (error) {
 			console.error('Error downloading file:', error);
-			alert('Failed to download file');
+			toast.error('Failed to download file. Please try again.');
 		}
 	}
 
@@ -102,7 +103,7 @@
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error deleting file:', error);
-			alert(`Failed to delete file: ${error.message}`);
+			toast.error(`Failed to delete file: ${error.message}`);
 		}
 	}
 
@@ -134,7 +135,7 @@
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error renaming file:', error);
-			alert(`Failed to rename file: ${error.message}`);
+			toast.error(`Failed to rename file: ${error.message}`);
 		}
 	}
 </script>

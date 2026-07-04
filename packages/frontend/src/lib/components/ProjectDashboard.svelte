@@ -10,6 +10,7 @@
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
 	import { hasCompletedOnboarding, createDashboardTour } from '$lib/utils/onboarding';
+	import { toast } from '$lib/toast.svelte';
 	import 'driver.js/dist/driver.css';
 	import '$lib/styles/onboarding-tour.css';
 
@@ -99,7 +100,7 @@
 					: p
 			);
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to publish project');
+			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
 			publishingProjectId = null;
 		}
@@ -117,7 +118,7 @@
 					: p
 			);
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to unpublish project');
+			toast.error(e instanceof Error ? e.message : 'Failed to unpublish project.');
 		} finally {
 			publishingProjectId = null;
 		}

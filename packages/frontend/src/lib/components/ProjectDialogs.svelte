@@ -4,6 +4,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
+	import { toast } from '$lib/toast.svelte';
 
 	interface Props {
 		showRenameDialog: boolean;
@@ -53,7 +54,7 @@
 			await onRenameSuccess(renamedProject);
 		} catch (error) {
 			console.error('Error renaming project:', error);
-			alert('Failed to rename project. Please try again.');
+			toast.error('Failed to rename project. Please try again.');
 		} finally {
 			isRenaming = false;
 		}
@@ -73,7 +74,7 @@
 			await onDeleteSuccess(deletedProjectId);
 		} catch (error) {
 			console.error('Error deleting project:', error);
-			alert('Failed to delete project. Please try again.');
+			toast.error('Failed to delete project. Please try again.');
 		} finally {
 			isDeleting = false;
 		}

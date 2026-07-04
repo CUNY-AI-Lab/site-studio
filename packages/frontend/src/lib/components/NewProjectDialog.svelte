@@ -8,6 +8,7 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import * as LucideIcons from 'lucide-svelte';
+	import { toast } from '$lib/toast.svelte';
 
 	interface Props {
 		open: boolean;
@@ -129,7 +130,7 @@
 			if (onSuccess) onSuccess();
 		} catch (error) {
 			console.error('Error creating project:', error);
-			alert('Failed to create project. Please try again.');
+			toast.error('Failed to create project. Please try again.');
 		} finally {
 			isCreating = false;
 		}
