@@ -1,11 +1,11 @@
 import { AIChatAgent, createToolsFromClientSchemas } from "@cloudflare/ai-chat";
-import { callable } from "agents";
+import { callable, type Connection, type ConnectionContext } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
-import type { Env } from "../types";
+import type { Env, SiteBuilderAgentProps } from "../types";
+import { createCailModel, resolveModelId } from "../lib/model";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
@@ -73,7 +73,6 @@ type SiteBuilderObservabilitySnapshot = {
   events: SiteBuilderObservabilityEvent[];
 };
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4.6";
 const MAX_FILE_CONTENT_CHARS = 60_000;
 const MAX_DOCUMENT_CONTENT_CHARS = 120_000;
 const MAX_SEARCH_RESULTS = 50;
@@ -854,6 +853,50 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
+  /**
+   * The verified caller JWT, captured from connection props (routes/agents.ts).
+   * Forwarded to the CAIL model proxy on each model call. The browser opens the
+   * agent over a long-lived WebSocket, so this is set once at connection time
+   * and can outlive the JWT's ~5-min TTL — see the PR flag on JWT freshness.
+   */
+  private identityJwt: string | null = null;
+
+  /**
+   * Capture the caller JWT from connection props on first wake. `onStart` runs
+   * once per DO lifetime, so `onConnect` (below) is the per-connection refresh.
+   */
+  onStart(props?: Record<string, unknown>): void {
+    const jwt = props?.identityJwt;
+    if (typeof jwt === "string" && jwt) {
+      this.identityJwt = jwt;
+    }
+  }
+
+  /**
+   * Refresh the caller JWT on every new WebSocket connection. The upgrade
+   * request carries either the gate-injected `X-CAIL-Identity-JWT` directly (the
+   * real deployment behind the SSO gate) or the same value forwarded via
+   * connection props (`x-partykit-props`, see routes/agents.ts). Either way this
+   * binds the freshest identity available at connection time to the instance.
+   */
+  onConnect(_connection: Connection, ctx: ConnectionContext): void {
+    const direct = ctx.request.headers.get("X-CAIL-Identity-JWT");
+    if (direct) {
+      this.identityJwt = direct;
+      return;
+    }
+    const propsHeader = ctx.request.headers.get("x-partykit-props");
+    if (propsHeader) {
+      try {
+        const parsed = JSON.parse(propsHeader) as SiteBuilderAgentProps;
+        if (parsed?.identityJwt) {
+          this.identityJwt = parsed.identityJwt;
+        }
+      } catch {
+        // Ignore malformed props; the model call will fail closed at the proxy.
+      }
+    }
+  }
 
   @callable()
   async getObservability(): Promise<SiteBuilderObservabilitySnapshot> {
@@ -865,8 +908,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     options?: Parameters<ChatHandler>[1]
   ) {
     const requestId = options?.requestId ?? "unknown";
-    if (!this.env.OPENROUTER_API_KEY) {
-      return new Response(JSON.stringify({ error: "OPENROUTER_API_KEY is not configured" }), {
+    if (!this.env.CAIL_API_BASE) {
+      return new Response(JSON.stringify({ error: "CAIL_API_BASE is not configured" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
       });
@@ -892,9 +935,13 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     }
 
     try {
-      const provider = createOpenRouter({ apiKey: this.env.OPENROUTER_API_KEY });
-      const modelName = this.env.OPENROUTER_MODEL || DEFAULT_MODEL;
-      const model = provider(modelName);
+      // Model calls go through the CAIL model proxy (no provider keys here).
+      // The verified caller JWT is forwarded so the proxy attributes spend to
+      // the CAIL subject; its error envelopes (authentication_required,
+      // quota_exceeded, upstream_auth_error, …) surface to the client via the
+      // stream unmodified.
+      const modelName = resolveModelId(this.env);
+      const model = createCailModel(this.env, this.identityJwt);
       const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);

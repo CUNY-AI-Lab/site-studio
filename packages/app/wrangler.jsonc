@@ -25,8 +25,26 @@
     "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
     "LEGACY_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
     "R2_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
-    "OPENROUTER_MODEL": "anthropic/claude-sonnet-4.6"
+    // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----
+    // CAIL_API_BASE: the one public base URL of the CAIL model proxy (serves
+    // /v1/... model calls and /keys). Placeholder until launch — set to the real
+    // value from cail-gateway docs/LAUNCH_CHECKLIST.md (institutional Cloudflare
+    // account). Model calls hit {CAIL_API_BASE}/v1/compat/chat/completions.
+    "CAIL_API_BASE": "https://REPLACE-AT-LAUNCH.example/cail",
+    // CAIL_MODEL: model id for AI Gateway's OpenAI-compatible path. This mirrors
+    // the old OpenRouter id but is NOT guaranteed identical on the gateway —
+    // confirm the gateway-supported id at launch (see PR model-availability flag).
+    "CAIL_MODEL": "anthropic/claude-sonnet-4.6",
+    // CAIL_REQUIRE_IDENTITY: "false" during pre-SSO rollout (anonymous sessions
+    // still allowed). Flip to "true" in lockstep with the gateway's
+    // CAIL_SSO_MODE=enforce so the workers.dev URL is not an anonymous bypass.
+    "CAIL_REQUIRE_IDENTITY": "false"
   },
+  // ---- Secrets (never real values here) ----
+  // Set via `wrangler secret put` (ops-managed; cail-gateway push-secrets.sh):
+  //   CAIL_IDENTITY_JWT_SECRET  shared HS256 secret to verify X-CAIL-Identity-JWT
+  // Site Studio holds NO provider API keys — the CAIL model proxy attaches them.
+  // (OPENROUTER_API_KEY was removed on 2026-07-03.)
   "worker_loaders": [
     {
       "binding": "LOADER"
@@ -40,6 +58,9 @@
   },
   "r2_buckets": [
     {
+      // NOTE: the "site-studio" R2 bucket is shared with agent-studio's branch
+      // (flagged upstream). Do not rename or repoint it here without coordinating
+      // that migration; ownership is keyed by CAIL subject prefixes within it.
       "binding": "SITE_STUDIO_BUCKET",
       "bucket_name": "site-studio"
     }
