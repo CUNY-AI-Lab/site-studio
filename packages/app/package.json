@@ -11,7 +11,8 @@
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check": "vitest run && tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^1.0.41",

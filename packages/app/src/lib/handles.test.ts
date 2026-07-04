@@ -219,12 +219,29 @@ describe("createHandleRouter", () => {
     expect(res.status).toBe(409);
   });
 
-  it("never exposes an owner/subject id in any response", async () => {
-    await claimHandle(bucket, "cail-me", "jane-rivera");
+  it("no handle-route response body contains an owner/subject id (GET, check, and all POST outcomes)", async () => {
+    const post = (handle: string) =>
+      app.request(
+        "/api/handle",
+        { method: "POST", body: JSON.stringify({ handle }), headers: { "Content-Type": "application/json" } },
+        env(bucket)
+      );
+
+    // Seed a competing owner so the taken-conflict body is exercised too.
+    await claimHandle(bucket, "cail-other", "taken-one");
+
+    const conflictTaken = await post("taken-one"); // 409: taken by cail-other
+    const claim = await post("jane-rivera"); // 200: fresh claim by cail-me
+    const idempotent = await post("jane-rivera"); // 200: alreadyOwned
+    const conflictOwn = await post("another-one"); // 409: already has a different handle
     const get = await app.request("/api/handle", {}, env(bucket));
     const check = await app.request("/api/handle/check?handle=jane-rivera", {}, env(bucket));
-    expect(await get.text()).not.toContain("cail-me");
-    expect(await check.text()).not.toContain("cail-me");
+
+    for (const res of [conflictTaken, claim, idempotent, conflictOwn, get, check]) {
+      const body = await res.text();
+      expect(body).not.toContain("cail-me");
+      expect(body).not.toContain("cail-other");
+    }
   });
 });
 
