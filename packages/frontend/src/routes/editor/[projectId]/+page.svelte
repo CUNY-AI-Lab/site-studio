@@ -10,11 +10,12 @@
 	import * as Resizable from '$lib/components/ui/resizable';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import Button from '$lib/components/ui/button/button.svelte';
-    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw } from 'lucide-svelte';
+    import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
+	import ImageManagerDialog from '$lib/components/ImageManagerDialog.svelte';
 	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
@@ -65,6 +66,9 @@
 
 	// Handle-claim dialog, shown when publishing requires a public handle
 	let showHandleDialog = $state(false);
+
+	// Images dialog: upload photos, replace placeholders, hand insertion to chat
+	let showImagesDialog = $state(false);
 
 	function handleDragChange(dragging: boolean) {
 		isDragging = dragging;
@@ -530,6 +534,15 @@
 		);
 	}
 
+	function askAssistantToPlaceImage(prompt: string) {
+		// Make sure the chat is visible, then hand the request to the agent
+		// (same pattern as the accessibility "ask the assistant" flow).
+		if (isChatCollapsed && chatPane) {
+			chatPane.expand();
+		}
+		void chatComponent?.sendPrompt(prompt);
+	}
+
 	async function handleUnpublishProject() {
 		if (!currentProject) return;
 		try {
@@ -621,6 +634,13 @@
 	onAskAssistant={askAssistantToFixA11y}
 />
 
+<ImageManagerDialog
+	open={showImagesDialog}
+	{projectId}
+	onOpenChange={(open) => (showImagesDialog = open)}
+	onAskAssistant={askAssistantToPlaceImage}
+/>
+
 <HandleClaimDialog
 	open={showHandleDialog}
 	onOpenChange={(open) => (showHandleDialog = open)}
@@ -687,6 +707,18 @@
 								{/if}
 							</DropdownMenu.Content>
 						</DropdownMenu.Root>
+
+						<!-- Images Button -->
+						{#if currentProject}
+							<button
+								class="images-button"
+								onclick={() => (showImagesDialog = true)}
+								title="Manage images"
+							>
+								<ImageIcon size={14} />
+								<span>Images</span>
+							</button>
+						{/if}
 
 						<!-- Publish Button - Always visible -->
 						{#if currentProject}
@@ -943,6 +975,28 @@
 		flex-shrink: 0;
 	}
 
+	/* Images Button */
+	.images-button {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.4rem 0.75rem;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		font-family: var(--font-sans);
+		border-radius: var(--radius-md);
+		cursor: pointer;
+		transition: all 0.15s ease;
+		border: 1px solid var(--color-border);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+	}
+
+	.images-button:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-border-hover);
+	}
+
 	/* Publish Button */
 	.publish-button {
 		display: flex;
@@ -1171,6 +1225,14 @@
 		}
 
 		.publish-button {
+			padding: 0.375rem;
+		}
+
+		.images-button span {
+			display: none;
+		}
+
+		.images-button {
 			padding: 0.375rem;
 		}
 	}

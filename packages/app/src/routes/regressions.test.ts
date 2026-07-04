@@ -444,3 +444,170 @@ describe("route regressions", () => {
     expect(await response.text()).toContain("<h1>Legacy Home</h1>");
   });
 });
+
+/** Minimal PNG magic-byte prefix, padded to a plausible file size. */
+function pngBytes(len = 64): Uint8Array {
+  const arr = new Uint8Array(len);
+  arr.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return arr;
+}
+
+/** Build a multipart upload request body with an optional `dir` field. */
+function uploadRequest(
+  fileName: string,
+  data: Uint8Array,
+  opts: { dir?: string } = {}
+): RequestInit {
+  const form = new FormData();
+  form.append("file", new File([new Blob([data.buffer as ArrayBuffer])], fileName));
+  if (opts.dir !== undefined) {
+    form.append("dir", opts.dir);
+  }
+  return { method: "POST", body: form };
+}
+
+describe("image upload hardening", () => {
+  const userId = "user_test123";
+  let bucket: ReturnType<typeof createMockBucket>;
+  let storage: R2ProjectStorage;
+  let app: ReturnType<typeof createTestApp>;
+
+  beforeEach(async () => {
+    bucket = createMockBucket();
+    storage = new R2ProjectStorage(bucket);
+    app = createTestApp();
+    await storage.createProject(userId, "imgproj", "Image Project");
+  });
+
+  it("accepts an image whose magic bytes match its extension", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("photo.png", pngBytes()),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { path: string };
+    expect(body.path).toBe("photo.png");
+  });
+
+  it("rejects a file whose bytes do not match its image extension", async () => {
+    const html = new TextEncoder().encode("<!DOCTYPE html><html></html>");
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("fake.png", html),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("not a valid PNG");
+  });
+
+  it("rejects an oversized image with 400", async () => {
+    // 10MB cap + 1 byte, filled with the PNG signature so only size can fail.
+    const big = pngBytes(10 * 1024 * 1024 + 1);
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("huge.png", big),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("too large");
+  });
+
+  it("stores dir=images uploads under the images/ prefix and collision-suffixes", async () => {
+    const first = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("hero.png", pngBytes(), { dir: "images" }),
+      createEnv(bucket)
+    );
+    expect(first.status).toBe(200);
+    expect(((await first.json()) as { path: string }).path).toBe("images/hero.png");
+
+    const second = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("hero.png", pngBytes(), { dir: "images" }),
+      createEnv(bucket)
+    );
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { path: string }).path).toBe("images/hero_1.png");
+  });
+
+  it("rejects a dir value other than images with 400", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("evil.png", pngBytes(), { dir: "../secrets" }),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("Only \"images\" is allowed");
+  });
+
+  it("keeps generic (non-image) uploads working with no dir field", async () => {
+    const text = new TextEncoder().encode("hello world");
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("notes.txt", text),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { path: string }).path).toBe("notes.txt");
+  });
+});
+
+describe("images inventory endpoint", () => {
+  const userId = "user_test123";
+  let bucket: ReturnType<typeof createMockBucket>;
+  let storage: R2ProjectStorage;
+  let app: ReturnType<typeof createTestApp>;
+
+  beforeEach(() => {
+    bucket = createMockBucket();
+    storage = new R2ProjectStorage(bucket);
+    app = createTestApp();
+  });
+
+  it("lists project images and placeholder findings with an extractable src", async () => {
+    await storage.createProject(userId, "inv", "Inventory");
+    await storage.uploadToProject(userId, "inv", "images/hero.png", pngBytes());
+    await storage.writeFile(
+      userId,
+      "inv",
+      "index.html",
+      `<!DOCTYPE html>\n<html lang="en">\n<head>\n<title>T</title>\n<meta name="description" content="d">\n</head>\n<body>\n<h1>Hi</h1>\n<img src="https://placehold.co/600x400" alt="Placeholder — replace with a photo">\n</body>\n</html>`
+    );
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/inv/images",
+      undefined,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      images: Array<{ path: string; size: number }>;
+      placeholders: Array<{ file: string; line: number | null; message: string; src?: string }>;
+    };
+
+    expect(body.images.map((i) => i.path)).toContain("images/hero.png");
+    expect(body.placeholders.length).toBe(1);
+    expect(body.placeholders[0].file).toBe("index.html");
+    expect(body.placeholders[0].src).toBe("https://placehold.co/600x400");
+    expect(body.placeholders[0].message).toContain("placeholder");
+  });
+
+  it("returns 404 for a missing project", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/nope/images",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(404);
+  });
+});

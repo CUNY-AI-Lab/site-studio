@@ -1,6 +1,12 @@
 export const SESSION_COOKIE_NAME = "site-studio-session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+/**
+ * Image uploads are held to a tighter cap than generic files. Real photos for a
+ * student site rarely need more than a few MB; 10MB leaves room for a large
+ * hero image without inviting multi-hundred-MB uploads into R2.
+ */
+export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const PROTECTED_FILE_NAMES = new Set([".metadata.json", ".thumbnail.png"]);
 
 export const CONTENT_TYPES: Record<string, string> = {

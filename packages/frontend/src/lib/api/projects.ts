@@ -146,6 +146,58 @@ export async function uploadFile(projectId: string, file: File): Promise<string>
 }
 
 /**
+ * Upload an image into the project's images/ folder. The backend validates the
+ * magic bytes against the extension and rejects non-image or oversized files.
+ * Returns the stored path (e.g. "images/photo.png").
+ */
+export async function uploadProjectImage(projectId: string, file: File): Promise<string> {
+	const formData = new FormData();
+	formData.append('file', file);
+	formData.append('dir', 'images');
+
+	const response = await fetch(`${API_BASE}/projects/${projectId}/upload`, {
+		method: 'POST',
+		credentials: 'include',
+		body: formData,
+	});
+
+	if (!response.ok) {
+		await handleApiError(response);
+	}
+
+	const data = (await response.json()) as { path: string };
+	return data.path;
+}
+
+/** An image file that exists in the project. */
+export interface ProjectImage {
+	path: string;
+	size: number;
+}
+
+/** A placehold.co placeholder still present in the project's HTML. */
+export interface PlaceholderFinding {
+	file: string;
+	line: number | null;
+	message: string;
+	/** The placehold.co URL, when it could be pulled from the line. */
+	src?: string;
+}
+
+export interface ProjectImagesResult {
+	images: ProjectImage[];
+	placeholders: PlaceholderFinding[];
+}
+
+/**
+ * Fetch the project's image inventory: real image files plus any placehold.co
+ * placeholders still referenced in the HTML.
+ */
+export async function fetchProjectImages(projectId: string): Promise<ProjectImagesResult> {
+	return apiFetch<ProjectImagesResult>(`${API_BASE}/projects/${projectId}/images`);
+}
+
+/**
  * Download a file from the project
  */
 export async function downloadFile(projectId: string, filePath: string): Promise<void> {
