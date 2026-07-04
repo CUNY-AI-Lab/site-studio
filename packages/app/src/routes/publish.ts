@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import type { Env } from "../types";
 import { getContentType } from "../lib/path";
 import { binaryBody, jsonError } from "../lib/http";
+import { loadMigrationPointer } from "../lib/migration";
 import { getUser } from "../lib/session";
 import { R2ProjectStorage } from "../storage/r2";
 
@@ -153,12 +154,26 @@ async function servePublishedFile(
   rawPath: string
 ) {
   const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
-  const userId = c.req.param("userId");
+  const requestedUserId = c.req.param("userId");
   const slug = c.req.param("slug");
-  if (!userId || !slug) {
+  if (!requestedUserId || !slug) {
     jsonError("Published site not found", 404);
   }
-  const resolved = await storage.findPublishedProjectBySlug(userId, slug);
+
+  let userId = requestedUserId;
+  let resolved = await storage.findPublishedProjectBySlug(userId, slug);
+
+  if (!resolved) {
+    // The owner id in the URL may be an anonymous namespace that was migrated
+    // to a CAIL subject (lib/migration.ts). Follow the forwarding pointer so
+    // previously shared /sites/<anon>/<slug>/ links keep serving the live,
+    // migrated site.
+    const pointer = await loadMigrationPointer(c.env.SITE_STUDIO_BUCKET, userId);
+    if (pointer) {
+      userId = pointer.subject;
+      resolved = await storage.findPublishedProjectBySlug(userId, pointer.slugs[slug] ?? slug);
+    }
+  }
 
   if (!resolved) {
     jsonError("Published site not found", 404);

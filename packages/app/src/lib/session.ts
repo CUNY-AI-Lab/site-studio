@@ -1,5 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import { getCookie, setCookie } from "hono/cookie";
+import type { Context } from "hono";
 import type { Env, LegacySessionRecord, User } from "../types";
 import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 import {
@@ -8,6 +9,8 @@ import {
   getRequestIdentity,
   type CailIdentity,
 } from "./cail-identity";
+import { migrateAnonymousData, migrationPendingKey } from "./migration";
+import { createAgentHistoryPorter } from "./agent-porter";
 
 type SessionVariables = {
   sessionId: string;
@@ -101,6 +104,48 @@ function createAnonymousUser(): User {
 }
 
 /**
+ * First-login migration trigger. On an authenticated request that still
+ * carries the pre-SSO anonymous session cookie, claim that anonymous
+ * namespace for the subject and re-home its data. Independently, resume any
+ * interrupted migration recorded under the subject (the anonymous cookie is
+ * replaced by the subject cookie after the first request, so resumption must
+ * not depend on it). Pure anonymous requests never reach this function.
+ */
+async function migrateAnonymousSessionIfPresent(
+  c: Context<{ Bindings: Env; Variables: SessionVariables }>,
+  subject: string
+): Promise<void> {
+  const porter = createAgentHistoryPorter(c.env);
+  const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
+
+  if (cookieValue && cookieValue !== subject) {
+    const anonUser = await readCurrentSession(c.env, cookieValue);
+    if (anonUser && anonUser.id.startsWith("user_")) {
+      await migrateAnonymousData({
+        bucket: c.env.SITE_STUDIO_BUCKET,
+        kv: c.env.SESSION_KV,
+        anonUserId: anonUser.id,
+        subject,
+        anonSessionId: cookieValue,
+        porter,
+      });
+      return;
+    }
+  }
+
+  const pendingAnonId = await c.env.SESSION_KV.get(migrationPendingKey(subject)).catch(() => null);
+  if (pendingAnonId) {
+    await migrateAnonymousData({
+      bucket: c.env.SITE_STUDIO_BUCKET,
+      kv: c.env.SESSION_KV,
+      anonUserId: pendingAnonId,
+      subject,
+      porter,
+    });
+  }
+}
+
+/**
  * Auth middleware for protected routes.
  *
  * Identity precedence (docs/INTEGRATION.md §3):
@@ -134,6 +179,18 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     }
 
     const subject = identity.subject;
+
+    // First-login migration: if this authenticated request still carries the
+    // pre-SSO anonymous session cookie, claim that anonymous namespace for
+    // this subject and re-home its data (lib/migration.ts). Also resume a
+    // previously interrupted migration recorded under the subject. Failures
+    // never block authentication — the pending marker makes them retryable.
+    try {
+      await migrateAnonymousSessionIfPresent(c, subject);
+    } catch (error) {
+      console.error(`Anonymous-data migration failed for ${subject}`, error);
+    }
+
     const kvKey = cailSessionKey(subject);
     const stored = await c.env.SESSION_KV.get(kvKey, "json").catch(() => null);
     const createdAt =

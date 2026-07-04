@@ -72,6 +72,42 @@ function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt || "";
 }
 
+/**
+ * Forwarding pointer written by the app worker's anonymous-data migration
+ * (packages/app/src/lib/migration.ts — keep the shape in sync). When an
+ * anonymous namespace is re-homed to a CAIL subject, this pointer stays at
+ * `projects/<anonUserId>/.migrated.json` forever so previously shared
+ * /sites/<anonUserId>/<slug>/ URLs keep serving the live, migrated site.
+ */
+type MigrationPointer = {
+  version: number;
+  subject: string;
+  migratedAt?: string;
+  projects?: Record<string, string>;
+  slugs?: Record<string, string>;
+};
+
+async function loadMigrationPointer(
+  bucket: R2Bucket,
+  userId: string
+): Promise<MigrationPointer | null> {
+  const object = await bucket.get(`projects/${userId}/.migrated.json`);
+  if (!object) {
+    return null;
+  }
+
+  try {
+    const pointer = JSON.parse(await object.text()) as MigrationPointer;
+    if (pointer.version !== 1 || typeof pointer.subject !== "string" || !pointer.subject) {
+      return null;
+    }
+    return pointer;
+  } catch (error) {
+    console.warn(`Skipping invalid migration pointer for ${userId}`, error);
+    return null;
+  }
+}
+
 function parsePublishedRequest(url: URL): { userId: string; slug: string; filePath: string } | null {
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length >= 3 && parts[0] === "sites") {
@@ -115,7 +151,9 @@ async function listProjects(bucket: R2Bucket, userId: string): Promise<string[]>
     for (const object of listed.objects) {
       const relative = object.key.slice(prefix.length);
       const [projectId] = relative.split("/");
-      if (projectId) {
+      // Dotfile entries (e.g. the migration pointer .migrated.json) are
+      // system objects, never projects.
+      if (projectId && !projectId.startsWith(".")) {
         ids.add(projectId);
       }
     }
@@ -230,7 +268,20 @@ export default {
       });
     }
 
-    const resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, parsed.userId, parsed.slug);
+    let ownerId = parsed.userId;
+    let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug);
+
+    if (!resolved) {
+      // The owner id in the URL may be an anonymous namespace re-homed to a
+      // CAIL subject; follow the forwarding pointer so old links keep working.
+      const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId);
+      if (pointer) {
+        ownerId = pointer.subject;
+        const mappedSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
+        resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug);
+      }
+    }
+
     if (!resolved) {
       return new Response("Published site not found", {
         status: 404,
@@ -239,11 +290,11 @@ export default {
     }
 
     let filePath = parsed.filePath || "index.html";
-    let object = await readObject(env.SITE_STUDIO_BUCKET, parsed.userId, resolved.projectId, filePath);
+    let object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, filePath);
 
     if (!object && !filePath.endsWith(".html")) {
       const htmlPath = `${filePath}.html`;
-      object = await readObject(env.SITE_STUDIO_BUCKET, parsed.userId, resolved.projectId, htmlPath);
+      object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, htmlPath);
       if (object) {
         filePath = htmlPath;
       }
@@ -251,14 +302,14 @@ export default {
 
     if (!object && !filePath.endsWith(".html")) {
       const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
-      object = await readObject(env.SITE_STUDIO_BUCKET, parsed.userId, resolved.projectId, indexPath);
+      object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, indexPath);
       if (object) {
         filePath = indexPath;
       }
     }
 
     if (!object) {
-      return notFoundResponse(env.SITE_STUDIO_BUCKET, parsed.userId, resolved.projectId);
+      return notFoundResponse(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId);
     }
 
     return new Response(object.body, {

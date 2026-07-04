@@ -75,6 +75,14 @@ export interface ProjectMetadata {
   unpublishedAt?: string;
   thumbnailUrl?: string;
   slug?: string;
+  /**
+   * Set on projects copied in by the anonymous-data migration
+   * (lib/migration.ts): the anonymous user id the project came from and its
+   * id in that namespace. Lets retried/concurrent migration runs recognize
+   * their own copies instead of treating them as collisions.
+   */
+  importedFrom?: string;
+  importedOriginalId?: string;
 }
 
 export type ProjectSnapshotTrigger = "agent" | "manual" | "restore";

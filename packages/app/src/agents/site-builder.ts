@@ -903,6 +903,27 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     return this.snapshotObservability();
   }
 
+  /**
+   * Export the persisted chat history for the anonymous-data migration
+   * (lib/migration.ts). Called over DO RPC by the main worker only.
+   */
+  async exportChatHistoryForMigration(): Promise<unknown[]> {
+    return this.messages;
+  }
+
+  /**
+   * Import chat history during the anonymous-data migration. Non-destructive:
+   * refuses when this instance already has messages of its own. Returns
+   * whether the history was imported.
+   */
+  async importChatHistoryForMigration(messages: unknown[]): Promise<boolean> {
+    if (this.messages.length > 0) {
+      return false; // never overwrite an existing conversation
+    }
+    await this.saveMessages(messages as typeof this.messages);
+    return true;
+  }
+
   async onChatMessage(
     onFinish?: Parameters<ChatHandler>[0],
     options?: Parameters<ChatHandler>[1]

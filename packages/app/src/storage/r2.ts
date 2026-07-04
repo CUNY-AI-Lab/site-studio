@@ -90,7 +90,10 @@ export class R2ProjectStorage {
       for (const object of listed.objects) {
         const relative = object.key.slice(prefix.length);
         const [projectId] = relative.split("/");
-        if (projectId) {
+        // Dotfile entries are system objects (e.g. the migration forwarding
+        // pointer .migrated.json), never projects — sanitizeProjectId cannot
+        // produce ids starting with ".".
+        if (projectId && !projectId.startsWith(".")) {
           ids.add(projectId);
         }
       }
