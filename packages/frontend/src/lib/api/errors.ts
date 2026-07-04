@@ -52,8 +52,27 @@ export class ApiError extends Error {
 }
 
 /**
- * Parse error response from API and throw ApiError
- * Handles both structured API errors and generic network errors
+ * Redirect the browser to the CAIL SSO login, preserving where to return.
+ *
+ * The SSO gate serves `/login?rt=<same-origin-path>` (docs/INTEGRATION.md §2).
+ * Only same-origin paths are used as the return target to avoid open-redirects.
+ */
+function redirectToLogin(loginUrl: string): void {
+	if (typeof window === 'undefined') return;
+	const rt = window.location.pathname + window.location.search;
+	// Ignore any absolute login_url the backend might send; always same-origin.
+	const path = loginUrl && loginUrl.startsWith('/') ? loginUrl : '/login';
+	window.location.assign(`${path}?rt=${encodeURIComponent(rt)}`);
+}
+
+/**
+ * Parse error response from API and throw ApiError.
+ * Handles both structured API errors and generic network errors.
+ *
+ * CAIL `authentication_required` (401) redirects browsers to the SSO login so
+ * the user can sign in with CUNY Login (docs/INTEGRATION.md §2). Other CAIL
+ * envelopes (quota_exceeded, invalid_api_key, upstream_auth_error, …) pass
+ * through unmodified as ApiError so callers can show `message` as-is.
  */
 export async function handleApiError(response: Response): Promise<never> {
 	let errorData: any;
@@ -69,9 +88,15 @@ export async function handleApiError(response: Response): Promise<never> {
 		);
 	}
 
+	// CAIL envelopes carry a machine code in `error` and a human sentence in
+	// `message`. Redirect to login on authentication_required.
+	if (response.status === 401 && errorData.error === 'authentication_required') {
+		redirectToLogin(typeof errorData.login_url === 'string' ? errorData.login_url : '/login');
+	}
+
 	// Extract error information from response
-	const message = errorData.error || errorData.message || 'An error occurred';
-	const code = errorData.code;
+	const message = errorData.message || errorData.error || 'An error occurred';
+	const code = errorData.code || errorData.error;
 	const details = errorData.details;
 
 	throw new ApiError(response.status, message, code, details);
