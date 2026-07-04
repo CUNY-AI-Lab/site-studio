@@ -1,4 +1,6 @@
-type Env = {
+import { renderNotFoundPage } from "./not-found-page";
+
+export type Env = {
   PUBLIC_DOMAIN?: string;
   SITE_STUDIO_BUCKET: R2Bucket;
 };
@@ -13,7 +15,7 @@ type ProjectMetadata = {
   slug?: string;
 };
 
-function sanitizeFilePath(filePath: string): string {
+export function sanitizeFilePath(filePath: string): string {
   const normalized = filePath
     .trim()
     .replace(/\\/g, "/")
@@ -31,15 +33,15 @@ function sanitizeFilePath(filePath: string): string {
   return normalized;
 }
 
-function metadataKey(userId: string, projectId: string): string {
+export function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
 }
 
-function fileKey(userId: string, projectId: string, filePath: string): string {
+export function fileKey(userId: string, projectId: string, filePath: string): string {
   return `projects/${userId}/${projectId}/${sanitizeFilePath(filePath)}`;
 }
 
-function getContentType(filePath: string): string {
+export function getContentType(filePath: string): string {
   const match = filePath.toLowerCase().match(/\.[^.]+$/);
   const extension = match?.[0] || "";
   const types: Record<string, string> = {
@@ -68,7 +70,7 @@ function getContentType(filePath: string): string {
   return types[extension] || "application/octet-stream";
 }
 
-function publishedSortKey(metadata: ProjectMetadata): string {
+export function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt || "";
 }
 
@@ -87,7 +89,7 @@ type MigrationPointer = {
   slugs?: Record<string, string>;
 };
 
-async function loadMigrationPointer(
+export async function loadMigrationPointer(
   bucket: R2Bucket,
   userId: string
 ): Promise<MigrationPointer | null> {
@@ -108,7 +110,7 @@ async function loadMigrationPointer(
   }
 }
 
-function parsePublishedRequest(url: URL): { userId: string; slug: string; filePath: string } | null {
+export function parsePublishedRequest(url: URL): { userId: string; slug: string; filePath: string } | null {
   const parts = url.pathname.split("/").filter(Boolean);
   if (parts.length >= 3 && parts[0] === "sites") {
     return {
@@ -129,7 +131,7 @@ function parsePublishedRequest(url: URL): { userId: string; slug: string; filePa
   return null;
 }
 
-async function listProjects(bucket: R2Bucket, userId: string): Promise<string[]> {
+export async function listProjects(bucket: R2Bucket, userId: string): Promise<string[]> {
   const prefix = `projects/${userId}/`;
   const ids = new Set<string>();
   let cursor: string | undefined;
@@ -164,7 +166,7 @@ async function listProjects(bucket: R2Bucket, userId: string): Promise<string[]>
   return [...ids].sort();
 }
 
-async function getProjectMetadata(
+export async function getProjectMetadata(
   bucket: R2Bucket,
   userId: string,
   projectId: string
@@ -182,7 +184,7 @@ async function getProjectMetadata(
   }
 }
 
-async function findPublishedProject(
+export async function findPublishedProject(
   bucket: R2Bucket,
   userId: string,
   requestedSlug: string
@@ -209,7 +211,7 @@ async function findPublishedProject(
   return matches[0] || null;
 }
 
-async function readObject(
+export async function readObject(
   bucket: R2Bucket,
   userId: string,
   projectId: string,
@@ -218,7 +220,7 @@ async function readObject(
   return bucket.get(fileKey(userId, projectId, filePath));
 }
 
-function responseHeaders(filePath: string, object: R2ObjectBody): Headers {
+export function responseHeaders(filePath: string, object: R2ObjectBody): Headers {
   const contentType = getContentType(filePath);
   const headers = new Headers({
     "Content-Type": contentType,
@@ -238,10 +240,59 @@ function responseHeaders(filePath: string, object: R2ObjectBody): Headers {
   return headers;
 }
 
-async function notFoundResponse(
+/**
+ * A request "looks like a page navigation" when the visitor is expecting a
+ * document (so a styled 404 belongs) rather than an asset like an image/css/js
+ * referenced by a tag. We serve HTML only for navigations so a broken
+ * <img>/<script>/<link> does not download a full HTML document.
+ */
+export function looksLikePageNavigation(request: Request, filePath: string): boolean {
+  const accept = request.headers.get("Accept") || "";
+  if (accept.includes("text/html")) {
+    return true;
+  }
+  const path = filePath.trim();
+  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
+}
+
+/** The site's root path for a "Go to site home" link, if we know it. */
+export function siteRootPath(userId?: string, slug?: string): string | undefined {
+  return userId && slug ? `/sites/${userId}/${slug}/` : undefined;
+}
+
+/**
+ * Styled/terse fallback 404 for the publisher. Page navigations get the
+ * dignified HTML document (with a home link when available); asset requests
+ * keep a terse plain-text 404.
+ */
+export function fallbackNotFoundResponse(
+  request: Request,
+  filePath: string,
+  rootPath?: string
+): Response {
+  if (looksLikePageNavigation(request, filePath)) {
+    return new Response(renderNotFoundPage(rootPath), {
+      status: 404,
+      headers: { "Content-Type": "text/html; charset=utf-8" }
+    });
+  }
+  return new Response("Not found", {
+    status: 404,
+    headers: { "Content-Type": "text/plain; charset=utf-8" }
+  });
+}
+
+/**
+ * Missing file within a resolved published site. A project-supplied 404.html
+ * still wins; otherwise fall back to the styled/terse response.
+ */
+export async function notFoundResponse(
   bucket: R2Bucket,
   userId: string,
-  projectId: string
+  projectId: string,
+  request: Request,
+  filePath: string,
+  rootPath?: string
 ): Promise<Response> {
   const custom404 = await readObject(bucket, userId, projectId, "404.html");
   if (custom404) {
@@ -251,10 +302,7 @@ async function notFoundResponse(
     });
   }
 
-  return new Response("Not found", {
-    status: 404,
-    headers: { "Content-Type": "text/plain; charset=utf-8" }
-  });
+  return fallbackNotFoundResponse(request, filePath, rootPath);
 }
 
 export default {
@@ -262,10 +310,8 @@ export default {
     const url = new URL(request.url);
     const parsed = parsePublishedRequest(url);
     if (!parsed) {
-      return new Response("Not found", {
-        status: 404,
-        headers: { "Content-Type": "text/plain; charset=utf-8" }
-      });
+      // No site context to link back to — styled/terse 404 with no home link.
+      return fallbackNotFoundResponse(request, url.pathname);
     }
 
     let ownerId = parsed.userId;
@@ -283,12 +329,12 @@ export default {
     }
 
     if (!resolved) {
-      return new Response("Published site not found", {
-        status: 404,
-        headers: { "Content-Type": "text/plain; charset=utf-8" }
-      });
+      // Unknown site: the slug does not resolve, so we cannot promise a home
+      // link points at a live page. Styled/terse 404 without a home link.
+      return fallbackNotFoundResponse(request, parsed.filePath);
     }
 
+    const rootPath = siteRootPath(parsed.userId, parsed.slug);
     let filePath = parsed.filePath || "index.html";
     let object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, filePath);
 
@@ -309,7 +355,14 @@ export default {
     }
 
     if (!object) {
-      return notFoundResponse(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId);
+      return notFoundResponse(
+        env.SITE_STUDIO_BUCKET,
+        ownerId,
+        resolved.projectId,
+        request,
+        parsed.filePath,
+        rootPath
+      );
     }
 
     return new Response(object.body, {

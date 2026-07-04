@@ -3,8 +3,59 @@ import type { Env } from "../types";
 import { getContentType } from "../lib/path";
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
+import { renderNotFoundPage } from "../lib/not-found-page";
 import { getUser } from "../lib/session";
 import { R2ProjectStorage } from "../storage/r2";
+
+/**
+ * A request "looks like a page navigation" when the visitor is expecting a
+ * document (so a styled 404 belongs) rather than an asset like an image/css/js
+ * referenced by a tag. We serve HTML only for navigations so a broken
+ * <img>/<script>/<link> does not download a full HTML document.
+ */
+function looksLikePageNavigation(c: AppContext, filePath: string): boolean {
+  const accept = c.req.header("Accept") || "";
+  if (accept.includes("text/html")) {
+    return true;
+  }
+  const path = filePath.trim();
+  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
+}
+
+/**
+ * Respond to a missing published file. Page navigations get the dignified
+ * styled 404 (with a "Go to site home" link); asset requests keep a terse
+ * plain-text 404.
+ */
+function publishedNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
+  if (looksLikePageNavigation(c, filePath)) {
+    return c.html(renderNotFoundPage(siteRootPath), 404);
+  }
+  return c.text("Not found", 404);
+}
+
+/**
+ * Missing file within a resolved published site. A project-supplied 404.html
+ * takes precedence (for page navigations); otherwise fall back to the styled
+ * 404. Asset requests always get a terse 404.
+ */
+async function missingPublishedFile(
+  c: AppContext,
+  storage: R2ProjectStorage,
+  userId: string,
+  projectId: string,
+  filePath: string,
+  siteRootPath: string
+): Promise<Response> {
+  if (looksLikePageNavigation(c, filePath) && (await storage.fileExists(userId, projectId, "404.html"))) {
+    const custom = await storage.readFileBuffer(userId, projectId, "404.html");
+    return new Response(binaryBody(custom), {
+      status: 404,
+      headers: { "Content-Type": "text/html; charset=utf-8" }
+    });
+  }
+  return publishedNotFound(c, filePath, siteRootPath);
+}
 
 function slugify(value: string): string {
   return value
@@ -157,8 +208,11 @@ async function servePublishedFile(
   const requestedUserId = c.req.param("userId");
   const slug = c.req.param("slug");
   if (!requestedUserId || !slug) {
-    jsonError("Published site not found", 404);
+    // No site context to link back to — terse/styled 404 with no home link.
+    return publishedNotFound(c, rawPath);
   }
+
+  const siteRootPath = `/sites/${requestedUserId}/${slug}/`;
 
   let userId = requestedUserId;
   let resolved = await storage.findPublishedProjectBySlug(userId, slug);
@@ -176,7 +230,9 @@ async function servePublishedFile(
   }
 
   if (!resolved) {
-    jsonError("Published site not found", 404);
+    // Unknown site: the slug does not resolve, so we cannot promise the home
+    // link points at a live page. Serve the styled 404 without a home link.
+    return publishedNotFound(c, rawPath);
   }
 
   let filePath = rawPath || "index.html";
@@ -187,10 +243,10 @@ async function servePublishedFile(
       if (await storage.fileExists(userId, resolved.projectId, indexPath)) {
         filePath = indexPath;
       } else {
-        jsonError("Not found", 404);
+        return missingPublishedFile(c, storage, userId, resolved.projectId, rawPath, siteRootPath);
       }
     } else {
-      jsonError("Not found", 404);
+      return missingPublishedFile(c, storage, userId, resolved.projectId, rawPath, siteRootPath);
     }
   }
 

@@ -128,7 +128,7 @@ describe("route regressions", () => {
     app = createTestApp();
   });
 
-  it("returns 404 for missing preview assets", async () => {
+  it("returns a terse 404 for missing preview assets", async () => {
     await storage.createProject(userId, "preview-project", "Preview Project");
     await storage.writeFile(userId, "preview-project", "index.html", "<h1>Hello</h1>");
 
@@ -139,7 +139,84 @@ describe("route regressions", () => {
     );
 
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    expect(response.headers.get("Content-Type") || "").toContain("text/plain");
+    await expect(response.text()).resolves.toBe("Not found");
+  });
+
+  it("serves the styled 404 page for missing preview navigations", async () => {
+    await storage.createProject(userId, "preview-project", "Preview Project");
+    await storage.writeFile(userId, "preview-project", "index.html", "<h1>Hello</h1>");
+
+    const response = await app.request(
+      "http://site-studio.test/preview/preview-project/missing.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Content-Type") || "").toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("Page not found");
+    expect(body).toContain('href="/preview/preview-project/"');
+  });
+
+  it("serves the styled 404 page for missing published navigations", async () => {
+    await storage.createProject(userId, "pub", "Pub");
+    await storage.writeFile(userId, "pub", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "pub", {
+      published: true,
+      slug: "pub"
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_test123/pub/missing.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Content-Type") || "").toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("Page not found");
+    expect(body).toContain('href="/sites/user_test123/pub/"');
+  });
+
+  it("honors a project 404.html for missing published navigations", async () => {
+    await storage.createProject(userId, "pub2", "Pub2");
+    await storage.writeFile(userId, "pub2", "index.html", "<h1>Home</h1>");
+    await storage.writeFile(userId, "pub2", "404.html", "<h1>Custom missing</h1>");
+    await storage.updateProjectMetadata(userId, "pub2", {
+      published: true,
+      slug: "pub2"
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_test123/pub2/nope.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain("Custom missing");
+  });
+
+  it("keeps a terse 404 for missing published assets", async () => {
+    await storage.createProject(userId, "pub3", "Pub3");
+    await storage.writeFile(userId, "pub3", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "pub3", {
+      published: true,
+      slug: "pub3"
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_test123/pub3/missing.png",
+      undefined,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Content-Type") || "").toContain("text/plain");
+    await expect(response.text()).resolves.toBe("Not found");
   });
 
   it("returns 404 for missing project file reads and downloads", async () => {

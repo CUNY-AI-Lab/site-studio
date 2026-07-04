@@ -1,11 +1,34 @@
 import { Hono, type Context } from "hono";
 import type { Env } from "../types";
 import { addCacheBusterToHtml, getContentType, isTextContentType } from "../lib/path";
-import { binaryBody, jsonError } from "../lib/http";
+import { binaryBody } from "../lib/http";
+import { renderNotFoundPage } from "../lib/not-found-page";
 import { getUser } from "../lib/session";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
 type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
+
+/**
+ * A preview request "looks like a page navigation" when the visitor expects a
+ * document, so a styled 404 belongs (it renders inside the editor iframe).
+ * Asset requests (css/js/images) keep a terse 404 so a broken tag does not
+ * download a full HTML document.
+ */
+function looksLikePageNavigation(c: AppContext, filePath: string): boolean {
+  const accept = c.req.header("Accept") || "";
+  if (accept.includes("text/html")) {
+    return true;
+  }
+  const path = filePath.trim();
+  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
+}
+
+function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
+  if (looksLikePageNavigation(c, filePath)) {
+    return c.html(renderNotFoundPage(siteRootPath), 404);
+  }
+  return c.text("Not found", 404);
+}
 
 export function createPreviewRouter() {
   const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
@@ -32,11 +55,13 @@ async function servePreviewFile(
   const user = getUser(c);
   const projectId = c.req.param("id");
   if (!projectId) {
-    jsonError("Project not found", 404);
+    return previewNotFound(c, requestedPath);
   }
 
+  const siteRootPath = `/preview/${projectId}/`;
+
   if (!(await storage.projectExists(user.id, projectId))) {
-    jsonError("Project not found", 404);
+    return previewNotFound(c, requestedPath);
   }
 
   let filePath = requestedPath || "index.html";
@@ -70,7 +95,7 @@ async function servePreviewFile(
   }
 
   if (!content) {
-    jsonError("Not found", 404);
+    return previewNotFound(c, requestedPath, siteRootPath);
   }
 
   const contentType = getContentType(resolvedPath);
