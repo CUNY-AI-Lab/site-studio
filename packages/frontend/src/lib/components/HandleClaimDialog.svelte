@@ -115,7 +115,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Choose your public address</Dialog.Title>
 			<Dialog.Description>
-				All your published sites will live under it. It can't be changed later, so pick
+				All your published sites will live under it. It can't be changed right now, so pick
 				something you'll be happy to share.
 			</Dialog.Description>
 		</Dialog.Header>
