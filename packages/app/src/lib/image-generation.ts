@@ -18,6 +18,7 @@
  */
 
 import { buildProxyHeaders, type CailModelEnv } from "./model";
+import { sniffImageType, type ImageType } from "./image-validation";
 
 /**
  * Default image-generation model. CAIL policy (docs/INTEGRATION.md §1):
@@ -135,7 +136,7 @@ function extractBase64Image(payload: unknown): string | null {
 }
 
 export type GenerateImageResult =
-  | { ok: true; bytes: Uint8Array; contentType: "image/png" }
+  | { ok: true; bytes: Uint8Array; contentType: string }
   | { ok: false; message: string };
 
 export interface GenerateImageInput {
@@ -206,7 +207,11 @@ export async function generateImage(
     return { ok: false, message: "Image generation returned an empty image" };
   }
 
-  return { ok: true, bytes, contentType: "image/png" };
+  // Content type follows the actual bytes (flux returns png today, but don't
+  // hardcode the assumption); unknown formats fall back to png and are caught
+  // by the flow's sniff check anyway.
+  const sniffed = sniffImageType(bytes);
+  return { ok: true, bytes, contentType: sniffed ? `image/${sniffed}` : "image/png" };
 }
 
 export interface ScreenImageResult {
@@ -341,4 +346,98 @@ export async function screenImage(
   }
 
   return { allowed: true, reason: verdict.reason };
+}
+
+/** Calm, non-shaming rejection copy. The classifier's reason is never echoed. */
+export const GENERATED_IMAGE_REJECTED_MESSAGE =
+  "I couldn't use that image — it didn't pass the content check for published sites. Try rephrasing what you'd like.";
+
+/** File extension for a sniffed image type (jpeg saves as .jpg). */
+export function imageExtensionForType(type: ImageType): string {
+  return type === "jpeg" ? "jpg" : type;
+}
+
+/**
+ * Sanitize an optional user/model-suggested basename and give it the extension
+ * matching the actual image bytes. Empty/degenerate input falls back to a
+ * timestamped name.
+ */
+export function sanitizeGeneratedImageName(raw: string | undefined, type: ImageType): string {
+  const base = (raw || "").split("/").pop()?.split("\\").pop() ?? "";
+  const withoutExt = base.replace(/\.(png|jpe?g|gif|webp)$/i, "");
+  const cleaned = withoutExt.replace(/[^a-zA-Z0-9._-]/g, "_").replace(/^_+|_+$/g, "");
+  const stem = cleaned.length > 0 ? cleaned : `generated-${Date.now()}`;
+  return `${stem}.${imageExtensionForType(type)}`;
+}
+
+export interface GenerateImageFlowDeps {
+  /** Produce the image (already bound to env/jwt/input). */
+  generate: () => Promise<GenerateImageResult>;
+  /** The REQUIRED moderation gate (already bound to env/jwt). */
+  screen: (bytes: Uint8Array) => Promise<ScreenImageResult>;
+  /** Storage existence probe for collision suffixing, project-scoped. */
+  fileExists: (path: string) => Promise<boolean>;
+  /** Persist the image, project-scoped. Called ONLY after the gate allows. */
+  save: (path: string, bytes: Uint8Array) => Promise<void>;
+}
+
+export type GenerateImageFlowResult =
+  | { ok: true; path: string; message: string }
+  | { ok: false; message: string };
+
+/**
+ * The generate_image tool's orchestration, extracted so its ORDERING is
+ * testable outside the Durable Object module (which Node's test loader cannot
+ * import): generate → sniff → screen → only then save. `save` must be
+ * unreachable on any rejected, failed, or throwing screen — the integration
+ * tests pin exactly that property.
+ */
+export async function runGenerateImageFlow(
+  filename: string | undefined,
+  deps: GenerateImageFlowDeps
+): Promise<GenerateImageFlowResult> {
+  const generated = await deps.generate();
+  if (!generated.ok) {
+    // CAIL error envelope passed through unmodified.
+    return { ok: false, message: generated.message };
+  }
+
+  // Sanity check the bytes really are an image before screening/saving.
+  const sniffed = sniffImageType(generated.bytes);
+  if (!sniffed) {
+    return { ok: false, message: "The generator did not return a valid image. Try again in a moment." };
+  }
+
+  // The gate. screenImage itself fails closed, but the flow also treats a
+  // throwing screen dependency as a rejection so the property survives
+  // refactors of either side.
+  let allowed = false;
+  try {
+    allowed = (await deps.screen(generated.bytes)).allowed === true;
+  } catch {
+    allowed = false;
+  }
+  if (!allowed) {
+    return { ok: false, message: GENERATED_IMAGE_REJECTED_MESSAGE };
+  }
+
+  // Collision-suffix within images/, mirroring the upload route. Extension
+  // follows the sniffed bytes so the served content type is honest.
+  const safeName = sanitizeGeneratedImageName(filename, sniffed);
+  const ext = imageExtensionForType(sniffed);
+  let path = `images/${safeName}`;
+  let counter = 1;
+  while (await deps.fileExists(path)) {
+    const stem = safeName.replace(new RegExp(`\\.${ext}$`, "i"), "");
+    path = `images/${stem}_${counter}.${ext}`;
+    counter += 1;
+  }
+
+  await deps.save(path, generated.bytes);
+
+  return {
+    ok: true,
+    path,
+    message: `Saved a generated image to ${path}. Agree on descriptive alt text before or right after inserting it.`
+  };
 }

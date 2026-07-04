@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_CAIL_IMAGE_MODEL,
   DEFAULT_CAIL_IMAGE_CLASSIFIER,
+  GENERATED_IMAGE_REJECTED_MESSAGE,
   IMAGE_MODERATION_INSTRUCTION,
   clampDimension,
   generateImage,
   resolveImageClassifierId,
   resolveImageModelId,
+  runGenerateImageFlow,
   screenImage,
-  type CailImageEnv
+  type CailImageEnv,
+  type GenerateImageFlowDeps
 } from "./image-generation";
 
 const BASE = "https://cail.example/proxy";
@@ -220,5 +223,129 @@ describe("screenImage moderation gate (fail closed)", () => {
       json({ choices: [{ message: { content: 'Here is my verdict: {"allowed": true, "reason": "academic"}' } }] })
     );
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(true);
+  });
+});
+
+/**
+ * Truthy-but-not-boolean verdicts must NOT admit an image: the gate requires
+ * explicit boolean `allowed === true` (verifier follow-up — pin it).
+ */
+describe("screenImage strict-boolean verdicts", () => {
+  it.each([
+    ['{"allowed":"true","reason":"string true"}', "string 'true'"],
+    ['{"allowed":1,"reason":"numeric one"}', "numeric 1"]
+  ])("rejects a truthy non-boolean verdict %s", async (body) => {
+    const { fetch: stub } = captureFetch(() =>
+      json({ choices: [{ message: { role: "assistant", content: body } }] })
+    );
+    const result = await screenImage(env, "jwt", PNG_BYTES, stub);
+    expect(result.allowed).toBe(false);
+  });
+});
+
+/**
+ * Integration tests on the extracted generate_image orchestration: `save` must
+ * be unreachable unless generation succeeded, the bytes sniff as an image, and
+ * the gate explicitly allowed — including when the gate THROWS.
+ */
+describe("runGenerateImageFlow ordering", () => {
+  const WEBP_BYTES = new Uint8Array([
+    0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x00
+  ]);
+
+  function trackedDeps(overrides: Partial<GenerateImageFlowDeps> = {}) {
+    const calls = { screen: 0, fileExists: 0, save: 0 };
+    const deps: GenerateImageFlowDeps = {
+      generate: async () => ({ ok: true, bytes: PNG_BYTES, contentType: "image/png" }),
+      screen: async () => {
+        calls.screen += 1;
+        return { allowed: true };
+      },
+      fileExists: async () => {
+        calls.fileExists += 1;
+        return false;
+      },
+      save: async () => {
+        calls.save += 1;
+      },
+      ...overrides
+    };
+    return { deps, calls };
+  }
+
+  it("rejected verdict: save and fileExists are never called; calm copy returned", async () => {
+    const { deps, calls } = trackedDeps({ screen: async () => ({ allowed: false, reason: "nope" }) });
+    const result = await runGenerateImageFlow("photo.png", deps);
+    expect(result).toEqual({ ok: false, message: GENERATED_IMAGE_REJECTED_MESSAGE });
+    expect(calls.save).toBe(0);
+    expect(calls.fileExists).toBe(0);
+  });
+
+  it("throwing screen: treated as rejection, save never called", async () => {
+    const { deps, calls } = trackedDeps({
+      screen: async () => {
+        throw new Error("classifier exploded");
+      }
+    });
+    const result = await runGenerateImageFlow(undefined, deps);
+    expect(result).toEqual({ ok: false, message: GENERATED_IMAGE_REJECTED_MESSAGE });
+    expect(calls.save).toBe(0);
+  });
+
+  it("failed generation: screen and save never called; message passed through", async () => {
+    const { deps, calls } = trackedDeps({
+      generate: async () => ({ ok: false, message: '{"error":"quota_exceeded","message":"Budget hit."}' })
+    });
+    const result = await runGenerateImageFlow(undefined, deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("quota_exceeded");
+    }
+    expect(calls.screen).toBe(0);
+    expect(calls.save).toBe(0);
+  });
+
+  it("non-image bytes: screen and save never called", async () => {
+    const { deps, calls } = trackedDeps({
+      generate: async () => ({ ok: true, bytes: new Uint8Array([1, 2, 3, 4]), contentType: "image/png" })
+    });
+    const result = await runGenerateImageFlow(undefined, deps);
+    expect(result.ok).toBe(false);
+    expect(calls.screen).toBe(0);
+    expect(calls.save).toBe(0);
+  });
+
+  it("allowed: saves exactly once under images/ with the requested stem", async () => {
+    const saved: Array<{ path: string; bytes: Uint8Array }> = [];
+    const { deps, calls } = trackedDeps({
+      save: async (path, bytes) => {
+        saved.push({ path, bytes });
+      }
+    });
+    const result = await runGenerateImageFlow("Head shot!.png", deps);
+    expect(result).toMatchObject({ ok: true, path: "images/Head_shot.png" });
+    expect(saved).toHaveLength(1);
+    expect(saved[0].path).toBe("images/Head_shot.png");
+    expect(calls.screen).toBe(1);
+  });
+
+  it("collision: suffixes within images/ using fileExists", async () => {
+    let probes = 0;
+    const { deps } = trackedDeps({
+      fileExists: async () => {
+        probes += 1;
+        return probes === 1; // first candidate taken, second free
+      }
+    });
+    const result = await runGenerateImageFlow("logo.png", deps);
+    expect(result).toMatchObject({ ok: true, path: "images/logo_1.png" });
+  });
+
+  it("extension follows the sniffed bytes (webp in, .webp out)", async () => {
+    const { deps } = trackedDeps({
+      generate: async () => ({ ok: true, bytes: WEBP_BYTES, contentType: "image/webp" })
+    });
+    const result = await runGenerateImageFlow("banner.png", deps);
+    expect(result).toMatchObject({ ok: true, path: "images/banner.webp" });
   });
 });
