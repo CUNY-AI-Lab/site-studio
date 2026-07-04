@@ -68,13 +68,24 @@ export function resolveModelId(env: CailModelEnv): string {
 /**
  * Build an AI-SDK language model bound to the CAIL proxy for the given caller.
  *
+ * One-credential contract (docs/INTEGRATION.md, CAIL backbone rule): a
+ * model-proxy request carries exactly ONE credential. On the browser/JWT path
+ * that is `X-CAIL-Identity-JWT`, and there must be NO `Authorization` header —
+ * the proxy is JWT-first/strict. We pass no apiKey, and the OpenAI-compatible
+ * SDK only emits `Authorization` when an apiKey is truthy, so we stay compliant
+ * by construction (pinned by the wire test in model.test.ts).
+ *
  * Throws when `CAIL_API_BASE` is unset — the placeholder is filled in at launch
  * (cail-gateway docs/LAUNCH_CHECKLIST.md); there is no local fallback because
  * there are no provider keys to fall back to.
+ *
+ * `fetchImpl` is an optional test seam for capturing the outbound request; when
+ * omitted the SDK uses the platform `fetch` and behavior is unchanged.
  */
 export function createCailModel(
   env: CailModelEnv,
-  identityJwt: string | null
+  identityJwt: string | null,
+  fetchImpl?: typeof fetch
 ): LanguageModel {
   if (!env.CAIL_API_BASE) {
     throw new Error("CAIL_API_BASE is not configured");
@@ -86,6 +97,7 @@ export function createCailModel(
     // No apiKey: the proxy scrubs caller credentials and attaches the real
     // provider key itself. Identity travels in X-CAIL-Identity-JWT instead.
     headers: buildProxyHeaders(identityJwt),
+    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   });
 
   return provider(resolveModelId(env));
