@@ -2,11 +2,39 @@ import { createMiddleware } from "hono/factory";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, LegacySessionRecord, User } from "../types";
 import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
+import {
+  cailAuthRequiredResponse,
+  cailIdentityRequired,
+  getRequestIdentity,
+  type CailIdentity,
+} from "./cail-identity";
 
 type SessionVariables = {
   sessionId: string;
   user: User;
+  /**
+   * Raw, already-verified `X-CAIL-Identity-JWT` from the current request, when
+   * present. Downstream handlers (routes/agents.ts) forward it to the CAIL model
+   * proxy. Never a substitute for verification — it is only set after
+   * `getRequestIdentity()` accepts the token.
+   */
+  cailIdentityJwt?: string;
 };
+
+/** KV session key for a verified CAIL subject. */
+function cailSessionKey(subject: string): string {
+  return `cail:${subject}`;
+}
+
+function userFromIdentity(identity: CailIdentity, createdAt: string): User {
+  return {
+    id: identity.subject,
+    createdAt,
+    cail: true,
+    email: identity.email,
+    name: identity.name,
+  };
+}
 
 function sessionKey(sessionId: string): string {
   return `session:${sessionId}`;
@@ -72,6 +100,21 @@ function createAnonymousUser(): User {
   };
 }
 
+/**
+ * Auth middleware for protected routes.
+ *
+ * Identity precedence (docs/INTEGRATION.md §3):
+ *   1. A verified `X-CAIL-Identity-JWT` (from the SSO gate) wins. The durable
+ *      owner key becomes the CAIL subject; the KV session is bound to that
+ *      subject so the browser cookie remains a convenience affordance but never
+ *      the source of ownership. Bare X-CAIL-* headers are ignored — this worker
+ *      is reachable on workers.dev, where anyone can set them.
+ *   2. No/invalid identity + CAIL_REQUIRE_IDENTITY="true" → 401
+ *      `authentication_required` envelope (this is a protected kind=api route;
+ *      browsers redirect to /login?rt=…).
+ *   3. No/invalid identity + not required → anonymous KV session
+ *      (pre-SSO-rollout behavior, unchanged).
+ */
 export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: SessionVariables }>(async (c, next) => {
   const existingSessionId = c.get("sessionId") as string | undefined;
   const existingUser = c.get("user") as User | undefined;
@@ -81,6 +124,52 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     return;
   }
 
+  const identity = await getRequestIdentity(c.req.raw, c.env);
+
+  if (identity) {
+    // Verified CAIL identity: own everything by the subject.
+    const rawJwt = c.req.raw.headers.get("X-CAIL-Identity-JWT");
+    if (rawJwt) {
+      c.set("cailIdentityJwt", rawJwt);
+    }
+
+    const subject = identity.subject;
+    const kvKey = cailSessionKey(subject);
+    const stored = await c.env.SESSION_KV.get(kvKey, "json").catch(() => null);
+    const createdAt =
+      stored && typeof stored === "object" && typeof (stored as Record<string, unknown>).createdAt === "string"
+        ? (stored as User).createdAt
+        : new Date().toISOString();
+    const user = userFromIdentity(identity, createdAt);
+
+    // Refresh the subject-keyed session record (profile attrs may change).
+    await c.env.SESSION_KV.put(kvKey, JSON.stringify(user), {
+      expirationTtl: SESSION_TTL_SECONDS,
+    });
+
+    // The session id is the subject itself: ownership follows identity, not a
+    // random cookie. We still set a cookie so same-browser requests that briefly
+    // lack the gate-injected header stay bound to the same subject.
+    setCookie(c, SESSION_COOKIE_NAME, subject, {
+      httpOnly: true,
+      maxAge: SESSION_TTL_SECONDS,
+      path: "/",
+      sameSite: "Strict",
+      secure: new URL(c.req.url).protocol === "https:",
+    });
+
+    c.set("sessionId", subject);
+    c.set("user", user);
+    await next();
+    return;
+  }
+
+  // No verified identity. Fail closed when enforcement is on.
+  if (cailIdentityRequired(c.env)) {
+    return cailAuthRequiredResponse();
+  }
+
+  // Anonymous fallback (pre-SSO-rollout). Unchanged from the original flow.
   let sessionId = getCookie(c, SESSION_COOKIE_NAME) || "";
   let user: User | null = null;
 
@@ -108,6 +197,11 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
   c.set("user", user);
   await next();
 });
+
+/** The verified CAIL identity JWT for this request, if any (already verified). */
+export function getCailIdentityJwt(c: { get: (key: "cailIdentityJwt") => string | undefined }): string | null {
+  return c.get("cailIdentityJwt") ?? null;
+}
 
 export function getUser(c: { get: (key: "user") => User }): User {
   return c.get("user");

@@ -1,19 +1,21 @@
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
-import type { Env } from "../types";
+import type { Env, SiteBuilderAgentProps } from "../types";
 import { jsonError } from "../lib/http";
-import { getUser } from "../lib/session";
+import { getCailIdentityJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
 import { R2ProjectStorage } from "../storage/r2";
+
+type AgentRouterVariables = { user: { id: string }; cailIdentityJwt?: string };
 
 function agentInstanceName(userId: string, projectId: string): string {
   return `${userId}:${projectId}`;
 }
 
 export function createAgentRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+  const app = new Hono<{ Bindings: Env; Variables: AgentRouterVariables }>();
 
-  async function loadAgentStub(c: Context<{ Bindings: Env; Variables: { user: { id: string } } }>) {
+  async function loadAgentStub(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
     const user = getUser(c);
     const rawProjectId = c.req.param("projectId");
 
@@ -28,19 +30,23 @@ export function createAgentRouter() {
       return jsonError("Project not found", 404);
     }
 
+    // Forward the verified caller JWT into the Durable Object so the model call
+    // can present it to the CAIL model proxy. Captured at connection time; on a
+    // long-lived WebSocket it can outlive the JWT's ~5-min TTL (see PR flag).
+    const props: SiteBuilderAgentProps = {
+      userId: user.id,
+      projectId,
+      identityJwt: getCailIdentityJwt(c) ?? undefined
+    };
+
     return getAgentByName(
       c.env.SITE_BUILDER_AGENT,
       agentInstanceName(user.id, projectId),
-      {
-        props: {
-          userId: user.id,
-          projectId
-        }
-      }
+      { props }
     );
   }
 
-  async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: { user: { id: string } } }>) {
+  async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
     const stub = await loadAgentStub(c);
     if (stub instanceof Response) {
       return stub;
