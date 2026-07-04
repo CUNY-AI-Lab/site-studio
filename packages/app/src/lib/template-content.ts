@@ -9,6 +9,10 @@ export const TEMPLATE_FILES: Record<string, Record<string, string>> = {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Site</title>
+    <meta name="description" content="A simple personal website. Edit this description to introduce your site.">
+    <meta property="og:title" content="My Site">
+    <meta property="og:description" content="A simple personal website. Edit this description to introduce your site.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -68,10 +72,15 @@ a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Data Science Fundamentals - CS 220</title>
+    <meta name="description" content="CS 220: Data Science Fundamentals — course overview, schedule, assignments, and resources for Spring 2024 with Prof. Marcus Lee.">
+    <meta property="og:title" content="CS 220: Data Science Fundamentals">
+    <meta property="og:description" content="Course overview, schedule, assignments, and resources for Spring 2024.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="hero">
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="hero">
         <div class="container">
             <h1>CS 220: Data Science Fundamentals</h1>
             <p class="tagline">Explore data, build models, discover insights</p>
@@ -81,7 +90,7 @@ a:hover {
                 <span>Prof. Marcus Lee</span>
             </div>
         </div>
-    </div>
+    </header>
 
     <nav>
         <div class="container">
@@ -92,7 +101,7 @@ a:hover {
         </div>
     </nav>
 
-    <main class="container">
+    <main class="container" id="main">
         <section id="about">
             <div class="card">
                 <h2>Course Overview</h2>
@@ -367,6 +376,32 @@ body {
     max-width: 1200px;
     margin: 0 auto;
     padding: 0 2rem;
+}
+
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-primary);
+    color: #fff;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0;
+    font-weight: 600;
+    text-decoration: none;
+    transition: top 0.2s var(--ease-smooth);
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
 }
 
 /* Hero Section - Asymmetric Contemporary Layout */
@@ -916,6 +951,24 @@ footer p {
         grid-template-columns: 1fr;
     }
 }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .hero h1,
+    .tagline,
+    .meta,
+    section {
+        opacity: 1;
+    }
+}
 `
   },
   "course-traditional": {
@@ -925,9 +978,14 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HIST 301 - Modern American History</title>
+    <meta name="description" content="HIST 301: Modern American History — syllabus, course schedule, assignments, and resources for Fall 2024 with Dr. Patricia Johnson.">
+    <meta property="og:title" content="HIST 301: Modern American History">
+    <meta property="og:description" content="Syllabus, schedule, assignments, and resources for Fall 2024.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header>
         <div class="container">
             <h1>HIST 301: Modern American History</h1>
@@ -945,7 +1003,7 @@ footer p {
         </div>
     </nav>
 
-    <main class="container">
+    <main class="container" id="main">
         <section id="syllabus">
             <h2>Course Description</h2>
             <p>
@@ -1175,6 +1233,30 @@ body {
     max-width: 960px;
     margin: 0 auto;
     padding: 0 2rem;
+}
+
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-primary);
+    color: #fff;
+    padding: 0.75rem 1.25rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
 }
 
 /* Header - Classical Book-Inspired Design */
@@ -1641,6 +1723,10 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dr. Michael Chen - Curriculum Vitae</title>
+    <meta name="description" content="Curriculum vitae of Dr. Michael Chen, Associate Professor of Computer Science — research, publications, teaching, grants, and awards.">
+    <meta property="og:title" content="Dr. Michael Chen - Curriculum Vitae">
+    <meta property="og:description" content="Curriculum vitae of Dr. Michael Chen, Associate Professor of Computer Science.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -2396,6 +2482,10 @@ h2 {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CV - Dr. Sarah Martinez</title>
+    <meta name="description" content="Curriculum vitae of Dr. Sarah Martinez, Associate Professor of History — education, appointments, publications, and awards.">
+    <meta property="og:title" content="CV - Dr. Sarah Martinez">
+    <meta property="og:description" content="Curriculum vitae of Dr. Sarah Martinez, Associate Professor of History.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -2406,6 +2496,7 @@ h2 {
             <p class="contact">smartinez@university.edu | Office: Humanities Building 401</p>
         </header>
 
+        <main>
         <section>
             <h2>Education</h2>
             <div class="entry">
@@ -2480,6 +2571,7 @@ h2 {
                 <li>American Historical Association Herbert Baxter Adams Prize (2015)</li>
             </ul>
         </section>
+        </main>
     </div>
 </body>
 </html>
@@ -2655,24 +2747,28 @@ h2 {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jamie Taylor - CV</title>
+    <meta name="description" content="Curriculum vitae of Jamie Taylor, PhD candidate in Political Science studying urban politics, community organizing, and housing policy.">
+    <meta property="og:title" content="Jamie Taylor - CV">
+    <meta property="og:description" content="Curriculum vitae of Jamie Taylor, PhD candidate in Political Science.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
         <aside class="sidebar">
-            <img src="https://placehold.co/150x150/2563eb/ffffff?text=JT" alt="Profile" class="profile">
+            <img src="https://placehold.co/150x150/2563eb/ffffff?text=JT" alt="Placeholder — replace with a photo of yourself" class="profile">
 
             <h1>Jamie Taylor</h1>
             <p class="title">PhD Candidate<br>Political Science</p>
 
             <div class="contact">
-                <h3>Contact</h3>
+                <h2>Contact</h2>
                 <p>jamie.taylor@gradcenter.cuny.edu</p>
                 <p>(212) 555-0123</p>
             </div>
 
             <div class="skills">
-                <h3>Research Interests</h3>
+                <h2>Research Interests</h2>
                 <ul>
                     <li>Urban Politics</li>
                     <li>Community Organizing</li>
@@ -2853,7 +2949,7 @@ body {
     margin-bottom: calc(var(--spacing-unit) * 10);
 }
 
-.sidebar h3 {
+.sidebar h2 {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -2862,9 +2958,10 @@ body {
     font-weight: 700;
     position: relative;
     padding-bottom: calc(var(--spacing-unit) * 2);
+    border-bottom: none;
 }
 
-.sidebar h3::after {
+.sidebar h2::after {
     content: '';
     position: absolute;
     bottom: 0;
@@ -3091,7 +3188,7 @@ h2::after {
         height: 1.5pt;
     }
 
-    .sidebar h3::after {
+    .sidebar h2::after {
         height: 1.5pt;
     }
 
@@ -3171,6 +3268,10 @@ h2::after {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Marcus Johnson - CV</title>
+    <meta name="description" content="Curriculum vitae of Marcus Johnson, public health researcher and epidemiologist — career timeline, key publications, and grants.">
+    <meta property="og:title" content="Marcus Johnson - CV">
+    <meta property="og:description" content="Curriculum vitae of Marcus Johnson, public health researcher and epidemiologist.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -3180,7 +3281,7 @@ h2::after {
         <p class="contact">mjohnson@sph.cuny.edu | CUNY School of Public Health</p>
     </header>
 
-    <div class="container">
+    <main class="container">
         <section class="timeline">
             <h2>Professional Journey</h2>
 
@@ -3258,7 +3359,7 @@ h2::after {
                 <p><strong>CDC Grant</strong> - "Substance Use Prevention in Urban Youth" ($500K, 2022-2024, Co-I)</p>
             </div>
         </section>
-    </div>
+    </main>
 </body>
 </html>
 `,
@@ -3868,6 +3969,10 @@ h2::after {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NYC Housing Data Dashboard</title>
+    <meta name="description" content="An interactive dashboard analyzing rent burden and housing affordability across New York City neighborhoods, drawn from the 2023 NYC Housing & Vacancy Survey.">
+    <meta property="og:title" content="NYC Housing Affordability Dashboard">
+    <meta property="og:description" content="Analysis of rent burden and housing costs across NYC neighborhoods.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -3909,29 +4014,29 @@ h2::after {
         <div class="charts-row">
             <div class="chart-container">
                 <h2>Median Rent by Borough</h2>
-                <canvas id="rentByBoroughChart"></canvas>
+                <canvas id="rentByBoroughChart" role="img" aria-label="Bar chart of median monthly rent by NYC borough"></canvas>
             </div>
             <div class="chart-container">
                 <h2>Rent Burden by Income Level</h2>
-                <canvas id="rentBurdenChart"></canvas>
+                <canvas id="rentBurdenChart" role="img" aria-label="Bar chart of rent-burdened and severely burdened households by income level"></canvas>
             </div>
         </div>
 
         <div class="charts-row">
             <div class="chart-container full-width">
                 <h2>Median Rent Trends (2013-2023)</h2>
-                <canvas id="rentTrendsChart"></canvas>
+                <canvas id="rentTrendsChart" role="img" aria-label="Line chart of median rent trends from 2013 to 2023 for Manhattan, Brooklyn, and Queens"></canvas>
             </div>
         </div>
 
         <div class="charts-row">
             <div class="chart-container">
                 <h2>Housing Type Distribution</h2>
-                <canvas id="housingTypeChart"></canvas>
+                <canvas id="housingTypeChart" role="img" aria-label="Doughnut chart of housing type distribution across NYC rental units"></canvas>
             </div>
             <div class="chart-container">
                 <h2>Households by Tenure</h2>
-                <canvas id="tenureChart"></canvas>
+                <canvas id="tenureChart" role="img" aria-label="Pie chart of households by tenure: renter-occupied, owner-occupied, and vacant"></canvas>
             </div>
         </div>
 
@@ -4153,7 +4258,7 @@ h2::after {
 
     --color-text-primary: #111827;
     --color-text-secondary: #6b7280;
-    --color-text-tertiary: #9ca3af;
+    --color-text-tertiary: #767d89;
 
     --color-accent-primary: #2563eb;
     --color-accent-secondary: #3b82f6;
@@ -4195,6 +4300,14 @@ body {
     max-width: 1600px;
     margin: 0 auto;
     padding: 0 calc(var(--spacing-unit) * 8);
+}
+
+/* Focus visibility */
+a:focus-visible,
+.download-btn:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 3px;
+    border-radius: var(--radius-sm);
 }
 
 /* Header - Clean and Minimal */
@@ -4533,6 +4646,10 @@ footer a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NYC Subway Ridership Explorer</title>
+    <meta name="description" content="An interactive explorer for NYC subway ridership — filter MTA usage by line, time period, and metric, and browse station-level data.">
+    <meta property="og:title" content="NYC Subway Ridership Explorer">
+    <meta property="og:description" content="Interactive data exploration of MTA subway usage patterns.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -4590,7 +4707,7 @@ footer a:hover {
         <div class="viz-container">
             <div class="chart-wrapper">
                 <h2 id="chartTitle">Total Ridership - Past Year - All Lines</h2>
-                <canvas id="mainChart"></canvas>
+                <canvas id="mainChart" role="img" aria-label="Line chart of monthly subway ridership over the selected time period"></canvas>
             </div>
         </div>
 
@@ -4623,19 +4740,19 @@ footer a:hover {
         <div class="secondary-charts">
             <div class="chart-box">
                 <h3>Ridership by Hour of Day</h3>
-                <canvas id="hourlyChart"></canvas>
+                <canvas id="hourlyChart" role="img" aria-label="Bar chart of average subway ridership by hour of day"></canvas>
             </div>
 
             <div class="chart-box">
                 <h3>Top 10 Busiest Stations</h3>
-                <canvas id="stationsChart"></canvas>
+                <canvas id="stationsChart" role="img" aria-label="Horizontal bar chart of the ten busiest subway stations by daily average ridership"></canvas>
             </div>
         </div>
 
         <div class="data-table-container">
             <h2>Detailed Data</h2>
             <div class="table-controls">
-                <input type="text" id="searchTable" placeholder="Search stations or lines...">
+                <input type="text" id="searchTable" placeholder="Search stations or lines..." aria-label="Search stations or lines">
                 <button id="downloadCSV">Download CSV</button>
             </div>
             <div class="table-wrapper">
@@ -4859,7 +4976,7 @@ footer a:hover {
 
     --color-text-primary: #212529;
     --color-text-secondary: #495057;
-    --color-text-tertiary: #868e96;
+    --color-text-tertiary: #6d747d;
 
     --color-brand-primary: #1971c2;
     --color-brand-hover: #1864ab;
@@ -4906,6 +5023,14 @@ body {
     max-width: 1480px;
     margin: 0 auto;
     padding: 0 1.5rem;
+}
+
+/* Focus visibility */
+a:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius);
 }
 
 /* Header */
@@ -5382,6 +5507,10 @@ footer a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Climate Migration Story</title>
+    <meta name="description" content="A data-driven story on how rising temperatures are reshaping where Americans live, tracing climate migration patterns, costs, and who is left behind.">
+    <meta property="og:title" content="The Climate Migration Story">
+    <meta property="og:description" content="How rising temperatures are reshaping where Americans live.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -5426,7 +5555,7 @@ footer a:hover {
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="tempRiseChart"></canvas>
+                    <canvas id="tempRiseChart" role="img" aria-label="Bar chart of average temperature increase by U.S. region from 2000 to 2023"></canvas>
                 </div>
             </div>
         </section>
@@ -5451,7 +5580,7 @@ footer a:hover {
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="outmigrationChart"></canvas>
+                    <canvas id="outmigrationChart" role="img" aria-label="Horizontal bar chart of net outmigration by state, in thousands"></canvas>
                 </div>
             </div>
         </section>
@@ -5459,7 +5588,7 @@ footer a:hover {
         <section class="narrative-section with-viz reverse">
             <div class="content-container">
                 <div class="viz-block">
-                    <canvas id="destinationChart"></canvas>
+                    <canvas id="destinationChart" role="img" aria-label="Horizontal bar chart of net inmigration by state, in thousands"></canvas>
                 </div>
                 <div class="text-block">
                     <h2>New Destinations</h2>
@@ -5497,7 +5626,7 @@ footer a:hover {
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="housingCostChart"></canvas>
+                    <canvas id="housingCostChart" role="img" aria-label="Line chart comparing housing cost index from 2015 to 2023 for climate-haven cities, the national average, and high-risk areas"></canvas>
                 </div>
             </div>
         </section>
@@ -5535,7 +5664,7 @@ footer a:hover {
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="projectionChart"></canvas>
+                    <canvas id="projectionChart" role="img" aria-label="Line chart projecting millions of Americans in high climate-risk areas from 2020 to 2050"></canvas>
                 </div>
             </div>
         </section>
@@ -5709,7 +5838,7 @@ footer a:hover {
 
     --color-text-primary: #18181b;
     --color-text-secondary: #52525b;
-    --color-text-tertiary: #a1a1aa;
+    --color-text-tertiary: #71717a;
 
     --color-accent-primary: #0369a1;
     --color-accent-secondary: #0284c7;
@@ -6060,6 +6189,20 @@ footer a:hover {
     margin: 0 auto;
 }
 
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent-secondary);
+    outline-offset: 3px;
+    border-radius: var(--radius);
+}
+
+.btn:focus-visible,
+.methodology-section a:focus-visible,
+footer a:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 3px;
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
     .with-viz .content-container,
@@ -6212,9 +6355,14 @@ footer a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Urban Studies Symposium 2024</title>
+    <meta name="description" content="Cities in Transition — the 2024 Urban Studies Symposium at Hunter College. Three days of panels, workshops, and keynotes on how cities are adapting.">
+    <meta property="og:title" content="Cities in Transition — Urban Studies Symposium 2024">
+    <meta property="og:description" content="Three days of panels, workshops, and keynotes on how cities are adapting to change.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header>
         <div class="container">
             <div class="event-badge">Annual Symposium</div>
@@ -6236,7 +6384,7 @@ footer a:hover {
         </div>
     </nav>
 
-    <main class="container">
+    <main class="container" id="main">
         <section class="intro">
             <p>
                 Join scholars, practitioners, and students for three days of panels, workshops, and
@@ -6578,6 +6726,32 @@ body {
     max-width: 1100px;
     margin: 0 auto;
     padding: 0 2rem;
+}
+
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    padding: 0.75rem 1.25rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-decoration: none;
+    border-bottom: 3px solid var(--color-accent);
+    transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
 }
 
 header {
@@ -7024,6 +7198,17 @@ footer p {
         gap: 2rem;
     }
 }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
 `
   },
   "event-speaker": {
@@ -7033,6 +7218,10 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Digital Humanities Colloquium 2024</title>
+    <meta name="description" content="The 2024 Digital Humanities Colloquium at Queens College, CUNY — featured speakers, schedule, and registration for two days on digital methods in humanities research.">
+    <meta property="og:title" content="Digital Humanities Colloquium 2024">
+    <meta property="og:description" content="Two days of talks on digital methods in humanities research at Queens College, CUNY.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -7062,7 +7251,7 @@ footer p {
             <h2>Featured Speakers</h2>
 
             <div class="speaker-card keynote-speaker">
-                <img src="https://placehold.co/300x300/6366f1/ffffff?text=Speaker" alt="Dr. Amanda Chen" class="speaker-photo">
+                <img src="https://placehold.co/300x300/6366f1/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Amanda Chen" class="speaker-photo">
                 <div class="speaker-info">
                     <div class="keynote-badge">Keynote Speaker</div>
                     <h3>Dr. Amanda Chen</h3>
@@ -7081,7 +7270,7 @@ footer p {
 
             <div class="speaker-grid">
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/ec4899/ffffff?text=Speaker" alt="Dr. James Rodriguez" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/ec4899/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. James Rodriguez" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. James Rodriguez</h3>
                         <p class="title">Associate Professor of English<br>University of Michigan</p>
@@ -7095,7 +7284,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/10b981/ffffff?text=Speaker" alt="Dr. Maya Patel" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/10b981/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Maya Patel" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. Maya Patel</h3>
                         <p class="title">Digital Humanities Librarian<br>Columbia University</p>
@@ -7109,7 +7298,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/f59e0b/ffffff?text=Speaker" alt="Prof. David Kim" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/f59e0b/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Prof. David Kim" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Prof. David Kim</h3>
                         <p class="title">Professor of History<br>Northwestern University</p>
@@ -7123,7 +7312,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/8b5cf6/ffffff?text=Speaker" alt="Dr. Sarah Johnson" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/8b5cf6/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Sarah Johnson" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. Sarah Johnson</h3>
                         <p class="title">Assistant Professor of Art History<br>Yale University</p>
@@ -7137,7 +7326,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/06b6d4/ffffff?text=Speaker" alt="Dr. Marcus Thompson" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/06b6d4/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Marcus Thompson" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. Marcus Thompson</h3>
                         <p class="title">Director, Digital Media Lab<br>Brooklyn College, CUNY</p>
@@ -7151,7 +7340,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/ef4444/ffffff?text=Speaker" alt="Dr. Elena Martinez" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/ef4444/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Elena Martinez" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. Elena Martinez</h3>
                         <p class="title">Associate Professor of Linguistics<br>NYU</p>
@@ -7165,7 +7354,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/14b8a6/ffffff?text=Speaker" alt="Prof. Rachel Lee" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/14b8a6/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Prof. Rachel Lee" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Prof. Rachel Lee</h3>
                         <p class="title">Professor of Musicology<br>Juilliard School</p>
@@ -7179,7 +7368,7 @@ footer p {
                 </div>
 
                 <div class="speaker-card">
-                    <img src="https://placehold.co/200x200/f97316/ffffff?text=Speaker" alt="Dr. Thomas Wilson" class="speaker-photo">
+                    <img src="https://placehold.co/200x200/f97316/ffffff?text=Speaker" alt="Placeholder — replace with a photo of Dr. Thomas Wilson" class="speaker-photo">
                     <div class="speaker-info">
                         <h3>Dr. Thomas Wilson</h3>
                         <p class="title">Assistant Professor of Philosophy<br>CUNY Graduate Center</p>
@@ -7267,7 +7456,7 @@ footer p {
     --color-warm-white: #fffcf7;
     --color-charcoal: #2d2d2d;
     --color-warm-gray: #6b6b6b;
-    --color-soft-gray: #9a9a9a;
+    --color-soft-gray: #767676;
     --color-accent-gold: #c9a96e;
 
     --font-display: 'Fraunces', Georgia, serif;
@@ -7296,6 +7485,18 @@ body {
     max-width: 1240px;
     margin: 0 auto;
     padding: 0 2rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-terracotta);
+    outline-offset: 3px;
+    border-radius: 4px;
+}
+
+.register-btn:focus-visible {
+    outline: 2px solid var(--color-charcoal);
+    outline-offset: 3px;
 }
 
 header {
@@ -7829,6 +8030,17 @@ footer p {
         font-size: 2.25rem;
     }
 }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
 `
   },
   "personal-bold": {
@@ -7838,12 +8050,16 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maya Rodriguez</title>
+    <meta name="description" content="Maya Rodriguez — creative writer and literary scholar exploring contemporary fiction, cultural identity, and urban narratives.">
+    <meta property="og:title" content="Maya Rodriguez">
+    <meta property="og:description" content="Creative writer and literary scholar exploring contemporary fiction, cultural identity, and urban narratives.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="hero">
+    <header class="hero">
         <div class="container">
-            <img src="https://placehold.co/180x180/7c3aed/ffffff?text=MR" alt="Profile photo" class="profile-photo">
+            <img src="https://placehold.co/180x180/7c3aed/ffffff?text=MR" alt="Placeholder — replace with a photo of yourself" class="profile-photo">
 
             <h1>Maya Rodriguez</h1>
             <p class="title">Creative Writer & Literary Scholar</p>
@@ -7859,9 +8075,9 @@ footer p {
                 <a href="#" class="btn-secondary">Read My Work</a>
             </div>
         </div>
-    </div>
+    </header>
 
-    <section class="content">
+    <main class="content">
         <div class="container">
             <h2>Recent Work</h2>
             <div class="work-grid">
@@ -7879,7 +8095,7 @@ footer p {
                 </div>
             </div>
         </div>
-    </section>
+    </main>
 </body>
 </html>
 `,
@@ -7895,6 +8111,14 @@ body {
     font-family: 'Inter', sans-serif;
     line-height: 1.6;
     color: #171717;
+}
+
+a:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
+    outline: 2px solid #7c3aed;
+    outline-offset: 3px;
+    border-radius: 2px;
 }
 
 .hero {
@@ -8070,28 +8294,32 @@ h2 {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dr. Sarah Martinez</title>
+    <meta name="description" content="Dr. Sarah Martinez, Associate Professor of Psychology at Columbia University, studying memory, learning, and decision-making.">
+    <meta property="og:title" content="Dr. Sarah Martinez">
+    <meta property="og:description" content="Dr. Sarah Martinez, Associate Professor of Psychology at Columbia University, studying memory, learning, and decision-making.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
         <aside class="profile-card">
-            <img src="https://placehold.co/200x200/3b82f6/ffffff?text=SM" alt="Profile photo" class="profile-photo">
+            <img src="https://placehold.co/200x200/3b82f6/ffffff?text=SM" alt="Placeholder — replace with your profile photo" class="profile-photo">
             <h1>Dr. Sarah Martinez</h1>
             <p class="position">Associate Professor</p>
             <p class="department">Department of Psychology<br>Columbia University</p>
 
             <div class="contact">
-                <h3>Contact</h3>
+                <h2>Contact</h2>
                 <p>sarah.martinez@columbia.edu</p>
                 <p>Office: Schermerhorn 415</p>
                 <p>Office Hours: Tu/Th 2-4pm</p>
             </div>
 
-            <div class="social-links">
+            <nav class="social-links" aria-label="Profile links">
                 <a href="#">Google Scholar</a>
                 <a href="#">ResearchGate</a>
                 <a href="#">Twitter</a>
-            </div>
+            </nav>
         </aside>
 
         <main class="content">
@@ -8284,7 +8512,7 @@ body {
     border-top: 2px solid var(--sand);
 }
 
-.contact h3 {
+.contact h2 {
     font-family: var(--sans);
     font-size: 0.75rem;
     text-transform: uppercase;
@@ -8515,6 +8743,27 @@ body {
     margin: 0;
 }
 
+a:focus-visible,
+.social-links a:focus-visible {
+    outline: 2px solid var(--burgundy);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .social-links a:hover,
+    .interests-list li:hover {
+        transform: none;
+    }
+}
+
 @media (max-width: 1024px) {
     .container {
         grid-template-columns: 1fr;
@@ -8573,12 +8822,16 @@ body {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jordan Chen</title>
+    <meta name="description" content="Jordan Chen, Assistant Professor of Sociology researching urban communities, housing policy, and neighborhood change.">
+    <meta property="og:title" content="Jordan Chen">
+    <meta property="og:description" content="Jordan Chen, Assistant Professor of Sociology researching urban communities, housing policy, and neighborhood change.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <main>
         <div class="container">
-            <img src="https://placehold.co/200x200/e2e8f0/64748b?text=Photo" alt="Profile photo" class="profile-photo">
+            <img src="https://placehold.co/200x200/e2e8f0/64748b?text=Photo" alt="Placeholder — replace with your profile photo" class="profile-photo">
 
             <h1>Jordan Chen</h1>
             <p class="subtitle">Assistant Professor, Department of Sociology</p>
@@ -8709,18 +8962,23 @@ h1 {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dr. Alex Kim</title>
+    <meta name="description" content="Dr. Alex Kim, environmental scientist researching climate adaptation, coastal resilience, and urban ecology.">
+    <meta property="og:title" content="Dr. Alex Kim">
+    <meta property="og:description" content="Dr. Alex Kim, environmental scientist researching climate adaptation, coastal resilience, and urban ecology.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <div class="layout">
         <aside class="sidebar">
             <div class="sidebar-content">
-                <img src="https://placehold.co/150x150/059669/ffffff?text=AK" alt="Profile photo" class="profile-photo">
+                <img src="https://placehold.co/150x150/059669/ffffff?text=AK" alt="Placeholder — replace with your profile photo" class="profile-photo">
 
                 <h1>Dr. Alex Kim</h1>
                 <p class="title">Environmental Science</p>
 
-                <nav>
+                <nav aria-label="Section navigation">
                     <a href="#about" class="nav-link active">About</a>
                     <a href="#research" class="nav-link">Research</a>
                     <a href="#publications" class="nav-link">Publications</a>
@@ -8735,7 +8993,7 @@ h1 {
             </div>
         </aside>
 
-        <main class="main-content">
+        <main class="main-content" id="main">
             <section id="about">
                 <h2>About</h2>
                 <p>
@@ -8773,17 +9031,17 @@ h1 {
             <section id="publications">
                 <h2>Selected Publications</h2>
                 <div class="publication">
-                    <h4>Nature-Based Solutions for Urban Coastal Flooding</h4>
+                    <h3>Nature-Based Solutions for Urban Coastal Flooding</h3>
                     <p class="pub-meta">Journal of Environmental Management, 2024</p>
                     <p class="pub-authors">Kim, A., Chen, L., & Rodriguez, M.</p>
                 </div>
                 <div class="publication">
-                    <h4>Community Engagement in Climate Adaptation Planning</h4>
+                    <h3>Community Engagement in Climate Adaptation Planning</h3>
                     <p class="pub-meta">Urban Studies, 2023</p>
                     <p class="pub-authors">Kim, A. & Thompson, J.</p>
                 </div>
                 <div class="publication">
-                    <h4>Green Infrastructure and Thermal Comfort in Cities</h4>
+                    <h3>Green Infrastructure and Thermal Comfort in Cities</h3>
                     <p class="pub-meta">Climate and Environment, 2023</p>
                     <p class="pub-authors">Patel, R., Kim, A., & Lee, S.</p>
                 </div>
@@ -8813,9 +9071,9 @@ h1 {
                     <strong>Office Hours:</strong> Tuesdays 2-4pm, Thursdays 10am-12pm, or by appointment
                 </p>
                 <p class="social-links">
-                    <a href="https://twitter.com" target="_blank">Twitter</a> •
-                    <a href="https://scholar.google.com" target="_blank">Google Scholar</a> •
-                    <a href="https://github.com" target="_blank">GitHub</a>
+                    <a href="https://twitter.com" target="_blank" rel="noopener noreferrer">Twitter</a> •
+                    <a href="https://scholar.google.com" target="_blank" rel="noopener noreferrer">Google Scholar</a> •
+                    <a href="https://github.com" target="_blank" rel="noopener noreferrer">GitHub</a>
                 </p>
             </section>
         </main>
@@ -8864,6 +9122,31 @@ body {
     background: var(--midnight);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+}
+
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: var(--amber);
+    color: var(--midnight);
+    font-family: var(--geometric);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+}
+
+a:focus-visible,
+.nav-link:focus-visible,
+.social-links a:focus-visible {
+    outline: 2px solid var(--amber-bright);
+    outline-offset: 2px;
 }
 
 .layout {
@@ -9162,7 +9445,7 @@ html {
     transform: translateY(-2px);
 }
 
-.publication h4 {
+.publication h3 {
     font-family: var(--serif);
     color: var(--text);
     font-size: 1.2rem;
@@ -9265,6 +9548,31 @@ html {
     box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2);
 }
 
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    section {
+        animation: none;
+    }
+
+    .research-card:hover,
+    .publication:hover,
+    .social-links a:hover {
+        transform: none;
+    }
+}
+
 @media (max-width: 1024px) {
     .layout {
         grid-template-columns: 1fr;
@@ -9326,6 +9634,10 @@ html {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Brooklyn Voices - Photo Essay by Alex Kim</title>
+    <meta name="description" content="Brooklyn Voices, a documentary photo essay by Alex Kim exploring community and identity in changing neighborhoods.">
+    <meta property="og:title" content="Brooklyn Voices - Photo Essay by Alex Kim">
+    <meta property="og:description" content="Brooklyn Voices, a documentary photo essay by Alex Kim exploring community and identity in changing neighborhoods.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -9350,7 +9662,7 @@ html {
 
         <div class="gallery">
             <div class="gallery-item large">
-                <img src="https://placehold.co/1200x800/334155/ffffff?text=Opening+Image" alt="Opening photograph">
+                <img src="https://placehold.co/1200x800/334155/ffffff?text=Opening+Image" alt="Placeholder — replace with the opening photograph (Mrs. Rodriguez outside her bodega)">
                 <div class="caption">
                     <p class="caption-text">
                         Mrs. Rodriguez stands in front of her bodega on Knickerbocker Avenue, where she's
@@ -9360,7 +9672,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/1e40af/ffffff?text=Photo+2" alt="Photograph 2">
+                <img src="https://placehold.co/800x600/1e40af/ffffff?text=Photo+2" alt="Placeholder — replace with a photograph of the community garden on a Sunday morning">
                 <div class="caption">
                     <p class="caption-text">
                         Sunday morning at the community garden, where neighbors of all ages come together
@@ -9370,7 +9682,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/059669/ffffff?text=Photo+3" alt="Photograph 3">
+                <img src="https://placehold.co/800x600/059669/ffffff?text=Photo+3" alt="Placeholder — replace with a photograph of Marcus the barber at work">
                 <div class="caption">
                     <p class="caption-text">
                         Marcus, a barber at Flatbush Cuts for 28 years, gives a trim while sharing stories
@@ -9380,7 +9692,7 @@ html {
             </div>
 
             <div class="gallery-item wide">
-                <img src="https://placehold.co/1400x700/dc2626/ffffff?text=Wide+Photo" alt="Wide photograph">
+                <img src="https://placehold.co/1400x700/dc2626/ffffff?text=Wide+Photo" alt="Placeholder — replace with a photograph of the annual Jefferson Street block party">
                 <div class="caption">
                     <p class="caption-text">
                         The annual block party on Jefferson Street brings together old-timers and newcomers.
@@ -9390,7 +9702,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/7c3aed/ffffff?text=Photo+5" alt="Photograph 5">
+                <img src="https://placehold.co/800x600/7c3aed/ffffff?text=Photo+5" alt="Placeholder — replace with a photograph of children playing near new luxury condos">
                 <div class="caption">
                     <p class="caption-text">
                         Children play in the shadow of new luxury condos rising behind their playground.
@@ -9399,7 +9711,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/ea580c/ffffff?text=Photo+6" alt="Photograph 6">
+                <img src="https://placehold.co/800x600/ea580c/ffffff?text=Photo+6" alt="Placeholder — replace with a photograph of Ahmed at his halal cart">
                 <div class="caption">
                     <p class="caption-text">
                         Ahmed at his halal cart, a fixture at the corner of Bedford and Nassau for 15 years.
@@ -9408,7 +9720,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/0891b2/ffffff?text=Photo+7" alt="Photograph 7">
+                <img src="https://placehold.co/800x600/0891b2/ffffff?text=Photo+7" alt="Placeholder — replace with a photograph of evening light in a rent-stabilized building">
                 <div class="caption">
                     <p class="caption-text">
                         Evening light filters through the windows of a rent-stabilized building, home to
@@ -9418,7 +9730,7 @@ html {
             </div>
 
             <div class="gallery-item large">
-                <img src="https://placehold.co/1200x800/be123c/ffffff?text=Featured+Photo" alt="Featured photograph">
+                <img src="https://placehold.co/1200x800/be123c/ffffff?text=Featured+Photo" alt="Placeholder — replace with a photograph of the Martinez family at Sunday dinner">
                 <div class="caption">
                     <p class="caption-text">
                         The Martinez family gathers for Sunday dinner in their apartment. "We won't leave,"
@@ -9428,7 +9740,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/15803d/ffffff?text=Photo+9" alt="Photograph 9">
+                <img src="https://placehold.co/800x600/15803d/ffffff?text=Photo+9" alt="Placeholder — replace with a photograph of old-timers playing dominoes in McCarren Park">
                 <div class="caption">
                     <p class="caption-text">
                         Old timers play dominoes in McCarren Park, a tradition that continues despite
@@ -9438,7 +9750,7 @@ html {
             </div>
 
             <div class="gallery-item">
-                <img src="https://placehold.co/800x600/9333ea/ffffff?text=Photo+10" alt="Photograph 10">
+                <img src="https://placehold.co/800x600/9333ea/ffffff?text=Photo+10" alt="Placeholder — replace with a photograph of the community mural on Bushwick Avenue">
                 <div class="caption">
                     <p class="caption-text">
                         A mural on Bushwick Avenue commemorates neighborhood history and residents who've
@@ -9448,7 +9760,7 @@ html {
             </div>
 
             <div class="gallery-item wide">
-                <img src="https://placehold.co/1400x700/0f766e/ffffff?text=Closing+Image" alt="Closing photograph">
+                <img src="https://placehold.co/1400x700/0f766e/ffffff?text=Closing+Image" alt="Placeholder — replace with the closing photograph (residents on stoops at sunset)">
                 <div class="caption">
                     <p class="caption-text">
                         As the sun sets over Brooklyn, residents gather on stoops and fire escapes, continuing
@@ -9956,6 +10268,36 @@ footer p {
 .gallery-item:nth-child(5) { animation-delay: 0.5s; }
 .gallery-item:nth-child(6) { animation-delay: 0.6s; }
 .gallery-item:nth-child(n+7) { animation-delay: 0.7s; }
+
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .gallery-item {
+        animation: none;
+    }
+
+    .gallery-item:hover {
+        transform: none;
+    }
+
+    .gallery-item:hover img {
+        transform: none;
+    }
+}
 `
   },
   "photo-narrative": {
@@ -9965,6 +10307,10 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Last Shoemaker - Photo Essay by Jamie Lee</title>
+    <meta name="description" content="The Last Shoemaker, a documentary photo essay by Jamie Lee portraying Giuseppe Romano and sixty years of his craft.">
+    <meta property="og:title" content="The Last Shoemaker - Photo Essay by Jamie Lee">
+    <meta property="og:description" content="The Last Shoemaker, a documentary photo essay by Jamie Lee portraying Giuseppe Romano and sixty years of his craft.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -10024,7 +10370,7 @@ footer p {
         <section class="narrative-section">
             <div class="side-by-side">
                 <div class="image-half">
-                    <img src="https://placehold.co/800x1000/059669/ffffff?text=Tools" alt="Shoemaker's tools">
+                    <img src="https://placehold.co/800x1000/059669/ffffff?text=Tools" alt="Placeholder — replace with a photograph of the shoemaker's inherited tools">
                 </div>
                 <div class="text-half">
                     <h2>Tools of the Trade</h2>
@@ -10080,9 +10426,9 @@ footer p {
 
         <section class="narrative-section">
             <div class="image-grid">
-                <img src="https://placehold.co/600x600/7c3aed/ffffff?text=Detail+1" alt="Detail shot">
-                <img src="https://placehold.co/600x600/ea580c/ffffff?text=Detail+2" alt="Detail shot">
-                <img src="https://placehold.co/600x600/0891b2/ffffff?text=Detail+3" alt="Detail shot">
+                <img src="https://placehold.co/600x600/7c3aed/ffffff?text=Detail+1" alt="Placeholder — replace with a close-up detail from the shop">
+                <img src="https://placehold.co/600x600/ea580c/ffffff?text=Detail+2" alt="Placeholder — replace with a close-up detail from the shop">
+                <img src="https://placehold.co/600x600/0891b2/ffffff?text=Detail+3" alt="Placeholder — replace with a close-up detail from the shop">
             </div>
         </section>
 
@@ -10769,6 +11115,43 @@ html {
     scroll-behavior: smooth;
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .title-screen::before,
+    .fullscreen-image,
+    .scroll-indicator,
+    .narrative-section,
+    .content-block,
+    .side-by-side,
+    .image-grid {
+        animation: none;
+    }
+
+    .side-by-side:hover .image-half img,
+    .image-grid img:hover {
+        transform: none;
+    }
+}
+
 /* Selection Styling */
 ::selection {
     background: var(--color-accent);
@@ -10788,6 +11171,10 @@ html {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Riley Chen - Portfolio</title>
+    <meta name="description" content="Riley Chen, digital media and visual communication portfolio — documentary, photography, and design projects.">
+    <meta property="og:title" content="Riley Chen - Portfolio">
+    <meta property="og:description" content="Riley Chen, digital media and visual communication portfolio — documentary, photography, and design projects.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -10796,57 +11183,57 @@ html {
         <p>Digital Media & Visual Communication</p>
     </header>
 
-    <div class="container">
+    <main class="container">
         <div class="grid">
             <div class="project-card">
-                <img src="https://placehold.co/600x400/6366f1/ffffff?text=Project+1" alt="Project 1">
+                <img src="https://placehold.co/600x400/6366f1/ffffff?text=Project+1" alt="Placeholder — replace with an image from your Community Voices Documentary">
                 <div class="project-info">
-                    <h3>Community Voices Documentary</h3>
+                    <h2>Community Voices Documentary</h2>
                     <p>Short film exploring immigrant narratives in Queens</p>
                 </div>
             </div>
 
             <div class="project-card">
-                <img src="https://placehold.co/600x400/ec4899/ffffff?text=Project+2" alt="Project 2">
+                <img src="https://placehold.co/600x400/ec4899/ffffff?text=Project+2" alt="Placeholder — replace with an image from your Urban Landscapes Series">
                 <div class="project-info">
-                    <h3>Urban Landscapes Series</h3>
+                    <h2>Urban Landscapes Series</h2>
                     <p>Photography collection of NYC architecture</p>
                 </div>
             </div>
 
             <div class="project-card">
-                <img src="https://placehold.co/600x400/10b981/ffffff?text=Project+3" alt="Project 3">
+                <img src="https://placehold.co/600x400/10b981/ffffff?text=Project+3" alt="Placeholder — replace with an image from your Climate Action Campaign">
                 <div class="project-info">
-                    <h3>Climate Action Campaign</h3>
+                    <h2>Climate Action Campaign</h2>
                     <p>Visual identity and materials for local environmental group</p>
                 </div>
             </div>
 
             <div class="project-card">
-                <img src="https://placehold.co/600x400/f59e0b/ffffff?text=Project+4" alt="Project 4">
+                <img src="https://placehold.co/600x400/f59e0b/ffffff?text=Project+4" alt="Placeholder — replace with an image from your Student Newspaper Redesign">
                 <div class="project-info">
-                    <h3>Student Newspaper Redesign</h3>
+                    <h2>Student Newspaper Redesign</h2>
                     <p>Layout and design overhaul for campus publication</p>
                 </div>
             </div>
 
             <div class="project-card">
-                <img src="https://placehold.co/600x400/8b5cf6/ffffff?text=Project+5" alt="Project 5">
+                <img src="https://placehold.co/600x400/8b5cf6/ffffff?text=Project+5" alt="Placeholder — replace with an image from your Podcast Cover Art project">
                 <div class="project-info">
-                    <h3>Podcast Cover Art</h3>
+                    <h2>Podcast Cover Art</h2>
                     <p>Visual identity for Brooklyn history podcast</p>
                 </div>
             </div>
 
             <div class="project-card">
-                <img src="https://placehold.co/600x400/06b6d4/ffffff?text=Project+6" alt="Project 6">
+                <img src="https://placehold.co/600x400/06b6d4/ffffff?text=Project+6" alt="Placeholder — replace with an image from your Exhibition Catalog project">
                 <div class="project-info">
-                    <h3>Exhibition Catalog</h3>
+                    <h2>Exhibition Catalog</h2>
                     <p>Design and production for gallery show</p>
                 </div>
             </div>
         </div>
-    </div>
+    </main>
 
     <footer>
         <p>Contact: riley.chen@email.com | <a href="#">View Resume</a></p>
@@ -11024,7 +11411,7 @@ header p {
     position: relative;
 }
 
-.project-info h3 {
+.project-info h2 {
     font-family: var(--font-serif);
     font-size: 1.5rem;
     font-weight: 400;
@@ -11034,7 +11421,7 @@ header p {
     transition: color 0.3s ease;
 }
 
-.project-card:hover .project-info h3 {
+.project-card:hover .project-info h2 {
     color: var(--color-sage);
 }
 
@@ -11121,9 +11508,15 @@ footer a:hover::after {
         padding: calc(var(--spacing-unit) * 3);
     }
 
-    .project-info h3 {
+    .project-info h2 {
         font-size: 1.375rem;
     }
+}
+
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-sage);
+    outline-offset: 3px;
 }
 
 /* Accessibility */
@@ -11135,6 +11528,11 @@ footer a:hover::after {
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
     }
+
+    .project-card:hover,
+    .project-card:hover img {
+        transform: none;
+    }
 }
 `
   },
@@ -11145,6 +11543,10 @@ footer a:hover::after {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sam Torres - Work</title>
+    <meta name="description" content="Sam Torres, writer and cultural critic — essays, literary criticism, and interviews on culture and the city.">
+    <meta property="og:title" content="Sam Torres - Work">
+    <meta property="og:description" content="Sam Torres, writer and cultural critic — essays, literary criticism, and interviews on culture and the city.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11155,10 +11557,10 @@ footer a:hover::after {
         </div>
     </header>
 
-    <div class="container">
+    <main class="container">
         <article class="feature">
             <div class="feature-image">
-                <img src="https://placehold.co/800x500/dc2626/ffffff?text=Featured+Work" alt="Featured">
+                <img src="https://placehold.co/800x500/dc2626/ffffff?text=Featured+Work" alt="Placeholder — replace with an image for your featured essay on gentrification and memory">
             </div>
             <div class="feature-content">
                 <span class="category">Essay</span>
@@ -11173,7 +11575,7 @@ footer a:hover::after {
 
         <div class="works-grid">
             <article class="work-item">
-                <img src="https://placehold.co/600x400/7c3aed/ffffff?text=Article+2" alt="Work 2">
+                <img src="https://placehold.co/600x400/7c3aed/ffffff?text=Article+2" alt="Placeholder — replace with an image for your Caribbean American literature piece">
                 <div class="work-content">
                     <span class="category">Literary Criticism</span>
                     <h3>Contemporary Voices in Caribbean American Literature</h3>
@@ -11182,7 +11584,7 @@ footer a:hover::after {
             </article>
 
             <article class="work-item">
-                <img src="https://placehold.co/600x400/059669/ffffff?text=Article+3" alt="Work 3">
+                <img src="https://placehold.co/600x400/059669/ffffff?text=Article+3" alt="Placeholder — replace with an image for your interview with Maria Santos">
                 <div class="work-content">
                     <span class="category">Interview</span>
                     <h3>Conversation with Poet Laureate Maria Santos</h3>
@@ -11191,7 +11593,7 @@ footer a:hover::after {
             </article>
 
             <article class="work-item">
-                <img src="https://placehold.co/600x400/0891b2/ffffff?text=Article+4" alt="Work 4">
+                <img src="https://placehold.co/600x400/0891b2/ffffff?text=Article+4" alt="Placeholder — replace with an image for your book review of new urban literature">
                 <div class="work-content">
                     <span class="category">Book Review</span>
                     <h3>The City in Translation: New Urban Literature</h3>
@@ -11199,7 +11601,7 @@ footer a:hover::after {
                 </div>
             </article>
         </div>
-    </div>
+    </main>
 
     <footer>
         <p><a href="mailto:sam.torres@writer.com">Get in Touch</a> | <a href="#">Full Archive</a></p>
@@ -11567,6 +11969,12 @@ footer a:hover::after {
     }
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
 /* Accessibility */
 @media (prefers-reduced-motion: reduce) {
     *,
@@ -11580,6 +11988,11 @@ footer a:hover::after {
     html {
         scroll-behavior: auto;
     }
+
+    .work-item:hover,
+    .feature:hover .feature-image img {
+        transform: none;
+    }
 }
 `
   },
@@ -11590,9 +12003,14 @@ footer a:hover::after {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Alex Kim - Portfolio</title>
+    <meta name="description" content="Alex Kim, Brooklyn-based visual artist and photographer exploring urban environments, memory, and technological change.">
+    <meta property="og:title" content="Alex Kim - Portfolio">
+    <meta property="og:description" content="Alex Kim, Brooklyn-based visual artist and photographer exploring urban environments, memory, and technological change.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header>
         <nav>
             <a href="#" class="logo">Alex Kim</a>
@@ -11604,11 +12022,11 @@ footer a:hover::after {
         </nav>
     </header>
 
-    <main>
+    <main id="main">
         <section id="work" class="work-section">
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+01" alt="Urban Transitions">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+01" alt="Placeholder — replace with an image from your Urban Transitions project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">01</span>
@@ -11620,7 +12038,7 @@ footer a:hover::after {
 
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+02" alt="Ephemeral Spaces">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+02" alt="Placeholder — replace with an image from your Ephemeral Spaces project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">02</span>
@@ -11632,7 +12050,7 @@ footer a:hover::after {
 
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+03" alt="Digital Futures">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+03" alt="Placeholder — replace with an image from your Digital Futures project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">03</span>
@@ -11644,7 +12062,7 @@ footer a:hover::after {
 
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+04" alt="Memory Archives">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+04" alt="Placeholder — replace with an image from your Memory Archives project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">04</span>
@@ -11656,7 +12074,7 @@ footer a:hover::after {
 
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+05" alt="Coastal Erosion">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+05" alt="Placeholder — replace with an image from your Coastal Erosion project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">05</span>
@@ -11668,7 +12086,7 @@ footer a:hover::after {
 
             <div class="project">
                 <div class="project-image">
-                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+06" alt="Material Studies">
+                    <img src="https://placehold.co/1400x900/000000/ffffff?text=Project+06" alt="Placeholder — replace with an image from your Material Studies project">
                 </div>
                 <div class="project-info">
                     <span class="project-number">06</span>
@@ -11776,6 +12194,24 @@ body {
 ::selection {
     background: var(--color-muted-green);
     color: white;
+}
+
+/* Skip Link */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    padding: calc(var(--unit) * 3) calc(var(--unit) * 5);
+    background: var(--color-charcoal);
+    color: var(--color-pearl);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.skip-link:focus {
+    left: calc(var(--unit) * 3);
+    top: calc(var(--unit) * 3);
 }
 
 /* Header & Navigation */
@@ -12209,6 +12645,12 @@ footer p {
     }
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-muted-green);
+    outline-offset: 3px;
+}
+
 /* Accessibility */
 @media (prefers-reduced-motion: reduce) {
     *,
@@ -12222,6 +12664,10 @@ footer p {
     html {
         scroll-behavior: auto;
     }
+
+    .project:hover .project-image img {
+        transform: none;
+    }
 }
 `
   },
@@ -12232,9 +12678,14 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Taylor Kim - Research</title>
+    <meta name="description" content="Taylor Kim, UX researcher and HCI designer creating inclusive digital experiences through participatory research.">
+    <meta property="og:title" content="Taylor Kim - Research">
+    <meta property="og:description" content="Taylor Kim, UX researcher and HCI designer creating inclusive digital experiences through participatory research.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <nav class="navbar">
         <div class="nav-content">
             <h1 class="logo">Taylor Kim</h1>
@@ -12253,10 +12704,10 @@ footer p {
         </div>
     </section>
 
-    <div class="container">
+    <main class="container" id="main">
         <section id="work" class="project-showcase">
             <div class="project-large">
-                <img src="https://placehold.co/1000x600/6366f1/ffffff?text=Featured+Project" alt="Featured">
+                <img src="https://placehold.co/1000x600/6366f1/ffffff?text=Featured+Project" alt="Placeholder — replace with an image from your Accessible Public Transit App project">
                 <div class="project-details">
                     <h3>Accessible Public Transit App</h3>
                     <p class="description">
@@ -12274,13 +12725,13 @@ footer p {
 
             <div class="project-row">
                 <div class="project-card">
-                    <img src="https://placehold.co/600x400/ec4899/ffffff?text=Project+2" alt="Project 2">
+                    <img src="https://placehold.co/600x400/ec4899/ffffff?text=Project+2" alt="Placeholder — replace with an image from your Community Health Portal project">
                     <h4>Community Health Portal</h4>
                     <p>Redesigning patient portals for multilingual communities in Queens</p>
                 </div>
 
                 <div class="project-card">
-                    <img src="https://placehold.co/600x400/10b981/ffffff?text=Project+3" alt="Project 3">
+                    <img src="https://placehold.co/600x400/10b981/ffffff?text=Project+3" alt="Placeholder — replace with an image from your Student Success Dashboard project">
                     <h4>Student Success Dashboard</h4>
                     <p>Data visualization tools for academic advisors and students</p>
                 </div>
@@ -12288,13 +12739,13 @@ footer p {
 
             <div class="project-row">
                 <div class="project-card">
-                    <img src="https://placehold.co/600x400/f59e0b/ffffff?text=Project+4" alt="Project 4">
+                    <img src="https://placehold.co/600x400/f59e0b/ffffff?text=Project+4" alt="Placeholder — replace with an image from your Civic Engagement Platform project">
                     <h4>Civic Engagement Platform</h4>
                     <p>Participatory budgeting tool for NYC neighborhoods</p>
                 </div>
 
                 <div class="project-card">
-                    <img src="https://placehold.co/600x400/8b5cf6/ffffff?text=Project+5" alt="Project 5">
+                    <img src="https://placehold.co/600x400/8b5cf6/ffffff?text=Project+5" alt="Placeholder — replace with an image from your Library Mobile Experience project">
                     <h4>Library Mobile Experience</h4>
                     <p>Streamlined borrowing and discovery for NYPL users</p>
                 </div>
@@ -12345,13 +12796,13 @@ footer p {
                     </div>
                 </div>
                 <div class="social-links">
-                    <a href="https://twitter.com" target="_blank">Twitter</a>
-                    <a href="https://linkedin.com" target="_blank">LinkedIn</a>
-                    <a href="https://scholar.google.com" target="_blank">Google Scholar</a>
+                    <a href="https://twitter.com" target="_blank" rel="noopener noreferrer">Twitter</a>
+                    <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+                    <a href="https://scholar.google.com" target="_blank" rel="noopener noreferrer">Google Scholar</a>
                 </div>
             </div>
         </section>
-    </div>
+    </main>
 </body>
 </html>
 `,
@@ -12406,6 +12857,24 @@ body {
 ::selection {
     background: var(--color-bronze);
     color: white;
+}
+
+/* Skip Link */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    padding: calc(var(--space) * 1.5) calc(var(--space) * 3);
+    background: var(--color-bronze);
+    color: var(--color-white);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.skip-link:focus {
+    left: var(--space);
+    top: var(--space);
 }
 
 /* Navigation */
@@ -13009,9 +13478,14 @@ a:focus-visible {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Publications - Dr. Elena Rodriguez</title>
+    <meta name="description" content="Selected publications of Dr. Elena Rodriguez, Professor of Environmental Science at CUNY — books, journal articles, chapters, and conference proceedings.">
+    <meta property="og:title" content="Publications - Dr. Elena Rodriguez">
+    <meta property="og:description" content="Selected publications of Dr. Elena Rodriguez, Professor of Environmental Science at CUNY — books, journal articles, chapters, and conference proceedings.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header>
         <div class="container">
             <h1>Dr. Elena Rodriguez</h1>
@@ -13020,9 +13494,9 @@ a:focus-visible {
         </div>
     </header>
 
-    <main class="container">
-        <nav class="toc">
-            <h3>Contents</h3>
+    <main class="container" id="main">
+        <nav class="toc" aria-label="Publication categories">
+            <h2>Contents</h2>
             <ul>
                 <li><a href="#books">Books</a></li>
                 <li><a href="#articles">Journal Articles</a></li>
@@ -13264,6 +13738,29 @@ body {
     padding: 0 2rem;
 }
 
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: #0a0a0a;
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+}
+
+a:focus-visible {
+    outline: 2px solid #262626;
+    outline-offset: 2px;
+}
+
 header {
     background: #fafafa;
     padding: 4rem 0;
@@ -13298,7 +13795,7 @@ header h1 {
     border-left: 3px solid #262626;
 }
 
-.toc h3 {
+.toc h2 {
     font-size: 1.125rem;
     margin-bottom: 1.25rem;
     color: #0a0a0a;
@@ -13306,6 +13803,8 @@ header h1 {
     letter-spacing: 0.03em;
     font-family: 'Inter', sans-serif;
     font-weight: 600;
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .toc ul {
@@ -13498,6 +13997,10 @@ footer a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Publications - Dr. Michael Torres</title>
+    <meta name="description" content="Publications of Dr. Michael Torres, researcher in cognitive neuroscience and learning — books, journal articles, and selected earlier work.">
+    <meta property="og:title" content="Publications - Dr. Michael Torres">
+    <meta property="og:description" content="Publications of Dr. Michael Torres, researcher in cognitive neuroscience and learning — books, journal articles, and selected earlier work.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13512,7 +14015,7 @@ footer a:hover {
         <section class="featured">
             <div class="featured-label">Featured Publication</div>
             <div class="featured-pub">
-                <img src="https://placehold.co/300x400/3b82f6/ffffff?text=Book+Cover" alt="Book cover" class="book-cover">
+                <img src="https://placehold.co/300x400/3b82f6/ffffff?text=Book+Cover" alt="Placeholder — replace with the cover of The Learning Brain" class="book-cover">
                 <div class="featured-content">
                     <h2>The Learning Brain: Cognitive Science and Educational Practice</h2>
                     <p class="pub-meta">MIT Press, 2023 | ISBN: 978-0-262-04567-8</p>
@@ -14256,6 +14759,31 @@ footer p {
     letter-spacing: 0.01em;
 }
 
+/* Focus Visibility */
+a:focus-visible,
+.btn:focus-visible {
+    outline: 2px solid var(--accent-burgundy);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .book-cover:hover,
+    .btn:hover,
+    .btn-outline:hover,
+    .pub-card:hover {
+        transform: none;
+    }
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
     .container {
@@ -14357,9 +14885,14 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Digital Humanities Resources</title>
+    <meta name="description" content="A curated guide to digital humanities tools, tutorials, and datasets, maintained by the Brooklyn College Digital Humanities Lab.">
+    <meta property="og:title" content="Digital Humanities Resources">
+    <meta property="og:description" content="A curated guide to digital humanities tools, tutorials, and datasets, maintained by the Brooklyn College Digital Humanities Lab.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
     <header>
         <div class="container">
             <h1>Digital Humanities Resources</h1>
@@ -14368,7 +14901,7 @@ footer p {
         </div>
     </header>
 
-    <main class="container">
+    <main class="container" id="main">
         <section class="intro">
             <p>
                 This resource guide provides links to essential tools, tutorials, and datasets for digital
@@ -14376,7 +14909,7 @@ footer p {
             </p>
         </section>
 
-        <nav class="category-nav">
+        <nav class="category-nav" aria-label="Resource categories">
             <a href="#text-analysis">Text Analysis</a>
             <a href="#mapping">Mapping & GIS</a>
             <a href="#visualization">Data Visualization</a>
@@ -14746,6 +15279,28 @@ body {
     max-width: 1100px;
     margin: 0 auto;
     padding: 0 2.5rem;
+}
+
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: var(--primary-accent);
+    color: #ffffff;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+}
+
+a:focus-visible {
+    outline: 2px solid var(--primary-accent);
+    outline-offset: 2px;
 }
 
 /* Header - Editorial Magazine Style */
@@ -15235,6 +15790,17 @@ footer p {
         font-size: 1.25rem;
     }
 }
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}
 `
   },
   "resource-grid": {
@@ -15244,6 +15810,10 @@ footer p {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Success Resources</title>
+    <meta name="description" content="A campus guide to academic support, career services, wellness, and financial resources for student success.">
+    <meta property="og:title" content="Student Success Resources">
+    <meta property="og:description" content="A campus guide to academic support, career services, wellness, and financial resources for student success.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15255,8 +15825,9 @@ footer p {
     </header>
 
     <main class="container">
-        <section class="search-section">
-            <input type="text" placeholder="Search resources..." class="search-box">
+        <section class="search-section" aria-label="Search and filter resources">
+            <label for="resource-search" class="sr-only">Search resources</label>
+            <input type="text" id="resource-search" placeholder="Search resources..." class="search-box">
             <div class="filter-tags">
                 <button class="filter-tag active">All</button>
                 <button class="filter-tag">Academic</button>
@@ -15271,7 +15842,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
                     <span>📚</span>
                 </div>
-                <h3>Writing Center</h3>
+                <h2>Writing Center</h2>
                 <p>Free tutoring for all stages of the writing process. One-on-one appointments and drop-in hours available.</p>
                 <div class="card-meta">
                     <span class="location">Library, Room 301</span>
@@ -15284,7 +15855,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);">
                     <span>🔬</span>
                 </div>
-                <h3>STEM Tutoring Center</h3>
+                <h2>STEM Tutoring Center</h2>
                 <p>Drop-in tutoring for math, physics, chemistry, biology, and computer science courses.</p>
                 <div class="card-meta">
                     <span class="location">Science Building, Room 125</span>
@@ -15297,7 +15868,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
                     <span>💼</span>
                 </div>
-                <h3>Career Services</h3>
+                <h2>Career Services</h2>
                 <p>Resume reviews, interview prep, internship listings, and career counseling appointments.</p>
                 <div class="card-meta">
                     <span class="location">Student Center, 2nd Floor</span>
@@ -15310,7 +15881,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);">
                     <span>💚</span>
                 </div>
-                <h3>Counseling Center</h3>
+                <h2>Counseling Center</h2>
                 <p>Confidential mental health support, crisis intervention, and wellness workshops for students.</p>
                 <div class="card-meta">
                     <span class="location">Health Center, 1st Floor</span>
@@ -15323,7 +15894,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);">
                     <span>💰</span>
                 </div>
-                <h3>Financial Aid Office</h3>
+                <h2>Financial Aid Office</h2>
                 <p>Help with FAFSA, scholarships, grants, loans, and emergency financial assistance programs.</p>
                 <div class="card-meta">
                     <span class="location">Administration Building, Room 200</span>
@@ -15336,7 +15907,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);">
                     <span>📖</span>
                 </div>
-                <h3>Library Services</h3>
+                <h2>Library Services</h2>
                 <p>Research support, database access, study rooms, technology lending, and information literacy workshops.</p>
                 <div class="card-meta">
                     <span class="location">Main Library</span>
@@ -15349,7 +15920,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">
                     <span>🌍</span>
                 </div>
-                <h3>Study Abroad Office</h3>
+                <h2>Study Abroad Office</h2>
                 <p>Information on international programs, scholarships, and application support for studying overseas.</p>
                 <div class="card-meta">
                     <span class="location">International Center</span>
@@ -15362,7 +15933,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);">
                     <span>🏃</span>
                 </div>
-                <h3>Recreation Center</h3>
+                <h2>Recreation Center</h2>
                 <p>Fitness classes, gym access, intramural sports, and wellness programs included in student fees.</p>
                 <div class="card-meta">
                     <span class="location">Athletic Complex</span>
@@ -15375,7 +15946,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%);">
                     <span>🎓</span>
                 </div>
-                <h3>Academic Advising</h3>
+                <h2>Academic Advising</h2>
                 <p>Help with course selection, degree planning, major changes, and academic policies.</p>
                 <div class="card-meta">
                     <span class="location">By department</span>
@@ -15388,7 +15959,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #a855f7 0%, #9333ea 100%);">
                     <span>🎯</span>
                 </div>
-                <h3>Internship Programs</h3>
+                <h2>Internship Programs</h2>
                 <p>Credit-bearing internships, job postings, and connections with local employers and nonprofits.</p>
                 <div class="card-meta">
                     <span class="location">Career Services</span>
@@ -15401,7 +15972,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);">
                     <span>🍎</span>
                 </div>
-                <h3>Food Pantry</h3>
+                <h2>Food Pantry</h2>
                 <p>Free groceries and meals for students experiencing food insecurity. Confidential and no questions asked.</p>
                 <div class="card-meta">
                     <span class="location">Student Center, Basement</span>
@@ -15414,7 +15985,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">
                     <span>💻</span>
                 </div>
-                <h3>Technology Help Desk</h3>
+                <h2>Technology Help Desk</h2>
                 <p>Tech support for campus systems, WiFi, email, Blackboard, and computer troubleshooting.</p>
                 <div class="card-meta">
                     <span class="location">Library, 1st Floor</span>
@@ -15427,7 +15998,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);">
                     <span>🌐</span>
                 </div>
-                <h3>English Language Center</h3>
+                <h2>English Language Center</h2>
                 <p>ESL support, conversation partners, and writing assistance for multilingual students.</p>
                 <div class="card-meta">
                     <span class="location">Language Building, Room 212</span>
@@ -15440,7 +16011,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">
                     <span>📋</span>
                 </div>
-                <h3>Emergency Grants</h3>
+                <h2>Emergency Grants</h2>
                 <p>Quick financial assistance for unexpected expenses like textbooks, housing, or medical bills.</p>
                 <div class="card-meta">
                     <span class="location">Dean of Students Office</span>
@@ -15453,7 +16024,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);">
                     <span>🤝</span>
                 </div>
-                <h3>Alumni Network</h3>
+                <h2>Alumni Network</h2>
                 <p>Connect with graduates in your field, attend networking events, and access mentorship opportunities.</p>
                 <div class="card-meta">
                     <span class="location">Online platform</span>
@@ -15466,7 +16037,7 @@ footer p {
                 <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);">
                     <span>🏠</span>
                 </div>
-                <h3>Housing Resources</h3>
+                <h2>Housing Resources</h2>
                 <p>On-campus housing, off-campus listings, roommate matching, and tenant rights information.</p>
                 <div class="card-meta">
                     <span class="location">Residential Life Office</span>
@@ -15531,6 +16102,12 @@ body {
     max-width: 1440px;
     margin: 0 auto;
     padding: 0 3rem;
+}
+
+a:focus-visible,
+.filter-tag:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
 }
 
 /* Header - Architectural Minimal */
@@ -15748,7 +16325,7 @@ main {
     padding: 0 2rem;
 }
 
-.resource-card h3 {
+.resource-card h2 {
     font-size: 1.375rem;
     color: var(--text-primary);
     margin: 1.75rem 0 0.75rem 0;
@@ -15992,7 +16569,7 @@ footer a:hover {
         font-size: 3rem;
     }
 
-    .resource-card h3 {
+    .resource-card h2 {
         font-size: 1.25rem;
         margin: 1.5rem 0 0.5rem 0;
     }
@@ -16036,7 +16613,7 @@ footer a:hover {
         padding: 0 1.5rem;
     }
 
-    .resource-card h3 {
+    .resource-card h2 {
         padding: 0 1.5rem;
     }
 
@@ -16089,6 +16666,22 @@ footer a:hover {
     background: rgba(0, 71, 255, 0.15);
     color: var(--text-primary);
 }
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .resource-card:hover,
+    .filter-tag:hover {
+        transform: none;
+    }
+}
 `
   },
   "timeline-interactive": {
@@ -16098,6 +16691,10 @@ footer a:hover {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>History of Digital Humanities - Interactive Timeline</title>
+    <meta name="description" content="An interactive timeline of key moments in the digital transformation of humanistic research, from early computing to AI-driven scholarship.">
+    <meta property="og:title" content="History of Digital Humanities - Interactive Timeline">
+    <meta property="og:description" content="An interactive timeline of key moments in the digital transformation of humanistic research, from early computing to AI-driven scholarship.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.knightlab.com">
     <link rel="preconnect" href="https://cdn.knightlab.com" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -16110,12 +16707,12 @@ footer a:hover {
         <p class="subtitle">Key Moments in the Digital Transformation of Humanistic Research</p>
     </header>
 
-    <div class="timeline-container">
+    <main class="timeline-container">
         <div id="timeline-embed" style="width: 100%; height: 600px"></div>
-    </div>
+    </main>
 
     <footer class="footer">
-        <p>Built with <a href="https://timeline.knightlab.com/" target="_blank">TimelineJS</a></p>
+        <p>Built with <a href="https://timeline.knightlab.com/" target="_blank" rel="noopener noreferrer">TimelineJS</a></p>
     </footer>
 
     <!-- TimelineJS JavaScript -->
@@ -16715,6 +17312,23 @@ body {
 
     .tl-timemarker .tl-timemarker-content-container .tl-timemarker-content .tl-timemarker-text h2.tl-headline {
         font-size: 12px !important;
+    }
+}
+
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--accent-emerald);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
     }
 }
 

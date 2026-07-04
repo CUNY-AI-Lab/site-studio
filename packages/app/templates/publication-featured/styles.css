@@ -542,6 +542,31 @@ footer p {
     letter-spacing: 0.01em;
 }
 
+/* Focus Visibility */
+a:focus-visible,
+.btn:focus-visible {
+    outline: 2px solid var(--accent-burgundy);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .book-cover:hover,
+    .btn:hover,
+    .btn-outline:hover,
+    .pub-card:hover {
+        transform: none;
+    }
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
     .container {

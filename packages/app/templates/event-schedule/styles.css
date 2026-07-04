@@ -37,6 +37,32 @@ body {
     padding: 0 2rem;
 }
 
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    padding: 0.75rem 1.25rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-decoration: none;
+    border-bottom: 3px solid var(--color-accent);
+    transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
 header {
     background: var(--color-ink);
     color: var(--color-paper);
@@ -479,5 +505,16 @@ footer p {
 
     .venue-info {
         gap: 2rem;
+    }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
 }

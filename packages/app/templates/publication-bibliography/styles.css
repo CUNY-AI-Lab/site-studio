@@ -19,6 +19,29 @@ body {
     padding: 0 2rem;
 }
 
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: #0a0a0a;
+    color: #ffffff;
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+}
+
+a:focus-visible {
+    outline: 2px solid #262626;
+    outline-offset: 2px;
+}
+
 header {
     background: #fafafa;
     padding: 4rem 0;
@@ -53,7 +76,7 @@ header h1 {
     border-left: 3px solid #262626;
 }
 
-.toc h3 {
+.toc h2 {
     font-size: 1.125rem;
     margin-bottom: 1.25rem;
     color: #0a0a0a;
@@ -61,6 +84,8 @@ header h1 {
     letter-spacing: 0.03em;
     font-family: 'Inter', sans-serif;
     font-weight: 600;
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .toc ul {

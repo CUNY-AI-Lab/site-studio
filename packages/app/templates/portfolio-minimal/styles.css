@@ -49,6 +49,24 @@ body {
     color: white;
 }
 
+/* Skip Link */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    padding: calc(var(--unit) * 3) calc(var(--unit) * 5);
+    background: var(--color-charcoal);
+    color: var(--color-pearl);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.skip-link:focus {
+    left: calc(var(--unit) * 3);
+    top: calc(var(--unit) * 3);
+}
+
 /* Header & Navigation */
 header {
     position: fixed;
@@ -480,6 +498,12 @@ footer p {
     }
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-muted-green);
+    outline-offset: 3px;
+}
+
 /* Accessibility */
 @media (prefers-reduced-motion: reduce) {
     *,
@@ -492,5 +516,9 @@ footer p {
 
     html {
         scroll-behavior: auto;
+    }
+
+    .project:hover .project-image img {
+        transform: none;
     }
 }

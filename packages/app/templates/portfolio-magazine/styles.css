@@ -358,6 +358,12 @@ footer a:hover::after {
     }
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
 /* Accessibility */
 @media (prefers-reduced-motion: reduce) {
     *,
@@ -370,5 +376,10 @@ footer a:hover::after {
 
     html {
         scroll-behavior: auto;
+    }
+
+    .work-item:hover,
+    .feature:hover .feature-image img {
+        transform: none;
     }
 }

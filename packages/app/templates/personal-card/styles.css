@@ -119,7 +119,7 @@ body {
     border-top: 2px solid var(--sand);
 }
 
-.contact h3 {
+.contact h2 {
     font-family: var(--sans);
     font-size: 0.75rem;
     text-transform: uppercase;
@@ -348,6 +348,27 @@ body {
     font-size: 1.05rem;
     color: var(--ink-light);
     margin: 0;
+}
+
+a:focus-visible,
+.social-links a:focus-visible {
+    outline: 2px solid var(--burgundy);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .social-links a:hover,
+    .interests-list li:hover {
+        transform: none;
+    }
 }
 
 @media (max-width: 1024px) {

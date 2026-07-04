@@ -41,6 +41,12 @@ body {
     padding: 0 3rem;
 }
 
+a:focus-visible,
+.filter-tag:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
 /* Header - Architectural Minimal */
 header {
     background: var(--text-primary);
@@ -256,7 +262,7 @@ main {
     padding: 0 2rem;
 }
 
-.resource-card h3 {
+.resource-card h2 {
     font-size: 1.375rem;
     color: var(--text-primary);
     margin: 1.75rem 0 0.75rem 0;
@@ -500,7 +506,7 @@ footer a:hover {
         font-size: 3rem;
     }
 
-    .resource-card h3 {
+    .resource-card h2 {
         font-size: 1.25rem;
         margin: 1.5rem 0 0.5rem 0;
     }
@@ -544,7 +550,7 @@ footer a:hover {
         padding: 0 1.5rem;
     }
 
-    .resource-card h3 {
+    .resource-card h2 {
         padding: 0 1.5rem;
     }
 
@@ -596,4 +602,20 @@ footer a:hover {
 ::-moz-selection {
     background: rgba(0, 71, 255, 0.15);
     color: var(--text-primary);
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .resource-card:hover,
+    .filter-tag:hover {
+        transform: none;
+    }
 }

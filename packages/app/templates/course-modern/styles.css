@@ -48,6 +48,32 @@ body {
     padding: 0 2rem;
 }
 
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-primary);
+    color: #fff;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0;
+    font-weight: 600;
+    text-decoration: none;
+    transition: top 0.2s var(--ease-smooth);
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 3px;
+}
+
 /* Hero Section - Asymmetric Contemporary Layout */
 .hero {
     position: relative;
@@ -593,5 +619,23 @@ footer p {
 
     .resource-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    .hero h1,
+    .tagline,
+    .meta,
+    section {
+        opacity: 1;
     }
 }

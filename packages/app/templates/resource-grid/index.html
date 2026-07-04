@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Success Resources</title>
+    <meta name="description" content="A campus guide to academic support, career services, wellness, and financial resources for student success.">
+    <meta property="og:title" content="Student Success Resources">
+    <meta property="og:description" content="A campus guide to academic support, career services, wellness, and financial resources for student success.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,8 +19,9 @@
     </header>
 
     <main class="container">
-        <section class="search-section">
-            <input type="text" placeholder="Search resources..." class="search-box">
+        <section class="search-section" aria-label="Search and filter resources">
+            <label for="resource-search" class="sr-only">Search resources</label>
+            <input type="text" id="resource-search" placeholder="Search resources..." class="search-box">
             <div class="filter-tags">
                 <button class="filter-tag active">All</button>
                 <button class="filter-tag">Academic</button>
@@ -31,7 +36,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
                     <span>📚</span>
                 </div>
-                <h3>Writing Center</h3>
+                <h2>Writing Center</h2>
                 <p>Free tutoring for all stages of the writing process. One-on-one appointments and drop-in hours available.</p>
                 <div class="card-meta">
                     <span class="location">Library, Room 301</span>
@@ -44,7 +49,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);">
                     <span>🔬</span>
                 </div>
-                <h3>STEM Tutoring Center</h3>
+                <h2>STEM Tutoring Center</h2>
                 <p>Drop-in tutoring for math, physics, chemistry, biology, and computer science courses.</p>
                 <div class="card-meta">
                     <span class="location">Science Building, Room 125</span>
@@ -57,7 +62,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
                     <span>💼</span>
                 </div>
-                <h3>Career Services</h3>
+                <h2>Career Services</h2>
                 <p>Resume reviews, interview prep, internship listings, and career counseling appointments.</p>
                 <div class="card-meta">
                     <span class="location">Student Center, 2nd Floor</span>
@@ -70,7 +75,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);">
                     <span>💚</span>
                 </div>
-                <h3>Counseling Center</h3>
+                <h2>Counseling Center</h2>
                 <p>Confidential mental health support, crisis intervention, and wellness workshops for students.</p>
                 <div class="card-meta">
                     <span class="location">Health Center, 1st Floor</span>
@@ -83,7 +88,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #0891b2 0%, #06b6d4 100%);">
                     <span>💰</span>
                 </div>
-                <h3>Financial Aid Office</h3>
+                <h2>Financial Aid Office</h2>
                 <p>Help with FAFSA, scholarships, grants, loans, and emergency financial assistance programs.</p>
                 <div class="card-meta">
                     <span class="location">Administration Building, Room 200</span>
@@ -96,7 +101,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);">
                     <span>📖</span>
                 </div>
-                <h3>Library Services</h3>
+                <h2>Library Services</h2>
                 <p>Research support, database access, study rooms, technology lending, and information literacy workshops.</p>
                 <div class="card-meta">
                     <span class="location">Main Library</span>
@@ -109,7 +114,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">
                     <span>🌍</span>
                 </div>
-                <h3>Study Abroad Office</h3>
+                <h2>Study Abroad Office</h2>
                 <p>Information on international programs, scholarships, and application support for studying overseas.</p>
                 <div class="card-meta">
                     <span class="location">International Center</span>
@@ -122,7 +127,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);">
                     <span>🏃</span>
                 </div>
-                <h3>Recreation Center</h3>
+                <h2>Recreation Center</h2>
                 <p>Fitness classes, gym access, intramural sports, and wellness programs included in student fees.</p>
                 <div class="card-meta">
                     <span class="location">Athletic Complex</span>
@@ -135,7 +140,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%);">
                     <span>🎓</span>
                 </div>
-                <h3>Academic Advising</h3>
+                <h2>Academic Advising</h2>
                 <p>Help with course selection, degree planning, major changes, and academic policies.</p>
                 <div class="card-meta">
                     <span class="location">By department</span>
@@ -148,7 +153,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #a855f7 0%, #9333ea 100%);">
                     <span>🎯</span>
                 </div>
-                <h3>Internship Programs</h3>
+                <h2>Internship Programs</h2>
                 <p>Credit-bearing internships, job postings, and connections with local employers and nonprofits.</p>
                 <div class="card-meta">
                     <span class="location">Career Services</span>
@@ -161,7 +166,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);">
                     <span>🍎</span>
                 </div>
-                <h3>Food Pantry</h3>
+                <h2>Food Pantry</h2>
                 <p>Free groceries and meals for students experiencing food insecurity. Confidential and no questions asked.</p>
                 <div class="card-meta">
                     <span class="location">Student Center, Basement</span>
@@ -174,7 +179,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">
                     <span>💻</span>
                 </div>
-                <h3>Technology Help Desk</h3>
+                <h2>Technology Help Desk</h2>
                 <p>Tech support for campus systems, WiFi, email, Blackboard, and computer troubleshooting.</p>
                 <div class="card-meta">
                     <span class="location">Library, 1st Floor</span>
@@ -187,7 +192,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);">
                     <span>🌐</span>
                 </div>
-                <h3>English Language Center</h3>
+                <h2>English Language Center</h2>
                 <p>ESL support, conversation partners, and writing assistance for multilingual students.</p>
                 <div class="card-meta">
                     <span class="location">Language Building, Room 212</span>
@@ -200,7 +205,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">
                     <span>📋</span>
                 </div>
-                <h3>Emergency Grants</h3>
+                <h2>Emergency Grants</h2>
                 <p>Quick financial assistance for unexpected expenses like textbooks, housing, or medical bills.</p>
                 <div class="card-meta">
                     <span class="location">Dean of Students Office</span>
@@ -213,7 +218,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);">
                     <span>🤝</span>
                 </div>
-                <h3>Alumni Network</h3>
+                <h2>Alumni Network</h2>
                 <p>Connect with graduates in your field, attend networking events, and access mentorship opportunities.</p>
                 <div class="card-meta">
                     <span class="location">Online platform</span>
@@ -226,7 +231,7 @@
                 <div class="card-icon" style="background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);">
                     <span>🏠</span>
                 </div>
-                <h3>Housing Resources</h3>
+                <h2>Housing Resources</h2>
                 <p>On-campus housing, off-campus listings, roommate matching, and tenant rights information.</p>
                 <div class="card-meta">
                     <span class="location">Residential Life Office</span>

@@ -9,7 +9,7 @@
 
     --color-text-primary: #111827;
     --color-text-secondary: #6b7280;
-    --color-text-tertiary: #9ca3af;
+    --color-text-tertiary: #767d89;
 
     --color-accent-primary: #2563eb;
     --color-accent-secondary: #3b82f6;
@@ -51,6 +51,14 @@ body {
     max-width: 1600px;
     margin: 0 auto;
     padding: 0 calc(var(--spacing-unit) * 8);
+}
+
+/* Focus visibility */
+a:focus-visible,
+.download-btn:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 3px;
+    border-radius: var(--radius-sm);
 }
 
 /* Header - Clean and Minimal */

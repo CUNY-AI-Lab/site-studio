@@ -7,7 +7,7 @@
 
     --color-text-primary: #18181b;
     --color-text-secondary: #52525b;
-    --color-text-tertiary: #a1a1aa;
+    --color-text-tertiary: #71717a;
 
     --color-accent-primary: #0369a1;
     --color-accent-secondary: #0284c7;
@@ -356,6 +356,20 @@ footer a:hover {
 .container {
     max-width: 1280px;
     margin: 0 auto;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent-secondary);
+    outline-offset: 3px;
+    border-radius: var(--radius);
+}
+
+.btn:focus-visible,
+.methodology-section a:focus-visible,
+footer a:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 3px;
 }
 
 /* Responsive Design */

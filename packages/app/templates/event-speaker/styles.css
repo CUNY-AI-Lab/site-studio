@@ -8,7 +8,7 @@
     --color-warm-white: #fffcf7;
     --color-charcoal: #2d2d2d;
     --color-warm-gray: #6b6b6b;
-    --color-soft-gray: #9a9a9a;
+    --color-soft-gray: #767676;
     --color-accent-gold: #c9a96e;
 
     --font-display: 'Fraunces', Georgia, serif;
@@ -37,6 +37,18 @@ body {
     max-width: 1240px;
     margin: 0 auto;
     padding: 0 2rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-terracotta);
+    outline-offset: 3px;
+    border-radius: 4px;
+}
+
+.register-btn:focus-visible {
+    outline: 2px solid var(--color-charcoal);
+    outline-offset: 3px;
 }
 
 header {
@@ -568,5 +580,16 @@ footer p {
 
     .speakers > h2 {
         font-size: 2.25rem;
+    }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
 }

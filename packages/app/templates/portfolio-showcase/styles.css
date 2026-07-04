@@ -51,6 +51,24 @@ body {
     color: white;
 }
 
+/* Skip Link */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 2000;
+    padding: calc(var(--space) * 1.5) calc(var(--space) * 3);
+    background: var(--color-bronze);
+    color: var(--color-white);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.skip-link:focus {
+    left: var(--space);
+    top: var(--space);
+}
+
 /* Navigation */
 .navbar {
     position: fixed;

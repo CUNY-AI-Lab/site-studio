@@ -46,6 +46,30 @@ body {
     padding: 0 2rem;
 }
 
+/* Skip link - visually hidden until focused */
+.skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -3rem;
+    z-index: 1000;
+    background: var(--color-primary);
+    color: #fff;
+    padding: 0.75rem 1.25rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+    top: 1rem;
+}
+
+/* Focus visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
 /* Header - Classical Book-Inspired Design */
 header {
     background: linear-gradient(180deg, var(--color-primary-dark) 0%, var(--color-primary) 100%);

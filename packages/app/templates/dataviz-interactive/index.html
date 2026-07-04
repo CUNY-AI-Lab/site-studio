@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NYC Subway Ridership Explorer</title>
+    <meta name="description" content="An interactive explorer for NYC subway ridership — filter MTA usage by line, time period, and metric, and browse station-level data.">
+    <meta property="og:title" content="NYC Subway Ridership Explorer">
+    <meta property="og:description" content="Interactive data exploration of MTA subway usage patterns.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -61,7 +65,7 @@
         <div class="viz-container">
             <div class="chart-wrapper">
                 <h2 id="chartTitle">Total Ridership - Past Year - All Lines</h2>
-                <canvas id="mainChart"></canvas>
+                <canvas id="mainChart" role="img" aria-label="Line chart of monthly subway ridership over the selected time period"></canvas>
             </div>
         </div>
 
@@ -94,19 +98,19 @@
         <div class="secondary-charts">
             <div class="chart-box">
                 <h3>Ridership by Hour of Day</h3>
-                <canvas id="hourlyChart"></canvas>
+                <canvas id="hourlyChart" role="img" aria-label="Bar chart of average subway ridership by hour of day"></canvas>
             </div>
 
             <div class="chart-box">
                 <h3>Top 10 Busiest Stations</h3>
-                <canvas id="stationsChart"></canvas>
+                <canvas id="stationsChart" role="img" aria-label="Horizontal bar chart of the ten busiest subway stations by daily average ridership"></canvas>
             </div>
         </div>
 
         <div class="data-table-container">
             <h2>Detailed Data</h2>
             <div class="table-controls">
-                <input type="text" id="searchTable" placeholder="Search stations or lines...">
+                <input type="text" id="searchTable" placeholder="Search stations or lines..." aria-label="Search stations or lines">
                 <button id="downloadCSV">Download CSV</button>
             </div>
             <div class="table-wrapper">

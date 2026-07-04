@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>The Climate Migration Story</title>
+    <meta name="description" content="A data-driven story on how rising temperatures are reshaping where Americans live, tracing climate migration patterns, costs, and who is left behind.">
+    <meta property="og:title" content="The Climate Migration Story">
+    <meta property="og:description" content="How rising temperatures are reshaping where Americans live.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -48,7 +52,7 @@
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="tempRiseChart"></canvas>
+                    <canvas id="tempRiseChart" role="img" aria-label="Bar chart of average temperature increase by U.S. region from 2000 to 2023"></canvas>
                 </div>
             </div>
         </section>
@@ -73,7 +77,7 @@
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="outmigrationChart"></canvas>
+                    <canvas id="outmigrationChart" role="img" aria-label="Horizontal bar chart of net outmigration by state, in thousands"></canvas>
                 </div>
             </div>
         </section>
@@ -81,7 +85,7 @@
         <section class="narrative-section with-viz reverse">
             <div class="content-container">
                 <div class="viz-block">
-                    <canvas id="destinationChart"></canvas>
+                    <canvas id="destinationChart" role="img" aria-label="Horizontal bar chart of net inmigration by state, in thousands"></canvas>
                 </div>
                 <div class="text-block">
                     <h2>New Destinations</h2>
@@ -119,7 +123,7 @@
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="housingCostChart"></canvas>
+                    <canvas id="housingCostChart" role="img" aria-label="Line chart comparing housing cost index from 2015 to 2023 for climate-haven cities, the national average, and high-risk areas"></canvas>
                 </div>
             </div>
         </section>
@@ -157,7 +161,7 @@
                     </p>
                 </div>
                 <div class="viz-block">
-                    <canvas id="projectionChart"></canvas>
+                    <canvas id="projectionChart" role="img" aria-label="Line chart projecting millions of Americans in high climate-risk areas from 2020 to 2050"></canvas>
                 </div>
             </div>
         </section>

@@ -606,6 +606,43 @@ html {
     scroll-behavior: smooth;
 }
 
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .title-screen::before,
+    .fullscreen-image,
+    .scroll-indicator,
+    .narrative-section,
+    .content-block,
+    .side-by-side,
+    .image-grid {
+        animation: none;
+    }
+
+    .side-by-side:hover .image-half img,
+    .image-grid img:hover {
+        transform: none;
+    }
+}
+
 /* Selection Styling */
 ::selection {
     background: var(--color-accent);

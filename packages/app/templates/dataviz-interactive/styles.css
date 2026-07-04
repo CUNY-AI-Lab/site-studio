@@ -10,7 +10,7 @@
 
     --color-text-primary: #212529;
     --color-text-secondary: #495057;
-    --color-text-tertiary: #868e96;
+    --color-text-tertiary: #6d747d;
 
     --color-brand-primary: #1971c2;
     --color-brand-hover: #1864ab;
@@ -57,6 +57,14 @@ body {
     max-width: 1480px;
     margin: 0 auto;
     padding: 0 1.5rem;
+}
+
+/* Focus visibility */
+a:focus-visible,
+button:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius);
 }
 
 /* Header */

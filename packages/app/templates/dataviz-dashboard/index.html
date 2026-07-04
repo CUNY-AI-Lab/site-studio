@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NYC Housing Data Dashboard</title>
+    <meta name="description" content="An interactive dashboard analyzing rent burden and housing affordability across New York City neighborhoods, drawn from the 2023 NYC Housing & Vacancy Survey.">
+    <meta property="og:title" content="NYC Housing Affordability Dashboard">
+    <meta property="og:description" content="Analysis of rent burden and housing costs across NYC neighborhoods.">
+    <meta property="og:type" content="website">
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="styles.css">
@@ -45,29 +49,29 @@
         <div class="charts-row">
             <div class="chart-container">
                 <h2>Median Rent by Borough</h2>
-                <canvas id="rentByBoroughChart"></canvas>
+                <canvas id="rentByBoroughChart" role="img" aria-label="Bar chart of median monthly rent by NYC borough"></canvas>
             </div>
             <div class="chart-container">
                 <h2>Rent Burden by Income Level</h2>
-                <canvas id="rentBurdenChart"></canvas>
+                <canvas id="rentBurdenChart" role="img" aria-label="Bar chart of rent-burdened and severely burdened households by income level"></canvas>
             </div>
         </div>
 
         <div class="charts-row">
             <div class="chart-container full-width">
                 <h2>Median Rent Trends (2013-2023)</h2>
-                <canvas id="rentTrendsChart"></canvas>
+                <canvas id="rentTrendsChart" role="img" aria-label="Line chart of median rent trends from 2013 to 2023 for Manhattan, Brooklyn, and Queens"></canvas>
             </div>
         </div>
 
         <div class="charts-row">
             <div class="chart-container">
                 <h2>Housing Type Distribution</h2>
-                <canvas id="housingTypeChart"></canvas>
+                <canvas id="housingTypeChart" role="img" aria-label="Doughnut chart of housing type distribution across NYC rental units"></canvas>
             </div>
             <div class="chart-container">
                 <h2>Households by Tenure</h2>
-                <canvas id="tenureChart"></canvas>
+                <canvas id="tenureChart" role="img" aria-label="Pie chart of households by tenure: renter-occupied, owner-occupied, and vacant"></canvas>
             </div>
         </div>
 

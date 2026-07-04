@@ -455,3 +455,33 @@ footer p {
 .gallery-item:nth-child(5) { animation-delay: 0.5s; }
 .gallery-item:nth-child(6) { animation-delay: 0.6s; }
 .gallery-item:nth-child(n+7) { animation-delay: 0.7s; }
+
+/* Focus Visibility */
+a:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    .gallery-item {
+        animation: none;
+    }
+
+    .gallery-item:hover {
+        transform: none;
+    }
+
+    .gallery-item:hover img {
+        transform: none;
+    }
+}

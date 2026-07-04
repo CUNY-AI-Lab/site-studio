@@ -114,7 +114,7 @@ body {
     margin-bottom: calc(var(--spacing-unit) * 10);
 }
 
-.sidebar h3 {
+.sidebar h2 {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.1em;
@@ -123,9 +123,10 @@ body {
     font-weight: 700;
     position: relative;
     padding-bottom: calc(var(--spacing-unit) * 2);
+    border-bottom: none;
 }
 
-.sidebar h3::after {
+.sidebar h2::after {
     content: '';
     position: absolute;
     bottom: 0;
@@ -352,7 +353,7 @@ h2::after {
         height: 1.5pt;
     }
 
-    .sidebar h3::after {
+    .sidebar h2::after {
         height: 1.5pt;
     }
 

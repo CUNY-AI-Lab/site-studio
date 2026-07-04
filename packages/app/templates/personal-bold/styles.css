@@ -12,6 +12,14 @@ body {
     color: #171717;
 }
 
+a:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
+    outline: 2px solid #7c3aed;
+    outline-offset: 3px;
+    border-radius: 2px;
+}
+
 .hero {
     background: #0a0a0a;
     color: white;

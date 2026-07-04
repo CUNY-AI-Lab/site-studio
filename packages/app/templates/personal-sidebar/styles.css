@@ -41,6 +41,31 @@ body {
     -moz-osx-font-smoothing: grayscale;
 }
 
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: var(--amber);
+    color: var(--midnight);
+    font-family: var(--geometric);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+}
+
+a:focus-visible,
+.nav-link:focus-visible,
+.social-links a:focus-visible {
+    outline: 2px solid var(--amber-bright);
+    outline-offset: 2px;
+}
+
 .layout {
     display: grid;
     grid-template-columns: 340px 1fr;
@@ -337,7 +362,7 @@ html {
     transform: translateY(-2px);
 }
 
-.publication h4 {
+.publication h3 {
     font-family: var(--serif);
     color: var(--text);
     font-size: 1.2rem;
@@ -438,6 +463,31 @@ html {
     background: rgba(245, 158, 11, 0.1);
     transform: translateY(-2px);
     box-shadow: 0 4px 16px rgba(245, 158, 11, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html {
+        scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-delay: 0ms !important;
+        animation-iteration-count: 1 !important;
+    }
+
+    section {
+        animation: none;
+    }
+
+    .research-card:hover,
+    .publication:hover,
+    .social-links a:hover {
+        transform: none;
+    }
 }
 
 @media (max-width: 1024px) {
