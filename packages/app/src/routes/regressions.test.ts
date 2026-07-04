@@ -259,10 +259,15 @@ describe("route regressions", () => {
     );
 
     expect(publishResponse.status).toBe(200);
-    await expect(publishResponse.json()).resolves.toMatchObject({
+    const publishBody = await publishResponse.json() as { success: boolean; url: string; a11yFindings: unknown[] };
+    expect(publishBody).toMatchObject({
       success: true,
       url: "http://site-studio.test/sites/user_test123/foo-2/"
     });
+    // The publish response includes an accessibility findings array; the bare
+    // "<h1>Beta</h1>" fragment has no <html>/<head>, so nothing to report.
+    expect(Array.isArray(publishBody.a11yFindings)).toBe(true);
+    expect(publishBody.a11yFindings).toEqual([]);
 
     const publishedSiteResponse = await app.request(
       "http://site-studio.test/sites/user_test123/foo-2/",

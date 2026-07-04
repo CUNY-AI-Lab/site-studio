@@ -5,7 +5,35 @@ import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { getUser } from "../lib/session";
+import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
+
+const MAX_PUBLISH_A11Y_FINDINGS = 50;
+
+/**
+ * Run the accessibility linter over the project's HTML after a successful
+ * publish. Read-only and best-effort: any failure yields an empty array so it
+ * can never fail the publish itself.
+ */
+async function collectPublishA11yFindings(
+  storage: R2ProjectStorage,
+  userId: string,
+  projectId: string
+): Promise<A11yFinding[]> {
+  try {
+    const files = await storage.listFiles(userId, projectId);
+    const htmlFiles: Record<string, string> = {};
+    for (const file of files) {
+      if (!/\.html?$/i.test(file.path)) {
+        continue;
+      }
+      htmlFiles[file.path] = await storage.readFile(userId, projectId, file.path);
+    }
+    return lintProject(htmlFiles).slice(0, MAX_PUBLISH_A11Y_FINDINGS);
+  } catch {
+    return [];
+  }
+}
 
 /**
  * A request "looks like a page navigation" when the visitor is expecting a
@@ -110,10 +138,13 @@ export function createPublishRouter() {
       slug
     });
 
+    const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
+
     return c.json({
       success: true,
       message: "Project published successfully",
-      url
+      url,
+      a11yFindings
     });
   });
 

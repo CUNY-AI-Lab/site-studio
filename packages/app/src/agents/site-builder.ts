@@ -9,6 +9,7 @@ import { createCailModel, resolveModelId } from "../lib/model";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
+import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
 import { R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
@@ -743,6 +744,44 @@ function createProjectTools(
           ok: true,
           path: filePath,
           title
+        };
+      }
+    }),
+    audit_accessibility: tool({
+      description: "Run a read-only accessibility and publish-readiness scan over the project's HTML files. Reports issues like missing alt text, filler alt text, placeholder images, missing titles or lang attributes, heading problems, unlabeled form controls, and unsafe target=\"_blank\" links. Does not change any files.",
+      inputSchema: z.object({
+        prefix: z.string().optional().describe("Optional directory prefix to scope the scan, such as pages/.")
+      }),
+      outputSchema: z.object({
+        count: z.number().describe("Total number of findings across the scanned HTML files."),
+        findings: z.array(z.object({
+          file: z.string().describe("Project-relative path of the file."),
+          line: z.number().nullable().describe("1-based line number where determinable, otherwise null."),
+          rule: z.string().describe("Stable kebab-case rule id, such as missing-alt."),
+          severity: z.enum(["error", "warning"]).describe("How serious the finding is."),
+          message: z.string().describe("Plain-language explanation of the issue and how to fix it.")
+        })).describe("The accessibility findings, in file and document order.")
+      }),
+      execute: async ({ prefix }) => {
+        const files = await storage.listFiles(
+          scope.userId,
+          scope.projectId,
+          prefix ? sanitizeFilePath(prefix) : ""
+        );
+        const htmlFiles: Record<string, string> = {};
+
+        for (const file of files) {
+          if (!/\.html?$/i.test(file.path)) {
+            continue;
+          }
+          htmlFiles[file.path] = await storage.readFile(scope.userId, scope.projectId, file.path);
+        }
+
+        const findings = lintProject(htmlFiles);
+
+        return {
+          count: findings.length,
+          findings
         };
       }
     }),
