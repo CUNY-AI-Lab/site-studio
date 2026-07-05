@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
 import type { Env } from "./types";
 import { authMiddleware } from "./lib/session";
-import { csrfProtect, getOrMintCsrfToken } from "./lib/csrf";
+import { csrfProtect, getOrMintCsrfToken, setCsrfCookie } from "./lib/csrf";
 import { createAgentRouter } from "./routes/agents";
 import { createFileRouter } from "./routes/files";
 import { createHandleRouter } from "./routes/handles";
@@ -56,12 +56,17 @@ app.use("/preview/:id", authMiddleware);
 // (rule 4) in routes/agents.ts.
 app.use("/api/*", csrfProtect);
 
-// Token issuance for the shared contract: GET /api/csrf → { token }, stable
-// for the session's life, minted lazily into KV.
+// Token issuance for the shared contract (INTEGRATION.md §3¾ rule 3): GET
+// /api/csrf mints/looks-up the stable per-session KV token and DELIVERS it via
+// a path-scoped Set-Cookie (setCsrfCookie) — never in the response body. A body
+// token would be readable by any same-origin sibling or /sites/ script that
+// fetches this endpoint with the ambient session cookie, defeating rule 3. The
+// body is 204 with no token anywhere.
 app.get("/api/csrf", async (c) => {
   const user = c.get("user");
   const token = await getOrMintCsrfToken(c.env.SESSION_KV, user.id);
-  return c.json({ token });
+  setCsrfCookie(c, token);
+  return c.body(null, 204);
 });
 
 app.route("/", createHealthRouter());

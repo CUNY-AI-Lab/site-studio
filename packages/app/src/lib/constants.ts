@@ -1,4 +1,13 @@
 export const SESSION_COOKIE_NAME = "site-studio-session";
+/**
+ * Delivery cookie for the anti-CSRF token (INTEGRATION.md §3¾ rule 3). The
+ * KV-stored per-subject token is handed to page JS via this cookie instead of
+ * a response body, so a same-origin sibling/attacker script cannot read it out
+ * of a fetch response. NOT HttpOnly (page JS must read it), Secure, SameSite=Lax,
+ * and Path-scoped by CSRF_COOKIE_PATH so siblings/published-site JS under other
+ * prefixes never see it. See lib/csrf.ts setCsrfCookie().
+ */
+export const CSRF_COOKIE_NAME = "cail_csrf_sitestudio";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
 /**

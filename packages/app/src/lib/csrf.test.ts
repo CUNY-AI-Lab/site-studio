@@ -8,6 +8,7 @@ import {
   csrfProtect,
   getCsrfToken,
   getOrMintCsrfToken,
+  setCsrfCookie,
   timingSafeEqual,
   verifyWsUpgrade,
   type CsrfRequestFacts
@@ -104,6 +105,39 @@ describe("token mint/lookup", () => {
     const a = await getOrMintCsrfToken(kv, "cail-a");
     const b = await getOrMintCsrfToken(kv, "user_anon");
     expect(a).not.toBe(b);
+  });
+});
+
+describe("setCsrfCookie (rule 3 delivery)", () => {
+  async function setCookieHeader(url: string, csrfCookiePath?: string): Promise<string> {
+    const app = new Hono<{ Bindings: Env }>();
+    app.get("*", (c) => {
+      setCsrfCookie(c, TOKEN);
+      return c.body(null, 204);
+    });
+    const env = { CSRF_COOKIE_PATH: csrfCookiePath } as unknown as Env;
+    const res = await app.request(url, {}, env);
+    return res.headers.get("set-cookie") || "";
+  }
+
+  it("emits Secure + SameSite=Lax + Path=/, NOT HttpOnly, over https", async () => {
+    const setCookie = await setCookieHeader("https://site-studio.example/x");
+    expect(setCookie).toContain(`cail_csrf_sitestudio=${TOKEN}`);
+    expect(setCookie).toContain("Secure");
+    expect(setCookie).toContain("SameSite=Lax");
+    expect(setCookie).toContain("Path=/");
+    expect(setCookie).not.toContain("HttpOnly");
+  });
+
+  it("honors CSRF_COOKIE_PATH for a shared-host path prefix", async () => {
+    const setCookie = await setCookieHeader("https://tools.example/site-studio/x", "/site-studio");
+    expect(setCookie).toContain("Path=/site-studio");
+  });
+
+  it("drops Secure on plain http (local dev), matching the session cookie", async () => {
+    const setCookie = await setCookieHeader("http://localhost:8792/x");
+    expect(setCookie).toContain("cail_csrf_sitestudio=");
+    expect(setCookie).not.toContain("Secure");
   });
 });
 

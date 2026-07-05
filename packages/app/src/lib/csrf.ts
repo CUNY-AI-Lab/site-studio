@@ -1,6 +1,8 @@
 import { createMiddleware } from "hono/factory";
+import { setCookie } from "hono/cookie";
+import type { Context, Env as HonoEnv } from "hono";
 import type { Env, User } from "../types";
-import { SESSION_TTL_SECONDS } from "./constants";
+import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 
 /**
  * CSRF protection per docs/INTEGRATION.md §3¾ ("CSRF for gated tools").
@@ -72,6 +74,39 @@ export async function getOrMintCsrfToken(kv: KVNamespace, userId: string): Promi
   const token = mintToken();
   await kv.put(csrfTokenKey(userId), token, { expirationTtl: SESSION_TTL_SECONDS });
   return token;
+}
+
+/**
+ * Deliver the KV token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
+ * "Delivery"). The token must NEVER appear in a response body — a same-origin
+ * sibling or student-authored /sites/ script could fetch GET /api/csrf with the
+ * ambient session cookie and read a JSON token straight out of the body,
+ * defeating rule 3. A path-scoped cookie is the one same-origin-proof channel:
+ * browsers only expose a cookie to pages under its Path.
+ *
+ * Attributes:
+ *  - name `cail_csrf_sitestudio`, value = the KV token.
+ *  - Path = CSRF_COOKIE_PATH (default "/"). At a shared-host launch set this to
+ *    the tool's own prefix so siblings/published-site JS can't read the cookie.
+ *  - Secure (dev-aware, matching lib/session.ts: only over https), SameSite=Lax
+ *    (per contract — Lax here, not the session cookie's Strict, so a top-level
+ *    navigation into the SPA still carries it), and NOT HttpOnly so page JS can
+ *    read it via document.cookie. This is stateful double-submit: the server
+ *    still verifies the request header against the KV token, so a readable
+ *    cookie does not weaken the check — a sibling that plants its own
+ *    cookie+header pair still can't produce the real KV token.
+ */
+export function setCsrfCookie<E extends HonoEnv & { Bindings: Env }>(
+  c: Context<E>,
+  token: string
+): void {
+  setCookie(c, CSRF_COOKIE_NAME, token, {
+    httpOnly: false,
+    maxAge: SESSION_TTL_SECONDS,
+    path: c.env.CSRF_COOKIE_PATH || "/",
+    sameSite: "Lax",
+    secure: new URL(c.req.url).protocol === "https:"
+  });
 }
 
 /**

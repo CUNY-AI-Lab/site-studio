@@ -73,16 +73,19 @@ let fetchMock: ReturnType<typeof vi.fn>;
 describe('AgentChat', () => {
 	beforeEach(() => {
 		FakeWebSocket.instances = [];
-		// The csrf client caches its token in module state; clear it so each test
-		// re-fetches against the fresh fetch stub.
+		// The csrf client caches its token in module state and reads it from the
+		// delivery cookie; clear both so each test re-derives against the stub.
 		invalidateCsrfToken();
+		document.cookie = 'cail_csrf_sitestudio=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 		vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
 		// The component fetches a CSRF token before connecting, and loadChatHistory
-		// hits GET /get-messages. Serve a token for /api/csrf, empty history otherwise.
+		// hits GET /get-messages. The token is delivered via Set-Cookie (rule 3),
+		// so the /api/csrf stub sets document.cookie; empty history otherwise.
 		fetchMock = vi.fn(async (input: RequestInfo | URL) => {
 			const url = typeof input === 'string' ? input : input.toString();
 			if (url.endsWith('/api/csrf')) {
-				return new Response(JSON.stringify({ token: 'test-csrf-token' }), { status: 200 });
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
 			}
 			return new Response('[]', { status: 200 });
 		});
@@ -91,6 +94,7 @@ describe('AgentChat', () => {
 
 	afterEach(() => {
 		invalidateCsrfToken();
+		document.cookie = 'cail_csrf_sitestudio=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 		vi.unstubAllGlobals();
 	});
 

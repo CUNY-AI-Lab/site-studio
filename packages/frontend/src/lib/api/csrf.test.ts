@@ -4,11 +4,16 @@ import { getCsrfToken, invalidateCsrfToken, csrfFetch } from './csrf';
 // resolvePath depends on $app/paths (aliased to a test stub returning base '').
 // So /api/csrf resolves to '/api/csrf' here.
 
-function tokenResponse(token: string): Response {
-	return new Response(JSON.stringify({ token }), {
-		status: 200,
-		headers: { 'Content-Type': 'application/json' }
-	});
+const CSRF_COOKIE = 'cail_csrf_sitestudio';
+
+/** Overwrite document.cookie so the client reads exactly this token (or none). */
+function setCookieToken(token: string | null): void {
+	// jsdom's document.cookie is a real accessor; clearing it needs an expiry.
+	if (token === null) {
+		document.cookie = `${CSRF_COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+		return;
+	}
+	document.cookie = `${CSRF_COOKIE}=${token}`;
 }
 
 function csrfFailure(): Response {
@@ -27,8 +32,10 @@ function isTokenFetch(call: unknown[]): boolean {
 
 describe('csrf token client', () => {
 	beforeEach(() => {
-		// Reset module cache between tests so caching assertions are isolated.
+		// Reset module cache and the cookie between tests so caching/cookie
+		// assertions are isolated.
 		invalidateCsrfToken();
+		setCookieToken(null);
 		fetchMock = vi.fn();
 		vi.stubGlobal('fetch', fetchMock);
 	});
@@ -36,10 +43,24 @@ describe('csrf token client', () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
 		invalidateCsrfToken();
+		setCookieToken(null);
 	});
 
-	it('caches the token: two getCsrfToken calls make one network request', async () => {
-		fetchMock.mockResolvedValue(tokenResponse('tok-1'));
+	it('reads the token from the cookie without any network request when present', async () => {
+		setCookieToken('tok-cookie');
+
+		const token = await getCsrfToken();
+
+		expect(token).toBe('tok-cookie');
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('caches the token: two getCsrfToken calls make at most one network request', async () => {
+		// Cookie absent → the client hits /api/csrf, which sets the cookie.
+		fetchMock.mockImplementation(async () => {
+			setCookieToken('tok-1');
+			return new Response(null, { status: 204 });
+		});
 
 		const first = await getCsrfToken();
 		const second = await getCsrfToken();
@@ -63,7 +84,10 @@ describe('csrf token client', () => {
 		// Both callers are waiting on the same in-flight promise.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 
-		resolveFetch(tokenResponse('tok-concurrent'));
+		// The server delivers the token via Set-Cookie; simulate by setting it
+		// before the fetch resolves.
+		setCookieToken('tok-concurrent');
+		resolveFetch(new Response(null, { status: 204 }));
 		const [a, b] = await Promise.all([p1, p2]);
 
 		expect(a).toBe('tok-concurrent');
@@ -72,12 +96,8 @@ describe('csrf token client', () => {
 	});
 
 	it('csrfFetch sets the X-CAIL-CSRF header on a POST', async () => {
-		fetchMock.mockImplementation(async (input: unknown) => {
-			if (typeof input === 'string' && input.endsWith('/api/csrf')) {
-				return tokenResponse('tok-post');
-			}
-			return new Response('{}', { status: 200 });
-		});
+		setCookieToken('tok-post');
+		fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
 
 		await csrfFetch('/api/projects', { method: 'POST', body: '{}' });
 
@@ -90,6 +110,7 @@ describe('csrf token client', () => {
 	});
 
 	it('csrfFetch does NOT set the header on a GET and passes through', async () => {
+		setCookieToken('tok-get');
 		fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
 
 		await csrfFetch('/api/projects', { method: 'GET' });
@@ -103,6 +124,7 @@ describe('csrf token client', () => {
 	});
 
 	it('csrfFetch treats a method-less request as GET (no header)', async () => {
+		setCookieToken('tok-x');
 		fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
 
 		await csrfFetch('/api/projects');
@@ -113,13 +135,18 @@ describe('csrf token client', () => {
 		expect(headers.has('X-CAIL-CSRF')).toBe(false);
 	});
 
-	it('on csrf_verification_failed 403: invalidates, refetches token, retries exactly once', async () => {
+	it('on csrf_verification_failed 403: re-fetches /api/csrf, re-reads the cookie, retries once', async () => {
+		// Seed a stale token so the first attempt uses it.
+		setCookieToken('tok-stale');
+
 		let tokenFetches = 0;
 		let requestAttempts = 0;
 		fetchMock.mockImplementation(async (input: unknown) => {
 			if (typeof input === 'string' && input.endsWith('/api/csrf')) {
 				tokenFetches += 1;
-				return tokenResponse(`tok-${tokenFetches}`);
+				// The refresh Set-Cookie delivers a fresh token.
+				setCookieToken('tok-fresh');
+				return new Response(null, { status: 204 });
 			}
 			requestAttempts += 1;
 			// First attempt gets a CSRF rejection; the retry succeeds.
@@ -129,22 +156,25 @@ describe('csrf token client', () => {
 		const response = await csrfFetch('/api/projects', { method: 'POST', body: '{}' });
 
 		expect(response.status).toBe(200);
-		// Two token fetches (initial + refetch) and two request attempts (original + one retry).
-		expect(tokenFetches).toBe(2);
+		// One refresh fetch and two request attempts (original + one retry).
+		expect(tokenFetches).toBe(1);
 		expect(requestAttempts).toBe(2);
 
-		// The retry used the fresh token.
+		// The retry used the fresh token read from the refreshed cookie.
 		const requestCalls = fetchMock.mock.calls.filter((c) => !isTokenFetch(c));
 		expect(requestCalls).toHaveLength(2);
+		const firstHeaders = new Headers((requestCalls[0][1] as RequestInit).headers);
+		expect(firstHeaders.get('X-CAIL-CSRF')).toBe('tok-stale');
 		const retryHeaders = new Headers((requestCalls[1][1] as RequestInit).headers);
-		expect(retryHeaders.get('X-CAIL-CSRF')).toBe('tok-2');
+		expect(retryHeaders.get('X-CAIL-CSRF')).toBe('tok-fresh');
 	});
 
 	it('does not retry on a non-CSRF 403', async () => {
+		setCookieToken('tok-x');
 		let requestAttempts = 0;
 		fetchMock.mockImplementation(async (input: unknown) => {
 			if (typeof input === 'string' && input.endsWith('/api/csrf')) {
-				return tokenResponse('tok-x');
+				return new Response(null, { status: 204 });
 			}
 			requestAttempts += 1;
 			return new Response(JSON.stringify({ error: 'forbidden' }), {

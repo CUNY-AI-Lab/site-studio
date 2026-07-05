@@ -48,6 +48,34 @@ function sessionCookie(res: Response): string {
   return `site-studio-session=${match[1]}`;
 }
 
+/** The CSRF token now delivered via the cail_csrf_sitestudio Set-Cookie. */
+function csrfCookieToken(res: Response): string {
+  const setCookie = res.headers.get("set-cookie") || "";
+  const match = /cail_csrf_sitestudio=([^;]+)/.exec(setCookie);
+  if (!match) {
+    throw new Error(`No csrf cookie in: ${setCookie}`);
+  }
+  return match[1];
+}
+
+/**
+ * The csrf cookie's own segment (attrs up to the next cookie), so attribute
+ * assertions don't accidentally match the session cookie's attrs. Set-Cookie
+ * combines multiple cookies comma-separated in this test harness.
+ */
+function csrfCookieSegment(res: Response): string {
+  const setCookie = res.headers.get("set-cookie") || "";
+  const start = setCookie.indexOf("cail_csrf_sitestudio=");
+  if (start === -1) {
+    throw new Error(`No csrf cookie in: ${setCookie}`);
+  }
+  const rest = setCookie.slice(start);
+  // The next cookie begins after ", <name>=" — split on the comma that
+  // precedes another cookie name (attrs never contain "name=").
+  const nextCookie = /,\s*[^;,\s]+=/.exec(rest);
+  return nextCookie ? rest.slice(0, nextCookie.index) : rest;
+}
+
 beforeEach(() => {
   kv = createMockKV();
 });
@@ -99,7 +127,7 @@ describe("CORS allowlist (rule 5)", () => {
 describe("session cookie posture (rule 7)", () => {
   it("pins HttpOnly + Secure + SameSite=Strict on the session cookie", async () => {
     const res = await app.request(`${BASE}/api/csrf`, {}, createEnv());
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(204);
 
     const setCookie = res.headers.get("set-cookie") || "";
     expect(setCookie).toContain("site-studio-session=");
@@ -109,34 +137,48 @@ describe("session cookie posture (rule 7)", () => {
   });
 });
 
-describe("GET /api/csrf", () => {
-  it("returns a stable 64-hex token for the same session", async () => {
+describe("GET /api/csrf (rule 3 cookie delivery)", () => {
+  it("delivers the token via a path-scoped, non-HttpOnly Set-Cookie and NOT in the body", async () => {
+    const res = await app.request(`${BASE}/api/csrf`, {}, createEnv());
+    // No token in the body: 204, empty body.
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+
+    const segment = csrfCookieSegment(res);
+    expect(segment).toContain("cail_csrf_sitestudio=");
+    // Secure + SameSite=Lax + Path present; NOT HttpOnly (page JS must read it).
+    expect(segment).toContain("Secure");
+    expect(segment).toContain("SameSite=Lax");
+    expect(segment).toContain("Path=/");
+    expect(segment).not.toContain("HttpOnly");
+
+    expect(csrfCookieToken(res)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("delivers a stable token for the same session", async () => {
     const first = await app.request(`${BASE}/api/csrf`, {}, createEnv());
-    expect(first.status).toBe(200);
-    const { token } = (await first.json()) as { token: string };
+    const token = csrfCookieToken(first);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
 
     const cookie = sessionCookie(first);
     const second = await app.request(`${BASE}/api/csrf`, { headers: { Cookie: cookie } }, createEnv());
-    await expect(second.json()).resolves.toEqual({ token });
+    expect(csrfCookieToken(second)).toBe(token);
   });
 
-  it("returns different tokens for different sessions", async () => {
+  it("delivers different tokens for different sessions", async () => {
     const a = await app.request(`${BASE}/api/csrf`, {}, createEnv());
     const b = await app.request(`${BASE}/api/csrf`, {}, createEnv());
-
-    const { token: tokenA } = (await a.json()) as { token: string };
-    const { token: tokenB } = (await b.json()) as { token: string };
-    expect(tokenA).not.toBe(tokenB);
+    expect(csrfCookieToken(a)).not.toBe(csrfCookieToken(b));
   });
 });
 
 describe("full-chain CSRF enforcement through the real middleware stack", () => {
   it("403s a session-authenticated mutation without the token, accepts it with token + same-origin", async () => {
-    // Establish a session and its token exactly as the frontend does.
+    // Establish a session and its token exactly as the frontend does: read the
+    // token out of the delivery cookie, not a response body.
     const bootstrap = await app.request(`${BASE}/api/csrf`, {}, createEnv());
     const cookie = sessionCookie(bootstrap);
-    const { token } = (await bootstrap.json()) as { token: string };
+    const token = csrfCookieToken(bootstrap);
 
     const blocked = await app.request(
       `${BASE}/api/projects`,
