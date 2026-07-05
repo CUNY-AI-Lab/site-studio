@@ -1,6 +1,7 @@
-<script lang="ts">
+<script module lang="ts">
 	import { marked } from 'marked';
 	import { markedHighlight } from 'marked-highlight';
+	import DOMPurify from 'dompurify';
 	import hljs from 'highlight.js/lib/core';
 	import javascript from 'highlight.js/lib/languages/javascript';
 	import typescript from 'highlight.js/lib/languages/typescript';
@@ -10,7 +11,12 @@
 	import json from 'highlight.js/lib/languages/json';
 	import bash from 'highlight.js/lib/languages/bash';
 
-	// Register languages
+	// One-time configuration of the module-global `marked` singleton. This lives in
+	// a `<script module>` block so it runs exactly ONCE per module load rather than
+	// on every component instantiation. Registering the highlight extension and
+	// language grammars per-instance would stack them on the shared singleton, so a
+	// second mounted message would re-highlight already-highlighted HTML (producing
+	// garbled, multiply-escaped output).
 	hljs.registerLanguage('javascript', javascript);
 	hljs.registerLanguage('typescript', typescript);
 	hljs.registerLanguage('python', python);
@@ -19,6 +25,95 @@
 	hljs.registerLanguage('json', json);
 	hljs.registerLanguage('bash', bash);
 
+	marked.use(
+		markedHighlight({
+			langPrefix: 'hljs language-',
+			highlight(code: string, lang: string) {
+				const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+				return hljs.highlight(code, { language }).value;
+			}
+		})
+	);
+
+	marked.setOptions({
+		breaks: true,
+		gfm: true
+	});
+
+	// Sanitizer configuration. Chat content (assistant text, user text, and — via
+	// the agent — file/PDF/search-result text) is untrusted: an attacker can plant
+	// markup in a file the agent later echoes into chat. Because this renders in the
+	// top-level app origin (session cookie, credentialed /api/* calls), any raw
+	// <script>, on* handler, or javascript:/data: URI would be app-origin XSS.
+	//
+	// We run marked's HTML output through DOMPurify with an allowlist limited to the
+	// formatting tags markdown produces. Everything else (script/iframe/object/embed/
+	// form/style, event-handler attributes, dangerous URI schemes) is stripped.
+	const SANITIZE_CONFIG = {
+		ALLOWED_TAGS: [
+			'p', 'br', 'hr', 'span', 'div',
+			'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+			'strong', 'b', 'em', 'i', 'u', 's', 'del', 'ins', 'mark', 'sub', 'sup', 'small',
+			'ul', 'ol', 'li',
+			'blockquote',
+			'pre', 'code',
+			'a',
+			'img',
+			'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col'
+		],
+		ALLOWED_ATTR: ['href', 'title', 'src', 'alt', 'class', 'align', 'colspan', 'rowspan'],
+		// URI-scheme safety is left to DOMPurify's audited default ALLOWED_URI_REGEXP,
+		// which permits http(s), mailto, tel, relative links, and safe data:image/*
+		// while blocking javascript:, vbscript:, and data:text/html. A hand-rolled
+		// regexp here is easy to get wrong (an over-broad one let data:text/html
+		// through), so we intentionally do NOT override it.
+		FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'svg', 'math'],
+		FORBID_ATTR: ['style'],
+		ALLOW_DATA_ATTR: false
+	};
+
+	// Harden anchors: external-looking links open with noopener/noreferrer so a
+	// rendered link can't reach back into window.opener. Only runs in the browser
+	// (DOMPurify hooks require a DOM); harmless if it never registers under SSR.
+	let hookRegistered = false;
+	function ensureHook() {
+		if (hookRegistered || typeof window === 'undefined') return;
+		DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+			if (node.tagName === 'A' && node.hasAttribute('href')) {
+				node.setAttribute('rel', 'noopener noreferrer');
+				if (/^https?:/i.test(node.getAttribute('href') ?? '')) {
+					node.setAttribute('target', '_blank');
+				}
+			}
+		});
+		hookRegistered = true;
+	}
+
+	// Escape fallback for any non-browser (SSR/prerender) render path: emit inert
+	// text rather than trusting unsanitized markup where DOMPurify has no DOM.
+	function escapeHtml(value: string): string {
+		return value
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
+	// Turn untrusted markdown into sanitized, inert HTML. Kept at module scope so it
+	// closes over the shared config/hook without re-creating them per instance.
+	function renderMarkdown(content: string): string {
+		const rawHtml = marked.parse(content) as string;
+		if (typeof window === 'undefined') {
+			// No DOM available (SSR/prerender): never emit unsanitized HTML.
+			return escapeHtml(content);
+		}
+		ensureHook();
+		return DOMPurify.sanitize(rawHtml, SANITIZE_CONFIG);
+	}
+</script>
+
+<script lang="ts">
 	let {
 		content,
 		role = 'assistant'
@@ -27,24 +122,7 @@
 		role?: 'user' | 'assistant';
 	} = $props();
 
-	// Configure marked with syntax highlighting
-	marked.use(
-		markedHighlight({
-			langPrefix: 'hljs language-',
-			highlight(code, lang) {
-				const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-				return hljs.highlight(code, { language }).value;
-			}
-		})
-	);
-
-	// Configure marked options
-	marked.setOptions({
-		breaks: true,
-		gfm: true
-	});
-
-	let renderedContent = $derived(marked.parse(content));
+	let renderedContent = $derived(renderMarkdown(content));
 </script>
 
 <div class="message-content {role}">
