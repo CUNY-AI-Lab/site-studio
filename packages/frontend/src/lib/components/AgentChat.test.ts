@@ -3,6 +3,7 @@ import { flushSync, tick } from 'svelte';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import AgentChat from './AgentChat.svelte';
 import { AgentMessageType, type UIChatMessage } from '$lib/agents/chat';
+import { invalidateCsrfToken } from '$lib/api/csrf';
 
 /**
  * A scriptable fake WebSocket. The component calls `new WebSocket(url)` directly
@@ -72,13 +73,24 @@ let fetchMock: ReturnType<typeof vi.fn>;
 describe('AgentChat', () => {
 	beforeEach(() => {
 		FakeWebSocket.instances = [];
+		// The csrf client caches its token in module state; clear it so each test
+		// re-fetches against the fresh fetch stub.
+		invalidateCsrfToken();
 		vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
-		// loadChatHistory hits GET /get-messages; default to an empty history.
-		fetchMock = vi.fn(async () => new Response('[]', { status: 200 }));
+		// The component fetches a CSRF token before connecting, and loadChatHistory
+		// hits GET /get-messages. Serve a token for /api/csrf, empty history otherwise.
+		fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				return new Response(JSON.stringify({ token: 'test-csrf-token' }), { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
 		vi.stubGlobal('fetch', fetchMock);
 	});
 
 	afterEach(() => {
+		invalidateCsrfToken();
 		vi.unstubAllGlobals();
 	});
 
@@ -88,10 +100,13 @@ describe('AgentChat', () => {
 		return { onUpdate };
 	}
 
-	it('opens a WebSocket to the site-builder path for the project', async () => {
+	it('opens a WebSocket to the site-builder path with the csrf token param', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
-		expect(FakeWebSocket.last().url).toContain('/api/agents/site-builder/proj1');
+		const url = FakeWebSocket.last().url;
+		expect(url).toContain('/api/agents/site-builder/proj1');
+		// The token is appended as a query param (parsed via URLSearchParams).
+		expect(new URL(url).searchParams.get('csrf')).toBe('test-csrf-token');
 	});
 
 	it('populates history from an incoming CF_AGENT_CHAT_MESSAGES message', async () => {

@@ -1,6 +1,7 @@
 import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
 import type { Env, SiteBuilderAgentProps } from "../types";
+import { CSRF_ERROR_BODY, getCsrfToken, verifyWsUpgrade } from "../lib/csrf";
 import { jsonError } from "../lib/http";
 import { getCailIdentityJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
@@ -47,6 +48,50 @@ export function createAgentRouter() {
   }
 
   async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
+    // Rule 4 (docs/INTEGRATION.md §3¾): origin-check + token-gate WebSocket
+    // upgrades BEFORE accepting. The browser enforces no same-origin policy on
+    // WS handshakes, and the identity JWT is captured once at accept with no
+    // second chance, so this boundary is the only place the check can live.
+    //
+    // Judgment call on "gate the first state-changing WS message on your CSRF
+    // token": the WS message protocol is owned by @cloudflare/ai-chat, so we
+    // cannot inject a per-message token check without forking it. Token
+    // possession is instead proven at accept — the `?csrf=` param must match
+    // the session token before the upgrade is forwarded — which satisfies the
+    // contract at the connection boundary: no state-changing message can exist
+    // on the wire before the token has been verified.
+    const upgrade = c.req.header("Upgrade") ?? "";
+    if (upgrade.toLowerCase() === "websocket") {
+      const user = getUser(c);
+      const url = new URL(c.req.url);
+      const accepted = verifyWsUpgrade({
+        // Browsers always send Origin on WS upgrades; a present-but-foreign
+        // Origin fails even with a valid token. An absent Origin (non-browser
+        // test client) is accepted only when the token itself is valid.
+        origin: c.req.header("Origin") ?? null,
+        requestOrigin: url.origin,
+        appPublicDomain: c.env.APP_PUBLIC_DOMAIN,
+        presentedToken: url.searchParams.get("csrf"),
+        expectedToken: await getCsrfToken(c.env.SESSION_KV, user.id)
+      });
+
+      if (!accepted) {
+        return c.json(CSRF_ERROR_BODY, 403);
+      }
+
+      const stub = await loadAgentStub(c);
+      if (stub instanceof Response) {
+        return stub;
+      }
+
+      // Strip the csrf param before forwarding so the token never reaches the
+      // Durable Object (or its logs/history).
+      url.searchParams.delete("csrf");
+      return stub.fetch(new Request(url.toString(), c.req.raw));
+    }
+
+    // Non-WS requests: mutations (POSTs) to this route are covered by the
+    // app-level csrfProtect middleware in app.ts like every other /api route.
     const stub = await loadAgentStub(c);
     if (stub instanceof Response) {
       return stub;

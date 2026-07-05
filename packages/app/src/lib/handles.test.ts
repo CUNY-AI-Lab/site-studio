@@ -13,6 +13,8 @@ import {
   RESERVED_HANDLES
 } from "./handles";
 import { createHandleRouter } from "../routes/handles";
+import { csrfProtect } from "./csrf";
+import { createMockKV, mintCsrfSession, type CsrfSession } from "./test-utils";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts / migration.test.ts).
 function createMockBucket() {
@@ -155,15 +157,23 @@ describe("claimHandle", () => {
 describe("createHandleRouter", () => {
   let bucket: ReturnType<typeof createMockBucket>;
   let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
-  const env = (b: R2Bucket) => ({ SITE_STUDIO_BUCKET: b }) as unknown as Env;
+  let kv: ReturnType<typeof createMockKV>;
+  let csrf: CsrfSession;
+  const env = (b: R2Bucket) => ({ SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
+  // Every POST carries the session CSRF token + same-origin posture, matching
+  // production where csrfProtect guards all /api mutations (lib/csrf.ts).
+  const postHeaders = () => ({ "Content-Type": "application/json", ...csrf.headers });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     bucket = createMockBucket();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, "cail-me");
     app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: "cail-me" });
       await next();
     });
+    app.use("*", csrfProtect);
     app.route("/", createHandleRouter());
   });
 
@@ -187,7 +197,7 @@ describe("createHandleRouter", () => {
   it("POST /api/handle claims and is idempotent; 409 on a different handle", async () => {
     const claim = await app.request(
       "/api/handle",
-      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: { "Content-Type": "application/json" } },
+      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: postHeaders() },
       env(bucket)
     );
     expect(claim.status).toBe(200);
@@ -195,7 +205,7 @@ describe("createHandleRouter", () => {
 
     const again = await app.request(
       "/api/handle",
-      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: { "Content-Type": "application/json" } },
+      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: postHeaders() },
       env(bucket)
     );
     expect(again.status).toBe(200);
@@ -203,7 +213,7 @@ describe("createHandleRouter", () => {
 
     const other = await app.request(
       "/api/handle",
-      { method: "POST", body: JSON.stringify({ handle: "another-one" }), headers: { "Content-Type": "application/json" } },
+      { method: "POST", body: JSON.stringify({ handle: "another-one" }), headers: postHeaders() },
       env(bucket)
     );
     expect(other.status).toBe(409);
@@ -213,7 +223,7 @@ describe("createHandleRouter", () => {
     await claimHandle(bucket, "cail-other", "jane-rivera");
     const res = await app.request(
       "/api/handle",
-      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: { "Content-Type": "application/json" } },
+      { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: postHeaders() },
       env(bucket)
     );
     expect(res.status).toBe(409);
@@ -223,7 +233,7 @@ describe("createHandleRouter", () => {
     const post = (handle: string) =>
       app.request(
         "/api/handle",
-        { method: "POST", body: JSON.stringify({ handle }), headers: { "Content-Type": "application/json" } },
+        { method: "POST", body: JSON.stringify({ handle }), headers: postHeaders() },
         env(bucket)
       );
 

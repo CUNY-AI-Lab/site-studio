@@ -4,6 +4,7 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
 	import { getErrorMessage } from '$lib/api/errors';
+	import { csrfFetch, getCsrfToken } from '$lib/api/csrf';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
@@ -571,7 +572,21 @@
 			return socketPromise;
 		}
 
-		const nextSocket = new WebSocket(resolveWebSocketPath(`/api/agents/site-builder/${targetProjectId}`));
+		const csrf = await getCsrfToken();
+
+		// Awaiting the token yields the event loop, so a concurrent ensureSocket()
+		// call may have already started or opened a socket. Re-check before creating
+		// a second one.
+		if (socket && socket.readyState === WebSocket.OPEN) {
+			return socket;
+		}
+		if (socketPromise) {
+			return socketPromise;
+		}
+
+		const nextSocket = new WebSocket(
+			resolveWebSocketPath(`/api/agents/site-builder/${targetProjectId}`, { csrf })
+		);
 		socket = nextSocket;
 
 		nextSocket.addEventListener('message', handleSocketMessage);
@@ -858,9 +873,8 @@
 		const formData = new FormData();
 		formData.append('file', file);
 
-		const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
+		const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/upload`), {
 			method: 'POST',
-			credentials: 'include',
 			body: formData
 		});
 

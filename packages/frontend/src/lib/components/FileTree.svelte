@@ -12,6 +12,7 @@
 <script lang="ts">
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
+	import { csrfFetch } from '$lib/api/csrf';
 	import { toast } from '$lib/toast.svelte';
 
 	let {
@@ -40,9 +41,8 @@
 			const formData = new FormData();
 			formData.append('file', file);
 
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/upload`), {
+			const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/upload`), {
 				method: 'POST',
-				credentials: 'include',
 				body: formData
 			});
 
@@ -89,9 +89,8 @@
 		if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
 
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`), {
-				method: 'DELETE',
-				credentials: 'include'
+			const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/files?path=${encodeURIComponent(filePath)}`), {
+				method: 'DELETE'
 			});
 
 			if (!response.ok) {
@@ -119,10 +118,9 @@
 			pathParts[pathParts.length - 1] = newName;
 			const newPath = pathParts.join('/');
 
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/files/rename`), {
+			const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/files/rename`), {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
 				body: JSON.stringify({ oldPath: filePath, newPath })
 			});
 

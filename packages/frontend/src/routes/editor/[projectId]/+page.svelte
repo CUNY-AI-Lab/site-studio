@@ -12,6 +12,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
+	import { csrfFetch } from '$lib/api/csrf';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
@@ -242,10 +243,9 @@
 		const { projectId: targetProjectId, filePath, content } = snapshot;
 
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
+			const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
 				body: JSON.stringify({
 					path: filePath,
 					content

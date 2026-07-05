@@ -3,6 +3,8 @@
  * Corresponds to backend ApiError class for consistent error handling
  */
 
+import { csrfFetch } from './csrf';
+
 export interface ValidationDetail {
 	path: string;
 	message: string;
@@ -105,15 +107,15 @@ export async function handleApiError(response: Response): Promise<never> {
 /**
  * Wrapper for fetch that automatically handles errors
  * Returns the parsed JSON response or throws ApiError
+ *
+ * Routes through `csrfFetch` so state-changing methods carry the anti-CSRF
+ * header (CAIL INTEGRATION.md §3¾); GET/HEAD pass through without it.
  */
 export async function apiFetch<T = any>(
 	url: string,
 	options?: RequestInit
 ): Promise<T> {
-	const response = await fetch(url, {
-		credentials: 'include',
-		...options,
-	});
+	const response = await csrfFetch(url, options);
 
 	if (!response.ok) {
 		await handleApiError(response);

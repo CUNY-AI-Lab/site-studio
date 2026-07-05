@@ -207,6 +207,12 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     // The session id is the subject itself: ownership follows identity, not a
     // random cookie. We still set a cookie so same-browser requests that briefly
     // lack the gate-injected header stay bound to the same subject.
+    //
+    // Cookie posture (INTEGRATION.md §3¾ rule 7): HttpOnly + Secure +
+    // SameSite=Strict, pinned by test. Path stays "/" because this worker owns
+    // its whole origin on the Workers deployment; a tools.ailab path-prefix
+    // deployment (siblings sharing the host) would want Path scoped under the
+    // tool's prefix so sibling tools can't read or clobber it.
     setCookie(c, SESSION_COOKIE_NAME, subject, {
       httpOnly: true,
       maxAge: SESSION_TTL_SECONDS,

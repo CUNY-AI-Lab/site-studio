@@ -1,5 +1,6 @@
 import { resolvePath } from '$lib/utils/paths';
 import { apiFetch, handleApiError } from './errors';
+import { csrfFetch } from './csrf';
 
 const API_BASE = resolvePath('/api');
 
@@ -131,9 +132,8 @@ export async function uploadFile(projectId: string, file: File): Promise<string>
 	const formData = new FormData();
 	formData.append('file', file);
 
-	const response = await fetch(`${API_BASE}/projects/${projectId}/upload`, {
+	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/upload`, {
 		method: 'POST',
-		credentials: 'include',
 		body: formData,
 	});
 
@@ -155,9 +155,8 @@ export async function uploadProjectImage(projectId: string, file: File): Promise
 	formData.append('file', file);
 	formData.append('dir', 'images');
 
-	const response = await fetch(`${API_BASE}/projects/${projectId}/upload`, {
+	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/upload`, {
 		method: 'POST',
-		credentials: 'include',
 		body: formData,
 	});
 
@@ -230,9 +229,8 @@ export async function uploadThumbnail(projectId: string, blob: Blob): Promise<vo
 	const form = new FormData();
 	form.append('image', blob, 'thumbnail.png');
 
-	const response = await fetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
+	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
 		method: 'POST',
-		credentials: 'include',
 		body: form,
 	});
 
@@ -277,9 +275,8 @@ export type PublishResult = PublishSuccess | PublishNeedsHandle;
  * only unexpected failures throw.
  */
 export async function publishProject(projectId: string): Promise<PublishResult> {
-	const response = await fetch(`${API_BASE}/projects/${projectId}/publish`, {
+	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/publish`, {
 		method: 'POST',
-		credentials: 'include',
 	});
 
 	if (response.status === 409) {

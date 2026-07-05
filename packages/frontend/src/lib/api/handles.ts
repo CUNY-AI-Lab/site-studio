@@ -1,5 +1,6 @@
 import { resolvePath } from '$lib/utils/paths';
 import { apiFetch } from './errors';
+import { csrfFetch } from './csrf';
 
 const API_BASE = resolvePath('/api');
 
@@ -33,9 +34,8 @@ export async function checkHandle(handle: string): Promise<HandleCheckResult> {
  * dialog can show inline feedback.
  */
 export async function claimHandle(handle: string): Promise<ClaimHandleResult> {
-	const response = await fetch(`${API_BASE}/handle`, {
+	const response = await csrfFetch(`${API_BASE}/handle`, {
 		method: 'POST',
-		credentials: 'include',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ handle })
 	});

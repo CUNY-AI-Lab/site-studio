@@ -2,11 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
+import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
+import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import { R2ProjectStorage } from "../storage/r2";
 import { createFileRouter } from "./files";
+import { createHandleRouter } from "./handles";
 import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
 import { createProjectRouter } from "./projects";
+
+// Module-scoped session bits, reset per test: createEnv() and the request
+// helpers read these so individual tests stay terse.
+let kv: MockKV;
+let csrf: CsrfSession;
 
 function createMockBucket() {
   const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }>();
@@ -91,10 +99,15 @@ function createTestApp() {
     await next();
   });
 
+  // Mirror production (src/app.ts): every state-changing /api route sits
+  // behind csrfProtect, so mutation tests must present the session token.
+  app.use("/api/*", csrfProtect);
+
   app.route("/", createFileRouter());
   app.route("/", createPreviewRouter());
   app.route("/", createPublishRouter());
   app.route("/", createProjectRouter());
+  app.route("/", createHandleRouter());
   app.onError((error, c) => {
     if (error instanceof HTTPException) {
       return c.json({ error: error.message }, error.status);
@@ -108,7 +121,7 @@ function createTestApp() {
 
 function createEnv(bucket: R2Bucket): Env {
   return {
-    SESSION_KV: {} as KVNamespace,
+    SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
@@ -134,10 +147,12 @@ describe("route regressions", () => {
   let storage: R2ProjectStorage;
   let app: ReturnType<typeof createTestApp>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, userId);
     // The publish flow now requires a public handle; give the test user one so
     // the existing publish/serve regressions exercise the /u/{handle}/ path.
     seedHandle(bucket, userId, handle);
@@ -269,7 +284,7 @@ describe("route regressions", () => {
 
     const publishResponse = await app.request(
       "http://site-studio.test/api/projects/foo/publish",
-      { method: "POST" },
+      { method: "POST", headers: csrf.headers },
       createEnv(bucket)
     );
 
@@ -301,7 +316,7 @@ describe("route regressions", () => {
 
     const response = await app.request(
       "http://site-studio.test/api/projects/configured-url/publish",
-      { method: "POST" },
+      { method: "POST", headers: csrf.headers },
       {
         ...createEnv(bucket),
         PUBLISHED_BASE_URL: "https://publish.example.edu/"
@@ -321,7 +336,7 @@ describe("route regressions", () => {
 
     const response = await app.request(
       "http://site-studio.test/api/projects/legacy-domain/publish",
-      { method: "POST" },
+      { method: "POST", headers: csrf.headers },
       {
         ...createEnv(bucket),
         R2_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io"
@@ -402,7 +417,7 @@ describe("route regressions", () => {
 
     const response = await app.request(
       "http://site-studio.test/api/projects/nohandle/publish",
-      { method: "POST" },
+      { method: "POST", headers: csrf.headers },
       createEnv(bucket)
     );
 
@@ -463,7 +478,8 @@ function uploadRequest(
   if (opts.dir !== undefined) {
     form.append("dir", opts.dir);
   }
-  return { method: "POST", body: form };
+  // Uploads are mutations: carry the session CSRF token + compliant posture.
+  return { method: "POST", body: form, headers: csrf.headers };
 }
 
 describe("image upload hardening", () => {
@@ -476,6 +492,8 @@ describe("image upload hardening", () => {
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, userId);
     await storage.createProject(userId, "imgproj", "Image Project");
   });
 
@@ -567,10 +585,12 @@ describe("images inventory endpoint", () => {
   let storage: R2ProjectStorage;
   let app: ReturnType<typeof createTestApp>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, userId);
   });
 
   it("lists project images and placeholder findings with an extractable src", async () => {
@@ -610,4 +630,95 @@ describe("images inventory endpoint", () => {
     );
     expect(response.status).toBe(404);
   });
+});
+
+/**
+ * INTEGRATION.md §3¾ rules 2+3 over every state-changing route. Each mutation
+ * must: reject without the token (403 + exact envelope), reject a valid token
+ * arriving with `Sec-Fetch-Site: cross-site` (403), and proceed past CSRF with
+ * the token + compliant same-origin posture (whatever domain-level status the
+ * route then returns, it is never the CSRF envelope).
+ */
+describe("csrf protection on all mutation routes", () => {
+  const userId = "user_test123";
+  let bucket: ReturnType<typeof createMockBucket>;
+  let app: ReturnType<typeof createTestApp>;
+
+  beforeEach(async () => {
+    bucket = createMockBucket();
+    app = createTestApp();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, userId);
+  });
+
+  const json = (body: unknown): Pick<RequestInit, "body" | "headers"> => ({
+    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/json" }
+  });
+  const form = (): Pick<RequestInit, "body"> => ({ body: new FormData() });
+
+  // The 13 state-changing routes (POST/PUT/PATCH/DELETE — rule 1 keeps
+  // GET/HEAD side-effect free, so nothing else needs the token).
+  const mutations: Array<{
+    method: string;
+    path: string;
+    init?: () => Pick<RequestInit, "body" | "headers">;
+  }> = [
+    { method: "POST", path: "/api/handle", init: () => json({ handle: "table-check" }) },
+    { method: "POST", path: "/api/projects/proj-x/file", init: () => json({ path: "a.html", content: "hi" }) },
+    { method: "DELETE", path: "/api/projects/proj-x/files?path=a.html" },
+    { method: "PUT", path: "/api/projects/proj-x/files/rename", init: () => json({ oldPath: "a.html", newPath: "b.html" }) },
+    { method: "POST", path: "/api/projects/proj-x/upload", init: form },
+    { method: "POST", path: "/api/projects/proj-x/publish" },
+    { method: "POST", path: "/api/projects/proj-x/unpublish" },
+    { method: "POST", path: "/api/projects/proj-x/thumbnail", init: form },
+    { method: "POST", path: "/api/projects", init: () => json({ name: "table-proj" }) },
+    { method: "PATCH", path: "/api/projects/proj-x", init: () => json({ name: "renamed" }) },
+    { method: "DELETE", path: "/api/projects/proj-x" },
+    { method: "POST", path: "/api/projects/proj-x/snapshots" },
+    { method: "POST", path: "/api/projects/proj-x/snapshots/snap-1/restore" }
+  ];
+
+  const request = (
+    mutation: (typeof mutations)[number],
+    csrfHeaders: Record<string, string>
+  ) => {
+    const init = mutation.init?.() ?? {};
+    return app.request(
+      `http://site-studio.test${mutation.path}`,
+      {
+        method: mutation.method,
+        body: init.body,
+        headers: { ...(init.headers as Record<string, string> | undefined), ...csrfHeaders }
+      },
+      createEnv(bucket)
+    );
+  };
+
+  for (const mutation of mutations) {
+    describe(`${mutation.method} ${mutation.path.split("?")[0]}`, () => {
+      it("403s without a token", async () => {
+        const res = await request(mutation, {});
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
+      });
+
+      it("403s with a valid token but Sec-Fetch-Site: cross-site", async () => {
+        const res = await request(mutation, {
+          [CSRF_HEADER_NAME]: csrf.token,
+          "Sec-Fetch-Site": "cross-site"
+        });
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
+      });
+
+      it("passes CSRF with the token + same-origin posture", async () => {
+        const res = await request(mutation, csrf.headers);
+        // Domain-level outcomes vary (200/400/404/409 depending on seeded
+        // state) but none of these routes 403 on their success path here, so
+        // any 403 would be a CSRF false positive.
+        expect(res.status).not.toBe(403);
+      });
+    });
+  }
 });
