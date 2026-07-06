@@ -38,6 +38,50 @@ async function mintIdentityJwt(sub: string, secret = JWT_SECRET): Promise<string
   return `${headerB64}.${payloadB64}.${base64url(new Uint8Array(sig))}`;
 }
 
+/**
+ * In-memory stand-in for the MigrationCoordinator DO namespace. vitest runs
+ * under node and cannot load the real `cloudflare:workers` DO class, so we model
+ * the DO's serialized, first-wins claim decision here. `idFromName(anonId)`
+ * returns the anonId as the "id"; `.get(id)` returns a stub whose `claim`/
+ * `markComplete` read and mutate a shared per-anonId record map — exactly the
+ * single-serialization-point semantics the real DO provides. First subject to
+ * claim an anonId wins; a different subject is refused (granted:false).
+ */
+type CoordinatorRecord = { subject: string; status: "pending" | "complete" };
+type MockCoordinator = {
+  /** The DO namespace, ready to drop into Env["MIGRATION_COORDINATOR"]. */
+  namespace: Env["MIGRATION_COORDINATOR"];
+  /** The shared per-anonId claim map, for direct assertions/seeding in tests. */
+  records: Map<string, CoordinatorRecord>;
+};
+
+function createCoordinatorNamespace(): MockCoordinator {
+  const records = new Map<string, CoordinatorRecord>();
+  const namespace = {
+    idFromName: (name: string) => name,
+    get: (id: string) => ({
+      claim: async (anonId: string, subject: string) => {
+        const existing = records.get(anonId);
+        if (!existing) {
+          records.set(anonId, { subject, status: "pending" });
+          return { granted: true, resume: false, claimedBy: null };
+        }
+        if (existing.subject === subject) {
+          return { granted: true, resume: true, claimedBy: subject };
+        }
+        return { granted: false, resume: false, claimedBy: existing.subject };
+      },
+      markComplete: async (anonId: string, subject: string) => {
+        const existing = records.get(anonId);
+        if (existing && existing.subject === subject) {
+          records.set(anonId, { ...existing, status: "complete" });
+        }
+      }
+    })
+  } as unknown as Env["MIGRATION_COORDINATOR"];
+  return { namespace, records };
+}
+
 function createEnv(overrides?: Partial<Env>): Env {
   return {
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
@@ -53,6 +97,7 @@ function createEnv(overrides?: Partial<Env>): Env {
       get: vi.fn(async () => null)
     } as unknown as R2Bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+    MIGRATION_COORDINATOR: createCoordinatorNamespace().namespace,
     ASSETS: undefined,
     ...overrides
   };
@@ -294,21 +339,18 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
   });
 
-  // SS-19 (defense-in-depth): the anon namespace to absorb is picked from the
-  // request-supplied session cookie. If that namespace was ALREADY claimed by a
-  // DIFFERENT subject, a forged/replayed cookie pointing at it must not let a
-  // second subject re-home (or even touch) that data — it is refused before any
-  // work, and the original claim's data is untouched.
-  it("SS-19: refuses to absorb an anon namespace already claimed by another subject", async () => {
+  // SS-3 / SS-19: the anon namespace to absorb is picked from the
+  // request-supplied session cookie. If the MigrationCoordinator DO gate reports
+  // that namespace is ALREADY claimed by a DIFFERENT subject, a forged/replayed
+  // cookie pointing at it must not let a second subject re-home (or even touch)
+  // that data — the DO refuses the claim (granted:false) before any work, and
+  // the original owner's data is untouched. This is now atomic mutual exclusion,
+  // not a racy KV pre-check.
+  it("SS-3: refuses to absorb an anon namespace already claimed by another subject", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
     const OTHER_SUBJECT = "cail-other-owner";
 
-    // The anon namespace was already claimed+completed by OTHER_SUBJECT.
-    kv.store.set(
-      `migration:${ANON}`,
-      JSON.stringify({ subject: OTHER_SUBJECT, status: "complete", startedAt: "x", completedAt: "y" })
-    );
     // A live anon session record still exists (attacker replays this cookie).
     kv.store.set(
       "session:anon-cookie-1",
@@ -317,10 +359,15 @@ describe("authMiddleware anonymous-data migration", () => {
     // Residual anon data that must NOT be re-homed into the new subject.
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
+    const coordinator = createCoordinatorNamespace();
+    // The anon namespace was already claimed by OTHER_SUBJECT at the DO gate.
+    coordinator.records.set(ANON, { subject: OTHER_SUBJECT, status: "complete" });
+
     const env = createEnv({
       CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
       SESSION_KV: kv,
-      SITE_STUDIO_BUCKET: bucket
+      SITE_STUDIO_BUCKET: bucket,
+      MIGRATION_COORDINATOR: coordinator.namespace
     });
 
     const token = await mintIdentityJwt(SUBJECT); // a DIFFERENT, second subject
@@ -334,12 +381,73 @@ describe("authMiddleware anonymous-data migration", () => {
     const body = (await response.json()) as { user: { id: string } };
     expect(body.user.id).toBe(SUBJECT);
 
-    // Nothing re-homed into SUBJECT; the original claim is unchanged.
+    // Nothing re-homed into SUBJECT; the DO claim still owned by OTHER_SUBJECT.
     expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
-    const claim = JSON.parse(kv.store.get(`migration:${ANON}`)!);
-    expect(claim.subject).toBe(OTHER_SUBJECT);
-    // No pending marker was left for SUBJECT (we bailed before claiming).
+    expect(coordinator.records.get(ANON)?.subject).toBe(OTHER_SUBJECT);
+    // No KV claim or pending marker was written for SUBJECT (we bailed at the gate).
+    expect(kv.store.has(`migration:${ANON}`)).toBe(false);
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+  });
+
+  // SS-3: two DIFFERENT subjects presenting the SAME anon cookie — the classic
+  // split-brain. The DO gate serializes them to one first-winner; the second is
+  // refused and absorbs nothing, so data can never land under two owners.
+  it("SS-3: two different subjects racing the same anon cookie — first wins, second refused", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const SUBJECT_A = "cail-first-winner";
+    const SUBJECT_B = "cail-second-loser";
+
+    kv.store.set(
+      "session:anon-cookie-1",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+    );
+    bucket.store.set(
+      `projects/${ANON}/blog/.metadata.json`,
+      JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
+    );
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    // One shared coordinator across both requests (models the single DO instance
+    // that all claimants of this anonId reach).
+    const coordinator = createCoordinatorNamespace();
+    const env = createEnv({
+      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      MIGRATION_COORDINATOR: coordinator.namespace
+    });
+
+    const tokenA = await mintIdentityJwt(SUBJECT_A);
+    const respA = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": tokenA, Cookie: "site-studio-session=anon-cookie-1" } },
+      env
+    );
+    expect(respA.status).toBe(200);
+
+    // A won the DO gate and migrated.
+    expect(bucket.store.get(`projects/${SUBJECT_A}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+    expect(coordinator.records.get(ANON)?.subject).toBe(SUBJECT_A);
+
+    // B now presents the same anon cookie (the session was deleted on A's
+    // completion, but re-seed it to model a replay/concurrent presentation).
+    kv.store.set(
+      "session:anon-cookie-1",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+    );
+    const tokenB = await mintIdentityJwt(SUBJECT_B);
+    const respB = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": tokenB, Cookie: "site-studio-session=anon-cookie-1" } },
+      env
+    );
+    expect(respB.status).toBe(200);
+
+    // B was refused — nothing landed under SUBJECT_B; the anon namespace stays
+    // bound to SUBJECT_A. No split brain.
+    expect(bucket.store.has(`projects/${SUBJECT_B}/blog/index.html`)).toBe(false);
+    expect(coordinator.records.get(ANON)?.subject).toBe(SUBJECT_A);
   });
 
   it("pure anonymous flow is untouched: no migration traces, data stays put", async () => {

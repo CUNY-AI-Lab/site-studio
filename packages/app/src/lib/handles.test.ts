@@ -171,6 +171,70 @@ describe("claimHandle", () => {
   });
 });
 
+// SS-3 residual #2: a process death BETWEEN claimHandle's two put-if-absent
+// writes can leave a reverse slot `userhandles/{owner}` with no matching forward
+// `handles/{handle}` record (or a forward owned by someone else). The old fast
+// path returned "you already have a handle" on the reverse slot alone, HIDING
+// the orphan. The reaper deletes the stale reverse slot and lets the claim
+// proceed; a HEALTHY reverse+forward pair still yields the normal 409/idempotent
+// behavior.
+describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
+  let bucket: ReturnType<typeof createMockBucket>;
+  beforeEach(() => {
+    bucket = createMockBucket();
+  });
+
+  it("reaps an orphaned reverse slot (forward MISSING) and lets the SAME handle claim proceed", async () => {
+    // Reverse slot written, forward `handles/…` never written (crash between puts).
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "jane-rivera", claimedAt: "t0" }));
+    expect(bucket.store.has(handleRecordKey("jane-rivera"))).toBe(false);
+
+    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    // Claim proceeds cleanly to a fresh, fully-formed claim (not a false "already have").
+    expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: false });
+    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+  });
+
+  it("reaps an orphaned reverse slot and lets a DIFFERENT handle claim proceed (no false 409)", async () => {
+    // Orphan points at a handle the owner never truly claimed (forward missing).
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "orphaned-one", claimedAt: "t0" }));
+
+    // Owner now claims a DIFFERENT, free handle. The orphan must not 409 them.
+    const res = await claimHandle(bucket, "cail-a", "brand-new");
+    expect(res).toEqual({ ok: true, handle: "brand-new", alreadyOwned: false });
+    expect(await getUserHandle(bucket, "cail-a")).toBe("brand-new");
+    // The orphan forward record still doesn't exist (never was written).
+    expect(await resolveHandleOwner(bucket, "orphaned-one")).toBeNull();
+  });
+
+  it("reaps a reverse slot whose forward record points at a STRANGER, then resolves against real state", async () => {
+    // Crash left reverse {cail-a -> shared}, then cail-b legitimately won `shared`.
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "shared", claimedAt: "t0" }));
+    await claimHandle(bucket, "cail-b", "shared"); // cail-b owns the forward record
+
+    // cail-a re-claims the very handle it's orphaned against: it does NOT own it,
+    // so this must resolve to a taken-409 (not a false idempotent success).
+    const res = await claimHandle(bucket, "cail-a", "shared");
+    expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("taken") });
+    // The orphan reverse slot was reaped; cail-a owns nothing.
+    expect(await getUserHandle(bucket, "cail-a")).toBeNull();
+    // cail-b's healthy ownership is intact.
+    expect(await resolveHandleOwner(bucket, "shared")).toBe("cail-b");
+  });
+
+  it("does NOT reap a HEALTHY different-handle pair: still 409s", async () => {
+    // Legitimate full claim of a different handle.
+    await claimHandle(bucket, "cail-a", "jane-rivera");
+    // Asking for a new handle must 409 (owner already has a valid handle).
+    const res = await claimHandle(bucket, "cail-a", "someone-else");
+    expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
+    // The healthy pair is untouched.
+    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+  });
+});
+
 // SS-4: read-check-write against R2 with no compare-and-set lets two concurrent
 // claims both "win", or a single user racing two handles end up owning two. The
 // put-if-absent claim must make exactly one winner and leave NO orphan records.

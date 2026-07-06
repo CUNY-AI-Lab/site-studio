@@ -126,6 +126,7 @@ function createEnv(bucket: R2Bucket): Env {
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+    MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
     ASSETS: undefined
   };

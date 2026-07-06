@@ -1,8 +1,9 @@
 import app from "./app";
 import { SiteBuilderAgent } from "./agents/site-builder";
+import { MigrationCoordinator } from "./agents/migration-coordinator";
 
 // Worker entry: the Hono app is assembled in ./app (importable from tests);
-// this module only adds the Durable Object export, whose dependency tree needs
+// this module only adds the Durable Object exports, whose dependency trees need
 // the Workers runtime (`cloudflare:` modules).
 export default app;
-export { SiteBuilderAgent };
+export { SiteBuilderAgent, MigrationCoordinator };

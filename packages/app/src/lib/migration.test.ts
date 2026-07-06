@@ -305,7 +305,8 @@ describe("published-site continuity through migration", () => {
       LOADER: {} as WorkerLoader,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
-      SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>
+      SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+      MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>
     } as Env;
   });
 

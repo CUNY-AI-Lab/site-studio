@@ -1,4 +1,5 @@
 import type { SiteBuilderAgent } from "./agents/site-builder";
+import type { MigrationCoordinator } from "./agents/migration-coordinator";
 
 export interface Env {
   APP_PUBLIC_DOMAIN?: string;
@@ -38,6 +39,9 @@ export interface Env {
   SESSION_KV: KVNamespace;
   SITE_STUDIO_BUCKET: R2Bucket;
   SITE_BUILDER_AGENT: DurableObjectNamespace<SiteBuilderAgent>;
+  // SS-3: atomic first-gate for anonymous→subject migration claims, keyed by
+  // idFromName(anonId). See agents/migration-coordinator.ts and lib/session.ts.
+  MIGRATION_COORDINATOR: DurableObjectNamespace<MigrationCoordinator>;
   ASSETS?: Fetcher;
 }
 

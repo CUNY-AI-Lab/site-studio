@@ -11,9 +11,7 @@ import {
 } from "./cail-identity";
 import {
   migrateAnonymousData,
-  migrationClaimKey,
-  migrationPendingKey,
-  type MigrationClaim
+  migrationPendingKey
 } from "./migration";
 import { createAgentHistoryPorter } from "./agent-porter";
 
@@ -115,6 +113,26 @@ function createAnonymousUser(): User {
  * interrupted migration recorded under the subject (the anonymous cookie is
  * replaced by the subject cookie after the first request, so resumption must
  * not depend on it). Pure anonymous requests never reach this function.
+ *
+ * SS-3 / SS-19 — atomic mutual exclusion on the claim:
+ * The "who may migrate this anon namespace" decision is settled by the
+ * MigrationCoordinator Durable Object, keyed by `idFromName(anonId)`. Because a
+ * DO runs single-threaded and every subject racing the SAME anon namespace
+ * lands in the SAME DO instance, the claim calls SERIALIZE — the old KV
+ * read-check-write could let two different subjects both read the claim as
+ * empty and both migrate (split brain). The DO is now the AUTHORITATIVE first
+ * gate: if `claim()` is not granted (a different subject already owns the anon
+ * namespace) we SKIP migration entirely and never touch the data.
+ *
+ * The KV claim (`migration:<anonId>`) and subject-keyed resume marker
+ * (`migration-pending:<subject>`) inside migrateAnonymousData are RETAINED, but
+ * their role narrows: they are the resumability / step-idempotency layer, not a
+ * second ownership authority. Only one subject can pass the DO gate, and only
+ * that subject ever writes those KV records, so the two layers never disagree.
+ * A migration that dies mid-run leaves the pending marker, and a later request
+ * by the SAME (already-granted) subject resumes it — the DO grants that subject
+ * a `resume` claim, and the KV records drive convergence (copy-if-absent,
+ * deterministic renames).
  */
 async function migrateAnonymousSessionIfPresent(
   c: Context<{ Bindings: Env; Variables: SessionVariables }>,
@@ -129,42 +147,77 @@ async function migrateAnonymousSessionIfPresent(
     // anonymous (`user_…`) KV/legacy session record. A random string, an expired
     // record, or a subject-owned record all fall through untouched.
     if (anonUser && anonUser.id.startsWith("user_")) {
-      // SS-19 (defense-in-depth): the anon namespace to absorb is chosen from the
-      // request-supplied session cookie, gated by the sessionId's 128-bit entropy
-      // and the anon-record check above. Before doing any work, refuse if that
-      // namespace was ALREADY claimed by a DIFFERENT subject — migrateAnonymousData
-      // enforces this durably (claim-once) too, but checking here means a forged/
-      // replayed cookie pointing at someone else's already-migrated namespace is
-      // rejected before we touch it, and the claim can only ever bind one subject.
-      //
-      // Residual risk (left for the queued DO-serialization cohort): between two
-      // concurrent FIRST logins racing the SAME never-claimed anon namespace, both
-      // may pass this pre-check before either writes the claim. migrateAnonymousData's
-      // KV claim record makes that convergent and non-destructive (copy-if-absent,
-      // deterministic renames), but it is not a hard mutual-exclusion — true
-      // serialization needs the DO change and is intentionally out of scope here.
-      const existingClaim = await c.env.SESSION_KV.get<MigrationClaim>(
-        migrationClaimKey(anonUser.id),
-        "json"
-      ).catch(() => null);
-      if (existingClaim && existingClaim.subject !== subject) {
+      const anonId = anonUser.id;
+
+      // ATOMIC FIRST GATE (SS-3): serialize all subjects racing this anon
+      // namespace through the coordinator DO. `.get(idFromName(anonId))` routes
+      // every claimant of THIS anon id to the one DO instance whose
+      // single-threaded execution grants exactly one subject. A forged/replayed
+      // cookie pointing at a namespace already owned by another subject is
+      // refused here, before we touch any data.
+      let decision: { granted: boolean };
+      try {
+        const stub = c.env.MIGRATION_COORDINATOR.get(
+          c.env.MIGRATION_COORDINATOR.idFromName(anonId)
+        );
+        decision = await stub.claim(anonId, subject);
+      } catch (error) {
+        // If the coordinator is unreachable we fail CLOSED (skip migration)
+        // rather than fall back to the racy KV-only path — data safety over
+        // convenience. The anon data stays put and can be migrated on a retry
+        // once the DO is reachable.
+        console.error(`Migration claim gate failed for ${anonId} -> ${subject}`, error);
+        return;
+      }
+
+      if (!decision.granted) {
+        // Another subject already owns this anon namespace. Do not absorb.
         return;
       }
 
       await migrateAnonymousData({
         bucket: c.env.SITE_STUDIO_BUCKET,
         kv: c.env.SESSION_KV,
-        anonUserId: anonUser.id,
+        anonUserId: anonId,
         subject,
         anonSessionId: cookieValue,
         porter,
       });
+
+      // Flip the DO claim to complete (best-effort; the KV resume marker and
+      // idempotent copy already make a missed completion safe to retry).
+      try {
+        const stub = c.env.MIGRATION_COORDINATOR.get(
+          c.env.MIGRATION_COORDINATOR.idFromName(anonId)
+        );
+        await stub.markComplete(anonId, subject);
+      } catch (error) {
+        console.warn(`Migration markComplete failed for ${anonId} -> ${subject}`, error);
+      }
       return;
     }
   }
 
   const pendingAnonId = await c.env.SESSION_KV.get(migrationPendingKey(subject)).catch(() => null);
   if (pendingAnonId) {
+    // Resume path: the subject already holds the DO claim (it was granted on the
+    // first login that wrote this pending marker). Re-confirm the grant so a DO
+    // that lost/expired state doesn't let a stranger resume, then finish the
+    // interrupted run. The claim is idempotent for the owning subject (resume).
+    let decision: { granted: boolean };
+    try {
+      const stub = c.env.MIGRATION_COORDINATOR.get(
+        c.env.MIGRATION_COORDINATOR.idFromName(pendingAnonId)
+      );
+      decision = await stub.claim(pendingAnonId, subject);
+    } catch (error) {
+      console.error(`Migration resume gate failed for ${pendingAnonId} -> ${subject}`, error);
+      return;
+    }
+    if (!decision.granted) {
+      return;
+    }
+
     await migrateAnonymousData({
       bucket: c.env.SITE_STUDIO_BUCKET,
       kv: c.env.SESSION_KV,
@@ -172,6 +225,15 @@ async function migrateAnonymousSessionIfPresent(
       subject,
       porter,
     });
+
+    try {
+      const stub = c.env.MIGRATION_COORDINATOR.get(
+        c.env.MIGRATION_COORDINATOR.idFromName(pendingAnonId)
+      );
+      await stub.markComplete(pendingAnonId, subject);
+    } catch (error) {
+      console.warn(`Migration resume markComplete failed for ${pendingAnonId} -> ${subject}`, error);
+    }
   }
 }
 

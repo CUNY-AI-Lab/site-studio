@@ -27,9 +27,19 @@
  * silently share. It writes reverse-first (`userhandles/{owner}` is the
  * one-handle gate) so a lost race leaves no orphaned handle record; on losing
  * the forward `handles/{handle}` write it rolls back only its own reverse slot.
- * See `claimHandle` for the interleaving walk. (Not fully durable against a
- * process death BETWEEN the two puts — a reverse-orphan reaper is queued for
- * the migration DO cohort.)
+ * See `claimHandle` for the interleaving walk.
+ *
+ * Reverse-orphan reaper (SS-3 cohort residual #2): the two put-if-absent writes
+ * are NOT one transaction, so a process death BETWEEN them can leave the reverse
+ * slot `userhandles/{owner}` written while the forward `handles/{handle}` was
+ * never claimed (or was later claimed by someone else). That leaves the user
+ * pointed at a handle they do not actually own. `claimHandle`'s fast path now
+ * VERIFIES the forward record before trusting the reverse slot: if the forward
+ * record is missing or points at a different owner, the reverse slot is a stale
+ * orphan — it is REAPED (deleted) and the claim proceeds normally, rather than
+ * the old behavior of falsely reporting "you already have a handle" and hiding
+ * the orphan forever. A healthy reverse+forward pair still yields the
+ * idempotent-success / different-handle-409 behavior. See `claimHandle`.
  */
 
 export interface HandleRecord {
@@ -270,16 +280,49 @@ export async function claimHandle(
   const handle = validation.handle;
 
   // Fast-path reads (best-effort; the atomic puts below are authoritative).
+  //
+  // Reverse-orphan reaper (SS-3 residual #2): a reverse slot `userhandles/{owner}`
+  // is only trustworthy if the FORWARD record `handles/{thatHandle}` exists AND
+  // points back at this owner. A crash between claimHandle's two put-if-absent
+  // writes can leave the reverse slot pointing at a handle whose forward record
+  // was never written (or was later won by someone else). The old fast path
+  // returned "you already have a handle" on the reverse slot alone, which HID
+  // that orphan permanently. Verify the pair before trusting it.
+  //
+  // Interleavings this reaper heals vs. leaves intact:
+  //  A) Crash after reverse put, before forward put: reverse says {owner->H},
+  //     forward `handles/H` is MISSING. resolveHandleOwner(H) === null → orphan.
+  //     Reap the reverse slot, fall through, and re-claim cleanly (self-heals
+  //     even when the caller now asks for a DIFFERENT handle than the orphaned
+  //     one — the owner never truly owned H, so no 409 is warranted).
+  //  B) Crash after reverse put; another user then legitimately wins `handles/H`:
+  //     reverse says {owner->H}, forward `handles/H` points at STRANGER, not
+  //     owner. Trusting the reverse would wrongly claim owner holds H. Reap the
+  //     reverse slot and fall through; the owner is now handle-less and the
+  //     subsequent claim resolves against the real state (idempotent success if
+  //     they asked for a free handle, taken-409 if they asked for H itself).
+  //  C) Healthy pair (forward exists and points at owner): NOT an orphan. Keep
+  //     the original contract — same handle → idempotent success; different
+  //     handle → 409 "you already have a handle".
   const existingOwn = await getUserHandle(bucket, ownerId);
   if (existingOwn) {
-    if (existingOwn === handle) {
-      return { ok: true, handle, alreadyOwned: true };
+    const forwardOwner = await resolveHandleOwner(bucket, existingOwn);
+    if (forwardOwner === ownerId) {
+      // Case C: healthy reverse+forward pair.
+      if (existingOwn === handle) {
+        return { ok: true, handle, alreadyOwned: true };
+      }
+      return {
+        ok: false,
+        status: 409,
+        reason: "You already have a handle. Handles can't be changed."
+      };
     }
-    return {
-      ok: false,
-      status: 409,
-      reason: "You already have a handle. Handles can't be changed."
-    };
+    // Cases A/B: the reverse slot is an orphan (forward missing or owned by
+    // someone else). Reap it and let the claim proceed against real state. Only
+    // delete when it still matches the orphan we observed, so we never clobber a
+    // reverse slot a concurrent healthy claim just wrote.
+    await bucket.delete(userHandleRecordKey(ownerId)).catch(() => undefined);
   }
 
   const claimedAt = now();

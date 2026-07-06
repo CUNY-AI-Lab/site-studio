@@ -12,6 +12,13 @@
       {
         "name": "SITE_BUILDER_AGENT",
         "class_name": "SiteBuilderAgent"
+      },
+      {
+        // SS-3: atomic first-gate for anonymous→subject migration claims. Keyed
+        // by idFromName(anonId) so all subjects racing the SAME anon namespace
+        // serialize in one DO instance. See agents/migration-coordinator.ts.
+        "name": "MIGRATION_COORDINATOR",
+        "class_name": "MigrationCoordinator"
       }
     ]
   },
@@ -19,6 +26,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["SiteBuilderAgent"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["MigrationCoordinator"]
     }
   ],
   "vars": {

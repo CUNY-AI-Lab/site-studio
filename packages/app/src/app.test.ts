@@ -34,6 +34,7 @@ function createEnv(): Env {
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: createMockBucket(),
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
+    MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
     ASSETS: undefined
   };
