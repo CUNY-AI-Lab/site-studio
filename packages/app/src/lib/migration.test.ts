@@ -258,6 +258,24 @@ describe("migrateAnonymousData", () => {
     expect(otherKeys).toEqual([]);
   });
 
+  it("fails loud on a KV outage during the claim read (never proceeds as unclaimed)", async () => {
+    // rule 5: the claim read is the security-critical claim-once gate. A
+    // swallowed KV outage here would read as "no existing claim" and let a
+    // SECOND subject migrate into a namespace another subject already owns.
+    seedAnonProject(bucket, "portfolio");
+    const outage = new Error("KV read failed");
+    kv.get = vi.fn(async (key: string) => {
+      if (key === migrationClaimKey(ANON)) throw outage;
+      return null;
+    }) as unknown as typeof kv.get;
+
+    await expect(run()).rejects.toThrow("KV read failed");
+
+    // The guard was NOT bypassed: nothing was copied into the subject namespace.
+    const subjectKeys = [...bucket.store.keys()].filter((k) => k.includes(SUBJECT));
+    expect(subjectKeys).toEqual([]);
+  });
+
   it("refuses non-anonymous ids (never migrates a subject namespace)", async () => {
     const result = await run({ anonUserId: "cail-other" });
     expect(result.status).toBe("refused");

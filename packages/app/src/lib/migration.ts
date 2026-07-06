@@ -276,12 +276,21 @@ export async function migrateAnonymousData(options: {
 
   // ---- Claim (one anonymous namespace belongs to exactly one subject) ----
   const claimKey = migrationClaimKey(anonUserId);
-  const existingClaim = await kv.get<MigrationClaim>(claimKey, "json").catch(() => null);
+  // FAIL LOUD (rule 5): this read is the security-critical claim-once gate. A
+  // swallowed KV outage here would read as "no existing claim" and let a SECOND
+  // subject migrate into an anonymous namespace already owned by another — the
+  // exact cross-subject takeover the claim guards against. So a KV failure must
+  // abort the migration (the caller's auth flow decides), never be treated as
+  // an absent claim. (Contrast the best-effort cleanup deletes below, which are
+  // safe to swallow.)
+  const existingClaim = await kv.get<MigrationClaim>(claimKey, "json");
   if (existingClaim && existingClaim.subject !== subject) {
     // First verified claim wins; never migrate into a second subject.
     return { status: "refused", projects: {} };
   }
   if (existingClaim?.status === "complete") {
+    // Safe to swallow: clearing the resume marker is best-effort cleanup. A
+    // leftover marker only triggers a harmless no-op resume on the next login.
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
     return { status: "already-complete", projects: {} };
   }
@@ -296,12 +305,15 @@ export async function migrateAnonymousData(options: {
 
   const finish = async (status: MigrationStatus, projects: Record<string, string>) => {
     if (anonSessionId) {
+      // Safe to swallow: deleting the spent anon session is best-effort; if it
+      // fails it simply expires on its own TTL. Not on the security path.
       await kv.delete(`session:${anonSessionId}`).catch(() => undefined);
     }
     await kv.put(
       claimKey,
       JSON.stringify({ ...claim, status: "complete", completedAt: now() } satisfies MigrationClaim)
     );
+    // Safe to swallow: best-effort resume-marker cleanup (see above).
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
     return { status, projects } as MigrationResult;
   };

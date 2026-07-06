@@ -624,6 +624,9 @@ export class R2ProjectStorage {
     const reservedAtMs = parsed?.reservedAt ? Date.parse(parsed.reservedAt) : NaN;
     const isStale = !Number.isFinite(reservedAtMs) || Date.now() - reservedAtMs > STALE_RESERVATION_MS;
     if (isStale) {
+      // Safe to swallow: clearing the stale reservation is best-effort. The
+      // putIfAbsent below is the real atomic reclaim, so a failed delete just
+      // means this attempt loses the race and retries via the next suffix.
       await this.bucket.delete(key).catch(() => undefined);
       return this.putIfAbsent(key, makeRecord(), { httpMetadata: { contentType: "application/json" } });
     }
