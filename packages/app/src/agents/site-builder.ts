@@ -815,8 +815,8 @@ function createProjectTools(
         return runGenerateImageFlow(filename, {
           generate: () => generateImage(env, identityJwt, { prompt, width, height }),
           screen: (bytes) => screenImage(env, identityJwt, bytes),
-          fileExists: (path) => storage.fileExists(scope.userId, scope.projectId, path),
-          save: (path, bytes) => storage.uploadToProject(scope.userId, scope.projectId, path, bytes)
+          saveIfAbsent: (path, bytes) =>
+            storage.uploadToProjectIfAbsent(scope.userId, scope.projectId, path, bytes)
         });
       }
     }),

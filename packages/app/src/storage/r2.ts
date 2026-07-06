@@ -27,6 +27,17 @@ function snapshotPrefix(userId: string, projectId: string): string {
   return `snapshots/${userId}/${projectId}/`;
 }
 
+/**
+ * Reservation marker for a published slug within a user's namespace. Two
+ * concurrent publishes that both pick `blog` would otherwise both win; a
+ * put-if-absent on this key lets exactly one claim it while the loser advances
+ * to the next suffix. The record stores the owning projectId so re-publishing
+ * the same project is idempotent rather than colliding with its own marker.
+ */
+function slugReservationKey(userId: string, slug: string): string {
+  return `slugreservations/${userId}/${slug}.json`;
+}
+
 function snapshotArchiveKey(userId: string, projectId: string, snapshotId: string): string {
   return `${snapshotPrefix(userId, projectId)}${snapshotId}.zip`;
 }
@@ -306,6 +317,23 @@ export class R2ProjectStorage {
     await this.writeFile(userId, projectId, fileName, content);
   }
 
+  /**
+   * Collision-safe write: persist `content` at `fileName` ONLY if no object
+   * already exists at that key. Returns `true` when this call performed the
+   * write, `false` when an object was already present (so the caller can pick
+   * the next candidate name). The atomicity comes from R2's conditional put
+   * (`putIfAbsent`), which closes the read-check-write TOCTOU that a
+   * `fileExists()` probe followed by a `put()` leaves open.
+   */
+  async uploadToProjectIfAbsent(
+    userId: string,
+    projectId: string,
+    fileName: string,
+    content: Uint8Array
+  ): Promise<boolean> {
+    return this.putIfAbsent(fileKey(userId, projectId, fileName), content);
+  }
+
   async uploadToUserFolder(userId: string, fileName: string, content: Uint8Array): Promise<string> {
     const key = uploadKey(userId, fileName);
     await this.bucket.put(key, content);
@@ -470,18 +498,89 @@ export class R2ProjectStorage {
       }
     }
 
-    if (!usedSlugs.has(normalized)) {
-      return normalized;
+    // Walk candidates (normalized, then -2, -3, …) and CLAIM each atomically
+    // with a put-if-absent reservation. The metadata scan above only rules out
+    // already-settled slugs; the atomic claim is what makes two *concurrent*
+    // publishes safe — the second to reach `blog` fails the conditional put and
+    // advances to `blog-2` instead of colliding on the same slug.
+    const MAX_SLUG_ATTEMPTS = 1000;
+    for (let attempt = 0; attempt < MAX_SLUG_ATTEMPTS; attempt += 1) {
+      const candidate = attempt === 0 ? normalized : `${normalized}-${attempt + 1}`;
+      if (usedSlugs.has(candidate)) {
+        continue;
+      }
+      if (await this.claimSlugReservation(userId, candidate, excludeProjectId)) {
+        return candidate;
+      }
     }
 
-    let suffix = 2;
-    let candidate = `${normalized}-${suffix}`;
-    while (usedSlugs.has(candidate)) {
-      suffix += 1;
-      candidate = `${normalized}-${suffix}`;
+    throw new Error("Could not resolve a free published slug");
+  }
+
+  /**
+   * Atomically reserve `slug` for the given project within a user's namespace.
+   * Returns `true` when the reservation now belongs to this project — because
+   * the put-if-absent won the empty key, the existing reservation already names
+   * this project (idempotent re-publish), or the existing reservation is STALE
+   * (older than the publish-in-flight window) and we successfully re-claimed it.
+   * Returns `false` when a live reservation by another project holds the slug,
+   * so the caller advances to the next suffix.
+   *
+   * Why a timestamp and not a metadata check: `resolvePublishedSlug` runs
+   * BEFORE the caller writes the slug into project metadata, so during a genuine
+   * concurrent publish the winner's metadata isn't visible yet — a metadata
+   * "is this still held?" probe cannot tell an in-flight concurrent claim from
+   * an abandoned one, and would let both racers win. A concurrent publish
+   * settles in milliseconds, so any reservation older than STALE_RESERVATION_MS
+   * is provably not an in-flight competitor and is safe to reclaim. This keeps
+   * the pre-CAS "freeing a slug makes it reusable" behavior (a slug freed by
+   * unpublish/rename becomes reclaimable once its marker ages out) without
+   * reopening the race the reservation exists to close.
+   */
+  private async claimSlugReservation(
+    userId: string,
+    slug: string,
+    projectId?: string
+  ): Promise<boolean> {
+    const STALE_RESERVATION_MS = 60_000;
+    const key = slugReservationKey(userId, slug);
+    const makeRecord = () => JSON.stringify({ projectId: projectId ?? null, reservedAt: new Date().toISOString() });
+    const won = await this.putIfAbsent(key, makeRecord(), {
+      httpMetadata: { contentType: "application/json" }
+    });
+    if (won) {
+      return true;
     }
 
-    return candidate;
+    // The key was already reserved. Read who holds it and when.
+    const existing = await this.bucket.get(key);
+    if (!existing) {
+      // Reservation vanished between the failed put and this read — try to
+      // reclaim it; a concurrent winner still makes this return false.
+      return this.putIfAbsent(key, makeRecord(), { httpMetadata: { contentType: "application/json" } });
+    }
+    const parsed = safeParseJson<{ projectId?: string | null; reservedAt?: string }>(
+      await existing.text(),
+      "slug reservation",
+      key
+    );
+    const holder = parsed?.projectId ?? null;
+
+    // Ours already (idempotent re-publish of the same project).
+    if (projectId && holder === projectId) {
+      return true;
+    }
+
+    // Stale (aged past the publish-in-flight window) → reclaim atomically.
+    const reservedAtMs = parsed?.reservedAt ? Date.parse(parsed.reservedAt) : NaN;
+    const isStale = !Number.isFinite(reservedAtMs) || Date.now() - reservedAtMs > STALE_RESERVATION_MS;
+    if (isStale) {
+      await this.bucket.delete(key).catch(() => undefined);
+      return this.putIfAbsent(key, makeRecord(), { httpMetadata: { contentType: "application/json" } });
+    }
+
+    // A live, different project holds it — advance to the next suffix.
+    return false;
   }
 
   async findPublishedProjectBySlug(userId: string, slug: string): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {
@@ -517,6 +616,33 @@ export class R2ProjectStorage {
         contentType: "application/json"
       }
     });
+  }
+
+  /**
+   * Atomic put-if-absent against R2. Writes `value` at `key` only when no
+   * object currently exists there, using the conditional put
+   * `onlyIf: { etagDoesNotMatch: "*" }` — the wildcard etag never matches an
+   * existing object, so the write succeeds iff the key is empty. R2 signals a
+   * failed condition by returning `null` from `put` (no write, no throw), so a
+   * `null` result means "someone else already owns this key".
+   *
+   * This is the compare-and-set primitive the read-check-write collision paths
+   * (uploads, generated images, handle claims, slug reservations) rely on to be
+   * race-free: the check and the write are the same atomic operation.
+   *
+   * Returns `true` when this call wrote the object, `false` when the key was
+   * already taken.
+   */
+  async putIfAbsent(
+    key: string,
+    value: string | Uint8Array | ArrayBuffer,
+    opts?: { httpMetadata?: R2HTTPMetadata }
+  ): Promise<boolean> {
+    const result = await this.bucket.put(key, value, {
+      onlyIf: { etagDoesNotMatch: "*" },
+      ...(opts?.httpMetadata ? { httpMetadata: opts.httpMetadata } : {})
+    });
+    return result !== null;
   }
 
   private async listProjectKeys(userId: string, projectId: string): Promise<string[]> {

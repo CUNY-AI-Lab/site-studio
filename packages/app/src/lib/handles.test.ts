@@ -32,7 +32,13 @@ function createMockBucket() {
       };
     }),
     put: vi.fn(async (key: string, data: any, options?: any) => {
+      // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
+      // key is empty; a failed condition returns null (no write, no throw).
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
       store.set(key, { data: typeof data === "string" ? data : String(data), httpMetadata: options?.httpMetadata });
+      return { key };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -151,6 +157,69 @@ describe("claimHandle", () => {
     const res = await claimHandle(bucket, "user_anon", "anon-handle");
     expect(res.ok).toBe(true);
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe("user_anon");
+  });
+
+  it("self-heals when the handle record points at us but the reverse slot is missing", async () => {
+    // Simulate a half-written prior claim: handle record exists (owned by us),
+    // reverse record absent. Re-claiming must succeed idempotently and restore
+    // the reverse record without clobbering the handle record.
+    await bucket.put(handleRecordKey("jane-rivera"), JSON.stringify({ ownerId: "cail-a", claimedAt: "t0" }));
+    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: true });
+    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+  });
+});
+
+// SS-4: read-check-write against R2 with no compare-and-set lets two concurrent
+// claims both "win", or a single user racing two handles end up owning two. The
+// put-if-absent claim must make exactly one winner and leave NO orphan records.
+describe("claimHandle races (SS-4)", () => {
+  let bucket: ReturnType<typeof createMockBucket>;
+  beforeEach(() => {
+    bucket = createMockBucket();
+  });
+
+  it("two users racing the SAME handle: exactly one wins, loser leaves no orphan", async () => {
+    const [a, b] = await Promise.all([
+      claimHandle(bucket, "cail-x", "shared-one"),
+      claimHandle(bucket, "cail-y", "shared-one")
+    ]);
+
+    const winners = [a, b].filter((r) => r.ok);
+    const losers = [a, b].filter((r) => !r.ok);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0]).toMatchObject({ ok: false, status: 409 });
+
+    // The handle record points at exactly one owner, and that owner's reverse
+    // record agrees. The loser owns NO handle (its reverse slot was rolled back).
+    const owner = await resolveHandleOwner(bucket, "shared-one");
+    expect(owner === "cail-x" || owner === "cail-y").toBe(true);
+    const loserId = owner === "cail-x" ? "cail-y" : "cail-x";
+    expect(await getUserHandle(bucket, owner!)).toBe("shared-one");
+    expect(await getUserHandle(bucket, loserId)).toBeNull();
+  });
+
+  it("one user racing TWO different handles: ends up owning exactly one, no orphan handle record", async () => {
+    const [a, b] = await Promise.all([
+      claimHandle(bucket, "cail-solo", "handle-aaa"),
+      claimHandle(bucket, "cail-solo", "handle-bbb")
+    ]);
+
+    const winners = [a, b].filter((r) => r.ok);
+    const losers = [a, b].filter((r) => !r.ok);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect(losers[0]).toMatchObject({ ok: false, status: 409, reason: expect.stringContaining("already have") });
+
+    // The user owns exactly one handle, and the OTHER handle record must not
+    // exist as an orphan (the loser wrote nothing under handles/…).
+    const owned = await getUserHandle(bucket, "cail-solo");
+    expect(owned === "handle-aaa" || owned === "handle-bbb").toBe(true);
+    const orphan = owned === "handle-aaa" ? "handle-bbb" : "handle-aaa";
+    expect(await resolveHandleOwner(bucket, owned!)).toBe("cail-solo");
+    expect(await resolveHandleOwner(bucket, orphan)).toBeNull();
   });
 });
 

@@ -254,34 +254,31 @@ describe("runGenerateImageFlow ordering", () => {
   ]);
 
   function trackedDeps(overrides: Partial<GenerateImageFlowDeps> = {}) {
-    const calls = { screen: 0, fileExists: 0, save: 0 };
+    const calls = { screen: 0, saveIfAbsent: 0 };
     const deps: GenerateImageFlowDeps = {
       generate: async () => ({ ok: true, bytes: PNG_BYTES, contentType: "image/png" }),
       screen: async () => {
         calls.screen += 1;
         return { allowed: true };
       },
-      fileExists: async () => {
-        calls.fileExists += 1;
-        return false;
-      },
-      save: async () => {
-        calls.save += 1;
+      // Default: the atomic write always wins (key was free).
+      saveIfAbsent: async () => {
+        calls.saveIfAbsent += 1;
+        return true;
       },
       ...overrides
     };
     return { deps, calls };
   }
 
-  it("rejected verdict: save and fileExists are never called; calm copy returned", async () => {
+  it("rejected verdict: saveIfAbsent is never called; calm copy returned", async () => {
     const { deps, calls } = trackedDeps({ screen: async () => ({ allowed: false, reason: "nope" }) });
     const result = await runGenerateImageFlow("photo.png", deps);
     expect(result).toEqual({ ok: false, message: GENERATED_IMAGE_REJECTED_MESSAGE });
-    expect(calls.save).toBe(0);
-    expect(calls.fileExists).toBe(0);
+    expect(calls.saveIfAbsent).toBe(0);
   });
 
-  it("throwing screen: treated as rejection, save never called", async () => {
+  it("throwing screen: treated as rejection, saveIfAbsent never called", async () => {
     const { deps, calls } = trackedDeps({
       screen: async () => {
         throw new Error("classifier exploded");
@@ -289,10 +286,10 @@ describe("runGenerateImageFlow ordering", () => {
     });
     const result = await runGenerateImageFlow(undefined, deps);
     expect(result).toEqual({ ok: false, message: GENERATED_IMAGE_REJECTED_MESSAGE });
-    expect(calls.save).toBe(0);
+    expect(calls.saveIfAbsent).toBe(0);
   });
 
-  it("failed generation: screen and save never called; message passed through", async () => {
+  it("failed generation: screen and saveIfAbsent never called; message passed through", async () => {
     const { deps, calls } = trackedDeps({
       generate: async () => ({ ok: false, message: '{"error":"quota_exceeded","message":"Budget hit."}' })
     });
@@ -302,24 +299,25 @@ describe("runGenerateImageFlow ordering", () => {
       expect(result.message).toContain("quota_exceeded");
     }
     expect(calls.screen).toBe(0);
-    expect(calls.save).toBe(0);
+    expect(calls.saveIfAbsent).toBe(0);
   });
 
-  it("non-image bytes: screen and save never called", async () => {
+  it("non-image bytes: screen and saveIfAbsent never called", async () => {
     const { deps, calls } = trackedDeps({
       generate: async () => ({ ok: true, bytes: new Uint8Array([1, 2, 3, 4]), contentType: "image/png" })
     });
     const result = await runGenerateImageFlow(undefined, deps);
     expect(result.ok).toBe(false);
     expect(calls.screen).toBe(0);
-    expect(calls.save).toBe(0);
+    expect(calls.saveIfAbsent).toBe(0);
   });
 
   it("allowed: saves exactly once under images/ with the requested stem", async () => {
     const saved: Array<{ path: string; bytes: Uint8Array }> = [];
     const { deps, calls } = trackedDeps({
-      save: async (path, bytes) => {
+      saveIfAbsent: async (path, bytes) => {
         saved.push({ path, bytes });
+        return true;
       }
     });
     const result = await runGenerateImageFlow("Head shot!.png", deps);
@@ -329,12 +327,12 @@ describe("runGenerateImageFlow ordering", () => {
     expect(calls.screen).toBe(1);
   });
 
-  it("collision: suffixes within images/ using fileExists", async () => {
-    let probes = 0;
+  it("collision: advances the suffix when the atomic write loses the race", async () => {
+    let attempts = 0;
     const { deps } = trackedDeps({
-      fileExists: async () => {
-        probes += 1;
-        return probes === 1; // first candidate taken, second free
+      saveIfAbsent: async () => {
+        attempts += 1;
+        return attempts !== 1; // first candidate already taken, second free
       }
     });
     const result = await runGenerateImageFlow("logo.png", deps);
@@ -347,5 +345,51 @@ describe("runGenerateImageFlow ordering", () => {
     });
     const result = await runGenerateImageFlow("banner.png", deps);
     expect(result).toMatchObject({ ok: true, path: "images/banner.webp" });
+  });
+
+  it("errors cleanly when every candidate name loses the race (bounded retries)", async () => {
+    const { deps } = trackedDeps({ saveIfAbsent: async () => false });
+    const result = await runGenerateImageFlow("logo.png", deps);
+    expect(result.ok).toBe(false);
+  });
+
+  // SS-5 race: two concurrent generations for the same name against a shared,
+  // first-write-wins store. The atomic saveIfAbsent guarantees one gets
+  // images/logo.png and the other advances to images/logo_1.png — no clobber.
+  it("SS-5 race: two concurrent same-name saves never clobber (distinct paths)", async () => {
+    const store = new Map<string, Uint8Array>();
+    const saveIfAbsent = async (path: string, bytes: Uint8Array) => {
+      if (store.has(path)) return false; // first-write-wins
+      store.set(path, bytes);
+      return true;
+    };
+    const bytesA = new Uint8Array(PNG_BYTES);
+    const bytesB = new Uint8Array(PNG_BYTES);
+    bytesB[bytesB.length - 1] ^= 0xff; // make the payloads distinguishable
+
+    const depsA: GenerateImageFlowDeps = {
+      generate: async () => ({ ok: true, bytes: bytesA, contentType: "image/png" }),
+      screen: async () => ({ allowed: true }),
+      saveIfAbsent
+    };
+    const depsB: GenerateImageFlowDeps = {
+      generate: async () => ({ ok: true, bytes: bytesB, contentType: "image/png" }),
+      screen: async () => ({ allowed: true }),
+      saveIfAbsent
+    };
+
+    const [resA, resB] = await Promise.all([
+      runGenerateImageFlow("logo.png", depsA),
+      runGenerateImageFlow("logo.png", depsB)
+    ]);
+
+    expect(resA.ok).toBe(true);
+    expect(resB.ok).toBe(true);
+    const paths = [resA, resB].map((r) => (r.ok ? r.path : "")).sort();
+    expect(paths).toEqual(["images/logo.png", "images/logo_1.png"]);
+    // Two files exist and neither overwrote the other.
+    expect(store.size).toBe(2);
+    expect(store.get("images/logo.png")).toBeDefined();
+    expect(store.get("images/logo_1.png")).toBeDefined();
   });
 });

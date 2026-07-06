@@ -282,18 +282,30 @@ export function createFileRouter() {
     validateImageBytes(sanitized, buffer);
 
     // Collision-suffix within the target prefix so images/photo.png and
-    // photo.png at the root never clobber each other.
-    let filename = `${prefix}${sanitized}`;
-    let counter = 1;
-    while (await storage.fileExists(user.id, projectId, filename)) {
-      const dotIndex = sanitized.lastIndexOf(".");
-      const base = dotIndex >= 0 ? sanitized.slice(0, dotIndex) : sanitized;
-      const ext = dotIndex >= 0 ? sanitized.slice(dotIndex) : "";
-      filename = `${prefix}${base}_${counter}${ext}`;
-      counter += 1;
+    // photo.png at the root never clobber each other. The write itself is
+    // atomic (put-if-absent): rather than probe with fileExists() and then
+    // put() — a TOCTOU where two concurrent same-name uploads both see "absent"
+    // and the second clobbers the first — we ATTEMPT the conditional write at
+    // each candidate and only advance the suffix when the write loses the race.
+    const dotIndex = sanitized.lastIndexOf(".");
+    const base = dotIndex >= 0 ? sanitized.slice(0, dotIndex) : sanitized;
+    const ext = dotIndex >= 0 ? sanitized.slice(dotIndex) : "";
+
+    const MAX_UPLOAD_ATTEMPTS = 50;
+    let filename = "";
+    let written = false;
+    for (let counter = 0; counter < MAX_UPLOAD_ATTEMPTS; counter += 1) {
+      const candidate = counter === 0 ? `${prefix}${sanitized}` : `${prefix}${base}_${counter}${ext}`;
+      if (await storage.uploadToProjectIfAbsent(user.id, projectId, candidate, buffer)) {
+        filename = candidate;
+        written = true;
+        break;
+      }
     }
 
-    await storage.uploadToProject(user.id, projectId, filename, buffer);
+    if (!written) {
+      jsonError("Could not find a free filename for the upload. Rename the file and try again.", 409);
+    }
 
     return c.json({
       success: true,

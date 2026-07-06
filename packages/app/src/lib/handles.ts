@@ -149,6 +149,24 @@ async function putJson(bucket: R2Bucket, key: string, value: unknown): Promise<v
   });
 }
 
+/**
+ * Atomic put-if-absent: write `value` at `key` only when no object exists
+ * there. R2's conditional put `onlyIf: { etagDoesNotMatch: "*" }` succeeds iff
+ * the key is empty (the wildcard etag never matches an existing object) and
+ * returns `null` on a failed condition (no write, no throw). Returns `true`
+ * when this call wrote the object, `false` when the key was already claimed.
+ *
+ * This is the compare-and-set the claim flow relies on so two concurrent claims
+ * can't both "win" a handle or leave a user owning two handle records.
+ */
+async function putJsonIfAbsent(bucket: R2Bucket, key: string, value: unknown): Promise<boolean> {
+  const result = await bucket.put(key, JSON.stringify(value), {
+    onlyIf: { etagDoesNotMatch: "*" },
+    httpMetadata: { contentType: "application/json" }
+  });
+  return result !== null;
+}
+
 /** The handle a candidate resolves to, if any (handle -> owner lookup). */
 export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Promise<string | null> {
   const record = await readJson<HandleRecord>(bucket, handleRecordKey(handle));
@@ -208,8 +226,32 @@ export type ClaimHandleResult =
  *  - If the user already owns exactly this handle, succeed idempotently.
  *  - If the user already owns a *different* handle, refuse (409) — no rename.
  *  - If the handle is taken by someone else, refuse (409).
- *  - Otherwise write both mapping records, then re-read `handles/{h}` to detect
- *    a racing claimant (best-effort; documented narrow window).
+ *
+ * Race-free via two compare-and-set writes. R2 has no transactions, so the two
+ * mapping records are claimed with put-if-absent in an order chosen so that NO
+ * interleaving can leave an orphaned or half-claimed record:
+ *
+ *   1. Claim the per-user REVERSE slot `userhandles/{owner}` FIRST with
+ *      put-if-absent. This slot is the single "one handle per user" gate: a user
+ *      racing two different handles has both attempts contend on this one key, so
+ *      exactly one wins and the loser has written NOTHING under `handles/…` yet —
+ *      no orphan. A lost reverse claim means the user already has (or just took)
+ *      a handle: if it's this same handle, succeed idempotently; otherwise 409.
+ *   2. Claim the handle record `handles/{handle}` with put-if-absent. A lost
+ *      claim means another user won this handle; roll back the reverse slot we
+ *      just wrote (it points at a handle we don't own) and 409. The rollback is
+ *      safe because we only ever delete the reverse record we ourselves wrote in
+ *      step 1, and only on the path where the handle claim failed.
+ *
+ * Walk of the two adversarial interleavings:
+ *  - Same user, two handles A and B, fully interleaved: both reach step 1 on the
+ *    same `userhandles/{owner}` key; put-if-absent lets exactly one through. The
+ *    winner claims its handle record; the loser returns the already-have 409 and
+ *    never touched any `handles/…` key. No orphan, user owns exactly one handle.
+ *  - Two users X and Y, same handle H, fully interleaved: each claims its own
+ *    distinct reverse slot in step 1 (different keys, both succeed), then both
+ *    contend on `handles/H` in step 2. One wins; the other rolls back only its
+ *    own reverse slot and 409s. No orphan, handle owned by exactly one user.
  */
 export async function claimHandle(
   bucket: R2Bucket,
@@ -223,7 +265,7 @@ export async function claimHandle(
   }
   const handle = validation.handle;
 
-  // One handle per user (immutable in v1).
+  // Fast-path reads (best-effort; the atomic puts below are authoritative).
   const existingOwn = await getUserHandle(bucket, ownerId);
   if (existingOwn) {
     if (existingOwn === handle) {
@@ -236,35 +278,51 @@ export async function claimHandle(
     };
   }
 
-  // Handle must be free.
-  const currentOwner = await resolveHandleOwner(bucket, handle);
-  if (currentOwner) {
-    if (currentOwner === ownerId) {
-      // The handle record points at us but the reverse record was missing —
-      // heal it and treat as an idempotent success.
-      await putJson(bucket, userHandleRecordKey(ownerId), {
-        handle,
-        claimedAt: now()
-      } satisfies UserHandleRecord);
+  const claimedAt = now();
+
+  // Step 1: atomically claim the per-user reverse slot. This is the "one handle
+  // per user" gate and it comes FIRST so a lost race here means no handle record
+  // was written by this attempt (no orphan).
+  const reverseWon = await putJsonIfAbsent(bucket, userHandleRecordKey(ownerId), {
+    handle,
+    claimedAt
+  } satisfies UserHandleRecord);
+  if (!reverseWon) {
+    // We lost the reverse slot to a concurrent claim by this same owner. Read
+    // what actually landed: same handle → idempotent success; different → 409.
+    const settled = await getUserHandle(bucket, ownerId);
+    if (settled === handle) {
       return { ok: true, handle, alreadyOwned: true };
     }
-    return { ok: false, status: 409, reason: "That handle is taken." };
+    return {
+      ok: false,
+      status: 409,
+      reason: "You already have a handle. Handles can't be changed."
+    };
   }
 
-  const claimedAt = now();
-  await putJson(bucket, handleRecordKey(handle), { ownerId, claimedAt } satisfies HandleRecord);
-  await putJson(bucket, userHandleRecordKey(ownerId), { handle, claimedAt } satisfies UserHandleRecord);
-
-  // Best-effort race detection: if two brand-new claims landed together the
-  // last writer wins the handle record; the loser sees a mismatch and backs
-  // out its reverse record so it does not falsely believe it owns the handle.
-  const confirmed = await resolveHandleOwner(bucket, handle);
-  if (confirmed !== ownerId) {
-    await bucket.delete(userHandleRecordKey(ownerId)).catch(() => undefined);
-    return { ok: false, status: 409, reason: "That handle was just taken. Try another." };
+  // Step 2: atomically claim the handle record. We now own the reverse slot, so
+  // any failure here must NOT leave that slot pointing at a handle we don't own.
+  const handleWon = await putJsonIfAbsent(bucket, handleRecordKey(handle), {
+    ownerId,
+    claimedAt
+  } satisfies HandleRecord);
+  if (handleWon) {
+    return { ok: true, handle, alreadyOwned: false };
   }
 
-  return { ok: true, handle, alreadyOwned: false };
+  // The handle record already exists. If it points at us, this is a self-heal:
+  // the handle was ours but the reverse slot had gone missing (which is exactly
+  // what we just wrote in step 1). Keep the reverse slot and succeed.
+  const currentOwner = await resolveHandleOwner(bucket, handle);
+  if (currentOwner === ownerId) {
+    return { ok: true, handle, alreadyOwned: true };
+  }
+
+  // Another user owns the handle. Roll back the reverse slot we wrote in step 1
+  // so we never leave a user pointed at a handle they don't own, then 409.
+  await bucket.delete(userHandleRecordKey(ownerId)).catch(() => undefined);
+  return { ok: false, status: 409, reason: "That handle is taken." };
 }
 
 /**

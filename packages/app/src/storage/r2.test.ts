@@ -24,6 +24,11 @@ function createMockBucket() {
       };
     }),
     put: vi.fn(async (key: string, data: any, options?: any) => {
+      // Honor R2's put-if-absent condition: onlyIf.etagDoesNotMatch:"*" writes
+      // only when the key is empty, and R2 returns null on a failed condition.
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
       let stored: ArrayBuffer | string;
       if (typeof data === "string") {
         stored = data;
@@ -35,6 +40,7 @@ function createMockBucket() {
         stored = String(data);
       }
       store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
+      return { key };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -145,6 +151,86 @@ describe("R2ProjectStorage", () => {
       expect(await storage.fileExists(userId, projectId, "test.html")).toBe(true);
       await storage.deleteFile(userId, projectId, "test.html");
       expect(await storage.fileExists(userId, projectId, "test.html")).toBe(false);
+    });
+  });
+
+  describe("putIfAbsent / uploadToProjectIfAbsent (atomic collision guard)", () => {
+    it("writes when the key is free and reports true", async () => {
+      const wrote = await storage.uploadToProjectIfAbsent(userId, projectId, "images/a.png", new Uint8Array([1, 2, 3]));
+      expect(wrote).toBe(true);
+      expect(await storage.fileExists(userId, projectId, "images/a.png")).toBe(true);
+    });
+
+    it("refuses to overwrite an existing key and reports false (no clobber)", async () => {
+      await storage.uploadToProjectIfAbsent(userId, projectId, "images/a.png", new Uint8Array([1, 2, 3]));
+      const second = await storage.uploadToProjectIfAbsent(userId, projectId, "images/a.png", new Uint8Array([9, 9, 9]));
+      expect(second).toBe(false);
+      // Original bytes survive.
+      const buf = await storage.readFileBuffer(userId, projectId, "images/a.png");
+      expect(Array.from(buf)).toEqual([1, 2, 3]);
+    });
+
+    it("SS-5 race: two concurrent writers to the same key — one wins, one loses, no clobber", async () => {
+      const [a, b] = await Promise.all([
+        storage.uploadToProjectIfAbsent(userId, projectId, "images/x.png", new Uint8Array([1])),
+        storage.uploadToProjectIfAbsent(userId, projectId, "images/x.png", new Uint8Array([2]))
+      ]);
+      expect([a, b].filter(Boolean)).toHaveLength(1);
+      expect([a, b].filter((w) => !w)).toHaveLength(1);
+    });
+  });
+
+  describe("resolvePublishedSlug (atomic slug reservation, SS-5)", () => {
+    it("returns the normalized slug when free", async () => {
+      const slug = await storage.resolvePublishedSlug(userId, "My Blog!");
+      expect(slug).toBe("my-blog");
+    });
+
+    it("suffixes when the desired slug is already published by another project", async () => {
+      await storage.createProject(userId, "p1", "P1");
+      await storage.updateProjectMetadata(userId, "p1", { published: true, slug: "blog" });
+      const slug = await storage.resolvePublishedSlug(userId, "blog", "p2");
+      expect(slug).toBe("blog-2");
+    });
+
+    it("is idempotent for the same project re-publishing its slug", async () => {
+      const first = await storage.resolvePublishedSlug(userId, "portfolio", "same-proj");
+      const second = await storage.resolvePublishedSlug(userId, "portfolio", "same-proj");
+      expect(first).toBe("portfolio");
+      expect(second).toBe("portfolio");
+    });
+
+    it("SS-5 race: two concurrent publishes of different projects can't both take the same slug", async () => {
+      const [a, b] = await Promise.all([
+        storage.resolvePublishedSlug(userId, "blog", "proj-a"),
+        storage.resolvePublishedSlug(userId, "blog", "proj-b")
+      ]);
+      expect(new Set([a, b]).size).toBe(2); // distinct slugs
+      expect([a, b].sort()).toEqual(["blog", "blog-2"]);
+    });
+
+    it("reuses an ABANDONED (aged) reservation rather than holding the slug forever", async () => {
+      // Seed a stale reservation for "notes" owned by proj-a, older than the
+      // in-flight window, to simulate an abandoned/unpublished claim.
+      const stale = new Date(Date.now() - 5 * 60_000).toISOString();
+      await bucket.put(
+        `slugreservations/${userId}/notes.json`,
+        JSON.stringify({ projectId: "proj-a", reservedAt: stale })
+      );
+
+      // proj-b can reclaim the aged slug.
+      const slug = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
+      expect(slug).toBe("notes");
+    });
+
+    it("does NOT reclaim a FRESH reservation held by another project (concurrency guard holds)", async () => {
+      const fresh = new Date().toISOString();
+      await bucket.put(
+        `slugreservations/${userId}/notes.json`,
+        JSON.stringify({ projectId: "proj-a", reservedAt: fresh })
+      );
+      const slug = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
+      expect(slug).toBe("notes-2");
     });
   });
 

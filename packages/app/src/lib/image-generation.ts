@@ -375,10 +375,16 @@ export interface GenerateImageFlowDeps {
   generate: () => Promise<GenerateImageResult>;
   /** The REQUIRED moderation gate (already bound to env/jwt). */
   screen: (bytes: Uint8Array) => Promise<ScreenImageResult>;
-  /** Storage existence probe for collision suffixing, project-scoped. */
-  fileExists: (path: string) => Promise<boolean>;
-  /** Persist the image, project-scoped. Called ONLY after the gate allows. */
-  save: (path: string, bytes: Uint8Array) => Promise<void>;
+  /**
+   * Collision-safe persist, project-scoped. Writes the image at `path` ONLY if
+   * no file already exists there, returning `true` when this call performed the
+   * write and `false` when the path was already taken. Called ONLY after the
+   * gate allows. The atomic put-if-absent closes the read-check-write TOCTOU
+   * that a separate `fileExists` probe + `save` left open: two concurrent
+   * generations racing for `images/photo.png` no longer clobber each other —
+   * the loser advances to `images/photo_1.png`.
+   */
+  saveIfAbsent: (path: string, bytes: Uint8Array) => Promise<boolean>;
 }
 
 export type GenerateImageFlowResult =
@@ -422,18 +428,29 @@ export async function runGenerateImageFlow(
   }
 
   // Collision-suffix within images/, mirroring the upload route. Extension
-  // follows the sniffed bytes so the served content type is honest.
+  // follows the sniffed bytes so the served content type is honest. The write
+  // is atomic: we ATTEMPT saveIfAbsent at each candidate and only advance the
+  // suffix when the conditional write loses the race, so two concurrent
+  // generations can't clobber each other on the same name.
   const safeName = sanitizeGeneratedImageName(filename, sniffed);
   const ext = imageExtensionForType(sniffed);
-  let path = `images/${safeName}`;
-  let counter = 1;
-  while (await deps.fileExists(path)) {
-    const stem = safeName.replace(new RegExp(`\\.${ext}$`, "i"), "");
-    path = `images/${stem}_${counter}.${ext}`;
-    counter += 1;
+  const stem = safeName.replace(new RegExp(`\\.${ext}$`, "i"), "");
+
+  const MAX_SAVE_ATTEMPTS = 50;
+  let path = "";
+  let written = false;
+  for (let counter = 0; counter < MAX_SAVE_ATTEMPTS; counter += 1) {
+    const candidate = counter === 0 ? `images/${safeName}` : `images/${stem}_${counter}.${ext}`;
+    if (await deps.saveIfAbsent(candidate, generated.bytes)) {
+      path = candidate;
+      written = true;
+      break;
+    }
   }
 
-  await deps.save(path, generated.bytes);
+  if (!written) {
+    return { ok: false, message: "Couldn't find a free filename to save the image. Try a different name." };
+  }
 
   return {
     ok: true,
