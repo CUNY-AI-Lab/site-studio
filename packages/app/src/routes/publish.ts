@@ -5,6 +5,7 @@ import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
+import { servedContentHeaders } from "../lib/serving-headers";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
@@ -78,9 +79,14 @@ async function missingPublishedFile(
 ): Promise<Response> {
   if (looksLikePageNavigation(c, filePath) && (await storage.fileExists(userId, projectId, "404.html"))) {
     const custom = await storage.readFileBuffer(userId, projectId, "404.html");
+    // Project-supplied 404.html is agent/student-authored active content served
+    // on our origin — §3¾ containment applies (see lib/serving-headers.ts).
     return new Response(binaryBody(custom), {
       status: 404,
-      headers: { "Content-Type": "text/html; charset=utf-8" }
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        ...servedContentHeaders("text/html; charset=utf-8")
+      }
     });
   }
   return publishedNotFound(c, filePath, siteRootPath);
@@ -225,10 +231,15 @@ export function createPublishRouter() {
       jsonError("Thumbnail not found", 404);
     }
 
+    // Owner-only PNG rendered as an <img> in the dashboard — not active
+    // content, so it is intentionally NOT sandboxed (that would break the
+    // <img>). Add nosniff for hygiene so it can't be sniffed into an active
+    // type.
     return new Response(binaryBody(thumbnail), {
       headers: {
         "Content-Type": "image/png",
-        "Cache-Control": "public, max-age=60"
+        "Cache-Control": "public, max-age=60",
+        "X-Content-Type-Options": "nosniff"
       }
     });
   });
@@ -383,6 +394,12 @@ async function servePublishedFile(
   });
   if (!contentType.startsWith("text/html")) {
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  }
+  // §3¾: agent/student-authored bytes on our origin get the opaque-origin
+  // containment. serveByHandle (/u/) and serveLegacySite (/sites/) both funnel
+  // through here, so this single merge point covers every published byte.
+  for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
+    headers.set(key, value);
   }
   return new Response(binaryBody(content), { headers });
 }

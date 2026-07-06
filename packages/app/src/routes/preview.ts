@@ -3,6 +3,7 @@ import type { Env } from "../types";
 import { addCacheBusterToHtml, getContentType, isTextContentType } from "../lib/path";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
+import { servedContentHeaders } from "../lib/serving-headers";
 import { getUser } from "../lib/session";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
@@ -110,12 +111,16 @@ async function servePreviewFile(
     content = new TextEncoder().encode(addCacheBusterToHtml(new TextDecoder().decode(content), version));
   }
 
+  // §3¾: the preview renders agent/student-authored HTML on our origin. The
+  // opaque-origin CSP (see lib/serving-headers.ts) makes document.cookie /
+  // session / same-origin /api unreachable even on a direct top-level open.
   return new Response(binaryBody(content), {
     headers: {
       "Content-Type": isTextContentType(contentType) ? `${contentType}; charset=utf-8` : contentType,
       "X-Frame-Options": "SAMEORIGIN",
       "Cache-Control": "no-cache",
-      Pragma: "no-cache"
+      Pragma: "no-cache",
+      ...servedContentHeaders(contentType)
     }
   });
 }

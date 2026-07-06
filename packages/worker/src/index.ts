@@ -1,4 +1,5 @@
 import { renderNotFoundPage } from "./not-found-page";
+import { servedContentHeaders } from "./serving-headers";
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -284,6 +285,16 @@ export function responseHeaders(filePath: string, object: R2ObjectBody): Headers
     headers.set("Cache-Control", "public, max-age=300");
   } else {
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  }
+
+  // §3¾: every project-supplied byte served here (200 responses AND a custom
+  // 404.html, both of which build headers through this helper) is
+  // agent/student-authored active content on our origin — force the opaque
+  // origin so it can never read our cookie/session. The styled fallback 404
+  // builds its own headers and is intentionally NOT covered (it is our own
+  // trusted markup, not user bytes). See serving-headers.ts.
+  for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
+    headers.set(key, value);
   }
 
   return headers;

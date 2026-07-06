@@ -479,4 +479,58 @@ describe("worker.fetch (integration)", () => {
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
   });
+
+  // §3¾ active-content invariant: every published byte the publisher serves is
+  // agent/student-authored active content on our origin, so it must carry the
+  // opaque-origin CSP (sandbox allow-scripts, NEVER allow-same-origin) +
+  // nosniff. The styled fallback 404 is our own trusted markup and must NOT.
+  it("sandboxes a served published page", async () => {
+    publishProject(bucket, "u", "blog", { "index.html": "<h1>Home</h1>" });
+    const res = await worker.fetch(navRequest("https://x.test/sites/u/blog/"), createEnv(bucket));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    expect(res.headers.get("Content-Security-Policy") || "").not.toContain("allow-same-origin");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+  });
+
+  it("sandboxes a served published asset", async () => {
+    publishProject(bucket, "u", "blog", {
+      "index.html": "<h1>Home</h1>",
+      "styles.css": "body{}"
+    });
+    const res = await worker.fetch(
+      assetRequest("https://x.test/sites/u/blog/styles.css"),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("sandboxes a project-supplied 404.html", async () => {
+    publishProject(bucket, "u", "blog", {
+      "index.html": "<h1>Home</h1>",
+      "404.html": "<h1>Custom Not Found</h1>"
+    });
+    const res = await worker.fetch(
+      navRequest("https://x.test/sites/u/blog/missing.html"),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("Custom Not Found");
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("does NOT sandbox the styled fallback 404 (our own trusted markup)", async () => {
+    publishProject(bucket, "u", "blog", { "index.html": "<h1>Home</h1>" });
+    const res = await worker.fetch(
+      navRequest("https://x.test/sites/u/blog/missing.html"),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("Page not found");
+    expect(res.headers.get("Content-Security-Policy")).toBeNull();
+  });
 });
