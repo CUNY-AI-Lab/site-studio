@@ -187,7 +187,11 @@ export function createFileRouter() {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
     const projectId = c.req.param("id");
-    const { path, content } = saveFileSchema.parse(await c.req.json());
+    const parsed = saveFileSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      jsonError("Invalid file payload", 400);
+    }
+    const { path, content } = parsed.data;
     const filePath = sanitizeFilePath(path);
 
     if (!(await storage.projectExists(user.id, projectId))) {
@@ -224,7 +228,11 @@ export function createFileRouter() {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
     const projectId = c.req.param("id");
-    const { oldPath, newPath } = renameFileSchema.parse(await c.req.json());
+    const parsed = renameFileSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      jsonError("Invalid rename payload", 400);
+    }
+    const { oldPath, newPath } = parsed.data;
     const currentPath = sanitizeFilePath(oldPath);
     const nextPath = sanitizeFilePath(newPath);
 

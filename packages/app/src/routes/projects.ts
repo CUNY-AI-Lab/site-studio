@@ -47,7 +47,11 @@ export function createProjectRouter() {
   app.post("/api/projects", async (c) => {
     const user = getUser(c);
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
-    const { name, template } = createProjectSchema.parse(await c.req.json());
+    const parsed = createProjectSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      jsonError("Invalid project payload", 400);
+    }
+    const { name, template } = parsed.data;
     const projectId = sanitizeProjectId(name);
 
     if (template && template !== "blank" && !isValidTemplate(template)) {
@@ -80,7 +84,11 @@ export function createProjectRouter() {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
     const currentId = c.req.param("id");
-    const { name } = renameProjectSchema.parse(await c.req.json());
+    const parsed = renameProjectSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      jsonError("Invalid project payload", 400);
+    }
+    const { name } = parsed.data;
     const nextId = sanitizeProjectId(name);
 
     if (!(await storage.projectExists(user.id, currentId))) {
