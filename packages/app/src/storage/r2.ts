@@ -436,6 +436,21 @@ export class R2ProjectStorage {
     // the mutation proceeds, the user just has no restore point for this turn.
     // The tradeoff (no restore point for oversized turns) is deliberate — the
     // alternative is a pathological isolate spike that can stall the agent.
+    //
+    // Simplification wave 2026-07-06 (researched, NOT changed): making the zip
+    // non-blocking was investigated and REJECTED as unavoidably
+    // semantics-changing. (1) fflate's async/streaming API needs Web Workers /
+    // worker_threads, which Cloudflare Workers/DO isolates do not have — the
+    // maintainer confirms the async path "won't work on Cloudflare Workers"
+    // (github.com/101arrowz/fflate discussion #177), so there is no in-isolate
+    // non-blocking compressor. (2) Deferring the zip via a Queue or a DO alarm
+    // WOULD offload it, but the snapshot must capture PRE-mutation state and is
+    // awaited before the mutation writes (ensureSnapshot, site-builder.ts); a
+    // deferred snapshot races the mutation and would capture the wrong state.
+    // (3) The manual + restore routes (routes/projects.ts) return the created
+    // ProjectSnapshot synchronously in their HTTP response, so backgrounding it
+    // also breaks that contract. Every option changes an observable
+    // timing/ordering guarantee, so the size-cap skip below stays the mitigation.
     const listed = await this.listFiles(userId, projectId);
     const totalBytes = listed.reduce((sum, file) => sum + file.size, 0);
     if (totalBytes > MAX_SNAPSHOT_BYTES) {
