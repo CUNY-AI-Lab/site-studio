@@ -21,11 +21,15 @@
  *   - `handles/{handle}.json`      -> { ownerId, claimedAt }  (handle -> owner)
  *   - `userhandles/{ownerId}.json` -> { handle, claimedAt }   (owner -> handle)
  *
- * The claim flow mirrors lib/migration.ts's claim-once idiom: read-then-write
- * with a best-effort re-read to detect a racing claimant. R2 has no
- * compare-and-set, so a very narrow race window (two brand-new handles claimed
- * in the same instant) is possible; at this scale that is acceptable, and the
- * re-read makes the loser fail rather than silently share.
+ * The claim flow is race-safe via atomic R2 put-if-absent
+ * (`putIfAbsent` / `onlyIf: { etagDoesNotMatch: "*" }`): a lost conditional
+ * write means someone else won, so concurrent claimants cannot clobber or
+ * silently share. It writes reverse-first (`userhandles/{owner}` is the
+ * one-handle gate) so a lost race leaves no orphaned handle record; on losing
+ * the forward `handles/{handle}` write it rolls back only its own reverse slot.
+ * See `claimHandle` for the interleaving walk. (Not fully durable against a
+ * process death BETWEEN the two puts — a reverse-orphan reaper is queued for
+ * the migration DO cohort.)
  */
 
 export interface HandleRecord {
