@@ -40,19 +40,34 @@ export async function claimHandle(handle: string): Promise<ClaimHandleResult> {
 		body: JSON.stringify({ handle })
 	});
 
-	const data = await response.json().catch(() => ({}) as Record<string, unknown>);
+	// Tri-state parse (align with errors.ts's rigor — never fabricate success):
+	// a body that isn't JSON is a distinct failure, not an empty object we can
+	// read fields off. Track that explicitly instead of coercing to `{}`.
+	let data: Record<string, unknown> | null;
+	try {
+		data = (await response.json()) as Record<string, unknown>;
+	} catch {
+		data = null;
+	}
 
 	if (response.ok) {
-		return {
-			ok: true,
-			handle: (data as { handle: string }).handle,
-			alreadyOwned: Boolean((data as { alreadyOwned?: boolean }).alreadyOwned)
-		};
+		// A 200 with no usable handle string is a malformed success — the old code
+		// returned { ok: true, handle: undefined }, silently claiming success with
+		// no handle. Validate the handle is a non-empty string before trusting ok.
+		const handle = data && typeof data.handle === 'string' ? data.handle : '';
+		if (handle) {
+			return {
+				ok: true,
+				handle,
+				alreadyOwned: Boolean((data as { alreadyOwned?: boolean }).alreadyOwned)
+			};
+		}
+		return { ok: false, message: 'Could not claim that handle.' };
 	}
 
 	const message =
-		(data as { message?: string }).message ||
-		(data as { error?: string }).error ||
+		(data && typeof data.message === 'string' && data.message) ||
+		(data && typeof data.error === 'string' && data.error) ||
 		'Could not claim that handle.';
 	return { ok: false, message };
 }
