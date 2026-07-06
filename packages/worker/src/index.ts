@@ -1,5 +1,11 @@
 import { renderNotFoundPage } from "./not-found-page";
 import { servedContentHeaders } from "./serving-headers";
+// SS-8 served content-type resolver: single source of truth in
+// @site-studio/serving-core, shared with the app worker. Imported under this
+// worker's public name (getContentType) so callers/tests stay unchanged, then
+// re-exported below.
+import { getServedContentType as getContentType } from "../../serving-core/src/content-types";
+import { looksLikePageNavigation as looksLikePageNavigationCore } from "../../serving-core/src/page-navigation";
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -42,57 +48,11 @@ export function fileKey(userId: string, projectId: string, filePath: string): st
   return `projects/${userId}/${projectId}/${sanitizeFilePath(filePath)}`;
 }
 
-/**
- * AUTHORITATIVE served content-type table — a HAND-DUPLICATED copy of
- * SERVED_CONTENT_TYPES in packages/app/src/lib/constants.ts. This worker cannot
- * import from packages/app, so the two copies are maintained by hand and a
- * parity test (packages/worker/src/serving-parity.test.ts) asserts they agree
- * across a matrix of extensions.
- *
- * SS-8: both workers MUST return the SAME Content-Type for the same extension.
- * The previous inline map here omitted .md/.csv/.avif/.eot and the media types
- * and differed on charset, so a site served differently depending on which
- * worker answered. Keep this list byte-identical to the app copy.
- *
- * IMPORTANT: keep in sync with packages/app/src/lib/constants.ts
- * (SERVED_CONTENT_TYPES / getServedContentType).
- */
-const SERVED_CONTENT_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".htm": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".mjs": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".xml": "application/xml; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".ico": "image/x-icon",
-  ".pdf": "application/pdf",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".eot": "application/vnd.ms-fontobject",
-  ".otf": "font/otf",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg"
-};
-
-export function getContentType(filePath: string): string {
-  const match = filePath.toLowerCase().match(/\.[^.]+$/);
-  return match ? SERVED_CONTENT_TYPES[match[0]] || "application/octet-stream" : "application/octet-stream";
-}
+// SS-8 served content-type resolver — re-exported under this worker's public
+// name. Both workers now resolve from the one shared table
+// (packages/serving-core/src/content-types.ts), so a one-sided edit is
+// structurally impossible.
+export { getContentType };
 
 export function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt || "";
@@ -340,12 +300,7 @@ export function responseHeaders(filePath: string, object: R2ObjectBody): Headers
  * <img>/<script>/<link> does not download a full HTML document.
  */
 export function looksLikePageNavigation(request: Request, filePath: string): boolean {
-  const accept = request.headers.get("Accept") || "";
-  if (accept.includes("text/html")) {
-    return true;
-  }
-  const path = filePath.trim();
-  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
+  return looksLikePageNavigationCore(request.headers.get("Accept"), filePath);
 }
 
 /** The site's root path for a "Go to site home" link, if we know it. */
