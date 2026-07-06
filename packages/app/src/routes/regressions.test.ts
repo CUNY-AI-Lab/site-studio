@@ -468,6 +468,86 @@ describe("route regressions", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("<h1>Legacy Home</h1>");
   });
+
+  it("SS-14: resolves an extensionless path to {path}.html", async () => {
+    await storage.createProject(userId, "flat", "Flat");
+    await storage.writeFile(userId, "flat", "index.html", "<h1>Home</h1>");
+    await storage.writeFile(userId, "flat", "about.html", "<h1>Flat About</h1>");
+    await storage.updateProjectMetadata(userId, "flat", { published: true, slug: "flat" });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/flat/about",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Flat About");
+  });
+
+  it("SS-14: prefers {path}.html over {path}/index.html", async () => {
+    await storage.createProject(userId, "both", "Both");
+    await storage.writeFile(userId, "both", "index.html", "<h1>Home</h1>");
+    await storage.writeFile(userId, "both", "about.html", "<h1>Flat</h1>");
+    await storage.writeFile(userId, "both", "about/index.html", "<h1>Nested</h1>");
+    await storage.updateProjectMetadata(userId, "both", { published: true, slug: "both" });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/both/about",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Flat");
+  });
+
+  it("SS-13: serves a slug-less published project addressed by projectId", async () => {
+    // A different owner with no handle so the legacy /sites/ path serves directly.
+    bucket.store.set(`projects/user_slugless/legacy/.metadata.json`, {
+      data: JSON.stringify({ id: "legacy", name: "legacy", published: true })
+    });
+    bucket.store.set(`projects/user_slugless/legacy/index.html`, { data: "<h1>Slugless</h1>" });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_slugless/legacy/",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<h1>Slugless</h1>");
+  });
+
+  it("SS-15: published HTML carries max-age=300 + ETag, composed with the CSP", async () => {
+    await storage.createProject(userId, "cache", "Cache");
+    await storage.writeFile(userId, "cache", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "cache", { published: true, slug: "cache" });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/cache/",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    // The §3¾ containment coexists with the caching validators.
+    expect(response.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    expect(response.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+  });
+
+  it("SS-27: a missing published ASSET does not download the project 404.html", async () => {
+    await storage.createProject(userId, "gate", "Gate");
+    await storage.writeFile(userId, "gate", "index.html", "<h1>Home</h1>");
+    await storage.writeFile(userId, "gate", "404.html", "<h1>Custom missing</h1>");
+    await storage.updateProjectMetadata(userId, "gate", { published: true, slug: "gate" });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/gate/missing.png",
+      { headers: { Accept: "image/png,*/*" } },
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Content-Type") || "").toContain("text/plain");
+    expect(await response.text()).not.toContain("Custom missing");
+  });
 });
 
 /**

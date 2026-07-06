@@ -464,7 +464,11 @@ export async function loadMigrationPointer(
   userId: string
 ): Promise<MigrationPointer | null> {
   const pointer = await readJson<MigrationPointer>(bucket, migrationPointerKey(userId));
-  if (!pointer || pointer.version !== 1 || typeof pointer.subject !== "string") {
+  // SS-27: reject an empty subject as well as a missing/non-string one. An empty
+  // subject cannot own a namespace, and the publisher worker's copy of this
+  // guard already rejected it — accepting `subject:""` here would follow a
+  // pointer to `projects//…`, diverging from the publisher.
+  if (!pointer || pointer.version !== 1 || typeof pointer.subject !== "string" || !pointer.subject) {
     return null;
   }
   return pointer;

@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import type { Env } from "../types";
-import { getContentType } from "../lib/path";
+import { getServedContentType } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
@@ -77,17 +77,18 @@ async function missingPublishedFile(
   filePath: string,
   siteRootPath: string
 ): Promise<Response> {
-  if (looksLikePageNavigation(c, filePath) && (await storage.fileExists(userId, projectId, "404.html"))) {
-    const custom = await storage.readFileBuffer(userId, projectId, "404.html");
-    // Project-supplied 404.html is agent/student-authored active content served
-    // on our origin — §3¾ containment applies (see lib/serving-headers.ts).
-    return new Response(binaryBody(custom), {
-      status: 404,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        ...servedContentHeaders("text/html; charset=utf-8")
-      }
-    });
+  if (looksLikePageNavigation(c, filePath)) {
+    const custom = await storage.readObject(userId, projectId, "404.html");
+    if (custom) {
+      // Project-supplied 404.html is agent/student-authored active content served
+      // on our origin — §3¾ containment applies (see lib/serving-headers.ts). It
+      // goes through the same header builder as a 200 so the content-type,
+      // caching validators, and CSP match the publisher's notFoundResponse.
+      return new Response(binaryBody(new Uint8Array(await custom.arrayBuffer())), {
+        status: 404,
+        headers: publishedResponseHeaders("404.html", custom)
+      });
+    }
   }
   return publishedNotFound(c, filePath, siteRootPath);
 }
@@ -373,33 +374,72 @@ async function servePublishedFile(
   siteRootPath: string
 ) {
   let filePath = rawPath || "index.html";
+  let object = await storage.readObject(userId, projectId, filePath);
 
-  if (!(await storage.fileExists(userId, projectId, filePath))) {
-    if (!filePath.endsWith(".html")) {
-      const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
-      if (await storage.fileExists(userId, projectId, indexPath)) {
-        filePath = indexPath;
-      } else {
-        return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
-      }
-    } else {
-      return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
+  // SS-14 extensionless resolution — kept byte-for-byte parallel to the
+  // publisher worker: try `{path}.html` first, then `{path}/index.html`. The
+  // app worker previously tried only the /index.html form, so `/about` with an
+  // about.html at the root 404-ed here but served on the publisher.
+  if (!object && !filePath.endsWith(".html")) {
+    const htmlPath = `${filePath}.html`;
+    const htmlObject = await storage.readObject(userId, projectId, htmlPath);
+    if (htmlObject) {
+      object = htmlObject;
+      filePath = htmlPath;
     }
   }
 
-  const content = await storage.readFileBuffer(userId, projectId, filePath);
-  const contentType = getContentType(filePath);
-  const headers = new Headers({
-    "Content-Type": contentType
+  if (!object && !filePath.endsWith(".html")) {
+    const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
+    const indexObject = await storage.readObject(userId, projectId, indexPath);
+    if (indexObject) {
+      object = indexObject;
+      filePath = indexPath;
+    }
+  }
+
+  if (!object) {
+    return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
+  }
+
+  return new Response(binaryBody(new Uint8Array(await object.arrayBuffer())), {
+    headers: publishedResponseHeaders(filePath, object)
   });
-  if (!contentType.startsWith("text/html")) {
+}
+
+/**
+ * Build the Content-Type, caching validators, and §3¾ containment headers for
+ * a served published byte. Deliberately mirrors the publisher worker's
+ * responseHeaders() (packages/worker/src/index.ts) so both origins emit the
+ * SAME header set for the same file — SS-8 (content type), SS-15 (ETag /
+ * Last-Modified / HTML max-age=300), and the CSP sandbox composed on top.
+ */
+export function publishedResponseHeaders(filePath: string, object: R2ObjectBody): Headers {
+  const contentType = getServedContentType(filePath);
+  const headers = new Headers({ "Content-Type": contentType });
+
+  if (object.etag) {
+    headers.set("ETag", object.etag);
+  }
+  if (object.uploaded) {
+    headers.set("Last-Modified", object.uploaded.toUTCString());
+  }
+
+  // SS-15: HTML is short-lived (edits should surface quickly); everything else
+  // is content-addressed enough to cache hard. Same posture as the publisher.
+  if (contentType.startsWith("text/html")) {
+    headers.set("Cache-Control", "public, max-age=300");
+  } else {
     headers.set("Cache-Control", "public, max-age=31536000, immutable");
   }
+
   // §3¾: agent/student-authored bytes on our origin get the opaque-origin
-  // containment. serveByHandle (/u/) and serveLegacySite (/sites/) both funnel
-  // through here, so this single merge point covers every published byte.
+  // containment (sandbox allow-scripts + nosniff + no-referrer). These COMPOSE
+  // with the caching validators above — the CSP/security keys and the caching
+  // keys are disjoint, so neither clobbers the other. serveByHandle (/u/) and
+  // serveLegacySite (/sites/) both funnel through here, covering every byte.
   for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
     headers.set(key, value);
   }
-  return new Response(binaryBody(content), { headers });
+  return headers;
 }

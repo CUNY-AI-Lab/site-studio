@@ -154,6 +154,22 @@ describe("getContentType", () => {
     expect(getContentType("photo.jpeg")).toBe("image/jpeg");
   });
 
+  it("maps ES modules to application/javascript (SS-8: no octet-stream)", () => {
+    expect(getContentType("module.mjs")).toBe("application/javascript; charset=utf-8");
+  });
+
+  it("maps the extended type set the publisher previously lacked (SS-8)", () => {
+    expect(getContentType("notes.md")).toBe("text/markdown; charset=utf-8");
+    expect(getContentType("data.csv")).toBe("text/csv; charset=utf-8");
+    expect(getContentType("hero.avif")).toBe("image/avif");
+    expect(getContentType("legacy.eot")).toBe("application/vnd.ms-fontobject");
+    expect(getContentType("clip.mp4")).toBe("video/mp4");
+    expect(getContentType("clip.webm")).toBe("video/webm");
+    expect(getContentType("song.mp3")).toBe("audio/mpeg");
+    expect(getContentType("sound.wav")).toBe("audio/wav");
+    expect(getContentType("audio.ogg")).toBe("audio/ogg");
+  });
+
   it("falls back to octet-stream for unknown or missing extensions", () => {
     expect(getContentType("data.bin")).toBe("application/octet-stream");
     expect(getContentType("README")).toBe("application/octet-stream");
@@ -188,13 +204,11 @@ describe("parsePublishedRequest", () => {
     });
   });
 
-  it("supports the bare /:userId/:slug legacy shape", () => {
-    expect(parsePublishedRequest(new URL("https://x.test/owner/blog/style.css"))).toEqual({
-      kind: "legacy",
-      userId: "owner",
-      slug: "blog",
-      filePath: "style.css"
-    });
+  it("does NOT serve a bare /:userId/:slug path (SS-16: no owner-id leak)", () => {
+    // The bare fallback that served content addressed by raw owner id was
+    // removed; only the explicit /u/ and /sites/ prefixes parse.
+    expect(parsePublishedRequest(new URL("https://x.test/owner/blog/style.css"))).toBeNull();
+    expect(parsePublishedRequest(new URL("https://x.test/owner/blog"))).toBeNull();
   });
 
   it("returns null for URLs without enough path segments", () => {
@@ -460,6 +474,56 @@ describe("worker.fetch (integration)", () => {
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
     expect(await res.text()).toBe("Not found");
+  });
+
+  it("SS-27: a missing ASSET does NOT download the project's 404.html", async () => {
+    // A project-supplied 404.html must win only for navigations; a broken <img>
+    // should get a terse text/plain 404, not a full HTML document.
+    publishProject(bucket, "u", "blog", {
+      "index.html": "<h1>Home</h1>",
+      "404.html": "<h1>Custom Not Found</h1>"
+    });
+    const res = await worker.fetch(
+      assetRequest("https://x.test/sites/u/blog/missing.png"),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(await res.text()).toBe("Not found");
+  });
+
+  it("SS-13: serves a slug-less published project addressed by projectId", async () => {
+    publishProject(bucket, "u", "legacy", { "index.html": "<h1>Slugless</h1>" }, { slug: undefined });
+    const res = await worker.fetch(navRequest("https://x.test/sites/u/legacy/"), createEnv(bucket));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<h1>Slugless</h1>");
+  });
+
+  it("SS-15: HTML carries ETag/Last-Modified + max-age=300, composed with the CSP", async () => {
+    publishProject(bucket, "u", "blog", { "index.html": "<h1>Home</h1>" });
+    const res = await worker.fetch(navRequest("https://x.test/sites/u/blog/"), createEnv(bucket));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(res.headers.get("ETag")).toBeTruthy();
+    expect(res.headers.get("Last-Modified")).toBeTruthy();
+    // Caching validators and the §3¾ containment coexist on the same response.
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+
+  it("SS-15: non-HTML assets are cached immutably alongside the CSP", async () => {
+    publishProject(bucket, "u", "blog", {
+      "index.html": "<h1>Home</h1>",
+      "styles.css": "body{}"
+    });
+    const res = await worker.fetch(
+      assetRequest("https://x.test/sites/u/blog/styles.css"),
+      createEnv(bucket)
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("ETag")).toBeTruthy();
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });
 
   it("serves the styled 404 for an unknown site navigation without a home link", async () => {

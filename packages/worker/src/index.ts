@@ -42,33 +42,56 @@ export function fileKey(userId: string, projectId: string, filePath: string): st
   return `projects/${userId}/${projectId}/${sanitizeFilePath(filePath)}`;
 }
 
+/**
+ * AUTHORITATIVE served content-type table — a HAND-DUPLICATED copy of
+ * SERVED_CONTENT_TYPES in packages/app/src/lib/constants.ts. This worker cannot
+ * import from packages/app, so the two copies are maintained by hand and a
+ * parity test (packages/worker/src/serving-parity.test.ts) asserts they agree
+ * across a matrix of extensions.
+ *
+ * SS-8: both workers MUST return the SAME Content-Type for the same extension.
+ * The previous inline map here omitted .md/.csv/.avif/.eot and the media types
+ * and differed on charset, so a site served differently depending on which
+ * worker answered. Keep this list byte-identical to the app copy.
+ *
+ * IMPORTANT: keep in sync with packages/app/src/lib/constants.ts
+ * (SERVED_CONTENT_TYPES / getServedContentType).
+ */
+const SERVED_CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+  ".pdf": "application/pdf",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".eot": "application/vnd.ms-fontobject",
+  ".otf": "font/otf",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg"
+};
+
 export function getContentType(filePath: string): string {
   const match = filePath.toLowerCase().match(/\.[^.]+$/);
-  const extension = match?.[0] || "";
-  const types: Record<string, string> = {
-    ".html": "text/html; charset=utf-8",
-    ".htm": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".mjs": "application/javascript; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".txt": "text/plain; charset=utf-8",
-    ".xml": "application/xml; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".ico": "image/x-icon",
-    ".woff": "font/woff",
-    ".woff2": "font/woff2",
-    ".ttf": "font/ttf",
-    ".otf": "font/otf",
-    ".pdf": "application/pdf"
-  };
-
-  return types[extension] || "application/octet-stream";
+  return match ? SERVED_CONTENT_TYPES[match[0]] || "application/octet-stream" : "application/octet-stream";
 }
 
 export function publishedSortKey(metadata: ProjectMetadata): string {
@@ -113,9 +136,18 @@ export async function loadMigrationPointer(
 
 /**
  * A parsed published request. `kind` distinguishes the canonical handle URL
- * (/u/{handle}/{slug}/) from the legacy owner-id URL (/sites/{userId}/{slug}/
- * and the bare fallback). For "handle" requests `owner` holds the handle to be
- * resolved to a subject; for "legacy" requests it holds the owner id directly.
+ * (/u/{handle}/{slug}/) from the legacy owner-id URL (/sites/{userId}/{slug}/).
+ * For "handle" requests `owner` holds the handle to be resolved to a subject;
+ * for "legacy" requests it holds the owner id directly.
+ *
+ * SS-16: this ONLY matches the two explicit prefixes. It used to also treat any
+ * bare `≥2-segment` path as `{userId}/{slug}` and serve content addressed by
+ * raw owner id — with no handle indirection and no 301 to the /u/ form. The /u/
+ * scheme exists precisely to keep the CAIL subject out of public URLs; that
+ * bare fallback re-leaked it, and if the route pattern were ever broadened to
+ * catch bare paths it would silently serve owner-id-addressed content again.
+ * The branch is removed: a bare path returns null → the styled 404. The app
+ * worker has never had a bare route, so removing it also aligns the two.
  */
 export type ParsedPublishedRequest =
   | { kind: "handle"; handle: string; slug: string; filePath: string }
@@ -139,15 +171,6 @@ export function parsePublishedRequest(url: URL): ParsedPublishedRequest | null {
       userId: parts[1],
       slug: parts[2],
       filePath: parts.slice(3).join("/") || "index.html"
-    };
-  }
-
-  if (parts.length >= 2) {
-    return {
-      kind: "legacy",
-      userId: parts[0],
-      slug: parts[1],
-      filePath: parts.slice(2).join("/") || "index.html"
     };
   }
 
@@ -257,7 +280,17 @@ export async function findPublishedProject(
     return null;
   }
 
-  matches.sort((left, right) => publishedSortKey(right.metadata).localeCompare(publishedSortKey(left.metadata)));
+  // SS-13 tiebreaker: on equal published timestamps, break by projectId so the
+  // choice is DETERMINISTIC and identical to the app worker's
+  // findPublishedProjectBySlug. Without the secondary key two same-timestamp
+  // duplicates could resolve to different projects on the two origins.
+  matches.sort((left, right) => {
+    const publishedOrder = publishedSortKey(right.metadata).localeCompare(publishedSortKey(left.metadata));
+    if (publishedOrder !== 0) {
+      return publishedOrder;
+    }
+    return right.projectId.localeCompare(left.projectId);
+  });
   return matches[0] || null;
 }
 
@@ -355,7 +388,13 @@ export function fallbackNotFoundResponse(
 
 /**
  * Missing file within a resolved published site. A project-supplied 404.html
- * still wins; otherwise fall back to the styled/terse response.
+ * wins ONLY for page navigations; otherwise fall back to the styled/terse
+ * response.
+ *
+ * SS-27: this used to serve the custom 404.html for ANY miss, including a
+ * broken <img>/<script>/<link>, so an asset request could download a full HTML
+ * document. Gating on looksLikePageNavigation (matching the app worker) keeps
+ * asset misses terse and reserves the styled HTML for real navigations.
  */
 export async function notFoundResponse(
   bucket: R2Bucket,
@@ -365,12 +404,14 @@ export async function notFoundResponse(
   filePath: string,
   rootPath?: string
 ): Promise<Response> {
-  const custom404 = await readObject(bucket, userId, projectId, "404.html");
-  if (custom404) {
-    return new Response(custom404.body, {
-      status: 404,
-      headers: responseHeaders("404.html", custom404)
-    });
+  if (looksLikePageNavigation(request, filePath)) {
+    const custom404 = await readObject(bucket, userId, projectId, "404.html");
+    if (custom404) {
+      return new Response(custom404.body, {
+        status: 404,
+        headers: responseHeaders("404.html", custom404)
+      });
+    }
   }
 
   return fallbackNotFoundResponse(request, filePath, rootPath);

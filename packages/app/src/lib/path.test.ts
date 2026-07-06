@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { sanitizeProjectId, sanitizeFilePath, getContentType, isTextContentType, addCacheBusterToHtml, buildFileTree } from "./path";
+import { getServedContentType } from "./constants";
 import type { StorageFile } from "../types";
 
 describe("sanitizeProjectId", () => {
@@ -105,6 +106,33 @@ describe("getContentType", () => {
 
   it("handles nested paths", () => {
     expect(getContentType("assets/images/logo.svg")).toBe("image/svg+xml");
+  });
+});
+
+describe("getServedContentType (SS-8 authoritative serving map)", () => {
+  it("adds charset to text types", () => {
+    expect(getServedContentType("index.html")).toBe("text/html; charset=utf-8");
+    expect(getServedContentType("styles.css")).toBe("text/css; charset=utf-8");
+    expect(getServedContentType("app.js")).toBe("application/javascript; charset=utf-8");
+    expect(getServedContentType("notes.md")).toBe("text/markdown; charset=utf-8");
+    expect(getServedContentType("data.csv")).toBe("text/csv; charset=utf-8");
+  });
+
+  it("maps .mjs to application/javascript (never octet-stream)", () => {
+    expect(getServedContentType("module.mjs")).toBe("application/javascript; charset=utf-8");
+  });
+
+  it("leaves binary types without a charset", () => {
+    expect(getServedContentType("logo.png")).toBe("image/png");
+    expect(getServedContentType("hero.avif")).toBe("image/avif");
+    expect(getServedContentType("clip.mp4")).toBe("video/mp4");
+    expect(getServedContentType("legacy.eot")).toBe("application/vnd.ms-fontobject");
+  });
+
+  it("is case-insensitive and falls back to octet-stream", () => {
+    expect(getServedContentType("IMAGE.PNG")).toBe("image/png");
+    expect(getServedContentType("file.xyz")).toBe("application/octet-stream");
+    expect(getServedContentType("Makefile")).toBe("application/octet-stream");
   });
 });
 

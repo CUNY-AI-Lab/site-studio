@@ -282,6 +282,15 @@ export class R2ProjectStorage {
     return new Uint8Array(await object.arrayBuffer());
   }
 
+  /**
+   * Raw R2 object for a project file (or null if absent), exposing `etag` and
+   * `uploaded` so the published-site serving path can emit ETag/Last-Modified
+   * validators identically to the standalone publisher worker (SS-15 parity).
+   */
+  async readObject(userId: string, projectId: string, filePath: string): Promise<R2ObjectBody | null> {
+    return this.bucket.get(fileKey(userId, projectId, filePath));
+  }
+
   async writeFile(userId: string, projectId: string, filePath: string, content: string | Uint8Array | ArrayBuffer): Promise<void> {
     const key = fileKey(userId, projectId, filePath);
     await this.bucket.put(key, content);
@@ -589,7 +598,11 @@ export class R2ProjectStorage {
 
     for (const projectId of projectIds) {
       const metadata = await this.getProjectMetadata(userId, projectId);
-      if (metadata?.published && metadata.slug === slug) {
+      // SS-13: match by slug, OR by projectId when the metadata carries no slug
+      // (legacy/migrated sites published before slugs existed). Kept identical to
+      // the publisher worker's findPublishedProject so a slug-less site resolves
+      // the same on both origins instead of 404-ing on one.
+      if (metadata?.published && (metadata.slug === slug || (!metadata.slug && projectId === slug))) {
         matches.push({ projectId, metadata });
       }
     }

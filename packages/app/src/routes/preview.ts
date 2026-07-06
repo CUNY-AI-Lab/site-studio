@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import type { Env } from "../types";
-import { addCacheBusterToHtml, getContentType, isTextContentType } from "../lib/path";
+import { addCacheBusterToHtml } from "../lib/path";
+import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
@@ -99,14 +100,17 @@ async function servePreviewFile(
     return previewNotFound(c, requestedPath, siteRootPath);
   }
 
-  const contentType = getContentType(resolvedPath);
+  // SS-8: the served content-type (with `; charset=utf-8` on text types) comes
+  // from the same authoritative table both workers use, so a given extension
+  // renders identically in the preview and on the published origins.
+  const contentType = getServedContentType(resolvedPath);
 
-  c.header("Content-Type", isTextContentType(contentType) ? `${contentType}; charset=utf-8` : contentType);
+  c.header("Content-Type", contentType);
   c.header("X-Frame-Options", "SAMEORIGIN");
   c.header("Cache-Control", "no-cache");
   c.header("Pragma", "no-cache");
 
-  if (contentType === "text/html") {
+  if (contentType.startsWith("text/html")) {
     const version = c.req.query("v") || undefined;
     content = new TextEncoder().encode(addCacheBusterToHtml(new TextDecoder().decode(content), version));
   }
@@ -116,7 +120,7 @@ async function servePreviewFile(
   // session / same-origin /api unreachable even on a direct top-level open.
   return new Response(binaryBody(content), {
     headers: {
-      "Content-Type": isTextContentType(contentType) ? `${contentType}; charset=utf-8` : contentType,
+      "Content-Type": contentType,
       "X-Frame-Options": "SAMEORIGIN",
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
