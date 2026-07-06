@@ -111,7 +111,7 @@ export function invalidateCsrfToken(): void {
  * merely re-reading it would loop — we must hit /api/csrf to receive a fresh
  * Set-Cookie that overwrites it.
  */
-async function refreshCsrfToken(): Promise<string> {
+export async function refreshCsrfToken(): Promise<string> {
 	invalidateCsrfToken();
 	const response = await fetch(resolvePath('/api/csrf'), { credentials: 'include' });
 	if (!response.ok) {

@@ -45,6 +45,15 @@ class FakeWebSocket {
 	}
 
 	private emit(type: string, ev: any) {
+		// Real WebSocket events carry `currentTarget`; the component relies on it to
+		// distinguish the current socket from an orphaned/superseded one (SS-12).
+		try {
+			Object.defineProperty(ev, 'currentTarget', { value: this, configurable: true });
+			Object.defineProperty(ev, 'target', { value: this, configurable: true });
+		} catch {
+			// Some Event impls make these read-only accessors; fall back to assignment.
+			(ev as any).currentTarget = this;
+		}
 		this.listeners[type]?.forEach((cb) => cb(ev));
 	}
 
@@ -59,6 +68,11 @@ class FakeWebSocket {
 	serverClose() {
 		this.readyState = FakeWebSocket.CLOSED;
 		this.emit('close', new CloseEvent('close'));
+	}
+	// Fire an `error` event (e.g. a failed handshake) without closing, mirroring a
+	// real socket that errors before OPEN.
+	serverError() {
+		this.emit('error', new Event('error'));
 	}
 }
 
@@ -177,6 +191,239 @@ describe('AgentChat', () => {
 		await component.sendPrompt('second');
 		await settle();
 		expect(ws.sent.length).toBe(sentAfterFirst);
+	});
+
+	// SS-9: after the user hits Stop, a late CF_AGENT_USE_CHAT_RESPONSE frame for the
+	// cancelled request id must be dropped — it must not recreate the active stream
+	// and resume appending text, and isLoading must stay false.
+	it('drops late stream frames for a stopped request (SS-9)', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('build something');
+		await settle();
+
+		// The request id is the `id` on the CF_AGENT_USE_CHAT_REQUEST frame the
+		// component sent. Grab it so our stream frames match the live request.
+		const requestFrame = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((msg) => msg.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(requestFrame).toBeTruthy();
+		const streamId: string = requestFrame.id;
+
+		function chunk(body: unknown, done = false) {
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+				id: streamId,
+				body: JSON.stringify(body),
+				done
+			});
+		}
+
+		chunk({ type: 'text-start', id: 't1' });
+		chunk({ type: 'text-delta', id: 't1', delta: 'Before stop' });
+		await settle();
+		expect(screen.getByText('Before stop')).toBeInTheDocument();
+
+		// User stops the request.
+		const stopButton = screen.getByTitle('Stop request');
+		stopButton.click();
+		await settle();
+
+		// A cancel frame was sent, and the loading state cleared.
+		const sentTypes = ws.sent.map((raw) => JSON.parse(raw).type);
+		expect(sentTypes).toContain(AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL);
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+
+		// A late frame for the same (now cancelled) id arrives — it must be ignored.
+		chunk({ type: 'text-delta', id: 't1', delta: ' AFTER STOP' });
+		await settle();
+
+		expect(screen.queryByText(/AFTER STOP/)).not.toBeInTheDocument();
+		expect(screen.getByText('Before stop')).toBeInTheDocument();
+		// Still not loading — no active status card / stop button reappeared.
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
+	// SS-11: a stale-CSRF handshake closes the socket before OPEN; the reconnect
+	// must force a fresh /api/csrf round-trip so the next handshake uses a new token,
+	// and must not infinite-loop.
+	it('refreshes the CSRF token before reconnecting after a pre-OPEN close (SS-11)', async () => {
+		// Rotate the delivered token on each /api/csrf hit so we can prove the
+		// reconnect used a freshly-fetched one rather than the cached original.
+		let csrfHits = 0;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				csrfHits += 1;
+				document.cookie = `cail_csrf_sitestudio=token-${csrfHits}`;
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const first = FakeWebSocket.instances[0];
+		// Initial handshake used the first token.
+		expect(new URL(first.url).searchParams.get('csrf')).toBe('token-1');
+		const csrfHitsAfterInitial = csrfHits;
+
+		vi.useFakeTimers();
+		try {
+			// Handshake fails before OPEN: the socket closes without ever opening.
+			first.serverClose();
+			flushSync();
+			expect(FakeWebSocket.instances.length).toBe(1);
+
+			// First backoff is 1000ms; the reconnect must refresh CSRF first.
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+
+			expect(FakeWebSocket.instances.length).toBe(2);
+			// The refresh forced an extra /api/csrf round-trip...
+			expect(csrfHits).toBeGreaterThan(csrfHitsAfterInitial);
+			// ...and the reconnecting socket carries the fresh token, not the stale one.
+			const second = FakeWebSocket.instances[1];
+			expect(new URL(second.url).searchParams.get('csrf')).not.toBe('token-1');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// SS-11 (cont.): the recovery must not refresh-storm or spawn unbounded sockets —
+	// after MAX_RECONNECT_ATTEMPTS the reconnect loop gives up.
+	it('stops reconnecting after MAX_RECONNECT_ATTEMPTS (SS-11 no infinite loop)', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=rotating-token';
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+
+		vi.useFakeTimers();
+		try {
+			// Every new socket also fails pre-OPEN; drive the full backoff schedule.
+			for (let i = 0; i < 10; i += 1) {
+				const current = FakeWebSocket.last();
+				if (current.readyState !== FakeWebSocket.CLOSED) {
+					current.serverClose();
+					flushSync();
+				}
+				await vi.advanceTimersByTimeAsync(20000);
+				flushSync();
+				await vi.advanceTimersByTimeAsync(0);
+				flushSync();
+			}
+			// 1 initial + at most MAX_RECONNECT_ATTEMPTS (5) reconnect sockets.
+			expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(6);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// SS-12: a socket that errors on first connect must not, when it later closes,
+	// tear down a newer good socket or schedule a spurious reconnect.
+	it('an orphaned failed socket cannot tear down the current socket (SS-12)', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const first = FakeWebSocket.instances[0];
+
+		// First connect errors before OPEN: ensureSocket's promise rejects and its
+		// refs are cleared. This is the flaky-first-connect path.
+		first.serverError();
+		await settle();
+
+		// A subsequent action opens a fresh, good socket (socket #2). ensureSocket
+		// creates the socket synchronously but its promise only resolves on OPEN, so
+		// don't await sendPrompt — wait for the socket, open it, then let it settle.
+		const pending = component.sendPrompt('hello there');
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+		const second = FakeWebSocket.last();
+		second.open();
+		await pending;
+		await settle();
+		expect(second.readyState).toBe(FakeWebSocket.OPEN);
+
+		vi.useFakeTimers();
+		try {
+			const socketsBefore = FakeWebSocket.instances.length;
+
+			// The orphaned first socket now fires a late close. With the SS-12 fix its
+			// listeners were already removed on the earlier error, so this is inert;
+			// even if a close listener lingered, the currentTarget guard would keep it
+			// from nulling the current (second) socket or scheduling a reconnect.
+			first.serverClose();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(15000);
+			flushSync();
+
+			// No new socket spawned — the current one survived, no spurious reconnect.
+			expect(FakeWebSocket.instances.length).toBe(socketsBefore);
+			expect(second.readyState).toBe(FakeWebSocket.OPEN);
+		} finally {
+			vi.useRealTimers();
+		}
+
+		// The current socket is still usable: a stream frame on #2 renders.
+		second.serverMessage({
+			type: AgentMessageType.CF_AGENT_CHAT_MESSAGES,
+			messages: [{ id: 'x1', role: 'assistant', parts: [{ type: 'text', text: 'still alive' }] }]
+		});
+		await settle();
+		expect(screen.getByText('still alive')).toBeInTheDocument();
+	});
+
+	// SS-10: dropping the socket mid-request must NOT append a permanent dead-end
+	// error while a reconnect is pending (transient reconnecting state instead);
+	// once reconnect attempts are exhausted, the error IS surfaced.
+	it('shows no dead-end error while reconnecting, surfaces it when exhausted (SS-10)', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		let ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('do a big task');
+		await settle();
+
+		vi.useFakeTimers();
+		try {
+			// Socket drops mid-request. A reconnect is pending → no permanent error.
+			ws.serverClose();
+			flushSync();
+			expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
+
+			// Exhaust reconnect attempts: each new socket also drops pre-OPEN.
+			for (let i = 0; i < 8; i += 1) {
+				await vi.advanceTimersByTimeAsync(20000);
+				flushSync();
+				await vi.advanceTimersByTimeAsync(0);
+				flushSync();
+				const current = FakeWebSocket.last();
+				if (current !== ws && current.readyState !== FakeWebSocket.CLOSED) {
+					current.serverClose();
+					flushSync();
+					ws = current;
+				}
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+		await settle();
+
+		// After the reconnect budget is spent, the permanent error is surfaced.
+		expect(screen.getByText(/Connection lost while the agent was responding/)).toBeInTheDocument();
 	});
 
 	it('schedules a reconnect with backoff after an unexpected socket close', async () => {

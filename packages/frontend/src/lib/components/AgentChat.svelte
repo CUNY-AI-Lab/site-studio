@@ -4,7 +4,7 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
 	import { getErrorMessage } from '$lib/api/errors';
-	import { csrfFetch, getCsrfToken } from '$lib/api/csrf';
+	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
@@ -87,6 +87,13 @@
 	let requestStartedAt = $state<number | null>(null);
 	let clockNow = $state(Date.now());
 	let toolStartTimes = $state<Record<string, number>>({});
+	// SS-9: request ids the user explicitly cancelled. Late CF_AGENT_USE_CHAT_RESPONSE
+	// frames for these ids must be dropped rather than resuming a stopped stream.
+	let cancelledRequestIds = $state<Set<string>>(new Set());
+	// SS-11: guard so we refresh the CSRF cookie at most once per reconnect cycle
+	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
+	// before the next attempt avoids a refresh-storm while still self-healing).
+	let csrfRefreshedThisCycle = false;
 
 	const MAX_DISPLAYED_MESSAGES = 10;
 	const MUTATING_TOOLS = new Set([
@@ -226,6 +233,7 @@
 		expectingContinuation = false;
 		requestStartedAt = null;
 		toolStartTimes = {};
+		isReconnecting = false;
 	}
 
 	function getRunningToolFromParts(parts: UIMessagePart[]): RunningToolState | null {
@@ -491,6 +499,10 @@
 	let reconnectAttempts = 0;
 	const MAX_RECONNECT_ATTEMPTS = 5;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	// SS-10: true while a silent reconnect is pending after a mid-request drop, so
+	// we show a transient "reconnecting" state instead of a permanent dead-end
+	// error bubble. Cleared on a successful reconnect or when attempts are exhausted.
+	let isReconnecting = $state(false);
 
 	function closeSocket() {
 		if (reconnectTimer) {
@@ -498,6 +510,8 @@
 			reconnectTimer = null;
 		}
 		reconnectAttempts = 0;
+		isReconnecting = false;
+		csrfRefreshedThisCycle = false;
 
 		if (socket) {
 			ignoreNextSocketClose = true;
@@ -511,8 +525,20 @@
 		socketPromise = null;
 	}
 
-	function handleSocketClose() {
-		const closedSocket = socket;
+	function handleSocketClose(event: Event) {
+		// SS-12: a superseded (orphaned) socket must not tear down the current one.
+		// If this close came from a socket that is NOT the current `socket` (and a
+		// current socket exists to protect), just clean up its own listeners and
+		// return — do not null refs or schedule a reconnect. When `socket` is null
+		// there is no newer socket to protect, so we proceed normally.
+		const closedSocket = event.currentTarget as WebSocket | null;
+		if (socket && closedSocket && closedSocket !== socket) {
+			closedSocket.removeEventListener('message', handleSocketMessage);
+			closedSocket.removeEventListener('close', handleSocketClose);
+			closedSocket.removeEventListener('error', handleSocketError);
+			return;
+		}
+
 		socket = null;
 		socketPromise = null;
 
@@ -528,21 +554,31 @@
 			return;
 		}
 
-		if (isLoading) {
-			resetRequestState();
+		const willReconnect = reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !!projectId;
 
-			uiMessages = [
-				...uiMessages,
-				{
-					id: generateId(),
-					role: 'assistant',
-					parts: [{ type: 'text', text: 'Connection lost while the agent was responding.' }]
-				}
-			];
+		if (isLoading) {
+			if (willReconnect) {
+				// SS-10: don't append a permanent dead-end error while a silent
+				// reconnect is about to run — show a transient reconnecting state and
+				// keep the request "live" so the UI doesn't contradict itself.
+				isReconnecting = true;
+			} else {
+				// Reconnect attempts exhausted — surface the permanent error.
+				resetRequestState();
+				isReconnecting = false;
+				uiMessages = [
+					...uiMessages,
+					{
+						id: generateId(),
+						role: 'assistant',
+						parts: [{ type: 'text', text: 'Connection lost while the agent was responding.' }]
+					}
+				];
+			}
 		}
 
 		// Attempt reconnection with exponential backoff
-		if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && projectId) {
+		if (willReconnect) {
 			const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000);
 			reconnectAttempts++;
 			reconnectTimer = setTimeout(() => {
@@ -572,7 +608,22 @@
 			return socketPromise;
 		}
 
-		const csrf = await getCsrfToken();
+		// SS-11: on a reconnect (reconnectAttempts > 0) a stale CSRF token is the
+		// likely cause of the prior handshake failure, and re-reading the cookie
+		// would loop with the same rejected token. Force a fresh /api/csrf round-trip
+		// once per reconnect cycle so the next handshake uses a fresh token; the
+		// guard prevents a refresh-storm across successive attempts.
+		let csrf: string;
+		if (reconnectAttempts > 0 && !csrfRefreshedThisCycle) {
+			csrfRefreshedThisCycle = true;
+			try {
+				csrf = await refreshCsrfToken();
+			} catch {
+				csrf = await getCsrfToken();
+			}
+		} else {
+			csrf = await getCsrfToken();
+		}
 
 		// Awaiting the token yields the event loop, so a concurrent ensureSocket()
 		// call may have already started or opened a socket. Re-check before creating
@@ -597,13 +648,24 @@
 			const onOpen = () => {
 				nextSocket.removeEventListener('error', onError);
 				reconnectAttempts = 0; // Reset on successful connection
+				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
+				isReconnecting = false; // SS-10: silent reconnect succeeded
 				resolve(nextSocket);
 			};
 
 			const onError = () => {
 				nextSocket.removeEventListener('open', onOpen);
+				// SS-12: the failed socket keeps its message/close/error listeners.
+				// If we only null the refs, a later close on this orphaned socket
+				// would run handleSocketClose against a newer good socket. Remove its
+				// listeners so its late events cannot tear down the current socket.
+				nextSocket.removeEventListener('message', handleSocketMessage);
+				nextSocket.removeEventListener('close', handleSocketClose);
+				nextSocket.removeEventListener('error', handleSocketError);
 				socketPromise = null;
-				socket = null;
+				if (socket === nextSocket) {
+					socket = null;
+				}
 				reject(new Error('Unable to connect to the agent'));
 			};
 
@@ -655,6 +717,8 @@
 		isLoading = true;
 		activeStream = null;
 		expectingContinuation = false;
+		// SS-9: a genuinely new request starts fresh; drop stale cancellation markers.
+		cancelledRequestIds = new Set();
 
 		ws.send(
 			JSON.stringify({
@@ -774,6 +838,12 @@
 				break;
 			}
 			case AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE: {
+				// SS-9: drop frames for a request the user stopped. Without this a late
+				// frame would recreate activeStream below and resume appending text.
+				if (typeof data.id === 'string' && cancelledRequestIds.has(data.id)) {
+					break;
+				}
+
 				if (!activeStream || activeStream.id !== data.id) {
 					const continuation = data.continuation === true || expectingContinuation;
 					activeStream = createStreamState(data.id, continuation);
@@ -856,6 +926,10 @@
 		if (!currentRequestId) {
 			return;
 		}
+
+		// SS-9: remember the cancelled id so a late CF_AGENT_USE_CHAT_RESPONSE frame
+		// for it can't recreate activeStream and resume appending after the stop.
+		cancelledRequestIds.add(currentRequestId);
 
 		try {
 			sendSocketMessage({
@@ -1186,7 +1260,7 @@
 					<span class="active-status-time">{requestElapsedLabel}</span>
 				</div>
 				<div class="active-status-meta">
-					<span class="status-pill">Live activity</span>
+					<span class="status-pill">{isReconnecting ? 'Reconnecting…' : 'Live activity'}</span>
 					{#if activeToolTarget}
 						<span class="status-pill muted">{activeToolTarget}</span>
 					{/if}
