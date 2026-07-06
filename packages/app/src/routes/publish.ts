@@ -6,6 +6,8 @@ import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
+import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
+import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
@@ -44,22 +46,13 @@ async function collectPublishA11yFindings(
  * referenced by a tag. We serve HTML only for navigations so a broken
  * <img>/<script>/<link> does not download a full HTML document.
  */
-function looksLikePageNavigation(c: AppContext, filePath: string): boolean {
-  const accept = c.req.header("Accept") || "";
-  if (accept.includes("text/html")) {
-    return true;
-  }
-  const path = filePath.trim();
-  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
-}
-
 /**
  * Respond to a missing published file. Page navigations get the dignified
  * styled 404 (with a "Go to site home" link); asset requests keep a terse
  * plain-text 404.
  */
 function publishedNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
-  if (looksLikePageNavigation(c, filePath)) {
+  if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
     return c.html(renderNotFoundPage(siteRootPath), 404);
   }
   return c.text("Not found", 404);
@@ -78,7 +71,7 @@ async function missingPublishedFile(
   filePath: string,
   siteRootPath: string
 ): Promise<Response> {
-  if (looksLikePageNavigation(c, filePath)) {
+  if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
     const custom = await storage.readObject(userId, projectId, "404.html");
     if (custom) {
       // Project-supplied 404.html is agent/student-authored active content served
@@ -382,37 +375,19 @@ async function servePublishedFile(
   rawPath: string,
   siteRootPath: string
 ) {
-  let filePath = rawPath || "index.html";
-  let object = await storage.readObject(userId, projectId, filePath);
+  // SS-14 extensionless resolution — one shared helper for all three serving
+  // paths (preview, publish, publisher worker): try `{path}.html`, then
+  // `{path}/index.html`. See @site-studio/serving-core/extensionless.
+  const resolved = await resolveExtensionlessFile(rawPath || "index.html", (candidate) =>
+    storage.readObject(userId, projectId, candidate)
+  );
 
-  // SS-14 extensionless resolution — kept byte-for-byte parallel to the
-  // publisher worker: try `{path}.html` first, then `{path}/index.html`. The
-  // app worker previously tried only the /index.html form, so `/about` with an
-  // about.html at the root 404-ed here but served on the publisher.
-  if (!object && !filePath.endsWith(".html")) {
-    const htmlPath = `${filePath}.html`;
-    const htmlObject = await storage.readObject(userId, projectId, htmlPath);
-    if (htmlObject) {
-      object = htmlObject;
-      filePath = htmlPath;
-    }
-  }
-
-  if (!object && !filePath.endsWith(".html")) {
-    const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
-    const indexObject = await storage.readObject(userId, projectId, indexPath);
-    if (indexObject) {
-      object = indexObject;
-      filePath = indexPath;
-    }
-  }
-
-  if (!object) {
+  if (!resolved) {
     return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
   }
 
-  return new Response(binaryBody(new Uint8Array(await object.arrayBuffer())), {
-    headers: publishedResponseHeaders(filePath, object)
+  return new Response(binaryBody(new Uint8Array(await resolved.object.arrayBuffer())), {
+    headers: publishedResponseHeaders(resolved.filePath, resolved.object)
   });
 }
 

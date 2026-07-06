@@ -21,26 +21,29 @@
  *   - `handles/{handle}.json`      -> { ownerId, claimedAt }  (handle -> owner)
  *   - `userhandles/{ownerId}.json` -> { handle, claimedAt }   (owner -> handle)
  *
- * The claim flow is race-safe via atomic R2 put-if-absent
- * (`putIfAbsent` / `onlyIf: { etagDoesNotMatch: "*" }`): a lost conditional
- * write means someone else won, so concurrent claimants cannot clobber or
- * silently share. It writes reverse-first (`userhandles/{owner}` is the
- * one-handle gate) so a lost race leaves no orphaned handle record; on losing
- * the forward `handles/{handle}` write it rolls back only its own reverse slot.
- * See `claimHandle` for the interleaving walk.
+ * The claim flow (see `claimHandle` for the full interleaving walk):
  *
- * Reverse-orphan reaper (SS-3 cohort residual #2): the two put-if-absent writes
- * are NOT one transaction, so a process death BETWEEN them can leave the reverse
- * slot `userhandles/{owner}` written while the forward `handles/{handle}` was
- * never claimed (or was later claimed by someone else). That leaves the user
- * pointed at a handle they do not actually own. `claimHandle`'s fast path now
- * VERIFIES the forward record before trusting the reverse slot: if the forward
- * record is missing or points at a different owner, the reverse slot is a stale
- * orphan — it is REAPED (deleted) and the claim proceeds normally, rather than
- * the old behavior of falsely reporting "you already have a handle" and hiding
- * the orphan forever. A healthy reverse+forward pair still yields the
- * idempotent-success / different-handle-409 behavior. See `claimHandle`.
+ * Each mapping record is written with atomic R2 put-if-absent (`onlyIf:
+ * { etagDoesNotMatch: "*" }`): a lost conditional write means someone else won,
+ * so concurrent claimants cannot clobber or silently share. The reverse slot
+ * `userhandles/{owner}` is claimed FIRST because it is the "one handle per user"
+ * gate — two handles racing for the same owner both contend on that one key, so
+ * the loser has written nothing under `handles/…`. On then losing the forward
+ * `handles/{handle}` write, the claim rolls back only its own reverse slot.
+ *
+ * These two writes are NOT one transaction, so a crash BETWEEN them can still
+ * leave a durable orphan: the reverse slot written while the forward record was
+ * never claimed (or was later won by someone else), pointing the user at a
+ * handle they do not own. `claimHandle`'s fast path therefore VERIFIES the pair
+ * before trusting the reverse slot — if the forward record is missing or points
+ * at a different owner, the reverse slot is a stale orphan and is REAPED
+ * (deleted) so the claim proceeds cleanly, instead of the old behavior of
+ * falsely reporting "you already have a handle" and hiding the orphan forever.
+ * A healthy reverse+forward pair keeps the idempotent-success /
+ * different-handle-409 contract. (Reverse-orphan reaper: SS-3 residual #2.)
  */
+
+import { readR2Json, putR2Json } from "./r2-json";
 
 export interface HandleRecord {
   /** Durable owner key (CAIL subject or anonymous `user_…` id). */
@@ -147,22 +150,6 @@ export function userHandleRecordKey(ownerId: string): string {
   return `userhandles/${ownerId}.json`;
 }
 
-async function readJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
-  const object = await bucket.get(key);
-  if (!object) return null;
-  try {
-    return JSON.parse(await object.text()) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function putJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
-  await bucket.put(key, JSON.stringify(value), {
-    httpMetadata: { contentType: "application/json" }
-  });
-}
-
 /**
  * Atomic put-if-absent: write `value` at `key` only when no object exists
  * there. R2's conditional put `onlyIf: { etagDoesNotMatch: "*" }` succeeds iff
@@ -183,7 +170,7 @@ async function putJsonIfAbsent(bucket: R2Bucket, key: string, value: unknown): P
 
 /** The handle a candidate resolves to, if any (handle -> owner lookup). */
 export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Promise<string | null> {
-  const record = await readJson<HandleRecord>(bucket, handleRecordKey(handle));
+  const record = await readR2Json<HandleRecord>(bucket, handleRecordKey(handle));
   if (!record || typeof record.ownerId !== "string" || !record.ownerId) {
     return null;
   }
@@ -192,7 +179,7 @@ export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Prom
 
 /** The handle a user owns, if any (owner -> handle lookup). */
 export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
-  const record = await readJson<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
+  const record = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
   if (!record || typeof record.handle !== "string" || !record.handle) {
     return null;
   }
@@ -397,9 +384,9 @@ export async function migrateHandle(options: {
   }
 
   // Point the handle record at the subject (idempotent — safe to repeat).
-  const record = await readJson<HandleRecord>(bucket, handleRecordKey(anonHandle));
+  const record = await readR2Json<HandleRecord>(bucket, handleRecordKey(anonHandle));
   const claimedAt = record?.claimedAt ?? now();
-  await putJson(bucket, handleRecordKey(anonHandle), {
+  await putR2Json(bucket, handleRecordKey(anonHandle), {
     ownerId: subject,
     claimedAt
   } satisfies HandleRecord);
@@ -407,7 +394,7 @@ export async function migrateHandle(options: {
   const subjectHandle = await getUserHandle(bucket, subject);
   if (!subjectHandle) {
     // Subject has no handle: promote the anon handle to the subject's primary.
-    await putJson(bucket, userHandleRecordKey(subject), {
+    await putR2Json(bucket, userHandleRecordKey(subject), {
       handle: anonHandle,
       claimedAt
     } satisfies UserHandleRecord);

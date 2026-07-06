@@ -5,28 +5,15 @@ import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
+import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
+import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
 import { getUser } from "../lib/session";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
 type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
 
-/**
- * A preview request "looks like a page navigation" when the visitor expects a
- * document, so a styled 404 belongs (it renders inside the editor iframe).
- * Asset requests (css/js/images) keep a terse 404 so a broken tag does not
- * download a full HTML document.
- */
-function looksLikePageNavigation(c: AppContext, filePath: string): boolean {
-  const accept = c.req.header("Accept") || "";
-  if (accept.includes("text/html")) {
-    return true;
-  }
-  const path = filePath.trim();
-  return path === "" || path.endsWith("/") || path.endsWith(".html") || path.endsWith(".htm");
-}
-
 function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
-  if (looksLikePageNavigation(c, filePath)) {
+  if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
     return c.html(renderNotFoundPage(siteRootPath), 404);
   }
   return c.text("Not found", 404);
@@ -71,34 +58,30 @@ async function servePreviewFile(
     filePath = `${filePath}index.html`;
   }
 
-  const primaryPath = filePath;
-  const fallbackPath = !filePath.includes(".") ? `${filePath}/index.html` : null;
-
-  let content: Uint8Array | null = null;
-  let resolvedPath = primaryPath;
-
-  try {
-    content = await storage.readFileBuffer(user.id, projectId, primaryPath);
-  } catch (error) {
-    if (!(error instanceof FileNotFoundError)) {
+  // SS-14 extensionless resolution via the shared helper (try `{path}.html`
+  // then `{path}/index.html`). This ALIGNS preview to publish/publisher (the
+  // sanctioned S3 behavior change): preview previously only tried
+  // `{path}/index.html` and never the flat `{path}.html`. Adapt the
+  // throw-on-miss readFileBuffer into a null-returning probe the helper wants.
+  const readOrNull = async (candidate: string): Promise<Uint8Array | null> => {
+    try {
+      return await storage.readFileBuffer(user.id, projectId, candidate);
+    } catch (error) {
+      if (error instanceof FileNotFoundError) {
+        return null;
+      }
       throw error;
     }
-  }
+  };
 
-  if (!content && fallbackPath) {
-    try {
-      content = await storage.readFileBuffer(user.id, projectId, fallbackPath);
-      resolvedPath = fallbackPath;
-    } catch (error) {
-      if (!(error instanceof FileNotFoundError)) {
-        throw error;
-      }
-    }
-  }
+  const resolved = await resolveExtensionlessFile(filePath, readOrNull);
 
-  if (!content) {
+  if (!resolved) {
     return previewNotFound(c, requestedPath, siteRootPath);
   }
+
+  let content: Uint8Array | null = resolved.object;
+  const resolvedPath = resolved.filePath;
 
   // SS-8: the served content-type (with `; charset=utf-8` on text types) comes
   // from the same authoritative table both workers use, so a given extension

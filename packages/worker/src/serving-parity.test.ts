@@ -1,20 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import worker, {
-  getContentType as workerGetContentType,
   findPublishedProject as workerFindPublishedProject,
   type Env
 } from "./index";
-// The app worker's authoritative serving copies. The publisher CANNOT import
-// from packages/app at runtime (separate deploy), so its serving logic is a
-// hand-maintained duplicate. This test imports BOTH copies and asserts they
-// agree across a matrix — it is the anti-drift mechanism: if a future edit
-// touches one copy and not the other, one of these assertions fails.
-import {
-  getServedContentType as appGetServedContentType,
-  SERVED_CONTENT_TYPES as APP_SERVED_CONTENT_TYPES
-} from "../../app/src/lib/constants";
-import { servedContentHeaders as workerServedContentHeaders } from "./serving-headers";
-import { servedContentHeaders as appServedContentHeaders } from "../../app/src/lib/serving-headers";
+// The two workers' serving logic (content-type table, §3¾ security headers, the
+// fallback 404 page, page-navigation detection, extensionless resolution) now
+// lives once in @site-studio/serving-core and is imported by both. The former
+// table/header IDENTITY assertions here are therefore redundant — a single
+// source cannot drift from itself, and serving-core owns their unit coverage.
+// What remains below are the genuine ROUTE-BEHAVIOR checks: how the publisher
+// worker composes those primitives end-to-end through fetch() (slug matching,
+// extensionless resolution ORDER, caching + CSP composition, the bare-owner-id
+// guard, custom-404 navigation gating).
 
 /**
  * Minimal in-memory R2 bucket (same shape the two suites already use), returning
@@ -102,78 +99,6 @@ function publishProject(
     bucket.store.set(`projects/${userId}/${projectId}/${path}`, { data: content });
   }
 }
-
-/**
- * SS-8 — content-type parity. Both workers resolve a file's served Content-Type
- * from an authoritative table; those tables must be byte-identical. The matrix
- * covers every extension that ever differed (mjs, md, csv, avif, eot, media) and
- * confirms both fall through to octet-stream identically.
- */
-describe("SS-8 content-type parity (app vs publisher)", () => {
-  const EXTENSION_MATRIX = [
-    "index.html",
-    "page.htm",
-    "styles.css",
-    "app.js",
-    "module.mjs",
-    "data.json",
-    "sitemap.xml",
-    "notes.txt",
-    "readme.md",
-    "table.csv",
-    "logo.png",
-    "photo.jpg",
-    "photo.jpeg",
-    "anim.gif",
-    "art.svg",
-    "hero.webp",
-    "hero.avif",
-    "favicon.ico",
-    "paper.pdf",
-    "font.woff",
-    "font.woff2",
-    "font.ttf",
-    "legacy.eot",
-    "font.otf",
-    "clip.mp4",
-    "clip.webm",
-    "song.mp3",
-    "sound.wav",
-    "audio.ogg",
-    // unknown / extensionless fall-throughs
-    "archive.bin",
-    "Makefile",
-    "UPPER.PNG"
-  ];
-
-  it("returns the SAME Content-Type for every matrix extension", () => {
-    for (const file of EXTENSION_MATRIX) {
-      expect(
-        workerGetContentType(file),
-        `content-type disagreement for ${file}`
-      ).toBe(appGetServedContentType(file));
-    }
-  });
-
-  it("both tables enumerate the same extension set with the same values", () => {
-    // Rebuild the publisher's table from its lookups over the app's key set:
-    // if the app knows an extension the publisher does not (or maps it
-    // differently) this fails, catching a one-sided edit.
-    for (const [ext, appType] of Object.entries(APP_SERVED_CONTENT_TYPES)) {
-      expect(workerGetContentType(`file${ext}`), `publisher missing/mismatched ${ext}`).toBe(appType);
-    }
-  });
-
-  it("text types carry an explicit charset; binary types do not (SS-8)", () => {
-    expect(workerGetContentType("index.html")).toBe("text/html; charset=utf-8");
-    expect(appGetServedContentType("index.html")).toBe("text/html; charset=utf-8");
-    // ES modules must NOT fall through to octet-stream (that broke module loads).
-    expect(workerGetContentType("m.mjs")).toBe("application/javascript; charset=utf-8");
-    expect(appGetServedContentType("m.mjs")).toBe("application/javascript; charset=utf-8");
-    expect(workerGetContentType("logo.png")).toBe("image/png");
-    expect(appGetServedContentType("logo.png")).toBe("image/png");
-  });
-});
 
 /**
  * SS-13 — slug-less matching + tiebreaker parity. Exercised against the
@@ -334,25 +259,5 @@ describe("SS-27 custom-404 navigation gating (publisher)", () => {
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
     expect(await res.text()).toBe("Not found");
-  });
-
-  // The §3¾ security headers are ALSO a hand-maintained app+publisher duplicate
-  // (packages/{app/src/lib,worker/src}/serving-headers.ts). They are
-  // security-critical — a silent divergence could drop the opaque-origin CSP on
-  // one worker — so the anti-drift test covers them too.
-  describe("servedContentHeaders parity (security headers must not drift)", () => {
-    for (const ct of ["text/html; charset=utf-8", "image/svg+xml", "text/css", "application/octet-stream"]) {
-      it(`app and publisher emit identical security headers for ${ct}`, () => {
-        expect(workerServedContentHeaders(ct)).toEqual(appServedContentHeaders(ct));
-      });
-    }
-
-    it("both keep the load-bearing opaque-origin CSP (sandbox, no allow-same-origin)", () => {
-      for (const headers of [appServedContentHeaders("text/html"), workerServedContentHeaders("text/html")]) {
-        expect(headers["Content-Security-Policy"]).toBe("sandbox allow-scripts");
-        expect(headers["Content-Security-Policy"]).not.toContain("allow-same-origin");
-        expect(headers["X-Content-Type-Options"]).toBe("nosniff");
-      }
-    });
   });
 });

@@ -35,6 +35,7 @@
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { getUserHandle, migrateHandle } from "./handles";
+import { readR2Json, putR2Json } from "./r2-json";
 
 export interface MigrationClaim {
   subject: string;
@@ -134,22 +135,6 @@ async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
   return keys;
 }
 
-async function readJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
-  const object = await bucket.get(key);
-  if (!object) return null;
-  try {
-    return JSON.parse(await object.text()) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function putJson(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
-  await bucket.put(key, JSON.stringify(value), {
-    httpMetadata: { contentType: "application/json" }
-  });
-}
-
 /** Copy a single object without ever overwriting an existing destination. */
 async function copyIfAbsent(bucket: R2Bucket, fromKey: string, toKey: string): Promise<void> {
   if (await bucket.head(toKey)) return; // non-destructive: never overwrite
@@ -178,7 +163,7 @@ async function getMetadata(
   userId: string,
   projectId: string
 ): Promise<ProjectMetadata | null> {
-  return readJson<ProjectMetadata>(bucket, `${projectPrefix(userId)}${projectId}/.metadata.json`);
+  return readR2Json<ProjectMetadata>(bucket, `${projectPrefix(userId)}${projectId}/.metadata.json`);
 }
 
 async function subjectProjectOccupied(
@@ -276,12 +261,21 @@ export async function migrateAnonymousData(options: {
 
   // ---- Claim (one anonymous namespace belongs to exactly one subject) ----
   const claimKey = migrationClaimKey(anonUserId);
-  const existingClaim = await kv.get<MigrationClaim>(claimKey, "json").catch(() => null);
+  // FAIL LOUD (rule 5): this read is the security-critical claim-once gate. A
+  // swallowed KV outage here would read as "no existing claim" and let a SECOND
+  // subject migrate into an anonymous namespace already owned by another — the
+  // exact cross-subject takeover the claim guards against. So a KV failure must
+  // abort the migration (the caller's auth flow decides), never be treated as
+  // an absent claim. (Contrast the best-effort cleanup deletes below, which are
+  // safe to swallow.)
+  const existingClaim = await kv.get<MigrationClaim>(claimKey, "json");
   if (existingClaim && existingClaim.subject !== subject) {
     // First verified claim wins; never migrate into a second subject.
     return { status: "refused", projects: {} };
   }
   if (existingClaim?.status === "complete") {
+    // Safe to swallow: clearing the resume marker is best-effort cleanup. A
+    // leftover marker only triggers a harmless no-op resume on the next login.
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
     return { status: "already-complete", projects: {} };
   }
@@ -296,12 +290,15 @@ export async function migrateAnonymousData(options: {
 
   const finish = async (status: MigrationStatus, projects: Record<string, string>) => {
     if (anonSessionId) {
+      // Safe to swallow: deleting the spent anon session is best-effort; if it
+      // fails it simply expires on its own TTL. Not on the security path.
       await kv.delete(`session:${anonSessionId}`).catch(() => undefined);
     }
     await kv.put(
       claimKey,
       JSON.stringify({ ...claim, status: "complete", completedAt: now() } satisfies MigrationClaim)
     );
+    // Safe to swallow: best-effort resume-marker cleanup (see above).
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
     return { status, projects } as MigrationResult;
   };
@@ -381,7 +378,7 @@ export async function migrateAnonymousData(options: {
           : {})
       };
       if (!(await bucket.head(`${toPrefix}.metadata.json`))) {
-        await putJson(bucket, `${toPrefix}.metadata.json`, rewritten);
+        await putR2Json(bucket, `${toPrefix}.metadata.json`, rewritten);
       }
     }
 
@@ -399,9 +396,9 @@ export async function migrateAnonymousData(options: {
       const toKey = `${toSnapshots}${relative}`;
       if (key.endsWith(".json")) {
         if (!(await bucket.head(toKey))) {
-          const record = await readJson<ProjectSnapshot>(bucket, key);
+          const record = await readR2Json<ProjectSnapshot>(bucket, key);
           if (record) {
-            await putJson(bucket, toKey, { ...record, projectId: plan.newId });
+            await putR2Json(bucket, toKey, { ...record, projectId: plan.newId });
           }
         }
       } else {
@@ -436,7 +433,7 @@ export async function migrateAnonymousData(options: {
     projects: projectMap,
     slugs: slugMap
   };
-  await putJson(bucket, migrationPointerKey(anonUserId), pointer);
+  await putR2Json(bucket, migrationPointerKey(anonUserId), pointer);
 
   // ---- Delete originals (the pointer object stays forever) ----
   const pointerKey = migrationPointerKey(anonUserId);
@@ -463,7 +460,7 @@ export async function loadMigrationPointer(
   bucket: R2Bucket,
   userId: string
 ): Promise<MigrationPointer | null> {
-  const pointer = await readJson<MigrationPointer>(bucket, migrationPointerKey(userId));
+  const pointer = await readR2Json<MigrationPointer>(bucket, migrationPointerKey(userId));
   // SS-27: reject an empty subject as well as a missing/non-string one. An empty
   // subject cannot own a namespace, and the publisher worker's copy of this
   // guard already rejected it — accepting `subject:""` here would follow a

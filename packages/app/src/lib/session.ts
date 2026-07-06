@@ -198,6 +198,10 @@ async function migrateAnonymousSessionIfPresent(
     }
   }
 
+  // Safe to swallow: this is a resume-optimization read, not a security gate. On
+  // a KV blip we simply skip the resume this login; the pending marker persists,
+  // so the interrupted migration resumes on a later login. The real gate is the
+  // idempotent DO claim re-confirm below.
   const pendingAnonId = await c.env.SESSION_KV.get(migrationPendingKey(subject)).catch(() => null);
   if (pendingAnonId) {
     // Resume path: the subject already holds the DO claim (it was granted on the
@@ -284,6 +288,9 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     }
 
     const kvKey = cailSessionKey(subject);
+    // Safe to swallow: this read only recovers the original createdAt for the
+    // refreshed session record. On a KV blip we fall back to now() — a cosmetic
+    // timestamp reset, never an auth or identity decision.
     const stored = await c.env.SESSION_KV.get(kvKey, "json").catch(() => null);
     const createdAt =
       stored && typeof stored === "object" && typeof (stored as Record<string, unknown>).createdAt === "string"
