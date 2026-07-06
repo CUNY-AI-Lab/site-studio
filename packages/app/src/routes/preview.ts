@@ -6,6 +6,7 @@ import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
 import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
+import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
 import { getUser } from "../lib/session";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
@@ -57,34 +58,30 @@ async function servePreviewFile(
     filePath = `${filePath}index.html`;
   }
 
-  const primaryPath = filePath;
-  const fallbackPath = !filePath.includes(".") ? `${filePath}/index.html` : null;
-
-  let content: Uint8Array | null = null;
-  let resolvedPath = primaryPath;
-
-  try {
-    content = await storage.readFileBuffer(user.id, projectId, primaryPath);
-  } catch (error) {
-    if (!(error instanceof FileNotFoundError)) {
+  // SS-14 extensionless resolution via the shared helper (try `{path}.html`
+  // then `{path}/index.html`). This ALIGNS preview to publish/publisher (the
+  // sanctioned S3 behavior change): preview previously only tried
+  // `{path}/index.html` and never the flat `{path}.html`. Adapt the
+  // throw-on-miss readFileBuffer into a null-returning probe the helper wants.
+  const readOrNull = async (candidate: string): Promise<Uint8Array | null> => {
+    try {
+      return await storage.readFileBuffer(user.id, projectId, candidate);
+    } catch (error) {
+      if (error instanceof FileNotFoundError) {
+        return null;
+      }
       throw error;
     }
-  }
+  };
 
-  if (!content && fallbackPath) {
-    try {
-      content = await storage.readFileBuffer(user.id, projectId, fallbackPath);
-      resolvedPath = fallbackPath;
-    } catch (error) {
-      if (!(error instanceof FileNotFoundError)) {
-        throw error;
-      }
-    }
-  }
+  const resolved = await resolveExtensionlessFile(filePath, readOrNull);
 
-  if (!content) {
+  if (!resolved) {
     return previewNotFound(c, requestedPath, siteRootPath);
   }
+
+  let content: Uint8Array | null = resolved.object;
+  const resolvedPath = resolved.filePath;
 
   // SS-8: the served content-type (with `; charset=utf-8` on text types) comes
   // from the same authoritative table both workers use, so a given extension

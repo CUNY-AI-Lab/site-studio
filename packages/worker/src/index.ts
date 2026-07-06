@@ -6,6 +6,7 @@ import { servedContentHeaders } from "./serving-headers";
 // re-exported below.
 import { getServedContentType as getContentType } from "../../serving-core/src/content-types";
 import { looksLikePageNavigation as looksLikePageNavigationCore } from "../../serving-core/src/page-navigation";
+import { resolveExtensionlessFile } from "../../serving-core/src/extensionless";
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -430,26 +431,14 @@ export default {
       }
     }
 
-    let filePath = parsed.filePath || "index.html";
-    let object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, filePath);
+    // SS-14 extensionless resolution — one shared helper across all three
+    // serving paths (preview, publish, this worker): try `{path}.html`, then
+    // `{path}/index.html`. See @site-studio/serving-core/extensionless.
+    const served = await resolveExtensionlessFile(parsed.filePath || "index.html", (candidate) =>
+      readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, candidate)
+    );
 
-    if (!object && !filePath.endsWith(".html")) {
-      const htmlPath = `${filePath}.html`;
-      object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, htmlPath);
-      if (object) {
-        filePath = htmlPath;
-      }
-    }
-
-    if (!object && !filePath.endsWith(".html")) {
-      const indexPath = filePath === "index.html" ? "index.html" : `${filePath.replace(/\/$/, "")}/index.html`;
-      object = await readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, indexPath);
-      if (object) {
-        filePath = indexPath;
-      }
-    }
-
-    if (!object) {
+    if (!served) {
       return notFoundResponse(
         env.SITE_STUDIO_BUCKET,
         ownerId,
@@ -460,9 +449,9 @@ export default {
       );
     }
 
-    return new Response(object.body, {
+    return new Response(served.object.body, {
       status: 200,
-      headers: responseHeaders(filePath, object)
+      headers: responseHeaders(served.filePath, served.object)
     });
   }
 };

@@ -10,3 +10,4 @@ export { SERVED_CONTENT_TYPES, getServedContentType } from "./content-types";
 export { servedContentHeaders } from "./serving-headers";
 export { renderNotFoundPage } from "./not-found-page";
 export { looksLikePageNavigation } from "./page-navigation";
+export { resolveExtensionlessFile } from "./extensionless";
