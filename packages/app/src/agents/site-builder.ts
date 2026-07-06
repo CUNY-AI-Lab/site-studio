@@ -4,7 +4,8 @@ import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
-import type { Env, SiteBuilderAgentProps } from "../types";
+import type { Env, SiteBuilderAgentProps, SnapshotResult } from "../types";
+import { isSnapshotSkipped } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
@@ -313,8 +314,12 @@ function createProjectTools(
   }
 ) {
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
-  let snapshotPromise: Promise<unknown> | null = null;
+  let snapshotPromise: Promise<SnapshotResult> | null = null;
 
+  // SS-28: creating the pre-mutation snapshot is non-fatal. If the project is
+  // too large to snapshot (createSnapshot returns a skip signal), the mutation
+  // still proceeds — the user just has no restore point for this turn. Make the
+  // skip visible via observability (console.warn) rather than swallowing it.
   async function ensureSnapshot() {
     if (!snapshotPromise) {
       snapshotPromise = storage.createSnapshot(scope.userId, scope.projectId, {
@@ -323,7 +328,12 @@ function createProjectTools(
       });
     }
 
-    await snapshotPromise;
+    const result = await snapshotPromise;
+    if (isSnapshotSkipped(result)) {
+      console.warn(
+        `[site-builder] snapshot skipped for ${scope.userId}/${scope.projectId} (project ${result.totalBytes} bytes > ${result.limitBytes} cap); proceeding with mutation, no restore point for this turn.`
+      );
+    }
   }
 
   return {

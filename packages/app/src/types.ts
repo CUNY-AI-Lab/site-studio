@@ -113,6 +113,25 @@ export interface ProjectSnapshot {
   restoredFromSnapshotId?: string;
 }
 
+/**
+ * SS-28: `createSnapshot` returns a skip signal instead of a `ProjectSnapshot`
+ * when the project's total uncompressed size exceeds MAX_SNAPSHOT_BYTES. The
+ * skip is non-fatal — the caller proceeds with its mutation — but must be made
+ * visible (never silent). `skipped` is the discriminant so callers can branch.
+ */
+export interface SnapshotSkipped {
+  skipped: true;
+  reason: "too-large";
+  totalBytes: number;
+  limitBytes: number;
+}
+
+export type SnapshotResult = ProjectSnapshot | SnapshotSkipped;
+
+export function isSnapshotSkipped(result: SnapshotResult): result is SnapshotSkipped {
+  return (result as SnapshotSkipped).skipped === true;
+}
+
 export interface StorageFile {
   path: string;
   name: string;

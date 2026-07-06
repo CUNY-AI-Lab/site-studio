@@ -1,6 +1,13 @@
 import { unzipSync, zipSync, strToU8 } from "fflate";
-import type { Env, ProjectMetadata, ProjectSnapshot, ProjectSnapshotTrigger, StorageFile } from "../types";
-import { PROTECTED_FILE_NAMES } from "../lib/constants";
+import type {
+  Env,
+  ProjectMetadata,
+  ProjectSnapshot,
+  ProjectSnapshotTrigger,
+  SnapshotResult,
+  StorageFile
+} from "../types";
+import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 
 export class FileNotFoundError extends Error {
@@ -406,7 +413,27 @@ export class R2ProjectStorage {
       trigger?: ProjectSnapshotTrigger;
       restoredFromSnapshotId?: string;
     }
-  ): Promise<ProjectSnapshot> {
+  ): Promise<SnapshotResult> {
+    // SS-28: a snapshot reads every project file into memory and `zipSync`
+    // (synchronous, blocking) compresses them in the DO isolate. For an
+    // oversized project that is a blocking spike on every mutation. Sum the file
+    // sizes from R2 LISTING metadata FIRST (cheap — no bodies read) and, if the
+    // project exceeds MAX_SNAPSHOT_BYTES, SKIP the snapshot for this turn instead
+    // of reading + zipping everything. The caller treats the skip as non-fatal:
+    // the mutation proceeds, the user just has no restore point for this turn.
+    // The tradeoff (no restore point for oversized turns) is deliberate — the
+    // alternative is a pathological isolate spike that can stall the agent.
+    const listed = await this.listFiles(userId, projectId);
+    const totalBytes = listed.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAX_SNAPSHOT_BYTES) {
+      // Surface the skip — never silent. Callers also relay it (see
+      // ensureSnapshot in site-builder.ts and the manual snapshot route).
+      console.warn(
+        `Skipping snapshot for ${userId}/${projectId}: project size ${totalBytes} bytes exceeds MAX_SNAPSHOT_BYTES ${MAX_SNAPSHOT_BYTES}. Mutation proceeds with no restore point for this turn.`
+      );
+      return { skipped: true, reason: "too-large", totalBytes, limitBytes: MAX_SNAPSHOT_BYTES };
+    }
+
     const snapshotId = crypto.randomUUID();
     const files = await this.listProjectEntries(userId, projectId);
     const archive: Record<string, Uint8Array> = {};

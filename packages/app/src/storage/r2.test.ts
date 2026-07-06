@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { R2ProjectStorage } from "./r2";
-import type { ProjectMetadata } from "../types";
+import { isSnapshotSkipped } from "../types";
+import type { ProjectMetadata, ProjectSnapshot } from "../types";
+import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 
 // Mock R2 bucket
 function createMockBucket() {
@@ -64,9 +66,15 @@ function createMockBucket() {
           }
         }
 
+        const entry = store.get(key);
+        const size = entry
+          ? typeof entry.data === "string"
+            ? entry.data.length
+            : (entry.data as ArrayBuffer).byteLength
+          : 0;
         objects.push({
           key,
-          size: 0,
+          size,
           uploaded: new Date(),
           httpMetadata: {},
         });
@@ -383,11 +391,13 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
-      const snapshot = await storage.createSnapshot(userId, projectId, {
+      const result = await storage.createSnapshot(userId, projectId, {
         trigger: "manual",
         label: "Test snapshot"
       });
 
+      expect(isSnapshotSkipped(result)).toBe(false);
+      const snapshot = result as ProjectSnapshot;
       expect(snapshot.id).toBeTruthy();
       expect(snapshot.trigger).toBe("manual");
       expect(snapshot.label).toBe("Test snapshot");
@@ -407,7 +417,9 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Original</h1>");
 
-      const snapshot = await storage.createSnapshot(userId, projectId, { trigger: "manual" });
+      const snapshot = (await storage.createSnapshot(userId, projectId, {
+        trigger: "manual"
+      })) as ProjectSnapshot;
 
       // Modify the file
       await storage.writeFile(userId, projectId, "index.html", "<h1>Modified</h1>");
@@ -432,6 +444,44 @@ describe("R2ProjectStorage", () => {
     it("getSnapshot returns null for non-existent snapshot", async () => {
       const result = await storage.getSnapshot(userId, projectId, "nope");
       expect(result).toBeNull();
+    });
+
+    // SS-28: a project under MAX_SNAPSHOT_BYTES snapshots normally; a project
+    // over it SKIPS (no read+zip of every file) and returns a visible skip
+    // signal instead of a ProjectSnapshot.
+    it("SS-28: snapshots a project under MAX_SNAPSHOT_BYTES normally", async () => {
+      await storage.createProject(userId, projectId, "Small");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Small site</h1>");
+
+      const result = await storage.createSnapshot(userId, projectId, { trigger: "agent" });
+
+      expect(isSnapshotSkipped(result)).toBe(false);
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      expect(snapshots).toHaveLength(1);
+    });
+
+    it("SS-28: skips (visibly) when the project exceeds MAX_SNAPSHOT_BYTES and writes no archive", async () => {
+      await storage.createProject(userId, projectId, "Huge");
+      // One oversized file pushes the summed project size past the cap.
+      const oversized = "x".repeat(MAX_SNAPSHOT_BYTES + 1);
+      await storage.writeFile(userId, projectId, "big.txt", oversized);
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await storage.createSnapshot(userId, projectId, { trigger: "agent" });
+
+      // Skip is signalled, not silent.
+      expect(isSnapshotSkipped(result)).toBe(true);
+      if (isSnapshotSkipped(result)) {
+        expect(result.reason).toBe("too-large");
+        expect(result.totalBytes).toBeGreaterThan(MAX_SNAPSHOT_BYTES);
+        expect(result.limitBytes).toBe(MAX_SNAPSHOT_BYTES);
+      }
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+
+      // No snapshot archive/metadata was written for the skipped turn.
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      expect(snapshots).toHaveLength(0);
     });
   });
 

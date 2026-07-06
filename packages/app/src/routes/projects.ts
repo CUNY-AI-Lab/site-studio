@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env, ProjectMetadata } from "../types";
+import { isSnapshotSkipped } from "../types";
 import { getUser } from "../lib/session";
 import { R2ProjectStorage } from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
@@ -171,6 +172,19 @@ export function createProjectRouter() {
       label: parsed.data.label
     });
 
+    // SS-28: a manual snapshot is one the user EXPLICITLY asked for, so an
+    // over-cap project should be told the snapshot was too large (413) rather
+    // than silently 201-ing with no restore point. (Agent-triggered snapshots
+    // skip non-fatally so the mutation still lands — see ensureSnapshot — but
+    // the manual endpoint has a user waiting on the result and clearer UX is to
+    // surface the failure.)
+    if (isSnapshotSkipped(snapshot)) {
+      jsonError(
+        `Project is too large to snapshot (${snapshot.totalBytes} bytes exceeds the ${snapshot.limitBytes}-byte limit).`,
+        413
+      );
+    }
+
     return c.json({ snapshot }, 201);
   });
 
@@ -189,18 +203,25 @@ export function createProjectRouter() {
       jsonError("Snapshot not found", 404);
     }
 
-    const restorePoint = await storage.createSnapshot(user.id, projectId, {
+    // SS-28: the "before restore" safety snapshot may be skipped if the current
+    // project is over the snapshot cap. The restore itself IS the recovery the
+    // user asked for, so a skipped safety snapshot must not block it — proceed
+    // and report the skip in the response instead of returning a fake snapshot.
+    const restorePointResult = await storage.createSnapshot(user.id, projectId, {
       trigger: "restore",
       label: `Before restore to ${targetSnapshot.label || targetSnapshot.id}`,
       restoredFromSnapshotId: snapshotId
     });
+    const restorePoint = isSnapshotSkipped(restorePointResult) ? null : restorePointResult;
+    const restorePointSkipped = isSnapshotSkipped(restorePointResult);
 
     const restoredSnapshot = await storage.restoreSnapshot(user.id, projectId, snapshotId);
 
     return c.json({
       success: true,
       restoredSnapshot,
-      restorePoint
+      restorePoint,
+      restorePointSkipped
     });
   });
 

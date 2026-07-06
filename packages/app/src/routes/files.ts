@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../types";
-import { IMAGE_MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES, PROTECTED_FILE_NAMES } from "../lib/constants";
+import {
+  IMAGE_MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_BODY_BYTES,
+  MAX_UPLOAD_BYTES,
+  PROTECTED_FILE_NAMES
+} from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
@@ -260,6 +265,22 @@ export function createFileRouter() {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
     const projectId = c.req.param("id");
+
+    // SS-29 pre-buffer guard (defense-in-depth layered on the per-file storage
+    // caps below). `c.req.formData()` buffers the ENTIRE multipart body into
+    // isolate memory before any `file.size` check runs, so the storage caps
+    // reject storage but not allocation. Reject over-ceiling bodies early using
+    // the declared Content-Length, BEFORE buffering. The ceiling is the largest
+    // per-file cap plus a multipart-envelope margin so a valid 32MB file is not
+    // false-rejected by framing overhead. A missing/unparseable Content-Length
+    // falls through to the existing post-parse checks (the Workers platform
+    // still bounds the request body), so this is a cleaner early rejection, not
+    // the only line of defense.
+    const contentLength = Number(c.req.header("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BODY_BYTES) {
+      jsonError(`Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`, 413);
+    }
+
     const form = await c.req.formData();
     const entry = form.get("file");
 

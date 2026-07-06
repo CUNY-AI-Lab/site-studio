@@ -16,6 +16,38 @@ export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
  * hero image without inviting multi-hundred-MB uploads into R2.
  */
 export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/**
+ * SS-29 pre-buffer guard: absolute ceiling on the raw multipart request body for
+ * the upload route, checked against the Content-Length header BEFORE
+ * `c.req.formData()` buffers the whole body into isolate memory. The per-file
+ * storage caps (MAX_UPLOAD_BYTES / IMAGE_MAX_UPLOAD_BYTES) reject STORAGE but run
+ * only after the body is already buffered — this ceiling rejects ALLOCATION.
+ *
+ * The margin covers multipart framing overhead (boundary lines, the
+ * Content-Disposition/Content-Type part headers, and the optional `dir` field)
+ * so a legitimate 32MB file is never false-rejected by the envelope around it.
+ * 1MB is far more than any realistic multipart envelope for a single file plus a
+ * short text field, while still bounding a pathological upload well below what
+ * would spike the isolate.
+ */
+export const MAX_UPLOAD_BODY_MARGIN_BYTES = 1 * 1024 * 1024;
+export const MAX_UPLOAD_BODY_BYTES = MAX_UPLOAD_BYTES + MAX_UPLOAD_BODY_MARGIN_BYTES;
+/**
+ * SS-28 snapshot cap: maximum total UNCOMPRESSED project size (summed from R2
+ * listing metadata) that `createSnapshot` will read into memory and zip. Every
+ * agent mutation snapshots the whole project synchronously (`zipSync` blocks the
+ * DO isolate while it reads + compresses every file), so an oversized project
+ * turns each turn into an isolate spike.
+ *
+ * 50MB is chosen so normal sites always snapshot: a text-heavy academic site is
+ * a few hundred KB, and even one loaded with the max-size images allowed by the
+ * upload caps stays well under 50MB in practice. It is small enough that the
+ * synchronous read+zip of a project at the cap stays a bounded, recoverable
+ * cost rather than a multi-hundred-MB blocking spike. Projects above the cap
+ * SKIP the snapshot for that turn (see createSnapshot) — the mutation still
+ * proceeds, the user just has no restore point for that oversized turn.
+ */
+export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 export const PROTECTED_FILE_NAMES = new Set([".metadata.json", ".thumbnail.png"]);
 
 export const CONTENT_TYPES: Record<string, string> = {

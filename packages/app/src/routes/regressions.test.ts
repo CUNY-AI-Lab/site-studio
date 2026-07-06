@@ -5,6 +5,7 @@ import type { Env } from "../types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import { R2ProjectStorage } from "../storage/r2";
+import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 import { createFileRouter } from "./files";
 import { createHandleRouter } from "./handles";
 import { createPreviewRouter } from "./preview";
@@ -81,9 +82,15 @@ function createMockBucket() {
           }
         }
 
+        const entry = store.get(key);
+        const size = entry
+          ? typeof entry.data === "string"
+            ? entry.data.length
+            : entry.data.byteLength
+          : 0;
         objects.push({
           key,
-          size: 0,
+          size,
           uploaded: new Date(),
           httpMetadata: {},
         });
@@ -833,6 +840,66 @@ describe("image upload hardening", () => {
     expect(await storage.fileExists(userId, "imgproj", "photo.png")).toBe(true);
     expect(await storage.fileExists(userId, "imgproj", "photo_1.png")).toBe(true);
   });
+
+  // SS-29: the upload route rejects an over-ceiling body from its declared
+  // Content-Length BEFORE `c.req.formData()` buffers the multipart body into
+  // isolate memory (defense-in-depth on top of the per-file storage caps).
+  it("SS-29: over-ceiling Content-Length → 413 before formData, nothing stored", async () => {
+    const before = bucket.store.size;
+    // Declare a body far larger than the 32MB cap + 1MB envelope margin, but send
+    // a tiny actual body — the guard rejects on the header before parsing, so the
+    // body is never buffered and no file is written.
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      {
+        method: "POST",
+        body: "x",
+        headers: { ...csrf.headers, "content-length": String(64 * 1024 * 1024) }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(413);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("too large");
+    // Guard fired before formData(): no upload landed in storage.
+    expect(bucket.store.size).toBe(before);
+    expect(await storage.fileExists(userId, "imgproj", "huge.png")).toBe(false);
+  });
+
+  it("SS-29: a valid upload within the cap still succeeds under the ceiling", async () => {
+    // A real multipart upload (Content-Length auto-set by the runtime) that is
+    // comfortably under the ceiling passes the guard and stores normally.
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("ok.png", pngBytes()),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { path: string }).path).toBe("ok.png");
+    expect(await storage.fileExists(userId, "imgproj", "ok.png")).toBe(true);
+  });
+
+  it("SS-29: missing Content-Length falls through to the existing post-parse checks", async () => {
+    // Build a real multipart body but strip Content-Length. The pre-buffer guard
+    // is skipped (unparseable length), and the request still succeeds via the
+    // existing parse + validation path — the guard is an addition, not the only
+    // line of defense.
+    const req = uploadRequest("nolen.png", pngBytes());
+    const headers = new Headers(req.headers as HeadersInit);
+    headers.delete("content-length");
+    req.headers = headers;
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      req,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { path: string }).path).toBe("nolen.png");
+  });
 });
 
 describe("images inventory endpoint", () => {
@@ -977,4 +1044,57 @@ describe("csrf protection on all mutation routes", () => {
       });
     });
   }
+});
+
+// SS-28: the MANUAL snapshot endpoint. A snapshot the user explicitly asked for
+// should tell them it was too large (413) rather than silently 201-ing with no
+// restore point. A normal-sized project still snapshots (201).
+describe("SS-28 manual snapshot cap (over-cap → 413, normal → 201)", () => {
+  const userId = "user_test123";
+  let bucket: ReturnType<typeof createMockBucket>;
+  let storage: R2ProjectStorage;
+  let app: ReturnType<typeof createTestApp>;
+
+  beforeEach(async () => {
+    bucket = createMockBucket();
+    storage = new R2ProjectStorage(bucket);
+    app = createTestApp();
+    kv = createMockKV();
+    csrf = await mintCsrfSession(kv, userId);
+    await storage.createProject(userId, "snapproj", "Snap Project");
+  });
+
+  it("normal-sized project → 201 with a snapshot", async () => {
+    await storage.writeFile(userId, "snapproj", "index.html", "<h1>Small</h1>");
+
+    const res = await app.request(
+      "http://site-studio.test/api/projects/snapproj/snapshots",
+      { method: "POST", body: "{}", headers: { "Content-Type": "application/json", ...csrf.headers } },
+      createEnv(bucket)
+    );
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { snapshot: { id: string } };
+    expect(body.snapshot.id).toBeTruthy();
+  });
+
+  it("over-cap project → 413 (too large), not a silent skip", async () => {
+    await storage.writeFile(userId, "snapproj", "big.txt", "x".repeat(MAX_SNAPSHOT_BYTES + 1));
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await app.request(
+      "http://site-studio.test/api/projects/snapproj/snapshots",
+      { method: "POST", body: "{}", headers: { "Content-Type": "application/json", ...csrf.headers } },
+      createEnv(bucket)
+    );
+    warnSpy.mockRestore();
+
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("too large");
+
+    // Nothing was zipped/stored for the over-cap manual snapshot.
+    const snapshots = await storage.listSnapshots(userId, "snapproj");
+    expect(snapshots).toHaveLength(0);
+  });
 });
