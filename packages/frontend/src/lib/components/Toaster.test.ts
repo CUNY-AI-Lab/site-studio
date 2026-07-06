@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
@@ -23,6 +23,13 @@ function emit(fn: () => number): number {
 describe('Toaster + toast store', () => {
 	beforeEach(() => {
 		clearToasts();
+	});
+
+	// Restore real timers even if a fake-timer test throws mid-body, so this
+	// file can never leak fake timers into the next (the global setup also does
+	// this; kept here as a local guarantee for the tests that opt into them).
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it('renders an error toast with role="alert" and the message', () => {
@@ -75,7 +82,7 @@ describe('Toaster + toast store', () => {
 	});
 
 	it('the dismiss button removes the toast', async () => {
-		const user = userEvent.setup();
+		const user = userEvent.setup({ delay: null });
 		render(Toaster);
 		emit(() => toast.error('Dismiss me'));
 		const alert = screen.getByRole('alert');
@@ -85,7 +92,7 @@ describe('Toaster + toast store', () => {
 	});
 
 	it('Escape on a focused toast dismisses it', async () => {
-		const user = userEvent.setup();
+		const user = userEvent.setup({ delay: null });
 		render(Toaster);
 		emit(() => toast.error('Esc me'));
 		const alert = screen.getByRole('alert');

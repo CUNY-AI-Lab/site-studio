@@ -581,6 +581,14 @@
 		if (willReconnect) {
 			const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 15000);
 			reconnectAttempts++;
+			// Clear any prior reconnect timer before scheduling a new one: if
+			// handleSocketClose fires more than once (e.g. an orphaned socket also
+			// closes) the old timer would otherwise become untracked and survive
+			// closeSocket()/unmount — a leaked reconnect that fires later (in tests,
+			// into the next file, disrupting it; in prod, after teardown).
+			if (reconnectTimer) {
+				clearTimeout(reconnectTimer);
+			}
 			reconnectTimer = setTimeout(() => {
 				reconnectTimer = null;
 				ensureSocket().catch(() => {

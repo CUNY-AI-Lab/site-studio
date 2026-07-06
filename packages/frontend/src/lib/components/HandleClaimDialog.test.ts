@@ -39,7 +39,7 @@ describe('HandleClaimDialog', () => {
 	});
 
 	it('lowercases the handle as the user types', async () => {
-		const user = userEvent.setup();
+		const user = userEvent.setup({ delay: null });
 		mockCheck.mockResolvedValue({ handle: 'jane', valid: true, available: true });
 		open();
 		const input = screen.getByLabelText('Handle') as HTMLInputElement;

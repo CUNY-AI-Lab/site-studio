@@ -1,4 +1,4 @@
-import { expect, afterEach } from 'vitest';
+import { expect, afterEach, vi } from 'vitest';
 import * as matchers from '@testing-library/jest-dom/matchers';
 import { cleanup } from '@testing-library/svelte';
 
@@ -7,7 +7,12 @@ import { cleanup } from '@testing-library/svelte';
 // extend expect under our ESM + globals config, so we extend manually.
 expect.extend(matchers);
 
-// Unmount any components rendered in a test so each test starts from a clean DOM.
+// After every test: unmount rendered components for a clean DOM, and restore
+// real timers. The timer reset is a safety net — a test that installs fake
+// timers (e.g. Toaster's auto-dismiss tests) and fails an assertion before its
+// own useRealTimers would otherwise LEAK fake timers into the next file, where
+// userEvent's internal delays stall and unrelated tests flake intermittently.
 afterEach(() => {
 	cleanup();
+	vi.useRealTimers();
 });

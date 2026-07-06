@@ -68,7 +68,7 @@ describe('AccessibilityNotesDialog', () => {
 	});
 
 	it('renders the ask-assistant button and invokes the callback when provided', async () => {
-		const user = userEvent.setup();
+		const user = userEvent.setup({ delay: null });
 		const onAskAssistant = vi.fn();
 		render(AccessibilityNotesDialog, {
 			props: {

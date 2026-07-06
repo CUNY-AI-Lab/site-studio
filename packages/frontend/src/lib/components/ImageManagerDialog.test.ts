@@ -54,6 +54,16 @@ function thumbnail(index: number): HTMLElement {
 	return buttons[index];
 }
 
+// Svelte 5's `canSubmit` $derived re-enables the submit button a microtask after
+// the alt-text/decorative change lands. Clicking before that reactive flush hits
+// a still-disabled button and submit() no-ops (the callback never fires) — an
+// intermittent race. Wait for the button to be enabled, THEN click.
+async function clickSubmit(user: ReturnType<typeof userEvent.setup>) {
+	const btn = screen.getByRole('button', { name: /(insert|replace) with the assistant/i });
+	await waitFor(() => expect(btn).toBeEnabled());
+	await user.click(btn);
+}
+
 describe('ImageManagerDialog', () => {
 	beforeEach(() => {
 		mockFetch.mockReset();
@@ -69,7 +79,7 @@ describe('ImageManagerDialog', () => {
 
 	describe('alt-text validation', () => {
 		it('disables the insert button until alt text is entered', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			open();
 			await waitForImages();
 			// Open the insert form by selecting a thumbnail.
@@ -83,7 +93,7 @@ describe('ImageManagerDialog', () => {
 		});
 
 		it('marking decorative empties and disables the alt input and enables submit', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			open();
 			await waitForImages();
 			await user.click(thumbnail(0));
@@ -101,7 +111,7 @@ describe('ImageManagerDialog', () => {
 
 	describe('the switch-while-scoped regression', () => {
 		it('switching thumbnails during a replacement keeps the placeholder scope and typed alt text', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 
@@ -120,14 +130,14 @@ describe('ImageManagerDialog', () => {
 			expect((screen.getByLabelText(/describe this image/i) as HTMLInputElement).value).toBe('Team photo');
 
 			// Submitting produces a REPLACE prompt with the newly-selected image path.
-			await user.click(screen.getByRole('button', { name: /replace with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Replace the placeholder image at index.html:20 with images/two.jpg and set its alt text to "Team photo".'
 			);
 		});
 
 		it('cancel clears the replacement scope back to plain insertion', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			open();
 			await waitForImages();
 
@@ -149,61 +159,61 @@ describe('ImageManagerDialog', () => {
 
 	describe('exact prompt strings for all four combos', () => {
 		it('insert + described', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(thumbnail(0));
 			await user.type(screen.getByLabelText(/describe this image/i), 'A student poster');
-			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Insert images/one.png into the site. Use alt text: "A student poster".'
 			);
 		});
 
 		it('insert + decorative', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(thumbnail(0));
 			await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
-			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Insert images/one.png into the site. It is decorative, so use alt="".'
 			);
 		});
 
 		it('insert + described with a location hint', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(thumbnail(0));
 			await user.type(screen.getByLabelText(/describe this image/i), 'A photo');
 			await user.type(screen.getByLabelText(/where should it go/i), 'top of About page');
-			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Insert images/one.png into the site ("top of About page"). Use alt text: "A photo".'
 			);
 		});
 
 		it('replace + described', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(screen.getByRole('button', { name: /^replace$/i }));
 			await user.type(screen.getByLabelText(/describe this image/i), 'A lab bench');
-			await user.click(screen.getByRole('button', { name: /replace with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Replace the placeholder image at index.html:20 with images/one.png and set its alt text to "A lab bench".'
 			);
 		});
 
 		it('replace + decorative', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(screen.getByRole('button', { name: /^replace$/i }));
 			await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
-			await user.click(screen.getByRole('button', { name: /replace with the assistant/i }));
+			await clickSubmit(user);
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Replace the placeholder image at index.html:20 with images/one.png and mark it decorative with alt="".'
 			);
@@ -215,12 +225,12 @@ describe('ImageManagerDialog', () => {
 	// quoting — JSON.stringify keeps the assembled prompt unambiguous.
 	describe('SS-22: quote/newline-safe prompt assembly', () => {
 		it('escapes a double-quote in the alt text', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(thumbnail(0));
 			await user.type(screen.getByLabelText(/describe this image/i), 'A "great" photo');
-			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+			await clickSubmit(user);
 
 			const prompt = onAskAssistant.mock.calls[0][0] as string;
 			// The quotes inside the alt text are escaped, so JSON.parse round-trips
@@ -233,13 +243,13 @@ describe('ImageManagerDialog', () => {
 		});
 
 		it('escapes a double-quote in the location hint', async () => {
-			const user = userEvent.setup();
+			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
 			await user.click(thumbnail(0));
 			await user.type(screen.getByLabelText(/describe this image/i), 'A photo');
 			await user.type(screen.getByLabelText(/where should it go/i), 'the "hero" band');
-			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+			await clickSubmit(user);
 
 			const prompt = onAskAssistant.mock.calls[0][0] as string;
 			// The hint's quotes are escaped inside the parenthesized segment, so the
@@ -251,12 +261,12 @@ describe('ImageManagerDialog', () => {
 	});
 
 	it('closes the dialog after handing a prompt to the assistant', async () => {
-		const user = userEvent.setup();
+		const user = userEvent.setup({ delay: null });
 		const { onAskAssistant, onOpenChange } = open();
 		await waitForImages();
 		await user.click(thumbnail(0));
 		await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
-		await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+		await clickSubmit(user);
 		expect(onAskAssistant).toHaveBeenCalled();
 		expect(onOpenChange).toHaveBeenCalledWith(false);
 	});
