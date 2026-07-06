@@ -294,6 +294,54 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
   });
 
+  // SS-19 (defense-in-depth): the anon namespace to absorb is picked from the
+  // request-supplied session cookie. If that namespace was ALREADY claimed by a
+  // DIFFERENT subject, a forged/replayed cookie pointing at it must not let a
+  // second subject re-home (or even touch) that data — it is refused before any
+  // work, and the original claim's data is untouched.
+  it("SS-19: refuses to absorb an anon namespace already claimed by another subject", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const OTHER_SUBJECT = "cail-other-owner";
+
+    // The anon namespace was already claimed+completed by OTHER_SUBJECT.
+    kv.store.set(
+      `migration:${ANON}`,
+      JSON.stringify({ subject: OTHER_SUBJECT, status: "complete", startedAt: "x", completedAt: "y" })
+    );
+    // A live anon session record still exists (attacker replays this cookie).
+    kv.store.set(
+      "session:anon-cookie-1",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+    );
+    // Residual anon data that must NOT be re-homed into the new subject.
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    const env = createEnv({
+      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket
+    });
+
+    const token = await mintIdentityJwt(SUBJECT); // a DIFFERENT, second subject
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-1" } },
+      env
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { user: { id: string } };
+    expect(body.user.id).toBe(SUBJECT);
+
+    // Nothing re-homed into SUBJECT; the original claim is unchanged.
+    expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
+    const claim = JSON.parse(kv.store.get(`migration:${ANON}`)!);
+    expect(claim.subject).toBe(OTHER_SUBJECT);
+    // No pending marker was left for SUBJECT (we bailed before claiming).
+    expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+  });
+
   it("pure anonymous flow is untouched: no migration traces, data stays put", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();

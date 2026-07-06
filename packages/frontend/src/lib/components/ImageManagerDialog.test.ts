@@ -181,7 +181,7 @@ describe('ImageManagerDialog', () => {
 			await user.type(screen.getByLabelText(/where should it go/i), 'top of About page');
 			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
 			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Insert images/one.png into the site (top of About page). Use alt text: "A photo".'
+				'Insert images/one.png into the site ("top of About page"). Use alt text: "A photo".'
 			);
 		});
 
@@ -206,6 +206,46 @@ describe('ImageManagerDialog', () => {
 			await user.click(screen.getByRole('button', { name: /replace with the assistant/i }));
 			expect(onAskAssistant).toHaveBeenCalledWith(
 				'Replace the placeholder image at index.html:20 with images/one.png and mark it decorative with alt="".'
+			);
+		});
+	});
+
+	// SS-22: alt text / location hint are free-form user input spliced into the
+	// assistant instruction. A `"` or newline must not break the surrounding
+	// quoting — JSON.stringify keeps the assembled prompt unambiguous.
+	describe('SS-22: quote/newline-safe prompt assembly', () => {
+		it('escapes a double-quote in the alt text', async () => {
+			const user = userEvent.setup();
+			const { onAskAssistant } = open();
+			await waitForImages();
+			await user.click(thumbnail(0));
+			await user.type(screen.getByLabelText(/describe this image/i), 'A "great" photo');
+			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+
+			const prompt = onAskAssistant.mock.calls[0][0] as string;
+			// The quotes inside the alt text are escaped, so JSON.parse round-trips
+			// the exact user string out of its quoted segment.
+			expect(prompt).toBe(
+				'Insert images/one.png into the site. Use alt text: "A \\"great\\" photo".'
+			);
+			const quoted = prompt.slice(prompt.indexOf('Use alt text: ') + 'Use alt text: '.length, -1);
+			expect(JSON.parse(quoted)).toBe('A "great" photo');
+		});
+
+		it('escapes a double-quote in the location hint', async () => {
+			const user = userEvent.setup();
+			const { onAskAssistant } = open();
+			await waitForImages();
+			await user.click(thumbnail(0));
+			await user.type(screen.getByLabelText(/describe this image/i), 'A photo');
+			await user.type(screen.getByLabelText(/where should it go/i), 'the "hero" band');
+			await user.click(screen.getByRole('button', { name: /insert with the assistant/i }));
+
+			const prompt = onAskAssistant.mock.calls[0][0] as string;
+			// The hint's quotes are escaped inside the parenthesized segment, so the
+			// surrounding structure of the instruction stays intact.
+			expect(prompt).toBe(
+				'Insert images/one.png into the site ("the \\"hero\\" band"). Use alt text: "A photo".'
 			);
 		});
 	});

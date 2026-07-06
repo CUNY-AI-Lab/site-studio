@@ -6,6 +6,7 @@ import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
+import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
@@ -211,6 +212,14 @@ export function createPublishRouter() {
     }
 
     const content = new Uint8Array(await image.arrayBuffer());
+
+    // SS-21: don't trust the client-declared type. Thumbnails are PNGs, so sniff
+    // the magic bytes and reject anything that isn't a real PNG — the same
+    // defense the main upload route applies via validateImageBytes.
+    if (sniffImageType(content) !== "png") {
+      jsonError("Thumbnail must be a valid PNG image.", 400);
+    }
+
     await storage.writeThumbnail(user.id, projectId, content);
     await storage.updateProjectMetadata(user.id, projectId, {
       thumbnailUrl: `/api/projects/${projectId}/thumbnail`

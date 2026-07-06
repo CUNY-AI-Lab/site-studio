@@ -141,21 +141,26 @@
 		const path = activePath;
 		const alt = altText.trim();
 
+		// SS-22: alt text and the location hint are free-form user input. Splicing
+		// them raw into the instruction lets a `"` or newline break the surrounding
+		// quoting and produce a malformed (or misleading) instruction. JSON.stringify
+		// emits a safely-quoted, escaped string literal — quotes and newlines survive
+		// intact and the instruction stays unambiguous and readable.
 		let prompt: string;
 		if (replaceTarget) {
 			const at = locationLabel(replaceTarget);
 			if (isDecorative) {
 				prompt = `Replace the placeholder image at ${at} with ${path} and mark it decorative with alt="".`;
 			} else {
-				prompt = `Replace the placeholder image at ${at} with ${path} and set its alt text to "${alt}".`;
+				prompt = `Replace the placeholder image at ${at} with ${path} and set its alt text to ${JSON.stringify(alt)}.`;
 			}
 		} else {
 			const hint = locationHint.trim();
-			const where = hint ? ` (${hint})` : '';
+			const where = hint ? ` (${JSON.stringify(hint)})` : '';
 			if (isDecorative) {
 				prompt = `Insert ${path} into the site${where}. It is decorative, so use alt="".`;
 			} else {
-				prompt = `Insert ${path} into the site${where}. Use alt text: "${alt}".`;
+				prompt = `Insert ${path} into the site${where}. Use alt text: ${JSON.stringify(alt)}.`;
 			}
 		}
 

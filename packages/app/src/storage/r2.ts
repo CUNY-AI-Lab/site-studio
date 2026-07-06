@@ -159,7 +159,13 @@ export class R2ProjectStorage {
     const newMetadata: ProjectMetadata = {
       ...metadata,
       id: newProjectId,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      // SS-25: thumbnailUrl embeds the project id (/api/projects/{id}/thumbnail).
+      // Re-point it at the new id so it doesn't 404 against the old (now deleted)
+      // project; clear it when the old metadata had none so we never invent one.
+      ...(metadata.thumbnailUrl
+        ? { thumbnailUrl: `/api/projects/${newProjectId}/thumbnail` }
+        : {})
     };
 
     await this.putJson(metadataKey(userId, newProjectId), newMetadata);
@@ -231,7 +237,14 @@ export class R2ProjectStorage {
   }
 
   async listFiles(userId: string, projectId: string, prefix = ""): Promise<StorageFile[]> {
-    const filePrefix = prefix ? `${fileKey(userId, projectId, prefix)}` : `${fileKey(userId, projectId)}/`;
+    // SS-7: an R2 list prefix without a trailing slash matches sibling keys —
+    // listing dir "images" would also return "images2.txt" and "images-old/…".
+    // Force a directory boundary by ensuring the prefix ends with "/" (without
+    // double-slashing one the caller already terminated). The no-prefix branch
+    // already appends "/" to scope the list to the project root.
+    const filePrefix = prefix
+      ? `${fileKey(userId, projectId, prefix)}`.replace(/\/?$/, "/")
+      : `${fileKey(userId, projectId)}/`;
     const files: StorageFile[] = [];
     let cursor: string | undefined;
 

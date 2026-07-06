@@ -63,17 +63,27 @@ describe("codemode tool type generation", () => {
     expect(types).toContain("paths: string[]");
   });
 
-  it("generates typed output for write_file", () => {
+  it("generates typed output for write_file (discriminated union with SS-18 failure branch)", () => {
+    // SS-18: write_file now has a { ok: false, message } branch so it can reject
+    // writes to protected system files (.metadata.json, .thumbnail.png), matching
+    // delete_file's failure shape.
     const tools = {
       write_file: tool({
         description: "Write a file.",
         inputSchema: z.object({ path: z.string(), content: z.string() }),
-        outputSchema: z.object({
-          ok: z.literal(true),
-          path: z.string(),
-          created: z.boolean(),
-          changed: z.boolean()
-        }),
+        outputSchema: z.discriminatedUnion("ok", [
+          z.object({
+            ok: z.literal(true),
+            path: z.string(),
+            created: z.boolean(),
+            changed: z.boolean()
+          }),
+          z.object({
+            ok: z.literal(false),
+            path: z.string(),
+            message: z.string()
+          })
+        ]),
         execute: async () => ({ ok: true as const, path: "test", created: true, changed: true })
       })
     };
@@ -83,6 +93,9 @@ describe("codemode tool type generation", () => {
     expect(types).not.toContain("WriteFileOutput = unknown");
     expect(types).toContain("created: boolean");
     expect(types).toContain("changed: boolean");
+    expect(types).toContain("ok: true");
+    expect(types).toContain("ok: false");
+    expect(types).toContain("message: string");
   });
 
   it("generates typed output for search_files", () => {

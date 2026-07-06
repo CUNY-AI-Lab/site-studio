@@ -9,7 +9,12 @@ import {
   getRequestIdentity,
   type CailIdentity,
 } from "./cail-identity";
-import { migrateAnonymousData, migrationPendingKey } from "./migration";
+import {
+  migrateAnonymousData,
+  migrationClaimKey,
+  migrationPendingKey,
+  type MigrationClaim
+} from "./migration";
 import { createAgentHistoryPorter } from "./agent-porter";
 
 type SessionVariables = {
@@ -120,7 +125,32 @@ async function migrateAnonymousSessionIfPresent(
 
   if (cookieValue && cookieValue !== subject) {
     const anonUser = await readCurrentSession(c.env, cookieValue);
+    // Only absorb a namespace when the presented cookie resolves to a live,
+    // anonymous (`user_…`) KV/legacy session record. A random string, an expired
+    // record, or a subject-owned record all fall through untouched.
     if (anonUser && anonUser.id.startsWith("user_")) {
+      // SS-19 (defense-in-depth): the anon namespace to absorb is chosen from the
+      // request-supplied session cookie, gated by the sessionId's 128-bit entropy
+      // and the anon-record check above. Before doing any work, refuse if that
+      // namespace was ALREADY claimed by a DIFFERENT subject — migrateAnonymousData
+      // enforces this durably (claim-once) too, but checking here means a forged/
+      // replayed cookie pointing at someone else's already-migrated namespace is
+      // rejected before we touch it, and the claim can only ever bind one subject.
+      //
+      // Residual risk (left for the queued DO-serialization cohort): between two
+      // concurrent FIRST logins racing the SAME never-claimed anon namespace, both
+      // may pass this pre-check before either writes the claim. migrateAnonymousData's
+      // KV claim record makes that convergent and non-destructive (copy-if-absent,
+      // deterministic renames), but it is not a hard mutual-exclusion — true
+      // serialization needs the DO change and is intentionally out of scope here.
+      const existingClaim = await c.env.SESSION_KV.get<MigrationClaim>(
+        migrationClaimKey(anonUser.id),
+        "json"
+      ).catch(() => null);
+      if (existingClaim && existingClaim.subject !== subject) {
+        return;
+      }
+
       await migrateAnonymousData({
         bucket: c.env.SITE_STUDIO_BUCKET,
         kv: c.env.SESSION_KV,

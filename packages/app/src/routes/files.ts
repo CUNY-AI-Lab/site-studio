@@ -42,6 +42,28 @@ function fileExtension(fileName: string): string {
 }
 
 /**
+ * Build a well-formed `Content-Disposition: attachment` header for `fileName`.
+ *
+ * SS-20: interpolating a raw filename into `filename="…"` breaks the header when
+ * the name contains a `"` (or a control char / newline) — the quote closes the
+ * token early and the tail spills into the header, enabling response-splitting-
+ * style spoofing of the download name. We emit BOTH a sanitized ASCII `filename`
+ * (quotes/backslashes/control chars stripped) for legacy clients AND the RFC 5987
+ * `filename*=UTF-8''<percent-encoded>` form that modern browsers prefer, so the
+ * real (possibly non-ASCII) name is conveyed unambiguously.
+ */
+function contentDispositionAttachment(fileName: string): string {
+  // ASCII fallback: drop anything that could break the quoted-string token.
+  const asciiFallback =
+    // eslint-disable-next-line no-control-regex
+    fileName.replace(/["\\\r\n\x00-\x1f\x7f]/g, "").replace(/[^\x20-\x7e]/g, "_") || "download";
+  // RFC 5987: percent-encode the UTF-8 name; encodeURIComponent leaves a handful
+  // of sub-delims that are legal in ext-value, so it is safe as-is here.
+  const encoded = encodeURIComponent(fileName);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
+/**
  * Best-effort extraction of the placehold.co URL from the finding's line. The
  * linter reports a 1-based line number; we grab the placehold.co URL on that
  * line if it's cheap to find, otherwise return null (src is omitted).
@@ -198,6 +220,14 @@ export function createFileRouter() {
     }
     const { path, content } = parsed.data;
     const filePath = sanitizeFilePath(path);
+
+    // SS-18: protected system files (.metadata.json, .thumbnail.png) were guarded
+    // on delete/rename but NOT on write, so a caller could overwrite their own
+    // project's .metadata.json and flip published/slug/publishedUrl. Reject writes
+    // to any protected basename here, matching the delete/rename guards.
+    if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
+      jsonError("Cannot overwrite protected files", 403);
+    }
 
     if (!(await storage.projectExists(user.id, projectId))) {
       jsonError("Project not found", 404);
@@ -367,7 +397,7 @@ export function createFileRouter() {
 
     return new Response(binaryBody(buffer), {
       headers: {
-        "Content-Disposition": `attachment; filename="${filePath.split("/").pop() || "download"}"`,
+        "Content-Disposition": contentDispositionAttachment(filePath.split("/").pop() || "download"),
         "Content-Type": getContentType(filePath),
         "Content-Length": String(buffer.byteLength)
       }

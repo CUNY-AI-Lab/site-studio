@@ -273,6 +273,31 @@ describe("R2ProjectStorage", () => {
       expect(names).not.toContain(".thumbnail.png");
     });
 
+    // SS-7: a list prefix without a trailing slash matches sibling keys — listing
+    // "images" also caught "images2.txt" and "images-old/…". The prefix must be a
+    // directory boundary.
+    it("SS-7: a prefix listing does not include sibling keys sharing the prefix", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "images/a.png", "A");
+      await storage.writeFile(userId, projectId, "images/b.png", "B");
+      await storage.writeFile(userId, projectId, "images2.txt", "sibling file");
+      await storage.writeFile(userId, projectId, "images-old/c.png", "sibling dir");
+
+      const files = await storage.listFiles(userId, projectId, "images");
+      const paths = files.map((f) => f.path).sort();
+      expect(paths).toEqual(["images/a.png", "images/b.png"]);
+      expect(paths).not.toContain("images2.txt");
+      expect(paths.some((p) => p.startsWith("images-old/"))).toBe(false);
+    });
+
+    it("SS-7: a prefix already ending in / is not double-slashed", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "images/a.png", "A");
+
+      const files = await storage.listFiles(userId, projectId, "images/");
+      expect(files.map((f) => f.path)).toEqual(["images/a.png"]);
+    });
+
     it("marks binary files as non-text", async () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "paper.pdf", new Uint8Array([1, 2, 3]));
@@ -299,6 +324,36 @@ describe("R2ProjectStorage", () => {
 
       const content = await storage.readFile(userId, projectId, "new.html");
       expect(content).toBe("content");
+    });
+  });
+
+  describe("renameProject", () => {
+    // SS-25: thumbnailUrl embeds the project id, so after a rename it must point
+    // at the new id (or be cleared), never at the old/now-deleted project.
+    it("SS-25: re-points thumbnailUrl to the new project id", async () => {
+      await storage.createProject(userId, "old-id", "Old");
+      await storage.writeFile(userId, "old-id", "index.html", "<h1>Hi</h1>");
+      await storage.updateProjectMetadata(userId, "old-id", {
+        thumbnailUrl: "/api/projects/old-id/thumbnail"
+      });
+
+      await storage.renameProject(userId, "old-id", "new-id");
+
+      const metadata = await storage.getProjectMetadata(userId, "new-id");
+      expect(metadata?.id).toBe("new-id");
+      expect(metadata?.thumbnailUrl).toBe("/api/projects/new-id/thumbnail");
+      // The stale reference to the old id is gone.
+      expect(metadata?.thumbnailUrl).not.toContain("old-id");
+    });
+
+    it("SS-25: leaves thumbnailUrl unset when the old metadata had none", async () => {
+      await storage.createProject(userId, "old-id2", "Old2");
+      await storage.writeFile(userId, "old-id2", "index.html", "<h1>Hi</h1>");
+
+      await storage.renameProject(userId, "old-id2", "new-id2");
+
+      const metadata = await storage.getProjectMetadata(userId, "new-id2");
+      expect(metadata?.thumbnailUrl).toBeUndefined();
     });
   });
 

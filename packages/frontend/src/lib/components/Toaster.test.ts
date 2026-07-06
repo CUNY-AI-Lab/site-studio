@@ -105,4 +105,46 @@ describe('Toaster + toast store', () => {
 		expect(remaining).toHaveLength(1);
 		expect(remaining[0]).toHaveTextContent('Second');
 	});
+
+	// SS-23: error toasts persist, so repeated identical failures must not stack
+	// unboundedly. Identical messages de-dupe; the total stack is capped.
+	describe('SS-23: de-dupe + cap', () => {
+		it('pushing the same error twice yields a single toast and the same id', () => {
+			render(Toaster);
+			const first = emit(() => toast.error('Save failed'));
+			const second = emit(() => toast.error('Save failed'));
+			expect(second).toBe(first);
+			expect(screen.getAllByRole('alert')).toHaveLength(1);
+		});
+
+		it('de-dupe is per kind+message, so distinct messages still stack', () => {
+			render(Toaster);
+			emit(() => toast.error('A'));
+			emit(() => toast.error('B'));
+			expect(screen.getAllByRole('alert')).toHaveLength(2);
+		});
+
+		it('caps the stack at 4, dropping the oldest', () => {
+			render(Toaster);
+			for (let i = 1; i <= 6; i++) {
+				emit(() => toast.error(`err ${i}`));
+			}
+			const alerts = screen.getAllByRole('alert');
+			expect(alerts).toHaveLength(4);
+			// The two oldest ("err 1", "err 2") were dropped.
+			expect(toasts.map((t) => t.message)).toEqual(['err 3', 'err 4', 'err 5', 'err 6']);
+		});
+	});
+
+	// SS-24: exactly one live-region layer. The per-toast role/aria-live stays;
+	// the container must NOT also be a live region (nested regions double-announce).
+	it('SS-24: the container declares no competing aria-live', () => {
+		const { container } = render(Toaster);
+		emit(() => toast.error('Boom'));
+		const toaster = container.querySelector('.toaster');
+		expect(toaster).not.toBeNull();
+		expect(toaster).not.toHaveAttribute('aria-live');
+		// The per-toast live region is still present.
+		expect(screen.getByRole('alert')).toHaveAttribute('aria-live', 'assertive');
+	});
 });

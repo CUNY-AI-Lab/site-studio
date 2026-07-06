@@ -14,10 +14,13 @@
 </script>
 
 <!--
-	Two stacked live regions: errors are assertive (role="alert"), info/success
-	are polite (role="status"). Each toast is keyboard-dismissible (button + Esc).
+	SS-24: exactly ONE live-region layer. Each toast carries its own live-region
+	semantics (errors assertive via role="alert", info/success polite via
+	role="status"); the CONTAINER must NOT also be a live region, or nested live
+	regions double-announce in some screen readers. Each toast is
+	keyboard-dismissible (button + Esc).
 -->
-<div class="toaster" aria-live="polite">
+<div class="toaster">
 	{#each toasts as t (t.id)}
 		{@const Icon = icons[t.kind]}
 		<div

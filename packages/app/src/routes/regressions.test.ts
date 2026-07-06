@@ -286,6 +286,52 @@ describe("route regressions", () => {
     await expect(downloadResponse.json()).resolves.toEqual({ error: "File not found" });
   });
 
+  // SS-18: PROTECTED_FILE_NAMES were guarded on delete/rename but not on write,
+  // so a caller could overwrite their own .metadata.json (flip published/slug).
+  it("SS-18: rejects a write to .metadata.json via POST /file", async () => {
+    await storage.createProject(userId, "protproj", "Prot Proj");
+    const before = await storage.getProjectMetadata(userId, "protproj");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/protproj/file",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: ".metadata.json", content: '{"published":true,"slug":"pwned"}' }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Cannot overwrite protected files" });
+    // Metadata is untouched — still unpublished.
+    const after = await storage.getProjectMetadata(userId, "protproj");
+    expect(after).toEqual(before);
+    expect(after?.published).toBe(false);
+  });
+
+  // SS-20: a filename containing a `"` must not break the Content-Disposition
+  // header token; the ASCII fallback is quote-stripped and the real name rides in
+  // the RFC 5987 filename* form.
+  it("SS-20: download emits a well-formed Content-Disposition for a quoted filename", async () => {
+    await storage.createProject(userId, "dlproj", "Dl Proj");
+    await storage.writeFile(userId, "dlproj", 'a"b.txt', "hello");
+
+    const response = await app.request(
+      `http://site-studio.test/api/projects/dlproj/download?path=${encodeURIComponent('a"b.txt')}`,
+      undefined,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    const cd = response.headers.get("Content-Disposition") || "";
+    // No raw quote leaks into the quoted-string token (only the two delimiters).
+    expect(cd).toBe("attachment; filename=\"ab.txt\"; filename*=UTF-8''a%22b.txt");
+    // The quoted filename token has exactly two double-quotes (the delimiters).
+    const quotedToken = cd.match(/filename="([^"]*)"/);
+    expect(quotedToken?.[1]).toBe("ab.txt");
+  });
+
   it("assigns a unique slug when another published project already owns it", async () => {
     await storage.createProject(userId, "bar", "Bar");
     await storage.writeFile(userId, "bar", "index.html", "<h1>Alpha</h1>");
@@ -685,6 +731,47 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect(response.headers.get("Content-Security-Policy")).toBeNull();
+  });
+
+  // SS-21: the thumbnail POST previously trusted image.type === "image/png".
+  // Sniff the magic bytes and reject a non-PNG body posted as image/png.
+  it("SS-21: rejects a non-PNG body posted to the thumbnail route as image/png", async () => {
+    await storage.createProject(userId, "thumbsniff", "Thumb Sniff");
+    const html = new TextEncoder().encode("<!DOCTYPE html><html></html>");
+    const form = new FormData();
+    form.append(
+      "image",
+      new File([new Blob([html.buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
+    );
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/thumbsniff/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Thumbnail must be a valid PNG image." });
+    // Nothing was written.
+    expect(await storage.readThumbnail(userId, "thumbsniff")).toBeNull();
+  });
+
+  it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
+    await storage.createProject(userId, "thumbok", "Thumb OK");
+    const form = new FormData();
+    form.append(
+      "image",
+      new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
+    );
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/thumbok/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    expect(await storage.readThumbnail(userId, "thumbok")).not.toBeNull();
   });
 });
 

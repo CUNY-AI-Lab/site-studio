@@ -465,14 +465,33 @@ function createProjectTools(
         content: z.string().describe("File content to write."),
         mode: z.enum(["replace", "append"]).optional().default("replace").describe("Replace the full file or append to the end.")
       }),
-      outputSchema: z.object({
-        ok: z.literal(true),
-        path: z.string().describe("Resolved file path."),
-        created: z.boolean().describe("True if the file was newly created, false if it existed."),
-        changed: z.boolean().describe("True if the content actually changed.")
-      }),
+      outputSchema: z.discriminatedUnion("ok", [
+        z.object({
+          ok: z.literal(true),
+          path: z.string().describe("Resolved file path."),
+          created: z.boolean().describe("True if the file was newly created, false if it existed."),
+          changed: z.boolean().describe("True if the content actually changed.")
+        }),
+        z.object({
+          ok: z.literal(false),
+          path: z.string(),
+          message: z.string().describe("Error message explaining why the write failed.")
+        })
+      ]),
       execute: async ({ path, content, mode }) => {
         const filePath = sanitizeFilePath(path);
+
+        // SS-18: protected system files (.metadata.json, .thumbnail.png) are
+        // guarded on delete/rename; guard writes too so the agent can't overwrite
+        // .metadata.json and flip published/slug/publishedUrl.
+        if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
+          return {
+            ok: false,
+            path: filePath,
+            message: "Protected files cannot be overwritten."
+          };
+        }
+
         let previousContent: string | null = null;
 
         if (await storage.fileExists(scope.userId, scope.projectId, filePath)) {
