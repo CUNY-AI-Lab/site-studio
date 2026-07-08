@@ -2,11 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ProjectExistsError, R2ProjectStorage } from "./r2";
 import { isSnapshotSkipped } from "../types";
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
-import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
+import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 
 // Mock R2 bucket
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag: string; uploaded: Date }>();
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; customMetadata?: Record<string, string>; etag: string; uploaded: Date }>();
   const versions = new Map<string, number>();
 
   function objectSize(data: ArrayBuffer | string): number {
@@ -48,6 +48,7 @@ function createMockBucket() {
         etag: entry.etag,
         uploaded: entry.uploaded,
         httpMetadata: entry.httpMetadata || {},
+        customMetadata: entry.customMetadata || {},
         text: async () => typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer),
         arrayBuffer: async () => typeof data === "string" ? new TextEncoder().encode(data).buffer : data,
       };
@@ -63,6 +64,7 @@ function createMockBucket() {
       const entry = {
         data: stored,
         httpMetadata: options?.httpMetadata,
+        customMetadata: options?.customMetadata,
         etag: nextEtag(key),
         uploaded: new Date()
       };
@@ -72,9 +74,10 @@ function createMockBucket() {
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async ({ prefix, delimiter, cursor, limit }: any = {}) => {
+    list: vi.fn(async ({ prefix, delimiter, cursor, limit, include }: any = {}) => {
       const entries: Array<{ kind: "object"; key: string } | { kind: "prefix"; key: string }> = [];
       const seenPrefixes = new Set<string>();
+      const includeCustomMetadata = Array.isArray(include) && include.includes("customMetadata");
 
       for (const key of [...store.keys()].sort()) {
         if (prefix && !key.startsWith(prefix)) continue;
@@ -110,13 +113,17 @@ function createMockBucket() {
         const key = listedEntry.key;
         const entry = store.get(key);
         const size = entry ? objectSize(entry.data) : 0;
-        objects.push({
+        const object: any = {
           key,
           size,
           etag: entry?.etag,
           uploaded: entry?.uploaded || new Date(),
           httpMetadata: entry?.httpMetadata || {},
-        });
+        };
+        if (includeCustomMetadata) {
+          object.customMetadata = entry?.customMetadata || {};
+        }
+        objects.push(object);
       }
 
       const next = start + pageSize;
@@ -643,6 +650,167 @@ describe("R2ProjectStorage", () => {
         "Snapshot 5",
         "Snapshot 6"
       ]);
+    });
+
+    it("SS-38: keeps exactly 50 snapshots without pruning at the boundary", async () => {
+      vi.useFakeTimers();
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          await storage.createSnapshot(userId, projectId, {
+            trigger: "manual",
+            label: `Snapshot ${index}`
+          });
+        }
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(snapshots.map((snapshot) => snapshot.label)).toEqual(
+          Array.from({ length: SNAPSHOT_KEEP_COUNT }, (_, index) => `Snapshot ${SNAPSHOT_KEEP_COUNT - 1 - index}`)
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("SS-38: prunes exactly the oldest archive and metadata on the 51st snapshot", async () => {
+      vi.useFakeTimers();
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        const created: ProjectSnapshot[] = [];
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT + 1; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          created.push(
+            (await storage.createSnapshot(userId, projectId, {
+              trigger: "manual",
+              label: `Snapshot ${index}`
+            })) as ProjectSnapshot
+          );
+        }
+
+        const oldest = created[0];
+        expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.zip`)).toBe(false);
+        expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.json`)).toBe(false);
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(new Set(snapshots.map((snapshot) => snapshot.id))).toEqual(
+          new Set(created.slice(1).map((snapshot) => snapshot.id))
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("SS-39: lists modern snapshots without GETs for snapshot metadata objects", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      for (let index = 0; index < 4; index += 1) {
+        await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: `Snapshot ${index}`
+        });
+      }
+
+      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      getMock.mockClear();
+
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      const snapshotMetadataGets = getMock.mock.calls.filter(([key]) =>
+        String(key).startsWith(`snapshots/${userId}/${projectId}/`) && String(key).endsWith(".json")
+      );
+      expect(snapshots).toHaveLength(4);
+      expect(snapshotMetadataGets).toHaveLength(0);
+    });
+
+    it("SS-39: falls back to one GET for a legacy snapshot without custom metadata", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      await storage.createSnapshot(userId, projectId, {
+        trigger: "manual",
+        label: "Modern 1"
+      });
+      await storage.createSnapshot(userId, projectId, {
+        trigger: "manual",
+        label: "Modern 2"
+      });
+
+      const legacy: ProjectSnapshot = {
+        id: "legacy-snapshot",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        projectId,
+        trigger: "manual",
+        label: "Legacy",
+        fileCount: 1
+      };
+      await bucket.put(`snapshots/${userId}/${projectId}/${legacy.id}.json`, JSON.stringify(legacy), {
+        httpMetadata: { contentType: "application/json" }
+      });
+
+      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      getMock.mockClear();
+
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      const snapshotMetadataGets = getMock.mock.calls.filter(([key]) =>
+        String(key).startsWith(`snapshots/${userId}/${projectId}/`) && String(key).endsWith(".json")
+      );
+      expect(snapshots.map((snapshot) => snapshot.label).sort()).toEqual(["Legacy", "Modern 1", "Modern 2"]);
+      expect(snapshotMetadataGets).toEqual([[`snapshots/${userId}/${projectId}/${legacy.id}.json`]]);
+    });
+
+    it("SS-38: returns the created snapshot when prune delete fails, then converges on the next create", async () => {
+      vi.useFakeTimers();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          await storage.createSnapshot(userId, projectId, {
+            trigger: "manual",
+            label: `Snapshot ${index}`
+          });
+        }
+
+        const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
+        deleteMock.mockImplementationOnce(async () => {
+          throw new Error("delete failed");
+        });
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 0)));
+        const resilient = await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: "Resilient"
+        });
+        expect(isSnapshotSkipped(resilient)).toBe(false);
+        expect((resilient as ProjectSnapshot).label).toBe("Resilient");
+        expect(warnSpy).toHaveBeenCalled();
+        expect(await storage.listSnapshots(userId, projectId)).toHaveLength(SNAPSHOT_KEEP_COUNT + 1);
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 1)));
+        await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: "Converges"
+        });
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(snapshots.some((snapshot) => snapshot.label === "Converges")).toBe(true);
+        expect(snapshots.some((snapshot) => snapshot.label === "Resilient")).toBe(true);
+        expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 0")).toBe(false);
+        expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 1")).toBe(false);
+      } finally {
+        warnSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
 
     it("returns empty list when no snapshots exist", async () => {

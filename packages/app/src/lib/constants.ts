@@ -48,6 +48,12 @@ export const MAX_UPLOAD_BODY_BYTES = MAX_UPLOAD_BYTES + MAX_UPLOAD_BODY_MARGIN_B
  * proceeds, the user just has no restore point for that oversized turn.
  */
 export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
+/**
+ * SS-38 snapshot retention: keep the newest 50 snapshots per project. Snapshot
+ * creation is synchronous and runs on every mutation, so unbounded archives
+ * would grow R2 storage forever for active projects.
+ */
+export const SNAPSHOT_KEEP_COUNT = 50;
 export const PROTECTED_FILE_NAMES = new Set([".metadata.json", ".thumbnail.png"]);
 
 export const CONTENT_TYPES: Record<string, string> = {
