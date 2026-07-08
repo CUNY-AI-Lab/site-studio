@@ -127,6 +127,37 @@ describe('AgentChat', () => {
 		expect(new URL(url).searchParams.get('csrf')).toBe('test-csrf-token');
 	});
 
+	it('routes authentication_required history responses through the login redirect path', async () => {
+		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
+			(symbol) => symbol.toString() === 'Symbol(impl)'
+		);
+		expect(locationImplSymbol).toBeDefined();
+		const locationImpl = (window.location as any)[locationImplSymbol as symbol] as {
+			assign: (url: string) => void;
+		};
+		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				return new Response(
+					JSON.stringify({ error: 'authentication_required', login_url: '/login' }),
+					{ status: 401, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+
+		await waitFor(() =>
+			expect(assignSpy).toHaveBeenCalledWith('/login?rt=%2F')
+		);
+	});
+
 	it('populates history from an incoming CF_AGENT_CHAT_MESSAGES message', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));

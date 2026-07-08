@@ -3,7 +3,7 @@
 	import { Send, Loader2, X, Paperclip, Square } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { getErrorMessage } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage, isApiError } from '$lib/api/errors';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
@@ -686,7 +686,7 @@
 
 	async function loadChatHistory(targetProjectId: string) {
 		try {
-			const response = await fetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
+			const response = await apiResponseFetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
 				credentials: 'include'
 			});
 
@@ -699,7 +699,11 @@
 			uiMessages = Array.isArray(data) ? (data as UIChatMessage[]) : [];
 			await tick();
 			scrollToBottom();
-		} catch {
+		} catch (error) {
+			if (isApiError(error) && error.statusCode === 401 && error.code === 'authentication_required') {
+				return;
+			}
+
 			uiMessages = [];
 		}
 	}

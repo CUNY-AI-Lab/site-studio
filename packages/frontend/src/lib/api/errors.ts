@@ -67,6 +67,26 @@ function redirectToLogin(loginUrl: string): void {
 	window.location.assign(`${path}?rt=${encodeURIComponent(rt)}`);
 }
 
+function isAuthenticationRequiredEnvelope(status: number, errorData: any): boolean {
+	return status === 401 && errorData?.error === 'authentication_required';
+}
+
+function maybeRedirectToLogin(status: number, errorData: any): void {
+	if (!isAuthenticationRequiredEnvelope(status, errorData)) {
+		return;
+	}
+
+	redirectToLogin(typeof errorData.login_url === 'string' ? errorData.login_url : '/login');
+}
+
+function toApiError(response: Response, errorData: any): ApiError {
+	const message = errorData.message || errorData.error || 'An error occurred';
+	const code = errorData.code || errorData.error;
+	const details = errorData.details;
+
+	return new ApiError(response.status, message, code, details);
+}
+
 /**
  * Parse error response from API and throw ApiError.
  * Handles both structured API errors and generic network errors.
@@ -92,16 +112,38 @@ export async function handleApiError(response: Response): Promise<never> {
 
 	// CAIL envelopes carry a machine code in `error` and a human sentence in
 	// `message`. Redirect to login on authentication_required.
-	if (response.status === 401 && errorData.error === 'authentication_required') {
-		redirectToLogin(typeof errorData.login_url === 'string' ? errorData.login_url : '/login');
+	maybeRedirectToLogin(response.status, errorData);
+
+	throw toApiError(response, errorData);
+}
+
+/**
+ * Wrapper for fetch callers that need the raw Response (blob downloads, 415
+ * branching) while still honoring the shared 401 authentication redirect.
+ */
+export async function apiResponseFetch(
+	input: RequestInfo | URL,
+	init?: RequestInit
+): Promise<Response> {
+	const response = await csrfFetch(input, init);
+
+	if (response.status !== 401) {
+		return response;
 	}
 
-	// Extract error information from response
-	const message = errorData.message || errorData.error || 'An error occurred';
-	const code = errorData.code || errorData.error;
-	const details = errorData.details;
+	let errorData: any;
+	try {
+		errorData = await response.clone().json();
+	} catch {
+		return response;
+	}
 
-	throw new ApiError(response.status, message, code, details);
+	if (!isAuthenticationRequiredEnvelope(response.status, errorData)) {
+		return response;
+	}
+
+	maybeRedirectToLogin(response.status, errorData);
+	throw toApiError(response, errorData);
 }
 
 /**

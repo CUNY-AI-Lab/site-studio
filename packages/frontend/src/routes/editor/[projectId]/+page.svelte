@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { resolvePath } from '$lib/utils/paths';
+	import { createAutosave, type SaveSnapshot } from '$lib/editor/autosave';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
 	import CodeView from '$lib/components/CodeView.svelte';
@@ -13,6 +14,7 @@
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
 	import { csrfFetch } from '$lib/api/csrf';
+	import { apiFetch, apiResponseFetch } from '$lib/api/errors';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
 	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
@@ -30,11 +32,6 @@
 	let previousProjectId = $state<string | null>(null);
 	let stableProjectId = $state<string | null>(null);
 	let onboardingModulePromise: Promise<OnboardingModule> | null = null;
-	type SaveSnapshot = {
-		projectId: string;
-		filePath: string;
-		content: string;
-	};
 
 	// Get projectId from URL params
 	let projectId = $derived($page.params.projectId ?? '');
@@ -141,13 +138,14 @@
 		if (!targetProjectId) return [];
 
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${targetProjectId}/files`), {
+			const data = await apiFetch<{ files: ProjectFile[] }>(
+				resolvePath(`/api/projects/${targetProjectId}/files`),
+				{
 				credentials: 'include'
-			});
-			if (!response.ok) throw new Error('Failed to load files');
+				}
+			);
 
-			const data = await response.json();
-			return data.files as ProjectFile[];
+			return data.files;
 		} catch (error) {
 			console.error('Error loading files:', error);
 			return [];
@@ -195,9 +193,12 @@
 		}
 
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`), {
-				credentials: 'include'
-			});
+			const response = await apiResponseFetch(
+				resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`),
+				{
+					credentials: 'include'
+				}
+			);
 			if (response.status === 415) {
 				currentFileIsText = false;
 				fileContent = '';
@@ -217,17 +218,7 @@
 		}
 	}
 
-	let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-	let queuedSave: SaveSnapshot | null = null;
-	let saveLoopPromise: Promise<boolean> | null = null;
 	let isSaving = $state(false);
-
-	function clearSaveTimeout() {
-		if (saveTimeout) {
-			clearTimeout(saveTimeout);
-			saveTimeout = null;
-		}
-	}
 
 	function getCurrentSaveSnapshot(): SaveSnapshot | null {
 		if (!projectId || !currentFile || !currentFileIsText) return null;
@@ -271,49 +262,15 @@
 		}
 	}
 
-	async function persistQueuedSaves(): Promise<boolean> {
-		if (saveLoopPromise) {
-			return saveLoopPromise;
+	const autosave = createAutosave({
+		persist: persistFile,
+		onSavingChange: (saving) => {
+			isSaving = saving;
 		}
-
-		saveLoopPromise = (async () => {
-			let allSucceeded = true;
-			isSaving = true;
-
-			try {
-				while (queuedSave) {
-					const snapshot = queuedSave;
-					queuedSave = null;
-
-					const didSave = await persistFile(snapshot);
-					if (!didSave) {
-						allSucceeded = false;
-						queuedSave = null; // Drop queued save on failure to prevent retry loops
-						break;
-					}
-				}
-
-				return allSucceeded;
-			} finally {
-				isSaving = false;
-				saveLoopPromise = null;
-			}
-		})();
-
-		return saveLoopPromise;
-	}
+	});
 
 	async function flushPendingSave(): Promise<boolean> {
-		clearSaveTimeout();
-
-		while (queuedSave || saveLoopPromise) {
-			const didPersist = await persistQueuedSaves();
-			if (!didPersist) {
-				return false;
-			}
-		}
-
-		return true;
+		return autosave.flush();
 	}
 
 	function onEditorChange(content: string) {
@@ -321,14 +278,14 @@
 		const snapshot = getCurrentSaveSnapshot();
 		if (!snapshot) return;
 
-		// Auto-save after 1 second of no typing
-		queuedSave = snapshot;
-		clearSaveTimeout();
-		saveTimeout = setTimeout(() => {
-			saveTimeout = null;
-			void persistQueuedSaves();
-		}, 1000);
+		autosave.queue(snapshot);
 	}
+
+	$effect(() => {
+		return () => {
+			autosave.dispose();
+		};
+	});
 
 	async function refreshProjectState(targetProjectId: string) {
 		const loadVersion = ++projectLoadVersion;
@@ -570,7 +527,7 @@
 	async function handleExportProject() {
 		if (!currentProject) return;
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${currentProject.id}/export`), {
+			const response = await apiResponseFetch(resolvePath(`/api/projects/${currentProject.id}/export`), {
 				credentials: 'include'
 			});
 
