@@ -3,10 +3,10 @@ import {
   cailAuthRequiredResponse,
   cailIdentityRequired,
   getRequestIdentity,
-  verifyIdentityJwt,
 } from "./cail-identity";
 
 const SECRET = "test-shared-secret";
+const ENV = { CAIL_IDENTITY_JWT_SECRET: SECRET };
 
 function base64url(bytes: Uint8Array): string {
   let binary = "";
@@ -55,10 +55,28 @@ function validClaims(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("verifyIdentityJwt", () => {
+/**
+ * Request carrying `token` in the `X-CAIL-Identity-JWT` header — the only way a
+ * verified identity reaches this worker.
+ */
+function requestWithToken(token: string): Request {
+  return new Request("https://x/", {
+    headers: { "X-CAIL-Identity-JWT": token },
+  });
+}
+
+/**
+ * These exercise JWT verification through `getRequestIdentity` — the module's
+ * real surface, which wires the shared `@cuny-ai-lab/cail-identity` verifier to
+ * this worker's issuer allowlist. (The primitive's own byte-level tests live in
+ * the `@cuny-ai-lab/cail-identity` package.)
+ */
+describe("getRequestIdentity — JWT verification", () => {
   it("accepts a well-formed token and returns the identity", async () => {
-    const token = await mintJwt(validClaims());
-    const identity = await verifyIdentityJwt(token, SECRET);
+    const identity = await getRequestIdentity(
+      requestWithToken(await mintJwt(validClaims())),
+      ENV
+    );
     expect(identity).not.toBeNull();
     expect(identity!.subject).toBe("cail-abc123");
     expect(identity!.email).toBe("someone@gc.cuny.edu");
@@ -66,66 +84,82 @@ describe("verifyIdentityJwt", () => {
     expect(identity!.entitlements).toEqual(["site-studio"]);
   });
 
+  it("accepts the staging issuer (allowlisted)", async () => {
+    const token = await mintJwt(
+      validClaims({ iss: "https://tools.cuny.qzz.io/cail-sso" })
+    );
+    const identity = await getRequestIdentity(requestWithToken(token), ENV);
+    expect(identity!.subject).toBe("cail-abc123");
+  });
+
   it("rejects a token signed with a different secret", async () => {
     const token = await mintJwt(validClaims(), { secret: "wrong-secret" });
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
   it("rejects a non-HS256 algorithm (alg pinning)", async () => {
     // "alg: none" must never be accepted even if the signature check is skipped.
     const token = await mintJwt(validClaims(), { header: { alg: "none", typ: "JWT" } });
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
-  it("rejects an expired token", async () => {
+  it("rejects an expired token (beyond clock tolerance)", async () => {
     const now = Math.floor(Date.now() / 1000);
-    const token = await mintJwt(validClaims({ exp: now - 1 }));
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    // The primitive applies a 60s default clock tolerance; go well past it.
+    const token = await mintJwt(validClaims({ exp: now - 120 }));
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
   it("rejects the wrong audience", async () => {
     const token = await mintJwt(validClaims({ aud: "someone-else" }));
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
-  it("rejects an issuer that does not end with /cail-sso", async () => {
+  it("rejects a non-allowlisted issuer", async () => {
     const token = await mintJwt(validClaims({ iss: "https://evil.example/not-cail" }));
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
+  });
+
+  it("rejects a look-alike issuer that only ends with /cail-sso (EXACT-match, not suffix)", async () => {
+    // The old hand-copied verifier accepted anything ending in "/cail-sso"
+    // (endsWith). The shared primitive EXACT-matches the allowlist, so a
+    // forged issuer that merely shares the suffix is now rejected. This is the
+    // intended tightening (closes Codex #3).
+    const token = await mintJwt(validClaims({ iss: "https://evil.example/cail-sso" }));
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
   it("rejects an empty or missing subject", async () => {
     const token = await mintJwt(validClaims({ sub: "" }));
-    expect(await verifyIdentityJwt(token, SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
   it("rejects a malformed token", async () => {
-    expect(await verifyIdentityJwt("not-a-jwt", SECRET)).toBeNull();
-    expect(await verifyIdentityJwt("a.b", SECRET)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken("not-a-jwt"), ENV)).toBeNull();
+    expect(await getRequestIdentity(requestWithToken("a.b"), ENV)).toBeNull();
   });
 });
 
-describe("getRequestIdentity", () => {
+describe("getRequestIdentity — request wiring", () => {
   it("returns null when no secret is configured", async () => {
     const token = await mintJwt(validClaims());
-    const req = new Request("https://x/", { headers: { "X-CAIL-Identity-JWT": token } });
-    expect(await getRequestIdentity(req, {})).toBeNull();
+    expect(await getRequestIdentity(requestWithToken(token), {})).toBeNull();
   });
 
   it("returns null when the header is absent", async () => {
     const req = new Request("https://x/");
-    expect(await getRequestIdentity(req, { CAIL_IDENTITY_JWT_SECRET: SECRET })).toBeNull();
+    expect(await getRequestIdentity(req, ENV)).toBeNull();
   });
 
   it("verifies the X-CAIL-Identity-JWT header", async () => {
     const token = await mintJwt(validClaims());
-    const req = new Request("https://x/", { headers: { "X-CAIL-Identity-JWT": token } });
-    const identity = await getRequestIdentity(req, { CAIL_IDENTITY_JWT_SECRET: SECRET });
+    const identity = await getRequestIdentity(requestWithToken(token), ENV);
     expect(identity!.subject).toBe("cail-abc123");
   });
 
   it("ignores bare X-CAIL-Subject headers (never trusted)", async () => {
     const req = new Request("https://x/", { headers: { "X-CAIL-Subject": "cail-forged" } });
-    expect(await getRequestIdentity(req, { CAIL_IDENTITY_JWT_SECRET: SECRET })).toBeNull();
+    expect(await getRequestIdentity(req, ENV)).toBeNull();
   });
 });
 
