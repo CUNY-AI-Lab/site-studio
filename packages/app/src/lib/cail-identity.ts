@@ -8,109 +8,34 @@
  * workers.dev URL, so bare `X-CAIL-*` headers prove nothing — anyone can set
  * them. Identity is accepted ONLY from the verified JWT.
  *
- * Contract (must match key-service/src/identity.ts and
- * cloudflare/workers/shared/utils/cail-identity.ts):
- *   - HS256, algorithm PINNED (never let the token pick it)
- *   - aud === "cail-internal"
- *   - iss ends with "/cail-sso"
- *   - exp enforced (the gate mints short-lived tokens, CAIL_IDENTITY_JWT_TTL,
- *     currently 300s)
- *   - sub is the stable pseudonymous CAIL subject ("cail-<hex>") — the only
- *     durable key for workspace ownership. Never key anything by email.
+ * JWT verification is delegated to the shared `@cuny-ai-lab/cail-identity`
+ * primitive (one source of truth across the CAIL fleet; the same verifier the
+ * model-proxy uses). The primitive pins HS256, enforces `exp`/`nbf` with a
+ * clock tolerance, requires `aud === "cail-internal"`, and EXACT-matches `iss`
+ * against an explicit allowlist — see the allowlist passed at the call site
+ * below. The stable pseudonymous CAIL subject (`sub`, "cail-<hex>") is the only
+ * durable key for workspace ownership. Never key anything by email.
  *
  * The shared secret arrives as the `CAIL_IDENTITY_JWT_SECRET` wrangler secret
  * (ops-managed; never in code). If it is unset, identity is disabled and every
  * request is anonymous (pre-rollout behavior).
  */
 
-export interface CailIdentity {
-  /** Stable pseudonymous CAIL subject, e.g. "cail-<hex>". Durable owner key. */
-  subject: string;
-  email?: string;
-  name?: string;
-  entitlements: string[];
-}
+import {
+  verifyIdentityJwt,
+  CAIL_CANONICAL_ISSUER,
+  CAIL_STAGING_ISSUER,
+  type CailIdentity,
+} from "@cuny-ai-lab/cail-identity";
 
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-const JWT_AUDIENCE = "cail-internal";
-
-function base64UrlDecode(segment: string): Uint8Array<ArrayBuffer> | null {
-  try {
-    const padded = segment.replace(/-/g, "+").replace(/_/g, "/");
-    const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
-    const bytes = new Uint8Array(new ArrayBuffer(binary.length));
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  } catch {
-    return null;
-  }
-}
+export type { CailIdentity };
 
 /**
- * Verify an `X-CAIL-Identity-JWT` token. Returns the identity on success, or
- * `null` for any failure (malformed, wrong alg, bad signature, expired, wrong
- * aud/iss, empty sub). Never throws.
- *
- * Ported from cail-gateway key-service/src/identity.ts — keep in sync.
+ * Issuers this worker accepts. EXACT-match allowlist (not a suffix check):
+ * production `tools.ailab.gc.cuny.edu` and staging `tools.cuny.qzz.io`. Any
+ * other `iss` is rejected. An empty allowlist would reject every token.
  */
-export async function verifyIdentityJwt(
-  token: string,
-  secret: string,
-  now: number = Math.floor(Date.now() / 1000)
-): Promise<CailIdentity | null> {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [headerB64, payloadB64, signatureB64] = parts;
-
-  const headerBytes = base64UrlDecode(headerB64);
-  const payloadBytes = base64UrlDecode(payloadB64);
-  const signature = base64UrlDecode(signatureB64);
-  if (!headerBytes || !payloadBytes || !signature) return null;
-
-  let header: { alg?: string };
-  let payload: Record<string, unknown>;
-  try {
-    header = JSON.parse(decoder.decode(headerBytes));
-    payload = JSON.parse(decoder.decode(payloadBytes));
-  } catch {
-    return null;
-  }
-  // Pin the algorithm — never let the token pick it.
-  if (header.alg !== "HS256") return null;
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"]
-  );
-  const valid = await crypto.subtle.verify(
-    "HMAC",
-    key,
-    signature,
-    encoder.encode(`${headerB64}.${payloadB64}`)
-  );
-  if (!valid) return null;
-
-  if (typeof payload.exp !== "number" || payload.exp <= now) return null;
-  if (payload.aud !== JWT_AUDIENCE) return null;
-  if (typeof payload.iss !== "string" || !payload.iss.endsWith("/cail-sso")) return null;
-  if (typeof payload.sub !== "string" || payload.sub === "") return null;
-
-  return {
-    subject: payload.sub,
-    email: typeof payload.email === "string" ? payload.email : undefined,
-    name: typeof payload.name === "string" ? payload.name : undefined,
-    entitlements: Array.isArray(payload.entitlements)
-      ? payload.entitlements.filter((e): e is string => typeof e === "string")
-      : [],
-  };
-}
+const ALLOWED_ISSUERS = [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER];
 
 /** The header the SSO gate injects. Bare `X-CAIL-*` headers are never trusted. */
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
@@ -128,7 +53,7 @@ export async function getRequestIdentity(
   if (!secret) return null;
   const token = request.headers.get(CAIL_IDENTITY_HEADER);
   if (!token) return null;
-  return verifyIdentityJwt(token, secret);
+  return verifyIdentityJwt(token, secret, { allowedIssuers: ALLOWED_ISSUERS });
 }
 
 /**
