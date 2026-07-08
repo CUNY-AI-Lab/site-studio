@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import {
+  type HandleRecord,
   validateHandle,
   checkHandle,
   claimHandle,
@@ -232,6 +233,46 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
     // The healthy pair is untouched.
     expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
     expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+  });
+
+  it("SS-32: restarts when a concurrent healthy claim replaces the orphan before reap", async () => {
+    const ownerId = "cail-a";
+    await bucket.put(userHandleRecordKey(ownerId), JSON.stringify({ handle: "orphaned-one", claimedAt: "t0" }));
+
+    const originalGet = bucket.get;
+    let reverseReads = 0;
+    let injected = false;
+    bucket.get = vi.fn(async (key: string) => {
+      if (key === userHandleRecordKey(ownerId)) {
+        reverseReads += 1;
+        if (reverseReads === 2 && !injected) {
+          injected = true;
+          await claimHandle(bucket, ownerId, "alpha", () => "t1");
+        }
+      }
+      return originalGet(key);
+    }) as typeof bucket.get;
+
+    const res = await claimHandle(bucket, ownerId, "beta", () => "t2");
+    expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
+
+    const forwardHandles = [...bucket.store.entries()]
+      .filter(([key]) => key.startsWith("handles/"))
+      .map(([key, entry]) => ({
+        key,
+        record: JSON.parse(entry.data as string) as HandleRecord
+      }))
+      .filter(({ record }) => record.ownerId === ownerId);
+
+    expect(forwardHandles).toEqual([
+      {
+        key: handleRecordKey("alpha"),
+        record: { ownerId, claimedAt: "t1" }
+      }
+    ]);
+    expect(await getUserHandle(bucket, ownerId)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(ownerId);
+    expect(await resolveHandleOwner(bucket, "beta")).toBeNull();
   });
 });
 

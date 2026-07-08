@@ -10,7 +10,7 @@ import {
 import { binaryBody, jsonError } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
-import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
+import { FileNotFoundError } from "../storage/r2";
 import { buildFileTree, getContentType } from "../lib/path";
 import {
   imageTypeForExtension,
@@ -18,6 +18,7 @@ import {
   sniffImageType
 } from "../lib/image-validation";
 import { lintProject } from "../lib/a11y-lint";
+import { requireProject, type RequireProjectVariables } from "../lib/require-project";
 
 const saveFileSchema = z.object({
   path: z.string().min(1),
@@ -122,29 +123,23 @@ function validateImageBytes(fileName: string, bytes: Uint8Array) {
 }
 
 export function createFileRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+
+  app.use("/api/projects/:id/*", requireProject());
 
   app.get("/api/projects/:id/files", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     const files = await storage.listFiles(user.id, projectId);
     return c.json({ files: buildFileTree(files) });
   });
 
   app.get("/api/projects/:id/images", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     const files = await storage.listFiles(user.id, projectId);
 
@@ -179,14 +174,10 @@ export function createFileRouter() {
   });
 
   app.get("/api/projects/:id/file", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const filePath = sanitizeFilePath(c.req.query("path") || "");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
 
     if (!isTextContentType(getContentType(filePath))) {
       jsonError("Binary files cannot be opened in the text editor. Download the file instead.", 415);
@@ -211,9 +202,9 @@ export function createFileRouter() {
   });
 
   app.post("/api/projects/:id/file", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const parsed = saveFileSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       jsonError("Invalid file payload", 400);
@@ -229,10 +220,6 @@ export function createFileRouter() {
       jsonError("Cannot overwrite protected files", 403);
     }
 
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
-
     if (!isTextContentType(getContentType(filePath))) {
       jsonError("Binary files cannot be saved through the text editor endpoint.", 415);
     }
@@ -242,17 +229,13 @@ export function createFileRouter() {
   });
 
   app.delete("/api/projects/:id/files", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const filePath = sanitizeFilePath(c.req.query("path") || "");
 
     if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
       jsonError("Cannot delete protected files", 403);
-    }
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
     }
 
     await storage.deleteFile(user.id, projectId, filePath);
@@ -260,9 +243,9 @@ export function createFileRouter() {
   });
 
   app.put("/api/projects/:id/files/rename", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const parsed = renameFileSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       jsonError("Invalid rename payload", 400);
@@ -273,10 +256,6 @@ export function createFileRouter() {
 
     if (PROTECTED_FILE_NAMES.has(currentPath.split("/").pop() || "")) {
       jsonError("Cannot rename protected files", 403);
-    }
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
     }
 
     if (!(await storage.fileExists(user.id, projectId, currentPath))) {
@@ -292,9 +271,9 @@ export function createFileRouter() {
   });
 
   app.post("/api/projects/:id/upload", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
 
     // SS-29 pre-buffer guard (defense-in-depth layered on the per-file storage
     // caps below). `c.req.formData()` buffers the ENTIRE multipart body into
@@ -316,10 +295,6 @@ export function createFileRouter() {
 
     if (!isFileUpload(entry)) {
       jsonError("No file uploaded", 400);
-    }
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
     }
 
     // Optional `dir` field lets callers place uploads under a fixed prefix. Only
@@ -376,14 +351,10 @@ export function createFileRouter() {
   });
 
   app.get("/api/projects/:id/download", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const filePath = sanitizeFilePath(c.req.query("path") || "");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
 
     let buffer: Uint8Array;
     try {

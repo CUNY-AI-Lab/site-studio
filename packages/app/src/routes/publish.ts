@@ -12,6 +12,7 @@ import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
+import { requireProject, type RequireProjectVariables } from "../lib/require-project";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -114,15 +115,17 @@ function getPublishedBaseUrl(c: AppContext): string {
   return normalizeBaseUrl(new URL(c.req.url).origin);
 }
 
-type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
+type AppContext = Context<{ Bindings: Env; Variables: RequireProjectVariables }>;
 
 export function createPublishRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+
+  app.use("/api/projects/:id/*", requireProject());
 
   app.post("/api/projects/:id/publish", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const metadata = await storage.getProjectMetadata(user.id, projectId);
 
     if (!metadata) {
@@ -166,9 +169,9 @@ export function createPublishRouter() {
   });
 
   app.post("/api/projects/:id/unpublish", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const metadata = await storage.getProjectMetadata(user.id, projectId);
 
     if (!metadata?.published) {
@@ -188,9 +191,9 @@ export function createPublishRouter() {
   });
 
   app.post("/api/projects/:id/thumbnail", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const form = await c.req.formData();
     const entry = form.get("image");
 
@@ -225,9 +228,9 @@ export function createPublishRouter() {
   });
 
   app.get("/api/projects/:id/thumbnail", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const thumbnail = await storage.readThumbnail(user.id, projectId);
 
     if (!thumbnail) {

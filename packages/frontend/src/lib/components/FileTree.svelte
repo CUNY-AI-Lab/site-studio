@@ -13,6 +13,7 @@
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import { csrfFetch } from '$lib/api/csrf';
+	import { apiResponseFetch } from '$lib/api/errors';
 	import { toast } from '$lib/toast.svelte';
 
 	let {
@@ -63,7 +64,7 @@
 
 	async function handleDownload(filePath: string) {
 		try {
-			const response = await fetch(resolvePath(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`), {
+			const response = await apiResponseFetch(resolvePath(`/api/projects/${projectId}/download?path=${encodeURIComponent(filePath)}`), {
 				credentials: 'include'
 			});
 

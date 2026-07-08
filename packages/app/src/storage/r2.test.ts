@@ -1,17 +1,42 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { R2ProjectStorage } from "./r2";
+import { ProjectExistsError, R2ProjectStorage } from "./r2";
 import { isSnapshotSkipped } from "../types";
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
-import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
+import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 
 // Mock R2 bucket
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any }>();
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; customMetadata?: Record<string, string>; etag: string; uploaded: Date }>();
+  const versions = new Map<string, number>();
+
+  function objectSize(data: ArrayBuffer | string): number {
+    return typeof data === "string" ? data.length : data.byteLength;
+  }
+
+  function nextEtag(key: string): string {
+    const version = (versions.get(key) || 0) + 1;
+    versions.set(key, version);
+    return `${key}:${version}`;
+  }
+
+  function toStored(data: any): ArrayBuffer | string {
+    if (typeof data === "string") {
+      return data;
+    }
+    if (data instanceof ArrayBuffer) {
+      return data;
+    }
+    if (data instanceof Uint8Array) {
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    }
+    return String(data);
+  }
 
   return {
     store,
     head: vi.fn(async (key: string) => {
-      return store.has(key) ? { key, size: 0 } : null;
+      const entry = store.get(key);
+      return entry ? { key, size: objectSize(entry.data), etag: entry.etag, uploaded: entry.uploaded } : null;
     }),
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
@@ -19,39 +44,42 @@ function createMockBucket() {
       const data = entry.data;
       return {
         key,
-        size: typeof data === "string" ? data.length : (data as ArrayBuffer).byteLength,
+        size: objectSize(data),
+        etag: entry.etag,
+        uploaded: entry.uploaded,
         httpMetadata: entry.httpMetadata || {},
+        customMetadata: entry.customMetadata || {},
         text: async () => typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer),
         arrayBuffer: async () => typeof data === "string" ? new TextEncoder().encode(data).buffer : data,
       };
     }),
     put: vi.fn(async (key: string, data: any, options?: any) => {
-      // Honor R2's put-if-absent condition: onlyIf.etagDoesNotMatch:"*" writes
-      // only when the key is empty, and R2 returns null on a failed condition.
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      let stored: ArrayBuffer | string;
-      if (typeof data === "string") {
-        stored = data;
-      } else if (data instanceof ArrayBuffer) {
-        stored = data;
-      } else if (data instanceof Uint8Array) {
-        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-      } else {
-        stored = String(data);
+      if (options?.onlyIf?.etagMatches !== undefined && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+        return null;
       }
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
-      return { key };
+      const stored = toStored(data);
+      const entry = {
+        data: stored,
+        httpMetadata: options?.httpMetadata,
+        customMetadata: options?.customMetadata,
+        etag: nextEtag(key),
+        uploaded: new Date()
+      };
+      store.set(key, entry);
+      return { key, size: objectSize(stored), etag: entry.etag, uploaded: entry.uploaded };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async ({ prefix, delimiter, cursor, limit }: any = {}) => {
-      const objects: any[] = [];
-      const delimitedPrefixes: string[] = [];
+    list: vi.fn(async ({ prefix, delimiter, cursor, limit, include }: any = {}) => {
+      const entries: Array<{ kind: "object"; key: string } | { kind: "prefix"; key: string }> = [];
+      const seenPrefixes = new Set<string>();
+      const includeCustomMetadata = Array.isArray(include) && include.includes("customMetadata");
 
-      for (const key of store.keys()) {
+      for (const key of [...store.keys()].sort()) {
         if (prefix && !key.startsWith(prefix)) continue;
 
         if (delimiter) {
@@ -59,30 +87,50 @@ function createMockBucket() {
           const delimIndex = rest.indexOf(delimiter);
           if (delimIndex >= 0) {
             const delimitedPrefix = (prefix || "") + rest.slice(0, delimIndex + 1);
-            if (!delimitedPrefixes.includes(delimitedPrefix)) {
-              delimitedPrefixes.push(delimitedPrefix);
+            if (!seenPrefixes.has(delimitedPrefix)) {
+              seenPrefixes.add(delimitedPrefix);
+              entries.push({ kind: "prefix", key: delimitedPrefix });
             }
             continue;
           }
         }
 
-        const entry = store.get(key);
-        const size = entry
-          ? typeof entry.data === "string"
-            ? entry.data.length
-            : (entry.data as ArrayBuffer).byteLength
-          : 0;
-        objects.push({
-          key,
-          size,
-          uploaded: new Date(),
-          httpMetadata: {},
-        });
+        entries.push({ kind: "object", key });
       }
 
+      const pageSize = limit ?? 3;
+      const start = cursor ? Number(cursor) : 0;
+      const page = entries.slice(start, start + pageSize);
+      const objects: any[] = [];
+      const delimitedPrefixes: string[] = [];
+
+      for (const listedEntry of page) {
+        if (listedEntry.kind === "prefix") {
+          delimitedPrefixes.push(listedEntry.key);
+          continue;
+        }
+
+        const key = listedEntry.key;
+        const entry = store.get(key);
+        const size = entry ? objectSize(entry.data) : 0;
+        const object: any = {
+          key,
+          size,
+          etag: entry?.etag,
+          uploaded: entry?.uploaded || new Date(),
+          httpMetadata: entry?.httpMetadata || {},
+        };
+        if (includeCustomMetadata) {
+          object.customMetadata = entry?.customMetadata || {};
+        }
+        objects.push(object);
+      }
+
+      const next = start + pageSize;
       return {
-        objects: limit ? objects.slice(0, limit) : objects,
-        truncated: false,
+        objects,
+        truncated: next < entries.length,
+        cursor: next < entries.length ? String(next) : undefined,
         delimitedPrefixes,
       };
     }),
@@ -126,6 +174,24 @@ describe("R2ProjectStorage", () => {
     it("returns true when files exist without metadata", async () => {
       await bucket.put(`projects/${userId}/${projectId}/index.html`, "<h1>Hi</h1>");
       expect(await storage.projectExists(userId, projectId)).toBe(true);
+    });
+  });
+
+  describe("listProjects", () => {
+    it("returns projects across paginated delimiter listings", async () => {
+      for (let index = 0; index < 7; index += 1) {
+        await storage.createProject(userId, `project-${index}`, `Project ${index}`);
+      }
+
+      await expect(storage.listProjects(userId)).resolves.toEqual([
+        "project-0",
+        "project-1",
+        "project-2",
+        "project-3",
+        "project-4",
+        "project-5",
+        "project-6"
+      ]);
     });
   });
 
@@ -263,6 +329,24 @@ describe("R2ProjectStorage", () => {
       });
     });
 
+    it("returns all files across paginated listings", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      for (let index = 0; index < 7; index += 1) {
+        await storage.writeFile(userId, projectId, `page-${index}.html`, `<h1>${index}</h1>`);
+      }
+
+      const files = await storage.listFiles(userId, projectId);
+      expect(files.map((file) => file.path)).toEqual([
+        "page-0.html",
+        "page-1.html",
+        "page-2.html",
+        "page-3.html",
+        "page-4.html",
+        "page-5.html",
+        "page-6.html"
+      ]);
+    });
+
     it("excludes protected files", async () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "hi");
@@ -355,6 +439,20 @@ describe("R2ProjectStorage", () => {
       const metadata = await storage.getProjectMetadata(userId, "new-id2");
       expect(metadata?.thumbnailUrl).toBeUndefined();
     });
+
+    it("SS-31: throws when the target metadata appears and leaves the target untouched", async () => {
+      await storage.createProject(userId, "old-id3", "Old3");
+      await storage.writeFile(userId, "old-id3", "index.html", "<h1>Old</h1>");
+      await storage.createProject(userId, "new-id3", "Existing");
+      await storage.writeFile(userId, "new-id3", "index.html", "<h1>Existing</h1>");
+
+      await expect(storage.renameProject(userId, "old-id3", "new-id3")).rejects.toBeInstanceOf(ProjectExistsError);
+
+      const targetMetadata = await storage.getProjectMetadata(userId, "new-id3");
+      expect(targetMetadata?.name).toBe("Existing");
+      await expect(storage.readFile(userId, "new-id3", "index.html")).resolves.toBe("<h1>Existing</h1>");
+      await expect(storage.readFile(userId, "old-id3", "index.html")).resolves.toBe("<h1>Old</h1>");
+    });
   });
 
   describe("deleteProject", () => {
@@ -366,6 +464,22 @@ describe("R2ProjectStorage", () => {
       await storage.deleteProject(userId, projectId);
 
       expect(await storage.projectExists(userId, projectId)).toBe(false);
+    });
+
+    it("removes project and snapshot keys across paginated listings", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      for (let index = 0; index < 7; index += 1) {
+        await storage.writeFile(userId, projectId, `file-${index}.html`, `<h1>${index}</h1>`);
+      }
+      const snapshot = await storage.createSnapshot(userId, projectId, { trigger: "manual" });
+      expect(isSnapshotSkipped(snapshot)).toBe(false);
+      if (!isSnapshotSkipped(snapshot)) {
+        expect(snapshot.fileCount).toBe(7);
+      }
+
+      await storage.deleteProject(userId, projectId);
+
+      expect([...bucket.store.keys()].filter((key) => key.includes(`/${projectId}/`))).toEqual([]);
     });
   });
 
@@ -403,6 +517,58 @@ describe("R2ProjectStorage", () => {
       const updated = await storage.updateProjectMetadata(userId, projectId, { name: "New" });
       expect(updated.name).toBe("New");
       expect(updated.id).toBe(projectId);
+    });
+
+    it("SS-30: retries a stale metadata write and preserves both concurrent updates", async () => {
+      await storage.createProject(userId, projectId, "My Project");
+      const key = `projects/${userId}/${projectId}/.metadata.json`;
+      const originalPut = bucket.put;
+      let injected = false;
+
+      bucket.put = vi.fn(async (putKey: string, data: any, options?: any) => {
+        if (putKey === key && options?.onlyIf?.etagMatches && !injected) {
+          injected = true;
+          const current = JSON.parse(await (await bucket.get(key))!.text()) as ProjectMetadata;
+          await originalPut(key, JSON.stringify({ ...current, thumbnailUrl: "/api/projects/my-project/thumbnail" }), {
+            httpMetadata: { contentType: "application/json" }
+          });
+        }
+        return originalPut(putKey, data, options);
+      }) as unknown as typeof bucket.put;
+
+      const updated = await storage.updateProjectMetadata(userId, projectId, {
+        published: true,
+        publishedUrl: "https://example.com/u/janedoe/my-project/",
+        slug: "my-project"
+      });
+
+      expect(updated).toMatchObject({
+        published: true,
+        publishedUrl: "https://example.com/u/janedoe/my-project/",
+        slug: "my-project",
+        thumbnailUrl: "/api/projects/my-project/thumbnail"
+      });
+      await expect(storage.getProjectMetadata(userId, projectId)).resolves.toMatchObject({
+        published: true,
+        thumbnailUrl: "/api/projects/my-project/thumbnail"
+      });
+    });
+
+    it("SS-30: throws after repeated metadata CAS conflicts", async () => {
+      await storage.createProject(userId, projectId, "My Project");
+      const key = `projects/${userId}/${projectId}/.metadata.json`;
+      const original = await storage.getProjectMetadata(userId, projectId);
+      bucket.put = vi.fn(async (putKey: string, _data: any, options?: any) => {
+        if (putKey === key && options?.onlyIf) {
+          return null;
+        }
+        return { key: putKey };
+      }) as unknown as typeof bucket.put;
+
+      await expect(storage.updateProjectMetadata(userId, projectId, { published: true })).rejects.toThrow(
+        `Concurrent metadata update conflict for ${key}`
+      );
+      await expect(storage.getProjectMetadata(userId, projectId)).resolves.toEqual(original);
     });
   });
 
@@ -461,6 +627,190 @@ describe("R2ProjectStorage", () => {
       const snapshots = await storage.listSnapshots(userId, projectId);
       expect(snapshots).toHaveLength(1);
       expect(snapshots[0].id).toBe(snapshot.id);
+    });
+
+    it("returns snapshots across paginated listings", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      for (let index = 0; index < 7; index += 1) {
+        await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: `Snapshot ${index}`
+        });
+      }
+
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      expect(snapshots.map((snapshot) => snapshot.label).sort()).toEqual([
+        "Snapshot 0",
+        "Snapshot 1",
+        "Snapshot 2",
+        "Snapshot 3",
+        "Snapshot 4",
+        "Snapshot 5",
+        "Snapshot 6"
+      ]);
+    });
+
+    it("SS-38: keeps exactly 50 snapshots without pruning at the boundary", async () => {
+      vi.useFakeTimers();
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          await storage.createSnapshot(userId, projectId, {
+            trigger: "manual",
+            label: `Snapshot ${index}`
+          });
+        }
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(snapshots.map((snapshot) => snapshot.label)).toEqual(
+          Array.from({ length: SNAPSHOT_KEEP_COUNT }, (_, index) => `Snapshot ${SNAPSHOT_KEEP_COUNT - 1 - index}`)
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("SS-38: prunes exactly the oldest archive and metadata on the 51st snapshot", async () => {
+      vi.useFakeTimers();
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        const created: ProjectSnapshot[] = [];
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT + 1; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          created.push(
+            (await storage.createSnapshot(userId, projectId, {
+              trigger: "manual",
+              label: `Snapshot ${index}`
+            })) as ProjectSnapshot
+          );
+        }
+
+        const oldest = created[0];
+        expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.zip`)).toBe(false);
+        expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.json`)).toBe(false);
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(new Set(snapshots.map((snapshot) => snapshot.id))).toEqual(
+          new Set(created.slice(1).map((snapshot) => snapshot.id))
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("SS-39: lists modern snapshots without GETs for snapshot metadata objects", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      for (let index = 0; index < 4; index += 1) {
+        await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: `Snapshot ${index}`
+        });
+      }
+
+      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      getMock.mockClear();
+
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      const snapshotMetadataGets = getMock.mock.calls.filter(([key]) =>
+        String(key).startsWith(`snapshots/${userId}/${projectId}/`) && String(key).endsWith(".json")
+      );
+      expect(snapshots).toHaveLength(4);
+      expect(snapshotMetadataGets).toHaveLength(0);
+    });
+
+    it("SS-39: falls back to one GET for a legacy snapshot without custom metadata", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      await storage.createSnapshot(userId, projectId, {
+        trigger: "manual",
+        label: "Modern 1"
+      });
+      await storage.createSnapshot(userId, projectId, {
+        trigger: "manual",
+        label: "Modern 2"
+      });
+
+      const legacy: ProjectSnapshot = {
+        id: "legacy-snapshot",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        projectId,
+        trigger: "manual",
+        label: "Legacy",
+        fileCount: 1
+      };
+      await bucket.put(`snapshots/${userId}/${projectId}/${legacy.id}.json`, JSON.stringify(legacy), {
+        httpMetadata: { contentType: "application/json" }
+      });
+
+      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      getMock.mockClear();
+
+      const snapshots = await storage.listSnapshots(userId, projectId);
+      const snapshotMetadataGets = getMock.mock.calls.filter(([key]) =>
+        String(key).startsWith(`snapshots/${userId}/${projectId}/`) && String(key).endsWith(".json")
+      );
+      expect(snapshots.map((snapshot) => snapshot.label).sort()).toEqual(["Legacy", "Modern 1", "Modern 2"]);
+      expect(snapshotMetadataGets).toEqual([[`snapshots/${userId}/${projectId}/${legacy.id}.json`]]);
+    });
+
+    it("SS-38: returns the created snapshot when prune delete fails, then converges on the next create", async () => {
+      vi.useFakeTimers();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await storage.createProject(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          await storage.createSnapshot(userId, projectId, {
+            trigger: "manual",
+            label: `Snapshot ${index}`
+          });
+        }
+
+        const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
+        deleteMock.mockImplementationOnce(async () => {
+          throw new Error("delete failed");
+        });
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 0)));
+        const resilient = await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: "Resilient"
+        });
+        expect(isSnapshotSkipped(resilient)).toBe(false);
+        expect((resilient as ProjectSnapshot).label).toBe("Resilient");
+        expect(warnSpy).toHaveBeenCalled();
+        expect(await storage.listSnapshots(userId, projectId)).toHaveLength(SNAPSHOT_KEEP_COUNT + 1);
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 1)));
+        await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: "Converges"
+        });
+
+        const snapshots = await storage.listSnapshots(userId, projectId);
+        expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
+        expect(snapshots.some((snapshot) => snapshot.label === "Converges")).toBe(true);
+        expect(snapshots.some((snapshot) => snapshot.label === "Resilient")).toBe(true);
+        expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 0")).toBe(false);
+        expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 1")).toBe(false);
+      } finally {
+        warnSpy.mockRestore();
+        vi.useRealTimers();
+      }
     });
 
     it("returns empty list when no snapshots exist", async () => {

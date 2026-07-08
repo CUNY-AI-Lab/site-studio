@@ -7,7 +7,31 @@
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import * as LucideIcons from 'lucide-svelte';
+	import {
+		Award,
+		BarChart3,
+		BookMarked,
+		BookOpen,
+		Calendar,
+		Camera,
+		Clock,
+		Contact,
+		FileText,
+		Frame,
+		GraduationCap,
+		Grid,
+		Image,
+		Library,
+		Link,
+		Minimize2,
+		PieChart,
+		Presentation,
+		ScrollText,
+		SquareUser,
+		User,
+		UserCircle,
+		Users
+	} from 'lucide-svelte';
 	import { toast } from '$lib/toast.svelte';
 
 	interface Props {
@@ -20,29 +44,29 @@
 
 	// Map of icon name strings to Lucide components
 	const iconMap: Record<string, any> = {
-		User: LucideIcons.User,
-		UserCircle: LucideIcons.UserCircle,
-		Contact: LucideIcons.Contact,
-		SquareUser: LucideIcons.SquareUser,
-		FileText: LucideIcons.FileText,
-		GraduationCap: LucideIcons.GraduationCap,
-		Award: LucideIcons.Award,
-		ScrollText: LucideIcons.ScrollText,
-		Grid: LucideIcons.Grid,
-		Image: LucideIcons.Image,
-		Frame: LucideIcons.Frame,
-		Presentation: LucideIcons.Presentation,
-		BookOpen: LucideIcons.BookOpen,
-		BookMarked: LucideIcons.BookMarked,
-		Library: LucideIcons.Library,
-		Calendar: LucideIcons.Calendar,
-		Users: LucideIcons.Users,
-		Camera: LucideIcons.Camera,
-		Link: LucideIcons.Link,
-		BarChart3: LucideIcons.BarChart3,
-		PieChart: LucideIcons.PieChart,
-		Minimize2: LucideIcons.Minimize2,
-		Clock: LucideIcons.Clock
+		User,
+		UserCircle,
+		Contact,
+		SquareUser,
+		FileText,
+		GraduationCap,
+		Award,
+		ScrollText,
+		Grid,
+		Image,
+		Frame,
+		Presentation,
+		BookOpen,
+		BookMarked,
+		Library,
+		Calendar,
+		Users,
+		Camera,
+		Link,
+		BarChart3,
+		PieChart,
+		Minimize2,
+		Clock
 	};
 
 	// Fetch template categories from API
@@ -148,7 +172,7 @@
 
 	// Get the Lucide icon component for an icon name
 	function getIcon(iconName: string) {
-		return iconMap[iconName] || LucideIcons.FileText;
+		return iconMap[iconName] || FileText;
 	}
 </script>
 

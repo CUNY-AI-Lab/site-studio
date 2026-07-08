@@ -3,10 +3,11 @@ import { z } from "zod";
 import type { Env, ProjectMetadata } from "../types";
 import { isSnapshotSkipped } from "../types";
 import { getUser } from "../lib/session";
-import { R2ProjectStorage } from "../storage/r2";
+import { ProjectExistsError, R2ProjectStorage } from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
+import { requireProject, type RequireProjectVariables } from "../lib/require-project";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -32,7 +33,10 @@ function toProjectSummary(id: string, metadata: ProjectMetadata | null) {
 }
 
 export function createProjectRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+
+  app.use("/api/projects/:id", requireProject());
+  app.use("/api/projects/:id/*", requireProject());
 
   app.get("/api/projects", async (c) => {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
@@ -82,9 +86,9 @@ export function createProjectRouter() {
   });
 
   app.patch("/api/projects/:id", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const currentId = c.req.param("id");
+    const currentId = c.get("projectId");
     const parsed = renameProjectSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       jsonError("Invalid project payload", 400);
@@ -92,16 +96,19 @@ export function createProjectRouter() {
     const { name } = parsed.data;
     const nextId = sanitizeProjectId(name);
 
-    if (!(await storage.projectExists(user.id, currentId))) {
-      jsonError("Project not found", 404);
-    }
-
     if (currentId !== nextId && (await storage.projectExists(user.id, nextId))) {
       jsonError("Project already exists", 409);
     }
 
     if (currentId !== nextId) {
-      await storage.renameProject(user.id, currentId, nextId);
+      try {
+        await storage.renameProject(user.id, currentId, nextId);
+      } catch (error) {
+        if (error instanceof ProjectExistsError) {
+          jsonError("Project already exists", 409);
+        }
+        throw error;
+      }
     }
 
     const updated = await storage.updateProjectMetadata(user.id, nextId, { name });
@@ -109,26 +116,18 @@ export function createProjectRouter() {
   });
 
   app.delete("/api/projects/:id", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     await storage.deleteProject(user.id, projectId);
     return c.json({ success: true, message: "Project deleted successfully" });
   });
 
   app.get("/api/projects/:id/export", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     const archive = await storage.exportProjectZip(user.id, projectId);
     return new Response(binaryBody(archive), {
@@ -141,26 +140,18 @@ export function createProjectRouter() {
   });
 
   app.get("/api/projects/:id/snapshots", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     const snapshots = await storage.listSnapshots(user.id, projectId);
     return c.json({ snapshots });
   });
 
   app.post("/api/projects/:id/snapshots", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
+    const projectId = c.get("projectId");
 
     const parsed = createSnapshotSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
@@ -189,14 +180,10 @@ export function createProjectRouter() {
   });
 
   app.post("/api/projects/:id/snapshots/:snapshotId/restore", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = c.get("storage");
     const user = getUser(c);
-    const projectId = c.req.param("id");
+    const projectId = c.get("projectId");
     const snapshotId = c.req.param("snapshotId");
-
-    if (!(await storage.projectExists(user.id, projectId))) {
-      jsonError("Project not found", 404);
-    }
 
     const targetSnapshot = await storage.getSnapshot(user.id, projectId, snapshotId);
     if (!targetSnapshot) {

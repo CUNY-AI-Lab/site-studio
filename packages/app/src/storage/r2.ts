@@ -7,13 +7,20 @@ import type {
   SnapshotResult,
   StorageFile
 } from "../types";
-import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES } from "../lib/constants";
+import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 
 export class FileNotFoundError extends Error {
   constructor(public readonly filePath: string) {
     super("File not found");
     this.name = "FileNotFoundError";
+  }
+}
+
+export class ProjectExistsError extends Error {
+  constructor(public readonly projectId: string) {
+    super("Project already exists");
+    this.name = "ProjectExistsError";
   }
 }
 
@@ -68,6 +75,26 @@ function safeParseJson<T>(value: string, label: string, key: string): T | null {
     console.warn(`Skipping invalid ${label}: ${key}`, error);
     return null;
   }
+}
+
+function isValidSnapshotRecord(value: unknown): value is ProjectSnapshot {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ProjectSnapshot).id === "string" &&
+    typeof (value as ProjectSnapshot).createdAt === "string"
+  );
+}
+
+function sortSnapshotsNewestFirst(snapshots: ProjectSnapshot[]): ProjectSnapshot[] {
+  return snapshots.sort((left, right) => {
+    const createdOrder = right.createdAt.localeCompare(left.createdAt);
+    if (createdOrder !== 0) {
+      return createdOrder;
+    }
+
+    return right.id.localeCompare(left.id);
+  });
 }
 
 export class R2ProjectStorage {
@@ -168,7 +195,19 @@ export class R2ProjectStorage {
         : {})
     };
 
-    await this.putJson(metadataKey(userId, newProjectId), newMetadata);
+    // SS-31: the route preflight is advisory only. A target project can appear
+    // between that check and this write, so claim the target metadata key with
+    // put-if-absent before copying any files into the namespace. Losing the
+    // conditional write fails loud and leaves the target project untouched.
+    const claimedTarget = await this.bucket.put(metadataKey(userId, newProjectId), JSON.stringify(newMetadata), {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: {
+        contentType: "application/json"
+      }
+    });
+    if (claimedTarget === null) {
+      throw new ProjectExistsError(newProjectId);
+    }
 
     for (const file of files) {
       const content = await this.readFileBuffer(userId, oldProjectId, file.path);
@@ -193,8 +232,12 @@ export class R2ProjectStorage {
       }
 
       const nextKey = `${nextPrefix}${key.slice(oldPrefix.length)}`;
+      // Carry customMetadata across so renamed projects keep the SS-39
+      // list-time snapshot records instead of degrading every entry to the
+      // legacy per-object GET fallback.
       await this.bucket.put(nextKey, await object.arrayBuffer(), {
-        httpMetadata: object.httpMetadata
+        httpMetadata: object.httpMetadata,
+        ...(object.customMetadata ? { customMetadata: object.customMetadata } : {})
       });
       await this.bucket.delete(key);
     }
@@ -217,23 +260,45 @@ export class R2ProjectStorage {
     projectId: string,
     updates: Partial<ProjectMetadata>
   ): Promise<ProjectMetadata> {
-    const existing = (await this.getProjectMetadata(userId, projectId)) || {
+    const key = metadataKey(userId, projectId);
+    const defaultMetadata = (): ProjectMetadata => ({
       id: projectId,
       name: projectId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       published: false
-    };
+    });
 
-    const next: ProjectMetadata = {
-      ...existing,
-      ...updates,
-      id: projectId,
-      updatedAt: new Date().toISOString()
-    };
+    // SS-30: metadata is a shared read-modify-write record. Publish, thumbnail,
+    // restore, and rename can all update different fields concurrently; a plain
+    // put would let the later stale writer silently erase the earlier one. R2
+    // conditional puts provide the CAS guard: re-read on mismatch and fail loud
+    // if the record never settles.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const object = await this.bucket.get(key);
+      const existing = object
+        ? safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key) || defaultMetadata()
+        : defaultMetadata();
 
-    await this.putJson(metadataKey(userId, projectId), next);
-    return next;
+      const next: ProjectMetadata = {
+        ...existing,
+        ...updates,
+        id: projectId,
+        updatedAt: new Date().toISOString()
+      };
+
+      const result = await this.bucket.put(key, JSON.stringify(next), {
+        onlyIf: object ? { etagMatches: object.etag } : { etagDoesNotMatch: "*" },
+        httpMetadata: {
+          contentType: "application/json"
+        }
+      });
+      if (result !== null) {
+        return next;
+      }
+    }
+
+    throw new Error(`Concurrent metadata update conflict for ${key}`);
   }
 
   async listFiles(userId: string, projectId: string, prefix = ""): Promise<StorageFile[]> {
@@ -385,37 +450,7 @@ export class R2ProjectStorage {
   }
 
   async listSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
-    const prefix = snapshotPrefix(userId, projectId);
-    const snapshots: ProjectSnapshot[] = [];
-    let cursor: string | undefined;
-
-    do {
-      const listed = await this.bucket.list({
-        prefix,
-        cursor
-      });
-
-      for (const object of listed.objects) {
-        if (!object.key.endsWith(".json")) {
-          continue;
-        }
-
-        const record = await this.bucket.get(object.key);
-        if (!record) {
-          continue;
-        }
-
-        try {
-          snapshots.push(JSON.parse(await record.text()) as ProjectSnapshot);
-        } catch {
-          // Skip corrupted snapshot metadata
-        }
-      }
-
-      cursor = listed.truncated ? listed.cursor : undefined;
-    } while (cursor);
-
-    return snapshots.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return this.listSnapshotRecords(userId, projectId);
   }
 
   async createSnapshot(
@@ -485,7 +520,24 @@ export class R2ProjectStorage {
         contentType: "application/zip"
       }
     });
-    await this.putJson(snapshotMetadataKey(userId, projectId, snapshotId), snapshot);
+    await this.putJson(snapshotMetadataKey(userId, projectId, snapshotId), snapshot, {
+      customMetadata: {
+        snapshot: JSON.stringify(snapshot)
+      }
+    });
+
+    // SS-38: retention is best-effort AFTER the new snapshot's archive and
+    // metadata have both succeeded. A transient LIST/DELETE failure must not
+    // fail the caller's already-complete mutation or hide the fresh restore
+    // point, so pruning is the only part wrapped here. We warn with scope and
+    // return the created snapshot; because pruning re-runs on every subsequent
+    // create, retention converges. The list may temporarily lag over the cap,
+    // but it never fabricates or serves stale snapshot records.
+    try {
+      await this.pruneSnapshots(userId, projectId);
+    } catch (error) {
+      console.warn("Snapshot retention prune failed", { userId, projectId, error });
+    }
 
     return snapshot;
   }
@@ -681,11 +733,16 @@ export class R2ProjectStorage {
     return matches[0];
   }
 
-  private async putJson(key: string, value: unknown): Promise<void> {
+  private async putJson(
+    key: string,
+    value: unknown,
+    opts?: { customMetadata?: Record<string, string> }
+  ): Promise<void> {
     await this.bucket.put(key, JSON.stringify(value), {
       httpMetadata: {
         contentType: "application/json"
-      }
+      },
+      ...(opts?.customMetadata ? { customMetadata: opts.customMetadata } : {})
     });
   }
 
@@ -756,6 +813,80 @@ export class R2ProjectStorage {
     } while (cursor);
 
     return [...new Set(keys)];
+  }
+
+  private async listSnapshotRecords(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
+    const prefix = snapshotPrefix(userId, projectId);
+    const snapshots: ProjectSnapshot[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const listed = await this.bucket.list({
+        prefix,
+        cursor,
+        include: ["customMetadata"]
+      });
+
+      for (const object of listed.objects) {
+        if (!object.key.endsWith(".json")) {
+          continue;
+        }
+
+        // SS-39: snapshot metadata is duplicated into R2 custom metadata on the
+        // .json object, so LIST with include:["customMetadata"] can render the
+        // snapshot list without one GET per record. The R2 listing remains the
+        // ground truth for which keys exist, and the metadata travels atomically
+        // with the object; there is no separate index that can drift. Legacy or
+        // damaged entries with missing/unparseable custom metadata degrade to
+        // the old single-object GET path for that key only instead of being
+        // dropped or served from a stale side index.
+        const listedSnapshot = this.parseListedSnapshot(object.customMetadata?.snapshot);
+        if (listedSnapshot) {
+          snapshots.push(listedSnapshot);
+          continue;
+        }
+
+        const record = await this.bucket.get(object.key);
+        if (!record) {
+          continue;
+        }
+
+        const snapshot = this.parseListedSnapshot(await record.text());
+        if (snapshot) {
+          snapshots.push(snapshot);
+        }
+      }
+
+      cursor = listed.truncated ? listed.cursor : undefined;
+    } while (cursor);
+
+    return sortSnapshotsNewestFirst(snapshots);
+  }
+
+  private parseListedSnapshot(value: string | undefined): ProjectSnapshot | null {
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return isValidSnapshotRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async pruneSnapshots(userId: string, projectId: string): Promise<void> {
+    const snapshots = await this.listSnapshotRecords(userId, projectId);
+    const expired = snapshots.slice(SNAPSHOT_KEEP_COUNT);
+
+    for (const snapshot of expired) {
+      // Metadata first: a crash between the two deletes then leaves an orphan
+      // zip (invisible, reaped by deleteProject) rather than a listed snapshot
+      // whose archive is gone and whose restore would fail.
+      await this.bucket.delete(snapshotMetadataKey(userId, projectId, snapshot.id));
+      await this.bucket.delete(snapshotArchiveKey(userId, projectId, snapshot.id));
+    }
   }
 
   private async listProjectEntries(
