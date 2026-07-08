@@ -266,37 +266,87 @@ export async function claimHandle(
   }
   const handle = validation.handle;
 
-  // Fast-path reads (best-effort; the atomic puts below are authoritative).
-  //
-  // Reverse-orphan reaper (SS-3 residual #2): a reverse slot `userhandles/{owner}`
-  // is only trustworthy if the FORWARD record `handles/{thatHandle}` exists AND
-  // points back at this owner. A crash between claimHandle's two put-if-absent
-  // writes can leave the reverse slot pointing at a handle whose forward record
-  // was never written (or was later won by someone else). The old fast path
-  // returned "you already have a handle" on the reverse slot alone, which HID
-  // that orphan permanently. Verify the pair before trusting it.
-  //
-  // Interleavings this reaper heals vs. leaves intact:
-  //  A) Crash after reverse put, before forward put: reverse says {owner->H},
-  //     forward `handles/H` is MISSING. resolveHandleOwner(H) === null → orphan.
-  //     Reap the reverse slot, fall through, and re-claim cleanly (self-heals
-  //     even when the caller now asks for a DIFFERENT handle than the orphaned
-  //     one — the owner never truly owned H, so no 409 is warranted).
-  //  B) Crash after reverse put; another user then legitimately wins `handles/H`:
-  //     reverse says {owner->H}, forward `handles/H` points at STRANGER, not
-  //     owner. Trusting the reverse would wrongly claim owner holds H. Reap the
-  //     reverse slot and fall through; the owner is now handle-less and the
-  //     subsequent claim resolves against the real state (idempotent success if
-  //     they asked for a free handle, taken-409 if they asked for H itself).
-  //  C) Healthy pair (forward exists and points at owner): NOT an orphan. Keep
-  //     the original contract — same handle → idempotent success; different
-  //     handle → 409 "you already have a handle".
-  const existingOwn = await getUserHandle(bucket, ownerId);
-  if (existingOwn) {
-    const forwardOwner = await resolveHandleOwner(bucket, existingOwn);
-    if (forwardOwner === ownerId) {
-      // Case C: healthy reverse+forward pair.
-      if (existingOwn === handle) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // Fast-path reads (best-effort; the atomic puts below are authoritative).
+    //
+    // Reverse-orphan reaper (SS-3 residual #2, SS-32): a reverse slot
+    // `userhandles/{owner}` is only trustworthy if the FORWARD record
+    // `handles/{thatHandle}` exists AND points back at this owner. A crash
+    // between claimHandle's two put-if-absent writes can leave the reverse slot
+    // pointing at a handle whose forward record was never written (or was later
+    // won by someone else). The old fast path returned "you already have a
+    // handle" on the reverse slot alone, which HID that orphan permanently.
+    //
+    // R2 has no conditional delete, so compare-before-delete cannot fully close
+    // the re-read→delete gap. It narrows the race: immediately before reaping,
+    // re-read the reverse slot and only delete if it still matches the orphan we
+    // observed. If it changed, restart once from the fast path so the common
+    // interleaving resolves against the newly healthy claim; a second mismatch
+    // returns the normal "already have a handle" 409 rather than looping forever.
+    //
+    // Interleavings this reaper heals vs. leaves intact:
+    //  A) Crash after reverse put, before forward put: reverse says {owner->H},
+    //     forward `handles/H` is MISSING. resolveHandleOwner(H) === null → orphan.
+    //     Reap the reverse slot, fall through, and re-claim cleanly (self-heals
+    //     even when the caller now asks for a DIFFERENT handle than the orphaned
+    //     one — the owner never truly owned H, so no 409 is warranted).
+    //  B) Crash after reverse put; another user then legitimately wins `handles/H`:
+    //     reverse says {owner->H}, forward `handles/H` points at STRANGER, not
+    //     owner. Trusting the reverse would wrongly claim owner holds H. Reap the
+    //     reverse slot and fall through; the owner is now handle-less and the
+    //     subsequent claim resolves against the real state (idempotent success if
+    //     they asked for a free handle, taken-409 if they asked for H itself).
+    //  C) Healthy pair (forward exists and points at owner): NOT an orphan. Keep
+    //     the original contract — same handle → idempotent success; different
+    //     handle → 409 "you already have a handle".
+    const existingRecord = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
+    const existingOwn =
+      existingRecord && typeof existingRecord.handle === "string" && existingRecord.handle
+        ? existingRecord.handle
+        : null;
+    if (existingOwn) {
+      const forwardOwner = await resolveHandleOwner(bucket, existingOwn);
+      if (forwardOwner === ownerId) {
+        // Case C: healthy reverse+forward pair.
+        if (existingOwn === handle) {
+          return { ok: true, handle, alreadyOwned: true };
+        }
+        return {
+          ok: false,
+          status: 409,
+          reason: "You already have a handle. Handles can't be changed."
+        };
+      }
+      // Cases A/B: the reverse slot is an orphan (forward missing or owned by
+      // someone else). Reap it and let the claim proceed against real state.
+      const latest = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
+      if (latest?.handle !== existingRecord?.handle || latest?.claimedAt !== existingRecord?.claimedAt) {
+        if (attempt === 0) {
+          continue;
+        }
+        return {
+          ok: false,
+          status: 409,
+          reason: "You already have a handle. Handles can't be changed."
+        };
+      }
+      await bucket.delete(userHandleRecordKey(ownerId));
+    }
+
+    const claimedAt = now();
+
+    // Step 1: atomically claim the per-user reverse slot. This is the "one handle
+    // per user" gate and it comes FIRST so a lost race here means no handle record
+    // was written by this attempt (no orphan).
+    const reverseWon = await putJsonIfAbsent(bucket, userHandleRecordKey(ownerId), {
+      handle,
+      claimedAt
+    } satisfies UserHandleRecord);
+    if (!reverseWon) {
+      // We lost the reverse slot to a concurrent claim by this same owner. Read
+      // what actually landed: same handle → idempotent success; different → 409.
+      const settled = await getUserHandle(bucket, ownerId);
+      if (settled === handle) {
         return { ok: true, handle, alreadyOwned: true };
       }
       return {
@@ -305,58 +355,36 @@ export async function claimHandle(
         reason: "You already have a handle. Handles can't be changed."
       };
     }
-    // Cases A/B: the reverse slot is an orphan (forward missing or owned by
-    // someone else). Reap it and let the claim proceed against real state. Only
-    // delete when it still matches the orphan we observed, so we never clobber a
-    // reverse slot a concurrent healthy claim just wrote.
-    await bucket.delete(userHandleRecordKey(ownerId)).catch(() => undefined);
-  }
 
-  const claimedAt = now();
+    // Step 2: atomically claim the handle record. We now own the reverse slot, so
+    // any failure here must NOT leave that slot pointing at a handle we don't own.
+    const handleWon = await putJsonIfAbsent(bucket, handleRecordKey(handle), {
+      ownerId,
+      claimedAt
+    } satisfies HandleRecord);
+    if (handleWon) {
+      return { ok: true, handle, alreadyOwned: false };
+    }
 
-  // Step 1: atomically claim the per-user reverse slot. This is the "one handle
-  // per user" gate and it comes FIRST so a lost race here means no handle record
-  // was written by this attempt (no orphan).
-  const reverseWon = await putJsonIfAbsent(bucket, userHandleRecordKey(ownerId), {
-    handle,
-    claimedAt
-  } satisfies UserHandleRecord);
-  if (!reverseWon) {
-    // We lost the reverse slot to a concurrent claim by this same owner. Read
-    // what actually landed: same handle → idempotent success; different → 409.
-    const settled = await getUserHandle(bucket, ownerId);
-    if (settled === handle) {
+    // The handle record already exists. If it points at us, this is a self-heal:
+    // the handle was ours but the reverse slot had gone missing (which is exactly
+    // what we just wrote in step 1). Keep the reverse slot and succeed.
+    const currentOwner = await resolveHandleOwner(bucket, handle);
+    if (currentOwner === ownerId) {
       return { ok: true, handle, alreadyOwned: true };
     }
-    return {
-      ok: false,
-      status: 409,
-      reason: "You already have a handle. Handles can't be changed."
-    };
+
+    // Another user owns the handle. Roll back the reverse slot we wrote in step 1
+    // so we never leave a user pointed at a handle they don't own, then 409.
+    await bucket.delete(userHandleRecordKey(ownerId));
+    return { ok: false, status: 409, reason: "That handle is taken." };
   }
 
-  // Step 2: atomically claim the handle record. We now own the reverse slot, so
-  // any failure here must NOT leave that slot pointing at a handle we don't own.
-  const handleWon = await putJsonIfAbsent(bucket, handleRecordKey(handle), {
-    ownerId,
-    claimedAt
-  } satisfies HandleRecord);
-  if (handleWon) {
-    return { ok: true, handle, alreadyOwned: false };
-  }
-
-  // The handle record already exists. If it points at us, this is a self-heal:
-  // the handle was ours but the reverse slot had gone missing (which is exactly
-  // what we just wrote in step 1). Keep the reverse slot and succeed.
-  const currentOwner = await resolveHandleOwner(bucket, handle);
-  if (currentOwner === ownerId) {
-    return { ok: true, handle, alreadyOwned: true };
-  }
-
-  // Another user owns the handle. Roll back the reverse slot we wrote in step 1
-  // so we never leave a user pointed at a handle they don't own, then 409.
-  await bucket.delete(userHandleRecordKey(ownerId)).catch(() => undefined);
-  return { ok: false, status: 409, reason: "That handle is taken." };
+  return {
+    ok: false,
+    status: 409,
+    reason: "You already have a handle. Handles can't be changed."
+  };
 }
 
 /**

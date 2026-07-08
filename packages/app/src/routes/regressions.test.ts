@@ -774,6 +774,100 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(response.status).toBe(200);
     expect(await storage.readThumbnail(userId, "thumbok")).not.toBeNull();
   });
+
+  it("SS-33: thumbnail POST to a missing project 404s without fabricating project keys", async () => {
+    const form = new FormData();
+    form.append(
+      "image",
+      new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
+    );
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/missing-thumb/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+    expect(bucket.store.has(`projects/${userId}/missing-thumb/.metadata.json`)).toBe(false);
+    expect(bucket.store.has(`projects/${userId}/missing-thumb/.thumbnail.png`)).toBe(false);
+  });
+
+  it("SS-33: thumbnail GET to a missing project returns project 404", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/missing-thumb/thumbnail",
+      undefined,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+  });
+
+  it("SS-33: unpublish returns 404 for a missing project", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/missing-unpublish/unpublish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+  });
+
+  it("SS-33: unpublish keeps 400 for an existing unpublished project", async () => {
+    await storage.createProject(userId, "draft", "Draft");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/draft/unpublish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Project is not currently published" });
+  });
+
+  it("SS-31: PATCH rename returns 409 if the target project appears after preflight", async () => {
+    await storage.createProject(userId, "old-name", "Old Name");
+    await storage.writeFile(userId, "old-name", "index.html", "<h1>Old</h1>");
+    const targetMetadataKey = `projects/${userId}/new-name/.metadata.json`;
+    const originalPut = bucket.put;
+    let injected = false;
+
+    bucket.put = vi.fn(async (key, data, options) => {
+      if (key === targetMetadataKey && options?.onlyIf?.etagDoesNotMatch === "*" && !injected) {
+        injected = true;
+        bucket.store.set(targetMetadataKey, {
+          data: JSON.stringify({
+            id: "new-name",
+            name: "Concurrent New",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            published: false
+          })
+        });
+        bucket.store.set(`projects/${userId}/new-name/index.html`, { data: "<h1>Concurrent</h1>" });
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/old-name",
+      {
+        method: "PATCH",
+        body: JSON.stringify({ name: "New Name" }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "Project already exists" });
+    await expect(storage.readFile(userId, "old-name", "index.html")).resolves.toBe("<h1>Old</h1>");
+    await expect(storage.readFile(userId, "new-name", "index.html")).resolves.toBe("<h1>Concurrent</h1>");
+  });
 });
 
 /** Minimal PNG magic-byte prefix, padded to a plausible file size. */

@@ -17,6 +17,13 @@ export class FileNotFoundError extends Error {
   }
 }
 
+export class ProjectExistsError extends Error {
+  constructor(public readonly projectId: string) {
+    super("Project already exists");
+    this.name = "ProjectExistsError";
+  }
+}
+
 function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
 }
@@ -168,7 +175,19 @@ export class R2ProjectStorage {
         : {})
     };
 
-    await this.putJson(metadataKey(userId, newProjectId), newMetadata);
+    // SS-31: the route preflight is advisory only. A target project can appear
+    // between that check and this write, so claim the target metadata key with
+    // put-if-absent before copying any files into the namespace. Losing the
+    // conditional write fails loud and leaves the target project untouched.
+    const claimedTarget = await this.bucket.put(metadataKey(userId, newProjectId), JSON.stringify(newMetadata), {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: {
+        contentType: "application/json"
+      }
+    });
+    if (claimedTarget === null) {
+      throw new ProjectExistsError(newProjectId);
+    }
 
     for (const file of files) {
       const content = await this.readFileBuffer(userId, oldProjectId, file.path);
@@ -217,23 +236,45 @@ export class R2ProjectStorage {
     projectId: string,
     updates: Partial<ProjectMetadata>
   ): Promise<ProjectMetadata> {
-    const existing = (await this.getProjectMetadata(userId, projectId)) || {
+    const key = metadataKey(userId, projectId);
+    const defaultMetadata = (): ProjectMetadata => ({
       id: projectId,
       name: projectId,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       published: false
-    };
+    });
 
-    const next: ProjectMetadata = {
-      ...existing,
-      ...updates,
-      id: projectId,
-      updatedAt: new Date().toISOString()
-    };
+    // SS-30: metadata is a shared read-modify-write record. Publish, thumbnail,
+    // restore, and rename can all update different fields concurrently; a plain
+    // put would let the later stale writer silently erase the earlier one. R2
+    // conditional puts provide the CAS guard: re-read on mismatch and fail loud
+    // if the record never settles.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const object = await this.bucket.get(key);
+      const existing = object
+        ? safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key) || defaultMetadata()
+        : defaultMetadata();
 
-    await this.putJson(metadataKey(userId, projectId), next);
-    return next;
+      const next: ProjectMetadata = {
+        ...existing,
+        ...updates,
+        id: projectId,
+        updatedAt: new Date().toISOString()
+      };
+
+      const result = await this.bucket.put(key, JSON.stringify(next), {
+        onlyIf: object ? { etagMatches: object.etag } : { etagDoesNotMatch: "*" },
+        httpMetadata: {
+          contentType: "application/json"
+        }
+      });
+      if (result !== null) {
+        return next;
+      }
+    }
+
+    throw new Error(`Concurrent metadata update conflict for ${key}`);
   }
 
   async listFiles(userId: string, projectId: string, prefix = ""): Promise<StorageFile[]> {
