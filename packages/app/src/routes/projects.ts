@@ -8,6 +8,7 @@ import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -67,7 +68,14 @@ export function createProjectRouter() {
       jsonError("Project already exists", 409);
     }
 
-    await storage.createProject(user.id, projectId, name);
+    try {
+      await storage.createProjectIfAbsent(user.id, projectId, name);
+    } catch (error) {
+      if (error instanceof ProjectExistsError) {
+        jsonError("Project already exists", 409);
+      }
+      throw error;
+    }
 
     const templateFiles = template ? getTemplateFiles(template) : null;
     if (templateFiles) {
@@ -109,6 +117,20 @@ export function createProjectRouter() {
         }
         throw error;
       }
+
+      // SS-41: the project id is part of the Durable Object name. Move the
+      // conversation after storage succeeds so a rename neither strands the
+      // old history nor exposes it if the old name is later reused.
+      try {
+        await moveProjectAgentHistory(c.env, user.id, currentId, nextId);
+      } catch (error) {
+        console.warn("Failed to move agent history on rename", {
+          userId: user.id,
+          currentId,
+          nextId,
+          error
+        });
+      }
     }
 
     const updated = await storage.updateProjectMetadata(user.id, nextId, { name });
@@ -121,6 +143,19 @@ export function createProjectRouter() {
     const projectId = c.get("projectId");
 
     await storage.deleteProject(user.id, projectId);
+
+    // SS-41: R2 deletion does not remove the project-named agent Durable
+    // Object. Clear its persisted messages best-effort so recreating the same
+    // normalized project id cannot resurface the deleted conversation.
+    try {
+      await clearProjectAgentHistory(c.env, user.id, projectId);
+    } catch (error) {
+      console.warn("Failed to clear agent history on delete", {
+        userId: user.id,
+        projectId,
+        error
+      });
+    }
     return c.json({ success: true, message: "Project deleted successfully" });
   });
 

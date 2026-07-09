@@ -34,6 +34,7 @@ function createMockBucket() {
     }),
     put: vi.fn(async (key: string, data: string, options?: { httpMetadata?: unknown }) => {
       store.set(key, { data, httpMetadata: options?.httpMetadata });
+      return { key, etag: `${key}:1` };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);

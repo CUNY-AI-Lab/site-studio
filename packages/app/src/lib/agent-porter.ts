@@ -12,6 +12,45 @@
 import type { Env } from "../types";
 import type { ChatHistoryPorter } from "./migration";
 
+export async function clearProjectAgentHistory(
+  env: Pick<Env, "SITE_BUILDER_AGENT">,
+  owner: string,
+  projectId: string
+): Promise<void> {
+  // Keep this import lazy: `agents` pulls `cloudflare:` scheme modules that do
+  // not resolve in Node/vitest (see createAgentHistoryPorter below).
+  const { getAgentByName } = await import("agents");
+  const stub = await getAgentByName(
+    env.SITE_BUILDER_AGENT,
+    `${owner}:${projectId}`
+  );
+  await stub.clearChatHistory();
+}
+
+export async function moveProjectAgentHistory(
+  env: Pick<Env, "SITE_BUILDER_AGENT">,
+  owner: string,
+  fromProjectId: string,
+  toProjectId: string
+): Promise<void> {
+  const { getAgentByName } = await import("agents");
+  const source = await getAgentByName(
+    env.SITE_BUILDER_AGENT,
+    `${owner}:${fromProjectId}`
+  );
+  const messages = (await source.exportChatHistoryForMigration()) as unknown[];
+
+  if (Array.isArray(messages) && messages.length > 0) {
+    const destination = await getAgentByName(
+      env.SITE_BUILDER_AGENT,
+      `${owner}:${toProjectId}`
+    );
+    await destination.importChatHistoryForMigration(messages);
+  }
+
+  await source.clearChatHistory();
+}
+
 export function createAgentHistoryPorter(
   env: Pick<Env, "SITE_BUILDER_AGENT">
 ): ChatHistoryPorter {

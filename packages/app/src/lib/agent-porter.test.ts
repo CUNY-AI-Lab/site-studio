@@ -6,7 +6,62 @@ vi.mock("agents", () => ({
   getAgentByName: (...args: unknown[]) => getAgentByName(...args)
 }));
 
-import { createAgentHistoryPorter } from "./agent-porter";
+import {
+  clearProjectAgentHistory,
+  createAgentHistoryPorter,
+  moveProjectAgentHistory
+} from "./agent-porter";
+
+describe("project agent history lifecycle", () => {
+  const namespace = { __brand: "SITE_BUILDER_AGENT" } as any;
+  const env = { SITE_BUILDER_AGENT: namespace };
+
+  beforeEach(() => {
+    getAgentByName.mockReset();
+  });
+
+  it("SS-41: clears the exact owner/project Durable Object", async () => {
+    const clearChatHistory = vi.fn(async () => undefined);
+    getAgentByName.mockResolvedValueOnce({ clearChatHistory });
+
+    await clearProjectAgentHistory(env, "owner-1", "project-a");
+
+    expect(getAgentByName).toHaveBeenCalledWith(namespace, "owner-1:project-a");
+    expect(clearChatHistory).toHaveBeenCalledOnce();
+  });
+
+  it("SS-41: moves non-empty history to the renamed project and clears the source", async () => {
+    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const source = {
+      exportChatHistoryForMigration: vi.fn(async () => messages),
+      clearChatHistory: vi.fn(async () => undefined)
+    };
+    const destination = {
+      importChatHistoryForMigration: vi.fn(async () => true)
+    };
+    getAgentByName.mockResolvedValueOnce(source).mockResolvedValueOnce(destination);
+
+    await moveProjectAgentHistory(env, "owner-1", "old-name", "new-name");
+
+    expect(getAgentByName).toHaveBeenNthCalledWith(1, namespace, "owner-1:old-name");
+    expect(getAgentByName).toHaveBeenNthCalledWith(2, namespace, "owner-1:new-name");
+    expect(destination.importChatHistoryForMigration).toHaveBeenCalledWith(messages);
+    expect(source.clearChatHistory).toHaveBeenCalledOnce();
+  });
+
+  it("SS-41: skips the destination for empty history but still clears the source", async () => {
+    const source = {
+      exportChatHistoryForMigration: vi.fn(async () => []),
+      clearChatHistory: vi.fn(async () => undefined)
+    };
+    getAgentByName.mockResolvedValueOnce(source);
+
+    await moveProjectAgentHistory(env, "owner-1", "old-name", "new-name");
+
+    expect(getAgentByName).toHaveBeenCalledTimes(1);
+    expect(source.clearChatHistory).toHaveBeenCalledOnce();
+  });
+});
 
 describe("createAgentHistoryPorter", () => {
   const namespace = { __brand: "SITE_BUILDER_AGENT" } as any;
