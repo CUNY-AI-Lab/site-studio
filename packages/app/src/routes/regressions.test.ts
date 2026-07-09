@@ -267,6 +267,32 @@ describe("route regressions", () => {
     await expect(response.text()).resolves.toBe("Not found");
   });
 
+  it("returns 404 for protected published bookkeeping files", async () => {
+    await storage.createProject(userId, "protected-publish", "Protected Publish");
+    await storage.writeFile(userId, "protected-publish", "index.html", "<h1>Home</h1>");
+    await storage.writeThumbnail(userId, "protected-publish", pngBytes());
+    await storage.updateProjectMetadata(userId, "protected-publish", {
+      published: true,
+      slug: "protected-publish"
+    });
+
+    const metadata = await app.request(
+      "http://site-studio.test/u/janedoe/protected-publish/.metadata.json",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(metadata.status).toBe(404);
+    await expect(metadata.text()).resolves.toBe("Not found");
+
+    const thumbnail = await app.request(
+      "http://site-studio.test/u/janedoe/protected-publish/.thumbnail.png",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(thumbnail.status).toBe(404);
+    await expect(thumbnail.text()).resolves.toBe("Not found");
+  });
+
   it("returns 404 for missing project file reads and downloads", async () => {
     await storage.createProject(userId, "files-project", "Files Project");
 
@@ -660,6 +686,7 @@ describe("served-bytes security headers (§3¾)", () => {
       createEnv(bucket)
     );
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=3600");
     expectSandboxed(response);
   });
 
@@ -917,6 +944,17 @@ describe("image upload hardening", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { path: string };
     expect(body.path).toBe("photo.png");
+  });
+
+  it("rejects uploads to protected bookkeeping filenames", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest(".metadata.json", new TextEncoder().encode("{}")),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Cannot upload protected files" });
   });
 
   it("rejects a file whose bytes do not match its image extension", async () => {

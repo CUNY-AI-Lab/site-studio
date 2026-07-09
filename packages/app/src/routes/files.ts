@@ -310,6 +310,10 @@ export function createFileRouter() {
     }
 
     const sanitized = sanitizeUploadName(entry.name);
+    const uploadPath = `${prefix}${sanitized}`;
+    if (PROTECTED_FILE_NAMES.has(uploadPath.split("/").pop() || "")) {
+      jsonError("Cannot upload protected files", 403);
+    }
     validateUpload(entry, sanitized);
 
     const buffer = new Uint8Array(await entry.arrayBuffer());

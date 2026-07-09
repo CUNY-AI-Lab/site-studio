@@ -54,7 +54,7 @@ export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
  * would grow R2 storage forever for active projects.
  */
 export const SNAPSHOT_KEEP_COUNT = 50;
-export const PROTECTED_FILE_NAMES = new Set([".metadata.json", ".thumbnail.png"]);
+export { PROTECTED_FILE_NAMES } from "../../../serving-core/src/protected-files";
 
 export const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html",

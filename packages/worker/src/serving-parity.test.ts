@@ -169,8 +169,8 @@ describe("SS-14 extensionless resolution parity", () => {
 
 /**
  * SS-15 — caching + §3¾ CSP composition parity. HTML gets max-age=300 +
- * ETag/Last-Modified; other assets get immutable long-cache; BOTH also carry
- * the opaque-origin sandbox CSP + nosniff (they compose, neither clobbers).
+ * ETag/Last-Modified; other assets get a short revalidatable cache; BOTH also
+ * carry the opaque-origin sandbox CSP + nosniff (they compose, neither clobbers).
  */
 describe("SS-15 caching composes with the CSP (publisher)", () => {
   let bucket: ReturnType<typeof createMockBucket>;
@@ -192,14 +192,14 @@ describe("SS-15 caching composes with the CSP (publisher)", () => {
     expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
   });
 
-  it("asset: immutable long-cache + CSP together", async () => {
+  it("asset: max-age=3600 + validators + CSP together", async () => {
     publishProject(bucket, "u", "blog", { "index.html": "x", "app.mjs": "export const a=1;" });
     const res = await worker.fetch(
       new Request("https://x.test/sites/u/blog/app.mjs", { headers: { Accept: "*/*" } }),
       createEnv(bucket)
     );
     expect(res.headers.get("Content-Type")).toBe("application/javascript; charset=utf-8");
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=3600");
     expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });
 });

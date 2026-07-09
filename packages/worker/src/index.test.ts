@@ -386,6 +386,28 @@ describe("worker.fetch (integration)", () => {
     expect(await res.text()).toContain("<h1>By Handle</h1>");
   });
 
+  it("returns 404 for protected bookkeeping files on canonical URLs", async () => {
+    publishProject(bucket, "cail-subj", "blog", {
+      "index.html": "<h1>By Handle</h1>",
+      ".thumbnail.png": "PRIVATE THUMBNAIL"
+    });
+    seedHandle(bucket, "cail-subj", "jane");
+
+    const metadata = await worker.fetch(
+      assetRequest("https://x.test/u/jane/blog/.metadata.json"),
+      createEnv(bucket)
+    );
+    expect(metadata.status).toBe(404);
+    expect(await metadata.text()).toBe("Not found");
+
+    const thumbnail = await worker.fetch(
+      assetRequest("https://x.test/u/jane/blog/.thumbnail.png"),
+      createEnv(bucket)
+    );
+    expect(thumbnail.status).toBe(404);
+    expect(await thumbnail.text()).toBe("Not found");
+  });
+
   it("404s a /u/{handle}/ URL when the handle resolves to nobody", async () => {
     const res = await worker.fetch(navRequest("https://x.test/u/ghost/blog/"), createEnv(bucket));
     expect(res.status).toBe(404);
@@ -511,7 +533,7 @@ describe("worker.fetch (integration)", () => {
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 
-  it("SS-15: non-HTML assets are cached immutably alongside the CSP", async () => {
+  it("SS-15: non-HTML assets use a short revalidatable cache alongside the CSP", async () => {
     publishProject(bucket, "u", "blog", {
       "index.html": "<h1>Home</h1>",
       "styles.css": "body{}"
@@ -521,7 +543,7 @@ describe("worker.fetch (integration)", () => {
       createEnv(bucket)
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=3600");
     expect(res.headers.get("ETag")).toBeTruthy();
     expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });
