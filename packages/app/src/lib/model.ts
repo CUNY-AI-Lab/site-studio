@@ -14,6 +14,7 @@
  */
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { APICallError } from "@ai-sdk/provider";
 import type { LanguageModel } from "ai";
 
 /** Stable spend-attribution slug for this tool (docs/INTEGRATION.md §5). */
@@ -65,6 +66,46 @@ export function resolveModelId(env: CailModelEnv): string {
   return env.CAIL_MODEL || DEFAULT_CAIL_MODEL;
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  return input instanceof URL ? input.toString() : input.url;
+}
+
+/**
+ * Mark the CAIL proxy's hard hourly quota response as non-retryable while
+ * leaving every other response untouched for the AI SDK's normal policy.
+ */
+export function createQuotaAwareFetch(fetchImpl: typeof fetch = globalThis.fetch): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await fetchImpl(input, init);
+    if (response.status !== 429) {
+      return response;
+    }
+
+    const responseBody = await response.clone().text();
+    if (!/quota_exceeded/i.test(responseBody)) {
+      return response;
+    }
+
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+
+    throw new APICallError({
+      message: "Too Many Requests",
+      url: requestUrl(input),
+      requestBodyValues: {},
+      statusCode: 429,
+      responseHeaders,
+      responseBody,
+      isRetryable: false
+    });
+  }) as typeof fetch;
+}
+
 /**
  * Build an AI-SDK language model bound to the CAIL proxy for the given caller.
  *
@@ -79,8 +120,7 @@ export function resolveModelId(env: CailModelEnv): string {
  * (cail-gateway docs/LAUNCH_CHECKLIST.md); there is no local fallback because
  * there are no provider keys to fall back to.
  *
- * `fetchImpl` is an optional test seam for capturing the outbound request; when
- * omitted the SDK uses the platform `fetch` and behavior is unchanged.
+ * `fetchImpl` is an optional test seam for capturing the outbound request.
  */
 export function createCailModel(
   env: CailModelEnv,
@@ -91,13 +131,15 @@ export function createCailModel(
     throw new Error("CAIL_API_BASE is not configured");
   }
 
+  const fetch = createQuotaAwareFetch(fetchImpl ?? globalThis.fetch);
+
   const provider = createOpenAICompatible({
     name: "cail",
     baseURL: buildProxyBaseUrl(env.CAIL_API_BASE),
     // No apiKey: the proxy scrubs caller credentials and attaches the real
     // provider key itself. Identity travels in X-CAIL-Identity-JWT instead.
     headers: buildProxyHeaders(identityJwt),
-    ...(fetchImpl ? { fetch: fetchImpl } : {}),
+    fetch,
   });
 
   return provider(resolveModelId(env));

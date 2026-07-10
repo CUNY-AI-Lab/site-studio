@@ -48,21 +48,30 @@ export function isTextContentType(contentType: string): boolean {
   );
 }
 
-export function addCacheBusterToHtml(html: string, version?: string): string {
+export function addCacheBusterToHtml(
+  html: string,
+  version?: string,
+  extraParams: Record<string, string> = {}
+): string {
   const value = version || Date.now().toString();
+  const query = new URLSearchParams({ v: value, ...extraParams }).toString();
 
   return html
     .replace(
       /(<link[^>]*href=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?v=${value}$3`
+      `$1$2?${query}$3`
     )
     .replace(
       /(<script[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?v=${value}$3`
+      `$1$2?${query}$3`
     )
     .replace(
       /(<img[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?v=${value}$3`
+      `$1$2?${query}$3`
+    )
+    .replace(
+      /(<a[^>]*href=["'])(?!https?:\/\/|#|mailto:|tel:|javascript:|data:)([^"'?]+)(["'][^>]*>)/gi,
+      `$1$2?${query}$3`
     );
 }
 

@@ -205,6 +205,47 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Hello, world')).toBeInTheDocument();
 	});
 
+	it('parses SSE-framed stream chunks', async () => {
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'sse-stream',
+			body: `data: ${JSON.stringify({ type: 'error', errorText: 'Usage limit reached.' })}\n\n`,
+			done: true,
+			error: true
+		});
+		await settle();
+
+		expect(screen.getByText('Usage limit reached.')).toBeInTheDocument();
+	});
+
+	it('shows a visible fallback when an error frame body is malformed', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'broken-stream',
+			body: 'data: definitely-not-json\n\n',
+			done: true,
+			error: true
+		});
+		await settle();
+
+		expect(warn).toHaveBeenCalled();
+		expect(
+			screen.getByText('Something went wrong while generating this response.')
+		).toBeInTheDocument();
+		warn.mockRestore();
+	});
+
 	it('sendPrompt() no-ops while a request is already in flight', async () => {
 		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));

@@ -33,6 +33,7 @@
 		Users
 	} from 'lucide-svelte';
 	import { toast } from '$lib/toast.svelte';
+	import { isApiError } from '$lib/api/errors';
 
 	interface Props {
 		open: boolean;
@@ -154,7 +155,13 @@
 			if (onSuccess) onSuccess();
 		} catch (error) {
 			console.error('Error creating project:', error);
-			toast.error('Failed to create project. Please try again.');
+			if (isApiError(error) && error.statusCode === 409) {
+				toast.error('That project name is already taken. Pick a different name.');
+			} else if (isApiError(error)) {
+				toast.error(error.getUserMessage());
+			} else {
+				toast.error('Failed to create project. Please try again.');
+			}
 		} finally {
 			isCreating = false;
 		}

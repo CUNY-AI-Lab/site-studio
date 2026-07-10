@@ -4,6 +4,9 @@ import type { Env } from "../types";
 import { R2ProjectStorage } from "../storage/r2";
 import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
+import { authMiddleware } from "../lib/session";
+import { mintPreviewToken, previewTokenAuth } from "../lib/preview-token";
+import { createMockKV, type MockKV } from "../lib/test-utils";
 
 /**
  * Dedicated coverage for the editor preview route's file resolution. preview.ts
@@ -50,14 +53,15 @@ function createMockBucket() {
   } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string }> };
 }
 
-function createEnv(bucket: R2Bucket): Env {
+function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides: Partial<Env> = {}): Env {
   return {
-    SESSION_KV: {} as KVNamespace,
+    SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
-    ASSETS: undefined
+    ASSETS: undefined,
+    ...overrides
   };
 }
 
@@ -69,6 +73,21 @@ function createTestApp() {
   });
   app.route("/", createPreviewRouter());
   app.route("/", createPublishRouter());
+  return app;
+}
+
+function createAuthenticatedPreviewApp() {
+  const app = new Hono<{
+    Bindings: Env;
+    Variables: { sessionId: string; user: { id: string; createdAt: string } };
+  }>();
+  app.use("/preview/*", previewTokenAuth);
+  app.use("/preview/:id", previewTokenAuth);
+  app.use("/preview/*", authMiddleware);
+  app.use("/preview/:id", authMiddleware);
+  app.use("/api/private", authMiddleware);
+  app.get("/api/private", (c) => c.json({ userId: c.get("user").id }));
+  app.route("/", createPreviewRouter());
   return app;
 }
 
@@ -84,11 +103,13 @@ describe("preview file resolution", () => {
   let bucket: ReturnType<typeof createMockBucket>;
   let storage: R2ProjectStorage;
   let app: ReturnType<typeof createTestApp>;
+  let kv: MockKV;
 
   beforeEach(async () => {
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
+    kv = createMockKV();
     await storage.createProject(userId, "proj", "Proj");
     await storage.writeFile(userId, "proj", "index.html", "<h1>Home</h1>");
   });
@@ -97,7 +118,7 @@ describe("preview file resolution", () => {
     return app.request(
       `http://site-studio.test/preview/proj/${path}`,
       { headers: { Accept: accept } },
-      createEnv(bucket)
+      createEnv(bucket, kv)
     );
   }
 
@@ -128,6 +149,31 @@ describe("preview file resolution", () => {
     expect(await res.text()).toContain("Flat About");
   });
 
+  it("embeds cache-buster and preview-token params on relative HTML URLs", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>',
+      '<img src="photo.png">',
+      '<a href="about.html">About</a>'
+    ].join(""));
+
+    const res = await get("index.html?v=42", "text/html");
+    const html = await res.text();
+    const token = /styles\.css\?v=42&amp;pt=([0-9a-f]{64})/.exec(html)?.[1]
+      ?? /styles\.css\?v=42&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(res.status).toBe(200);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(html).toContain(`app.js?v=42&pt=${token}`);
+    expect(html).toContain(`photo.png?v=42&pt=${token}`);
+    expect(html).toContain(`about.html?v=42&pt=${token}`);
+  });
+
+  it("does not serve protected project bookkeeping files", async () => {
+    const res = await get(".metadata.json");
+    expect(res.status).toBe(404);
+  });
+
   // Post-alignment behavior (the sanctioned S3 change): preview now matches
   // publish/publisher — it tries the flat `{path}.html` FIRST, then
   // `{path}/index.html`. These are the flipped counterparts of the
@@ -154,6 +200,70 @@ describe("preview file resolution", () => {
       expect(res.status).toBe(200);
       expect(await res.text()).toContain("Docs");
     });
+  });
+});
+
+describe("preview token authentication", () => {
+  const userId = "user_test123";
+  let bucket: ReturnType<typeof createMockBucket>;
+  let storage: R2ProjectStorage;
+  let kv: MockKV;
+  let app: ReturnType<typeof createAuthenticatedPreviewApp>;
+
+  beforeEach(async () => {
+    bucket = createMockBucket();
+    storage = new R2ProjectStorage(bucket);
+    kv = createMockKV();
+    app = createAuthenticatedPreviewApp();
+    await storage.createProject(userId, "proj", "Proj");
+    await storage.writeFile(userId, "proj", "styles.css", "body { color: red; }");
+    await storage.createProject(userId, "other", "Other");
+    await storage.writeFile(userId, "other", "styles.css", "body { color: blue; }");
+  });
+
+  it("serves a project asset without a session cookie when its preview token is valid", async () => {
+    const token = await mintPreviewToken(kv, userId, "proj");
+    const res = await app.request(
+      `http://site-studio.test/preview/proj/styles.css?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("color: red");
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("does not authorize a different project with a valid token", async () => {
+    const token = await mintPreviewToken(kv, userId, "proj");
+    const res = await app.request(
+      `http://site-studio.test/preview/other/styles.css?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("falls through to normal anonymous auth for a garbage token", async () => {
+    const res = await app.request(
+      "http://site-studio.test/preview/proj/styles.css?pt=garbage",
+      {},
+      createEnv(bucket, kv)
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it("never authorizes an API route", async () => {
+    const token = await mintPreviewToken(kv, userId, "proj");
+    const res = await app.request(
+      `http://site-studio.test/api/private?pt=${token}`,
+      {},
+      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+    );
+
+    expect(res.status).toBe(401);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   csrfProtect,
   getCsrfToken,
   getOrMintCsrfToken,
+  isLoopbackOrigin,
   setCsrfCookie,
   timingSafeEqual,
   verifyWsUpgrade,
@@ -179,6 +180,40 @@ describe("verifyWsUpgrade (rule 4)", () => {
   it("rejects a valid origin without a token", () => {
     expect(verifyWsUpgrade({ ...base, origin: REQUEST_ORIGIN, presentedToken: null })).toBe(false);
     expect(verifyWsUpgrade({ ...base, origin: REQUEST_ORIGIN, expectedToken: null })).toBe(false);
+  });
+
+  it("accepts a valid-token upgrade across loopback dev-server ports", () => {
+    expect(verifyWsUpgrade({
+      ...base,
+      requestOrigin: "http://localhost:8792",
+      origin: "http://localhost:5173"
+    })).toBe(true);
+  });
+
+  it("rejects a loopback browser origin when the worker origin is production", () => {
+    expect(verifyWsUpgrade({
+      ...base,
+      requestOrigin: "https://tools.ailab.gc.cuny.edu",
+      origin: "http://localhost:5173"
+    })).toBe(false);
+  });
+
+  it("rejects loopback origins when the token is bad", () => {
+    expect(verifyWsUpgrade({
+      ...base,
+      requestOrigin: "http://localhost:8792",
+      origin: "http://127.0.0.1:5173",
+      presentedToken: "b".repeat(64)
+    })).toBe(false);
+  });
+
+  it("does not treat a localhost-looking hostile hostname as loopback", () => {
+    expect(isLoopbackOrigin("http://localhost.evil.com:5173")).toBe(false);
+    expect(verifyWsUpgrade({
+      ...base,
+      requestOrigin: "http://localhost:8792",
+      origin: "http://localhost.evil.com:5173"
+    })).toBe(false);
   });
 });
 

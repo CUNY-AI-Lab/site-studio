@@ -461,6 +461,26 @@ describe("route regressions", () => {
     });
   });
 
+  it("uses the local worker origin for published URLs during loopback development", async () => {
+    await storage.createProject(userId, "local-publish", "Local Publish");
+    await storage.writeFile(userId, "local-publish", "index.html", "<h1>Local</h1>");
+
+    const response = await app.request(
+      "http://localhost:8792/api/projects/local-publish/publish",
+      { method: "POST", headers: csrf.headers },
+      {
+        ...createEnv(bucket),
+        R2_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io"
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      url: "http://localhost:8792/u/janedoe/local-publish/"
+    });
+  });
+
   it("skips malformed project metadata instead of failing the projects list", async () => {
     await bucket.put(`projects/${userId}/broken-project/.metadata.json`, "{not valid json");
     await storage.createProject(userId, "healthy-project", "Healthy Project");

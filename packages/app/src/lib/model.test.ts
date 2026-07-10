@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { APICallError } from "@ai-sdk/provider";
 import { generateText } from "ai";
 import {
   CAIL_APP_SLUG,
@@ -6,6 +7,7 @@ import {
   buildProxyBaseUrl,
   buildProxyHeaders,
   createCailModel,
+  createQuotaAwareFetch,
   resolveModelId,
 } from "./model";
 
@@ -77,6 +79,55 @@ describe("createCailModel", () => {
     const meta = model as { modelId: string; provider: string };
     expect(meta.modelId).toBe("@cf/openai/gpt-oss-120b");
     expect(meta.provider).toContain("cail");
+  });
+});
+
+describe("createQuotaAwareFetch", () => {
+  it("throws a non-retryable APICallError for a CAIL quota response", async () => {
+    const body = JSON.stringify({ error: "quota_exceeded", message: "Hourly quota exhausted" });
+    const upstream = (async () => new Response(body, {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "3600" }
+    })) as typeof fetch;
+
+    let thrown: unknown;
+    try {
+      await createQuotaAwareFetch(upstream)("https://cail.example/v1/compat/chat/completions");
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(APICallError.isInstance(thrown)).toBe(true);
+    const apiError = thrown as APICallError;
+    expect(apiError.statusCode).toBe(429);
+    expect(apiError.isRetryable).toBe(false);
+    expect(apiError.responseBody).toBe(body);
+    expect(apiError.responseHeaders?.["retry-after"]).toBe("3600");
+  });
+
+  it.each([
+    ["a successful response", new Response("ok", { status: 200 })],
+    ["a non-quota 429", new Response("rate limited", { status: 429 })]
+  ])("returns %s untouched", async (_label, response) => {
+    const upstream = (async () => response) as typeof fetch;
+    await expect(createQuotaAwareFetch(upstream)("https://cail.example/test")).resolves.toBe(response);
+  });
+
+  it("prevents streamText/generateText from retrying a quota response", async () => {
+    let calls = 0;
+    const upstream = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: "quota_exceeded" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "3600" }
+      });
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
+
+    await expect(generateText({ model, prompt: "hi" })).rejects.toSatisfy((error: unknown) =>
+      APICallError.isInstance(error) && error.isRetryable === false
+    );
+    expect(calls).toBe(1);
   });
 });
 

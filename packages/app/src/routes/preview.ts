@@ -7,7 +7,9 @@ import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
 import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
+import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
 import { getUser } from "../lib/session";
+import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
 type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
@@ -49,6 +51,10 @@ async function servePreviewFile(
 
   const siteRootPath = `/preview/${projectId}/`;
 
+  if (isProtectedServedPath(requestedPath)) {
+    return previewNotFound(c, requestedPath, siteRootPath);
+  }
+
   if (!(await storage.projectExists(user.id, projectId))) {
     return previewNotFound(c, requestedPath);
   }
@@ -80,6 +86,10 @@ async function servePreviewFile(
     return previewNotFound(c, requestedPath, siteRootPath);
   }
 
+  if (isProtectedServedPath(resolved.filePath)) {
+    return previewNotFound(c, requestedPath, siteRootPath);
+  }
+
   let content: Uint8Array | null = resolved.object;
   const resolvedPath = resolved.filePath;
 
@@ -95,8 +105,19 @@ async function servePreviewFile(
 
   if (contentType.startsWith("text/html")) {
     const version = c.req.query("v") || undefined;
-    content = new TextEncoder().encode(addCacheBusterToHtml(new TextDecoder().decode(content), version));
+    // The ownership check above ensures preview tokens are never minted for a
+    // non-owner. Opaque-origin sandbox documents cannot send the session cookie,
+    // so carry this short-lived, project-scoped token on rewritten requests.
+    const previewToken = await mintPreviewToken(c.env.SESSION_KV, user.id, projectId);
+    content = new TextEncoder().encode(addCacheBusterToHtml(
+      new TextDecoder().decode(content),
+      version,
+      { pt: previewToken }
+    ));
   }
+
+  // Known limitation: url(...) references inside CSS are not rewritten, so
+  // nested fonts/background images still need a future CSS-aware pass.
 
   // §3¾: the preview renders agent/student-authored HTML on our origin. The
   // opaque-origin CSP (see lib/serving-headers.ts) makes document.cookie /

@@ -14,6 +14,7 @@ import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
 import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import { isLoopbackOrigin } from "../lib/csrf";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -103,6 +104,14 @@ function normalizeBaseUrl(value: string): string {
 }
 
 function getPublishedBaseUrl(c: AppContext): string {
+  const requestOrigin = new URL(c.req.url).origin;
+  // Published sites are served by this worker at /u/{handle}/{slug}/. In dev
+  // that means the local worker origin; production keeps its configured public
+  // domain authoritative because its request origin is never loopback.
+  if (isLoopbackOrigin(requestOrigin)) {
+    return normalizeBaseUrl(requestOrigin);
+  }
+
   const legacyConfiguredBaseUrl = c.env.R2_PUBLIC_DOMAIN?.trim();
   if (legacyConfiguredBaseUrl) {
     return normalizeBaseUrl(legacyConfiguredBaseUrl);
@@ -113,7 +122,7 @@ function getPublishedBaseUrl(c: AppContext): string {
     return normalizeBaseUrl(configuredBaseUrl);
   }
 
-  return normalizeBaseUrl(new URL(c.req.url).origin);
+  return normalizeBaseUrl(requestOrigin);
 }
 
 type AppContext = Context<{ Bindings: Env; Variables: RequireProjectVariables }>;

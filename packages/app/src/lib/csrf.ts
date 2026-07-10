@@ -141,6 +141,20 @@ function appPublicOrigin(appPublicDomain: string | undefined): string | null {
   }
 }
 
+/** True only for an HTTP(S) origin on localhost, 127.0.0.1, or ::1. */
+export function isLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return false;
+    }
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export type CsrfRequestFacts = {
   /** `Sec-Fetch-Site` header value, or null when absent. */
   secFetchSite: string | null;
@@ -235,7 +249,12 @@ export function verifyWsUpgrade(facts: {
 
   if (facts.origin !== null) {
     const canonical = appPublicOrigin(facts.appPublicDomain);
-    return facts.origin === facts.requestOrigin || (!!canonical && facts.origin === canonical);
+    return facts.origin === facts.requestOrigin
+      || (!!canonical && facts.origin === canonical)
+      // Vite preserves the browser Origin but proxies the upgrade to a different
+      // loopback port. This is dead in production because the worker's own
+      // serving origin is never loopback; the token check above still gates dev.
+      || (isLoopbackOrigin(facts.requestOrigin) && isLoopbackOrigin(facts.origin));
   }
 
   return true;

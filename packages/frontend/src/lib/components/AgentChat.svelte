@@ -822,6 +822,19 @@
 		flushActiveStreamToMessages(activeStream);
 	}
 
+	function parseStreamChunkBody(body: string): UIStreamChunk {
+		try {
+			return JSON.parse(body) as UIStreamChunk;
+		} catch (error) {
+			if (!body.startsWith('data:')) {
+				throw error;
+			}
+
+			const payload = body.slice('data:'.length).replace(/[\r\n]+$/, '');
+			return JSON.parse(payload) as UIStreamChunk;
+		}
+	}
+
 	function handleSocketMessage(event: MessageEvent<string>) {
 		if (typeof event.data !== 'string') return;
 
@@ -877,9 +890,16 @@
 
 				if (data.body?.trim()) {
 					try {
-						handleStreamChunk(JSON.parse(data.body) as UIStreamChunk);
+						handleStreamChunk(parseStreamChunkBody(data.body));
 					} catch (error) {
 						console.warn('Failed to parse stream chunk', error);
+						if (data.error && activeStream) {
+							activeStream.parts.push({
+								type: 'text',
+								text: 'Something went wrong while generating this response.',
+								state: 'done'
+							});
+						}
 					}
 				}
 
