@@ -139,6 +139,41 @@ describe('createAutosave', () => {
 		expect(persist).toHaveBeenCalledTimes(1);
 	});
 
+	it('flushes a queued snapshot before the debounce timer fires', async () => {
+		const persist = vi.fn(async () => true);
+		const autosave = createAutosave({ persist, delayMs: 100 });
+
+		autosave.queue(snapshot('A'));
+
+		await expect(autosave.flush()).resolves.toBe(true);
+		expect(persist).toHaveBeenCalledOnce();
+		expect(persist).toHaveBeenCalledWith(snapshot('A'));
+	});
+
+	it('flushes a pending snapshot after dispose', async () => {
+		const persist = vi.fn(async () => true);
+		const autosave = createAutosave({ persist, delayMs: 100 });
+
+		autosave.queue(snapshot('A'));
+		autosave.dispose();
+
+		await expect(autosave.flush()).resolves.toBe(true);
+		expect(persist).toHaveBeenCalledOnce();
+		expect(persist).toHaveBeenCalledWith(snapshot('A'));
+	});
+
+	it('reports the queued snapshot until a successful drain completes', async () => {
+		const persist = vi.fn(async () => true);
+		const autosave = createAutosave({ persist, delayMs: 100 });
+		const queued = snapshot('A');
+
+		autosave.queue(queued);
+		expect(autosave.pending()).toEqual(queued);
+
+		await expect(autosave.flush()).resolves.toBe(true);
+		expect(autosave.pending()).toBeNull();
+	});
+
 	it('cancels a pending timer on dispose and performs no persist afterward', async () => {
 		const persist = vi.fn(async () => true);
 		const autosave = createAutosave({ persist, delayMs: 100 });

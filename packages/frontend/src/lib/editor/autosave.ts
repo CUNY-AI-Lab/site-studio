@@ -12,6 +12,7 @@ export interface AutosaveOptions {
 
 export interface Autosave {
 	queue(snapshot: SaveSnapshot): void;
+	pending(): SaveSnapshot | null;
 	flush(): Promise<boolean>;
 	dispose(): void;
 }
@@ -45,7 +46,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 			setSaving(true);
 
 			try {
-				while (queuedSave && !disposed) {
+				while (queuedSave) {
 					const snapshot = queuedSave;
 					queuedSave = null;
 
@@ -82,12 +83,12 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 			}, delayMs);
 		},
 
+		pending() {
+			return queuedSave;
+		},
+
 		async flush() {
 			clearTimer();
-
-			if (disposed) {
-				return true;
-			}
 
 			if (drainPromise) {
 				return drainPromise;
@@ -103,7 +104,6 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 		dispose() {
 			disposed = true;
 			clearTimer();
-			queuedSave = null;
 		}
 	};
 }

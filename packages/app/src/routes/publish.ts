@@ -8,11 +8,13 @@ import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
 import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
+import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
 import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import { isLoopbackOrigin } from "../lib/csrf";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -102,6 +104,14 @@ function normalizeBaseUrl(value: string): string {
 }
 
 function getPublishedBaseUrl(c: AppContext): string {
+  const requestOrigin = new URL(c.req.url).origin;
+  // Published sites are served by this worker at /u/{handle}/{slug}/. In dev
+  // that means the local worker origin; production keeps its configured public
+  // domain authoritative because its request origin is never loopback.
+  if (isLoopbackOrigin(requestOrigin)) {
+    return normalizeBaseUrl(requestOrigin);
+  }
+
   const legacyConfiguredBaseUrl = c.env.R2_PUBLIC_DOMAIN?.trim();
   if (legacyConfiguredBaseUrl) {
     return normalizeBaseUrl(legacyConfiguredBaseUrl);
@@ -112,7 +122,7 @@ function getPublishedBaseUrl(c: AppContext): string {
     return normalizeBaseUrl(configuredBaseUrl);
   }
 
-  return normalizeBaseUrl(new URL(c.req.url).origin);
+  return normalizeBaseUrl(requestOrigin);
 }
 
 type AppContext = Context<{ Bindings: Env; Variables: RequireProjectVariables }>;
@@ -378,6 +388,10 @@ async function servePublishedFile(
   rawPath: string,
   siteRootPath: string
 ) {
+  if (isProtectedServedPath(rawPath)) {
+    return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
+  }
+
   // SS-14 extensionless resolution — one shared helper for all three serving
   // paths (preview, publish, publisher worker): try `{path}.html`, then
   // `{path}/index.html`. See @site-studio/serving-core/extensionless.
@@ -386,6 +400,10 @@ async function servePublishedFile(
   );
 
   if (!resolved) {
+    return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
+  }
+
+  if (isProtectedServedPath(resolved.filePath)) {
     return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
   }
 
@@ -412,12 +430,12 @@ export function publishedResponseHeaders(filePath: string, object: R2ObjectBody)
     headers.set("Last-Modified", object.uploaded.toUTCString());
   }
 
-  // SS-15: HTML is short-lived (edits should surface quickly); everything else
-  // is content-addressed enough to cache hard. Same posture as the publisher.
+  // SS-15: HTML is short-lived (edits should surface quickly); stable asset
+  // filenames get a short revalidatable cache. Same posture as the publisher.
   if (contentType.startsWith("text/html")) {
     headers.set("Cache-Control", "public, max-age=300");
   } else {
-    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    headers.set("Cache-Control", "public, max-age=3600");
   }
 
   // §3¾: agent/student-authored bytes on our origin get the opaque-origin

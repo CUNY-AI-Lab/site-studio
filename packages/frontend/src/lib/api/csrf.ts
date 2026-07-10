@@ -52,6 +52,11 @@ function readCookie(name: string): string | null {
 	return null;
 }
 
+/** Read the current delivery token synchronously for unload-safe requests. */
+export function getCsrfTokenFromCookie(): string | null {
+	return readCookie(CSRF_COOKIE_NAME);
+}
+
 /**
  * Resolve the current CSRF token from the delivery cookie, triggering the
  * server Set-Cookie once if the cookie is absent. Concurrent calls before the
@@ -63,7 +68,7 @@ export async function getCsrfToken(): Promise<string> {
 	}
 
 	// The cookie may already be present (server set it on a prior request).
-	const existing = readCookie(CSRF_COOKIE_NAME);
+	const existing = getCsrfTokenFromCookie();
 	if (existing) {
 		cachedToken = existing;
 		return existing;
@@ -84,7 +89,7 @@ export async function getCsrfToken(): Promise<string> {
 			}
 
 			// The token is delivered as a Set-Cookie, not a body — re-read it.
-			const token = readCookie(CSRF_COOKIE_NAME);
+			const token = getCsrfTokenFromCookie();
 			if (!token) {
 				throw new Error('CSRF cookie missing after /api/csrf');
 			}
@@ -117,7 +122,7 @@ export async function refreshCsrfToken(): Promise<string> {
 	if (!response.ok) {
 		throw new Error(`Failed to refresh CSRF token (status ${response.status})`);
 	}
-	const token = readCookie(CSRF_COOKIE_NAME);
+	const token = getCsrfTokenFromCookie();
 	if (!token) {
 		throw new Error('CSRF cookie missing after /api/csrf refresh');
 	}

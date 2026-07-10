@@ -10,11 +10,13 @@
 /* A warm, approachable interface for CUNY students and academics */
 /* First-time friendly, clear affordances, educational warmth */
 
-* {
-	margin: 0;
-	padding: 0;
-	box-sizing: border-box;
-}
+/* NOTE: no universal margin/padding-zero reset on the star selector here.
+   Tailwind v4's preflight (from the tailwindcss import above) already applies
+   exactly that reset in the base cascade layer. An UNLAYERED duplicate would
+   beat every layered Tailwind utility (cascade layers lose to unlayered rules
+   regardless of specificity), silently zeroing all padding and margin
+   utilities across the app — observed live as dialogs rendering with no
+   padding and their footer buttons clipped at the dialog edge. */
 
 :root {
 	/* === Open Studio Color System === */

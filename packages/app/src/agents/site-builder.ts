@@ -16,6 +16,9 @@ import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/tem
 import { R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
+import { describeModelStreamError } from "../lib/model-stream-error";
+
+export { describeModelStreamError } from "../lib/model-stream-error";
 
 type Scope = {
   userId: string;
@@ -126,7 +129,7 @@ function clipPreview(value: string, maxChars = 180): string {
   return `${value.slice(0, maxChars - 1)}...`;
 }
 
-function summarizeError(error: unknown): string {
+export function summarizeError(error: unknown): string {
   if (error instanceof Error) {
     return `${error.name}: ${error.message}`;
   }
@@ -304,7 +307,7 @@ function summarizeLatestUserRequest(messages: unknown): string | undefined {
   return undefined;
 }
 
-function createProjectTools(
+export function createProjectTools(
   env: Env,
   scope: Scope,
   identityJwt: string | null,
@@ -492,11 +495,8 @@ function createProjectTools(
           };
         }
 
-        let previousContent: string | null = null;
-
-        if (await storage.fileExists(scope.userId, scope.projectId, filePath)) {
-          previousContent = await storage.readFile(scope.userId, scope.projectId, filePath);
-        }
+        let current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        const previousContent = current?.content ?? null;
 
         const nextContent = mode === "append" && previousContent !== null
           ? `${previousContent}${content}`
@@ -512,13 +512,83 @@ function createProjectTools(
         }
 
         await ensureSnapshot();
-        await storage.writeFile(scope.userId, scope.projectId, filePath, nextContent);
+
+        // SS-40: creation is put-if-absent and overwrites/appends are CAS. A
+        // concurrent writer therefore forces a fresh read and recomputation
+        // instead of being silently clobbered by this turn's stale content.
+        if (current === null) {
+          const createdEtag = await storage.writeFileIfAbsent(
+            scope.userId,
+            scope.projectId,
+            filePath,
+            nextContent
+          );
+          if (createdEtag !== null) {
+            return {
+              ok: true,
+              path: filePath,
+              created: true,
+              changed: true
+            };
+          }
+          current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        }
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (current === null) {
+            const createdEtag = await storage.writeFileIfAbsent(
+              scope.userId,
+              scope.projectId,
+              filePath,
+              content
+            );
+            if (createdEtag !== null) {
+              return {
+                ok: true,
+                path: filePath,
+                created: true,
+                changed: true
+              };
+            }
+            current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+            continue;
+          }
+
+          const recomputed = mode === "append"
+            ? `${current.content}${content}`
+            : content;
+          if (current.content === recomputed) {
+            return {
+              ok: true,
+              path: filePath,
+              created: false,
+              changed: false
+            };
+          }
+
+          const writtenEtag = await storage.writeFileIfMatch(
+            scope.userId,
+            scope.projectId,
+            filePath,
+            recomputed,
+            current.etag
+          );
+          if (writtenEtag !== null) {
+            return {
+              ok: true,
+              path: filePath,
+              created: false,
+              changed: true
+            };
+          }
+
+          current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        }
 
         return {
-          ok: true,
+          ok: false,
           path: filePath,
-          created: previousContent === null,
-          changed: previousContent !== nextContent
+          message: "The file changed during the write; please re-read and retry."
         };
       }
     }),
@@ -553,9 +623,16 @@ function createProjectTools(
           };
         }
 
-        const existing = await storage.readFile(scope.userId, scope.projectId, filePath);
+        let current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        if (!current) {
+          return {
+            ok: false,
+            path: filePath,
+            message: "File not found."
+          };
+        }
 
-        if (!existing.includes(oldText)) {
+        if (!current.content.includes(oldText)) {
           return {
             ok: false,
             path: filePath,
@@ -563,15 +640,15 @@ function createProjectTools(
           };
         }
 
-        const updated = replaceAll
-          ? existing.split(oldText).join(newText)
-          : existing.replace(oldText, newText);
+        let updated = replaceAll
+          ? current.content.split(oldText).join(newText)
+          : current.content.replace(oldText, newText);
 
-        const replacementCount = replaceAll
-          ? existing.split(oldText).length - 1
+        let replacementCount = replaceAll
+          ? current.content.split(oldText).length - 1
           : 1;
 
-        if (updated === existing) {
+        if (updated === current.content) {
           return {
             ok: true,
             path: filePath,
@@ -580,12 +657,44 @@ function createProjectTools(
         }
 
         await ensureSnapshot();
-        await storage.writeFile(scope.userId, scope.projectId, filePath, updated);
+
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const writtenEtag = await storage.writeFileIfMatch(
+            scope.userId,
+            scope.projectId,
+            filePath,
+            updated,
+            current.etag
+          );
+          if (writtenEtag !== null) {
+            return {
+              ok: true,
+              path: filePath,
+              replacements: replacementCount
+            };
+          }
+
+          current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+          if (!current || !current.content.includes(oldText)) {
+            return {
+              ok: false,
+              path: filePath,
+              message: "The file changed during editing; re-read it and retry."
+            };
+          }
+
+          updated = replaceAll
+            ? current.content.split(oldText).join(newText)
+            : current.content.replace(oldText, newText);
+          replacementCount = replaceAll
+            ? current.content.split(oldText).length - 1
+            : 1;
+        }
 
         return {
-          ok: true,
+          ok: false,
           path: filePath,
-          replacements: replacementCount
+          message: "The file kept changing during editing; please retry."
         };
       }
     }),
@@ -1028,6 +1137,18 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     return true;
   }
 
+  /**
+   * Wipe this instance's persisted conversation so a project deleted (or
+   * renamed) out from under this DO name cannot resurface if the name is reused.
+   * Mirrors the built-in CF_AGENT_CHAT_CLEAR handling using members a subclass
+   * can reach.
+   */
+  async clearChatHistory(): Promise<void> {
+    this.resetTurnState();
+    this.sql`delete from cf_ai_chat_agent_messages`;
+    this.messages = [];
+  }
+
   async onChatMessage(
     onFinish?: Parameters<ChatHandler>[0],
     options?: Parameters<ChatHandler>[1]
@@ -1132,23 +1253,30 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             userId: scope.userId,
             projectId: scope.projectId,
             requestId,
-            error
+            // SS-45: AI_APICallError carries requestBodyValues (full prompts and
+            // extracted documents). Log only the clipped name/message summary.
+            error: summarizeError(error.error)
           });
         }
       });
 
       return result.toUIMessageStreamResponse({
         onError: (error) => {
-          this.finalizeObservabilityRequest(requestId, "error", "UI message stream failed", {
+          const described = describeModelStreamError(error);
+          // SS-44: quota envelopes are expected user-facing failures, distinct
+          // from an unknown stream crash, and must survive the UI stream layer.
+          this.finalizeObservabilityRequest(requestId, "error", described.quota
+            ? "Model quota exhausted"
+            : "UI message stream failed", {
             error: summarizeError(error)
           }, "error");
           console.error("SiteBuilderAgent chat stream failed", {
             userId: scope.userId,
             projectId: scope.projectId,
             requestId,
-            error
+            error: summarizeError(error)
           });
-          return "Site Studio hit an internal error while streaming this response.";
+          return described.message;
         }
       });
     } catch (error) {
@@ -1159,7 +1287,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         userId: scope.userId,
         projectId: scope.projectId,
         requestId,
-        error
+        error: summarizeError(error)
       });
       return new Response(JSON.stringify({ error: "Failed to process request" }), {
         status: 500,

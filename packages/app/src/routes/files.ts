@@ -22,7 +22,8 @@ import { requireProject, type RequireProjectVariables } from "../lib/require-pro
 
 const saveFileSchema = z.object({
   path: z.string().min(1),
-  content: z.string()
+  content: z.string(),
+  baseEtag: z.string().optional()
 });
 
 const renameFileSchema = z.object({
@@ -183,21 +184,17 @@ export function createFileRouter() {
       jsonError("Binary files cannot be opened in the text editor. Download the file instead.", 415);
     }
 
-    let content: string;
-    try {
-      content = await storage.readFile(user.id, projectId, filePath);
-    } catch (error) {
-      if (error instanceof FileNotFoundError) {
-        jsonError("File not found", 404);
-      }
-      throw error;
+    const file = await storage.readFileWithEtag(user.id, projectId, filePath);
+    if (!file) {
+      jsonError("File not found", 404);
     }
 
     return c.json({
       path: filePath,
       contentType: getContentType(filePath),
       isText: true,
-      content
+      content: file.content,
+      etag: file.etag
     });
   });
 
@@ -209,7 +206,7 @@ export function createFileRouter() {
     if (!parsed.success) {
       jsonError("Invalid file payload", 400);
     }
-    const { path, content } = parsed.data;
+    const { path, content, baseEtag } = parsed.data;
     const filePath = sanitizeFilePath(path);
 
     // SS-18: protected system files (.metadata.json, .thumbnail.png) were guarded
@@ -224,8 +221,35 @@ export function createFileRouter() {
       jsonError("Binary files cannot be saved through the text editor endpoint.", 415);
     }
 
-    await storage.writeFile(user.id, projectId, filePath, content);
-    return c.json({ success: true, path: filePath, message: "File saved successfully" });
+    // SS-40: editor saves can carry the ETag they loaded. A stale tab must get
+    // a conflict response instead of silently overwriting a newer agent/editor
+    // write. Legacy clients without an ETag retain the original write behavior.
+    if (baseEtag !== undefined) {
+      const etag = await storage.writeFileIfMatch(user.id, projectId, filePath, content, baseEtag);
+      if (etag === null) {
+        const current = await storage.readFileWithEtag(user.id, projectId, filePath);
+        return c.json({
+          error: "file_conflict",
+          message: "This file changed since you opened it. Reload to get the latest version.",
+          etag: current?.etag ?? null
+        }, 409);
+      }
+
+      return c.json({
+        success: true,
+        path: filePath,
+        message: "File saved successfully",
+        etag
+      });
+    }
+
+    const etag = await storage.writeFile(user.id, projectId, filePath, content);
+    return c.json({
+      success: true,
+      path: filePath,
+      message: "File saved successfully",
+      etag
+    });
   });
 
   app.delete("/api/projects/:id/files", async (c) => {
@@ -310,6 +334,10 @@ export function createFileRouter() {
     }
 
     const sanitized = sanitizeUploadName(entry.name);
+    const uploadPath = `${prefix}${sanitized}`;
+    if (PROTECTED_FILE_NAMES.has(uploadPath.split("/").pop() || "")) {
+      jsonError("Cannot upload protected files", 403);
+    }
     validateUpload(entry, sanitized);
 
     const buffer = new Uint8Array(await entry.arrayBuffer());

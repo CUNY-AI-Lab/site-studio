@@ -163,6 +163,32 @@ export class R2ProjectStorage {
     return metadata;
   }
 
+  async createProjectIfAbsent(userId: string, projectId: string, name: string): Promise<ProjectMetadata> {
+    const now = new Date().toISOString();
+    const metadata: ProjectMetadata = {
+      id: projectId,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      published: false
+    };
+
+    // SS-42: project creation claims the metadata key atomically. The route's
+    // existence preflight is only advisory because two same-name requests can
+    // both observe an empty namespace before either writes its template files.
+    const claimed = await this.bucket.put(metadataKey(userId, projectId), JSON.stringify(metadata), {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: {
+        contentType: "application/json"
+      }
+    });
+    if (claimed === null) {
+      throw new ProjectExistsError(projectId);
+    }
+
+    return metadata;
+  }
+
   async deleteProject(userId: string, projectId: string): Promise<void> {
     const keys = await this.listProjectKeys(userId, projectId);
     for (const key of keys) {
@@ -209,37 +235,44 @@ export class R2ProjectStorage {
       throw new ProjectExistsError(newProjectId);
     }
 
-    for (const file of files) {
-      const content = await this.readFileBuffer(userId, oldProjectId, file.path);
-      await this.writeFile(userId, newProjectId, file.path, content);
-    }
-
-    const thumbnail = await this.bucket.get(fileKey(userId, oldProjectId, ".thumbnail.png"));
-    if (thumbnail) {
-      await this.bucket.put(fileKey(userId, newProjectId, ".thumbnail.png"), await thumbnail.arrayBuffer(), {
-        httpMetadata: thumbnail.httpMetadata
-      });
-    }
-
-    const oldSnapshotKeys = await this.listSnapshotKeys(userId, oldProjectId);
-    const oldPrefix = snapshotPrefix(userId, oldProjectId);
-    const nextPrefix = snapshotPrefix(userId, newProjectId);
-
-    for (const key of oldSnapshotKeys) {
-      const object = await this.bucket.get(key);
-      if (!object) {
-        continue;
+    // SS-43: copy every project object before deleting any source object. If a
+    // copy fails, roll back the claimed target namespace and leave the complete
+    // source (including snapshots) intact so the rename can be retried safely.
+    try {
+      for (const file of files) {
+        const content = await this.readFileBuffer(userId, oldProjectId, file.path);
+        await this.writeFile(userId, newProjectId, file.path, content);
       }
 
-      const nextKey = `${nextPrefix}${key.slice(oldPrefix.length)}`;
-      // Carry customMetadata across so renamed projects keep the SS-39
-      // list-time snapshot records instead of degrading every entry to the
-      // legacy per-object GET fallback.
-      await this.bucket.put(nextKey, await object.arrayBuffer(), {
-        httpMetadata: object.httpMetadata,
-        ...(object.customMetadata ? { customMetadata: object.customMetadata } : {})
-      });
-      await this.bucket.delete(key);
+      const thumbnail = await this.bucket.get(fileKey(userId, oldProjectId, ".thumbnail.png"));
+      if (thumbnail) {
+        await this.bucket.put(fileKey(userId, newProjectId, ".thumbnail.png"), await thumbnail.arrayBuffer(), {
+          httpMetadata: thumbnail.httpMetadata
+        });
+      }
+
+      const oldSnapshotKeys = await this.listSnapshotKeys(userId, oldProjectId);
+      const oldPrefix = snapshotPrefix(userId, oldProjectId);
+      const nextPrefix = snapshotPrefix(userId, newProjectId);
+
+      for (const key of oldSnapshotKeys) {
+        const object = await this.bucket.get(key);
+        if (!object) {
+          continue;
+        }
+
+        const nextKey = `${nextPrefix}${key.slice(oldPrefix.length)}`;
+        // Carry customMetadata across so renamed projects keep the SS-39
+        // list-time snapshot records instead of degrading every entry to the
+        // legacy per-object GET fallback.
+        await this.bucket.put(nextKey, await object.arrayBuffer(), {
+          httpMetadata: object.httpMetadata,
+          ...(object.customMetadata ? { customMetadata: object.customMetadata } : {})
+        });
+      }
+    } catch (error) {
+      await this.deleteProject(userId, newProjectId).catch(() => undefined);
+      throw error;
     }
 
     await this.deleteProject(userId, oldProjectId);
@@ -358,6 +391,22 @@ export class R2ProjectStorage {
     return object.text();
   }
 
+  async readFileWithEtag(
+    userId: string,
+    projectId: string,
+    filePath: string
+  ): Promise<{ content: string; etag: string } | null> {
+    const object = await this.bucket.get(fileKey(userId, projectId, filePath));
+    if (!object) {
+      return null;
+    }
+
+    return {
+      content: await object.text(),
+      etag: object.etag
+    };
+  }
+
   async readFileBuffer(userId: string, projectId: string, filePath: string): Promise<Uint8Array> {
     const object = await this.bucket.get(fileKey(userId, projectId, filePath));
     if (!object) {
@@ -376,9 +425,38 @@ export class R2ProjectStorage {
     return this.bucket.get(fileKey(userId, projectId, filePath));
   }
 
-  async writeFile(userId: string, projectId: string, filePath: string, content: string | Uint8Array | ArrayBuffer): Promise<void> {
+  async writeFile(userId: string, projectId: string, filePath: string, content: string | Uint8Array | ArrayBuffer): Promise<string> {
     const key = fileKey(userId, projectId, filePath);
-    await this.bucket.put(key, content);
+    const result = await this.bucket.put(key, content);
+    if (result === null) {
+      throw new Error(`Unexpected conditional write failure for ${key}`);
+    }
+    return result.etag;
+  }
+
+  async writeFileIfMatch(
+    userId: string,
+    projectId: string,
+    filePath: string,
+    content: string | Uint8Array | ArrayBuffer,
+    expectedEtag: string
+  ): Promise<string | null> {
+    const result = await this.bucket.put(fileKey(userId, projectId, filePath), content, {
+      onlyIf: { etagMatches: expectedEtag }
+    });
+    return result?.etag ?? null;
+  }
+
+  async writeFileIfAbsent(
+    userId: string,
+    projectId: string,
+    filePath: string,
+    content: string | Uint8Array | ArrayBuffer
+  ): Promise<string | null> {
+    const result = await this.bucket.put(fileKey(userId, projectId, filePath), content, {
+      onlyIf: { etagDoesNotMatch: "*" }
+    });
+    return result?.etag ?? null;
   }
 
   async deleteFile(userId: string, projectId: string, filePath: string): Promise<void> {

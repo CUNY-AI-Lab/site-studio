@@ -12,18 +12,34 @@ import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
 import { createProjectRouter } from "./projects";
 
+vi.mock("agents", () => ({
+  getAgentByName: vi.fn(async () => ({
+    exportChatHistoryForMigration: async () => [],
+    importChatHistoryForMigration: async () => true,
+    clearChatHistory: async () => undefined
+  }))
+}));
+
 // Module-scoped session bits, reset per test: createEnv() and the request
 // helpers read these so individual tests stay terse.
 let kv: MockKV;
 let csrf: CsrfSession;
 
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }>();
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown; etag?: string }>();
+  const versions = new Map<string, number>();
+
+  function nextEtag(key: string): string {
+    const version = (versions.get(key) || 0) + 1;
+    versions.set(key, version);
+    return `${key}:${version}`;
+  }
 
   return {
     store,
     head: vi.fn(async (key: string) => {
-      return store.has(key) ? { key, size: 0 } : null;
+      const entry = store.get(key);
+      return entry ? { key, size: 0, etag: entry.etag } : null;
     }),
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
@@ -33,6 +49,7 @@ function createMockBucket() {
       return {
         key,
         size: typeof data === "string" ? data.length : data.byteLength,
+        etag: entry.etag,
         httpMetadata: entry.httpMetadata || {},
         text: async () => typeof data === "string" ? data : new TextDecoder().decode(data),
         arrayBuffer: async () => typeof data === "string" ? new TextEncoder().encode(data).buffer : data,
@@ -41,11 +58,14 @@ function createMockBucket() {
     put: vi.fn(async (
       key: string,
       data: string | ArrayBuffer | Uint8Array,
-      options?: { httpMetadata?: unknown; onlyIf?: { etagDoesNotMatch?: string } }
+      options?: { httpMetadata?: unknown; onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } }
     ) => {
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
       // key is empty; a failed condition returns null (no write, no throw).
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
+      if (options?.onlyIf?.etagMatches !== undefined && store.get(key)?.etag !== options.onlyIf.etagMatches) {
         return null;
       }
       let stored: ArrayBuffer | string;
@@ -57,8 +77,9 @@ function createMockBucket() {
         stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
       }
 
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
-      return { key };
+      const etag = nextEtag(key);
+      store.set(key, { data: stored, httpMetadata: options?.httpMetadata, etag });
+      return { key, etag };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -102,7 +123,7 @@ function createMockBucket() {
         delimitedPrefixes,
       };
     }),
-  } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }> };
+  } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown; etag?: string }> };
 }
 
 function createTestApp() {
@@ -267,6 +288,32 @@ describe("route regressions", () => {
     await expect(response.text()).resolves.toBe("Not found");
   });
 
+  it("returns 404 for protected published bookkeeping files", async () => {
+    await storage.createProject(userId, "protected-publish", "Protected Publish");
+    await storage.writeFile(userId, "protected-publish", "index.html", "<h1>Home</h1>");
+    await storage.writeThumbnail(userId, "protected-publish", pngBytes());
+    await storage.updateProjectMetadata(userId, "protected-publish", {
+      published: true,
+      slug: "protected-publish"
+    });
+
+    const metadata = await app.request(
+      "http://site-studio.test/u/janedoe/protected-publish/.metadata.json",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(metadata.status).toBe(404);
+    await expect(metadata.text()).resolves.toBe("Not found");
+
+    const thumbnail = await app.request(
+      "http://site-studio.test/u/janedoe/protected-publish/.thumbnail.png",
+      undefined,
+      createEnv(bucket)
+    );
+    expect(thumbnail.status).toBe(404);
+    await expect(thumbnail.text()).resolves.toBe("Not found");
+  });
+
   it("returns 404 for missing project file reads and downloads", async () => {
     await storage.createProject(userId, "files-project", "Files Project");
 
@@ -411,6 +458,26 @@ describe("route regressions", () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       url: "https://tools.cuny.qzz.io/u/janedoe/legacy-domain/"
+    });
+  });
+
+  it("uses the local worker origin for published URLs during loopback development", async () => {
+    await storage.createProject(userId, "local-publish", "Local Publish");
+    await storage.writeFile(userId, "local-publish", "index.html", "<h1>Local</h1>");
+
+    const response = await app.request(
+      "http://localhost:8792/api/projects/local-publish/publish",
+      { method: "POST", headers: csrf.headers },
+      {
+        ...createEnv(bucket),
+        R2_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io"
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      url: "http://localhost:8792/u/janedoe/local-publish/"
     });
   });
 
@@ -660,6 +727,7 @@ describe("served-bytes security headers (§3¾)", () => {
       createEnv(bucket)
     );
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=3600");
     expectSandboxed(response);
   });
 
@@ -829,6 +897,69 @@ describe("served-bytes security headers (§3¾)", () => {
     await expect(response.json()).resolves.toEqual({ error: "Project is not currently published" });
   });
 
+  it("SS-40: GET file returns the content ETag", async () => {
+    await storage.createProject(userId, "editor-etag", "Editor ETag");
+    const etag = await storage.writeFile(userId, "editor-etag", "index.html", "first");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/editor-etag/file?path=index.html",
+      undefined,
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      path: "index.html",
+      content: "first",
+      etag
+    });
+  });
+
+  it("SS-40: POST file rejects a stale base ETag without overwriting", async () => {
+    await storage.createProject(userId, "editor-conflict", "Editor Conflict");
+    const staleEtag = await storage.writeFile(userId, "editor-conflict", "index.html", "first");
+    const currentEtag = await storage.writeFile(userId, "editor-conflict", "index.html", "newer");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/editor-conflict/file",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "index.html", content: "stale save", baseEtag: staleEtag }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "file_conflict",
+      message: "This file changed since you opened it. Reload to get the latest version.",
+      etag: currentEtag
+    });
+    await expect(storage.readFile(userId, "editor-conflict", "index.html")).resolves.toBe("newer");
+  });
+
+  it("SS-40: POST file accepts a matching base ETag and returns the new ETag", async () => {
+    await storage.createProject(userId, "editor-save", "Editor Save");
+    const baseEtag = await storage.writeFile(userId, "editor-save", "index.html", "first");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/editor-save/file",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "index.html", content: "second", baseEtag }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { etag: string };
+    expect(body.etag).toBeTruthy();
+    expect(body.etag).not.toBe(baseEtag);
+    await expect(storage.readFile(userId, "editor-save", "index.html")).resolves.toBe("second");
+  });
+
   it("SS-31: PATCH rename returns 409 if the target project appears after preflight", async () => {
     await storage.createProject(userId, "old-name", "Old Name");
     await storage.writeFile(userId, "old-name", "index.html", "<h1>Old</h1>");
@@ -917,6 +1048,17 @@ describe("image upload hardening", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { path: string };
     expect(body.path).toBe("photo.png");
+  });
+
+  it("rejects uploads to protected bookkeeping filenames", async () => {
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest(".metadata.json", new TextEncoder().encode("{}")),
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Cannot upload protected files" });
   });
 
   it("rejects a file whose bytes do not match its image extension", async () => {

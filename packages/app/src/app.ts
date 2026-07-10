@@ -12,6 +12,7 @@ import { createPreviewRouter } from "./routes/preview";
 import { createProjectRouter } from "./routes/projects";
 import { createPublishRouter } from "./routes/publish";
 import { createTemplateRouter } from "./routes/templates";
+import { previewTokenAuth } from "./lib/preview-token";
 
 /**
  * App assembly lives here (separate from index.ts) so tests can exercise the
@@ -46,6 +47,8 @@ app.use("/api/handle", authMiddleware);
 app.use("/api/handle/*", authMiddleware);
 app.use("/api/agents/site-builder/*", authMiddleware);
 app.use("/api/agents/site-builder/:projectId", authMiddleware);
+app.use("/preview/*", previewTokenAuth);
+app.use("/preview/:id", previewTokenAuth);
 app.use("/preview/*", authMiddleware);
 app.use("/preview/:id", authMiddleware);
 

@@ -12,6 +12,13 @@
     {
       "pattern": "tools.cuny.qzz.io/sites/*",
       "zone_name": "cuny.qzz.io"
+    },
+    // Canonical published URLs target /u/* on this host. The main app also
+    // serves /u/* at tools.ailab.gc.cuny.edu, but that app's custom-domain
+    // routing is dashboard-managed and cannot be verified from its wrangler.jsonc.
+    {
+      "pattern": "tools.cuny.qzz.io/u/*",
+      "zone_name": "cuny.qzz.io"
     }
   ],
   "vars": {

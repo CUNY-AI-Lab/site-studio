@@ -7,6 +7,7 @@ import { servedContentHeaders } from "./serving-headers";
 import { getServedContentType as getContentType } from "../../serving-core/src/content-types";
 import { looksLikePageNavigation as looksLikePageNavigationCore } from "../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../serving-core/src/extensionless";
+import { isProtectedServedPath } from "../../serving-core/src/protected-files";
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -278,7 +279,7 @@ export function responseHeaders(filePath: string, object: R2ObjectBody): Headers
   if (contentType.startsWith("text/html")) {
     headers.set("Cache-Control", "public, max-age=300");
   } else {
-    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    headers.set("Cache-Control", "public, max-age=3600");
   }
 
   // §3¾: every project-supplied byte served here (200 responses AND a custom
@@ -431,6 +432,17 @@ export default {
       }
     }
 
+    if (isProtectedServedPath(parsed.filePath)) {
+      return notFoundResponse(
+        env.SITE_STUDIO_BUCKET,
+        ownerId,
+        resolved.projectId,
+        request,
+        parsed.filePath,
+        rootPath
+      );
+    }
+
     // SS-14 extensionless resolution — one shared helper across all three
     // serving paths (preview, publish, this worker): try `{path}.html`, then
     // `{path}/index.html`. See @site-studio/serving-core/extensionless.
@@ -439,6 +451,17 @@ export default {
     );
 
     if (!served) {
+      return notFoundResponse(
+        env.SITE_STUDIO_BUCKET,
+        ownerId,
+        resolved.projectId,
+        request,
+        parsed.filePath,
+        rootPath
+      );
+    }
+
+    if (isProtectedServedPath(served.filePath)) {
       return notFoundResponse(
         env.SITE_STUDIO_BUCKET,
         ownerId,

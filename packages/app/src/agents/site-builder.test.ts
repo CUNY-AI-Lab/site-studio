@@ -3,9 +3,36 @@ import { generateTypes } from "@cloudflare/codemode/ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { buildProjectContext } from "./project-context";
+import { describeModelStreamError } from "../lib/model-stream-error";
 
 // We can't easily test the full agent (needs Durable Object runtime),
 // but we can verify the tool schemas generate proper types for the LLM.
+
+describe("describeModelStreamError", () => {
+  it("finds quota details nested in an AI_RetryError", () => {
+    const apiCallError = {
+      name: "AI_APICallError",
+      message: "Too Many Requests",
+      statusCode: 429,
+      responseBody: JSON.stringify({
+        error: "quota_exceeded",
+        message: "Hourly quota exhausted"
+      }),
+      responseHeaders: { "retry-after": "3600" }
+    };
+    const retryError = {
+      name: "AI_RetryError",
+      message: "Failed after 3 attempts. Last error: Too Many Requests",
+      errors: [apiCallError, apiCallError, apiCallError],
+      lastError: apiCallError
+    };
+
+    const described = describeModelStreamError(retryError);
+
+    expect(described.quota).toBe(true);
+    expect(described.message).toContain("3600 seconds");
+  });
+});
 
 describe("codemode tool type generation", () => {
   it("generates typed output for read_file (discriminated union)", () => {

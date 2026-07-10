@@ -187,6 +187,37 @@ describe("addCacheBusterToHtml", () => {
     expect(result).toBe(html);
   });
 
+  it("adds cache and preview-token params to relative asset and navigation URLs", () => {
+    const html = [
+      '<link href="styles.css">',
+      '<script src="app.js"></script>',
+      '<img src="photo.png">',
+      '<a href="about.html">About</a>'
+    ].join("");
+    const result = addCacheBusterToHtml(html, "123", { pt: "preview-token" });
+
+    expect(result).toContain('href="styles.css?v=123&pt=preview-token"');
+    expect(result).toContain('src="app.js?v=123&pt=preview-token"');
+    expect(result).toContain('src="photo.png?v=123&pt=preview-token"');
+    expect(result).toContain('href="about.html?v=123&pt=preview-token"');
+  });
+
+  it("leaves excluded and already-query-bearing anchor URLs unchanged", () => {
+    const values = [
+      "https://example.com/page",
+      "http://example.com/page",
+      "#section",
+      "mailto:user@example.com",
+      "tel:+12125550123",
+      "javascript:void(0)",
+      "data:text/plain,hello",
+      "about.html?existing=1"
+    ];
+    const html = values.map((href) => `<a href="${href}">x</a>`).join("");
+
+    expect(addCacheBusterToHtml(html, "123", { pt: "token" })).toBe(html);
+  });
+
   it("generates timestamp when no version provided", () => {
     const html = '<link href="styles.css">';
     const result = addCacheBusterToHtml(html);

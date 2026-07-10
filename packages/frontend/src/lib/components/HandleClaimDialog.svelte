@@ -158,7 +158,7 @@
 			</p>
 		</div>
 
-		<Dialog.Footer>
+		<Dialog.Footer class="handle-dialog-footer">
 			<Button variant="outline" onclick={() => onOpenChange(false)} disabled={claiming}>
 				Cancel
 			</Button>
@@ -267,6 +267,22 @@
 	}
 	.status.muted {
 		color: var(--color-text-tertiary);
+	}
+
+	:global(.handle-dialog) {
+		max-height: calc(100dvh - 2rem);
+		overflow-y: auto;
+	}
+
+	:global(.handle-dialog-footer) {
+		display: flex;
+		width: 100%;
+		flex-direction: row;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		padding-top: 0.25rem;
 	}
 
 	:global(.handle-dialog .spin) {

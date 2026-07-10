@@ -10,6 +10,7 @@
     "./serving-headers": "./src/serving-headers.ts",
     "./not-found-page": "./src/not-found-page.ts",
     "./page-navigation": "./src/page-navigation.ts",
-    "./extensionless": "./src/extensionless.ts"
+    "./extensionless": "./src/extensionless.ts",
+    "./protected-files": "./src/protected-files.ts"
   }
 }

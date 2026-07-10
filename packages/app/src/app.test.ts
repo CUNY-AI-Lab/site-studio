@@ -21,7 +21,7 @@ function createMockBucket(): R2Bucket {
   return {
     head: vi.fn(async () => null),
     get: vi.fn(async () => null),
-    put: vi.fn(async () => undefined),
+    put: vi.fn(async (key: string) => ({ key, etag: `${key}:1` })),
     delete: vi.fn(async () => undefined),
     list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
   } as unknown as R2Bucket;

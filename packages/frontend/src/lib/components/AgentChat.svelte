@@ -20,6 +20,7 @@
 		type UIMessagePart,
 		type UIStreamChunk
 	} from '$lib/agents/chat';
+	import { shouldRefreshSocket } from '$lib/agents/socket-freshness';
 
 	interface ContentBlock {
 		type: 'text' | 'tools';
@@ -80,6 +81,7 @@
 	let isUploading = $state(false);
 	let socket = $state<WebSocket | null>(null);
 	let socketPromise: Promise<WebSocket> | null = null;
+	let socketOpenedAt: number | null = null;
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
 	let expectingContinuation = $state(false);
@@ -523,6 +525,7 @@
 
 		socket = null;
 		socketPromise = null;
+		socketOpenedAt = null;
 	}
 
 	function handleSocketClose(event: Event) {
@@ -541,6 +544,7 @@
 
 		socket = null;
 		socketPromise = null;
+		socketOpenedAt = null;
 
 		// Clean up listeners on the closed socket
 		if (closedSocket) {
@@ -655,6 +659,7 @@
 		socketPromise = new Promise((resolve, reject) => {
 			const onOpen = () => {
 				nextSocket.removeEventListener('error', onError);
+				socketOpenedAt = Date.now();
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
@@ -717,6 +722,15 @@
 	}
 
 	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
+		// Gate-injected identity JWTs expire after about five minutes, so reconnect
+		// before a new turn while there is still time to capture a fresh token.
+		if (
+			socket?.readyState === WebSocket.OPEN &&
+			shouldRefreshSocket(socketOpenedAt, Date.now())
+		) {
+			closeSocket();
+		}
+
 		const ws = await ensureSocket();
 		const requestId = generateId();
 		const startedAt = Date.now();
@@ -808,6 +822,19 @@
 		flushActiveStreamToMessages(activeStream);
 	}
 
+	function parseStreamChunkBody(body: string): UIStreamChunk {
+		try {
+			return JSON.parse(body) as UIStreamChunk;
+		} catch (error) {
+			if (!body.startsWith('data:')) {
+				throw error;
+			}
+
+			const payload = body.slice('data:'.length).replace(/[\r\n]+$/, '');
+			return JSON.parse(payload) as UIStreamChunk;
+		}
+	}
+
 	function handleSocketMessage(event: MessageEvent<string>) {
 		if (typeof event.data !== 'string') return;
 
@@ -863,9 +890,33 @@
 
 				if (data.body?.trim()) {
 					try {
-						handleStreamChunk(JSON.parse(data.body) as UIStreamChunk);
+						handleStreamChunk(parseStreamChunkBody(data.body));
 					} catch (error) {
-						console.warn('Failed to parse stream chunk', error);
+						// Error frames legitimately carry the human-readable error text as a
+						// plain (non-JSON) body. Observed live with the CAIL quota message:
+						// the transport sends `{error:true, body:"<text>"}` first and then the
+						// SAME text as a proper `{"type":"error","errorText":…}` JSON chunk,
+						// which handleStreamChunk renders. So rendering the plain body here
+						// would show the error twice: recognize the shape and stay quiet.
+						// Only a body that looks encoded (broken JSON / SSE framing) is a
+						// genuinely malformed frame — warn and surface a visible fallback so
+						// the user is not left hanging.
+						const bodyText = typeof data.body === 'string' ? data.body.trim() : '';
+						const looksLikeProse =
+							!!bodyText &&
+							!bodyText.startsWith('data:') &&
+							!bodyText.startsWith('{') &&
+							!bodyText.startsWith('[');
+						if (!(data.error && looksLikeProse)) {
+							console.warn('Failed to parse stream chunk', error);
+							if (data.error && activeStream) {
+								activeStream.parts.push({
+									type: 'text',
+									text: 'Something went wrong while generating this response.',
+									state: 'done'
+								});
+							}
+						}
 					}
 				}
 

@@ -159,6 +159,19 @@ describe("R2ProjectStorage", () => {
       const stored = bucket.store.get(`projects/${userId}/${projectId}/.metadata.json`);
       expect(stored).toBeTruthy();
     });
+
+    it("SS-42: atomically rejects a second create for the same project id", async () => {
+      const first = await storage.createProjectIfAbsent(userId, projectId, "First");
+
+      expect(first).toMatchObject({ id: projectId, name: "First" });
+      await expect(
+        storage.createProjectIfAbsent(userId, projectId, "Second")
+      ).rejects.toBeInstanceOf(ProjectExistsError);
+      await expect(storage.getProjectMetadata(userId, projectId)).resolves.toMatchObject({
+        id: projectId,
+        name: "First"
+      });
+    });
   });
 
   describe("projectExists", () => {
@@ -205,6 +218,43 @@ describe("R2ProjectStorage", () => {
 
     it("throws on reading non-existent file", async () => {
       await expect(storage.readFile(userId, projectId, "nope.html")).rejects.toThrow("File not found");
+    });
+
+    it("SS-40: round-trips content with its ETag and returns null when absent", async () => {
+      const etag = await storage.writeFile(userId, projectId, "index.html", "first");
+
+      await expect(storage.readFileWithEtag(userId, projectId, "index.html")).resolves.toEqual({
+        content: "first",
+        etag
+      });
+      await expect(storage.readFileWithEtag(userId, projectId, "missing.html")).resolves.toBeNull();
+    });
+
+    it("SS-40: conditionally writes only when the expected ETag matches", async () => {
+      const firstEtag = await storage.writeFile(userId, projectId, "index.html", "first");
+      const nextEtag = await storage.writeFileIfMatch(
+        userId,
+        projectId,
+        "index.html",
+        "second",
+        firstEtag
+      );
+
+      expect(nextEtag).not.toBeNull();
+      await expect(
+        storage.writeFileIfMatch(userId, projectId, "index.html", "stale", firstEtag)
+      ).resolves.toBeNull();
+      await expect(storage.readFile(userId, projectId, "index.html")).resolves.toBe("second");
+    });
+
+    it("SS-40: put-if-absent refuses to overwrite an existing file", async () => {
+      const createdEtag = await storage.writeFileIfAbsent(userId, projectId, "new.txt", "first");
+
+      expect(createdEtag).not.toBeNull();
+      await expect(
+        storage.writeFileIfAbsent(userId, projectId, "new.txt", "second")
+      ).resolves.toBeNull();
+      await expect(storage.readFile(userId, projectId, "new.txt")).resolves.toBe("first");
     });
   });
 
@@ -412,6 +462,59 @@ describe("R2ProjectStorage", () => {
   });
 
   describe("renameProject", () => {
+    it("SS-43: moves files, snapshots, and thumbnail only after every copy succeeds", async () => {
+      await storage.createProject(userId, "old-complete", "Old Complete");
+      await storage.writeFile(userId, "old-complete", "index.html", "<h1>Hi</h1>");
+      await storage.writeThumbnail(userId, "old-complete", new Uint8Array([137, 80, 78, 71]));
+      const snapshot = (await storage.createSnapshot(userId, "old-complete", {
+        trigger: "manual",
+        label: "Before rename"
+      })) as ProjectSnapshot;
+
+      await storage.renameProject(userId, "old-complete", "new-complete");
+
+      await expect(storage.readFile(userId, "new-complete", "index.html")).resolves.toBe("<h1>Hi</h1>");
+      await expect(storage.readThumbnail(userId, "new-complete")).resolves.toEqual(
+        new Uint8Array([137, 80, 78, 71])
+      );
+      await expect(storage.getSnapshot(userId, "new-complete", snapshot.id)).resolves.toMatchObject({
+        id: snapshot.id,
+        label: "Before rename"
+      });
+      await expect(storage.projectExists(userId, "old-complete")).resolves.toBe(false);
+      expect([...bucket.store.keys()].some((key) => key.startsWith(`snapshots/${userId}/old-complete/`))).toBe(false);
+    });
+
+    it("SS-43: rolls back a partial target and preserves the source when a snapshot copy fails", async () => {
+      await storage.createProject(userId, "old-atomic", "Old Atomic");
+      await storage.writeFile(userId, "old-atomic", "index.html", "source file");
+      const snapshot = (await storage.createSnapshot(userId, "old-atomic", {
+        trigger: "manual",
+        label: "Source snapshot"
+      })) as ProjectSnapshot;
+      const failingKey = `snapshots/${userId}/new-atomic/${snapshot.id}.zip`;
+      const originalPut = bucket.put;
+      bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+        if (key === failingKey) {
+          throw new Error("snapshot copy failed");
+        }
+        return originalPut(key, data, options);
+      }) as unknown as typeof bucket.put;
+
+      await expect(
+        storage.renameProject(userId, "old-atomic", "new-atomic")
+      ).rejects.toThrow("snapshot copy failed");
+
+      await expect(storage.readFile(userId, "old-atomic", "index.html")).resolves.toBe("source file");
+      await expect(storage.getSnapshot(userId, "old-atomic", snapshot.id)).resolves.toMatchObject({
+        id: snapshot.id,
+        label: "Source snapshot"
+      });
+      expect(bucket.store.has(`snapshots/${userId}/old-atomic/${snapshot.id}.zip`)).toBe(true);
+      expect(bucket.store.has(`projects/${userId}/new-atomic/.metadata.json`)).toBe(false);
+      await expect(storage.projectExists(userId, "new-atomic")).resolves.toBe(false);
+    });
+
     // SS-25: thumbnailUrl embeds the project id, so after a rename it must point
     // at the new id (or be cleared), never at the old/now-deleted project.
     it("SS-25: re-points thumbnailUrl to the new project id", async () => {
