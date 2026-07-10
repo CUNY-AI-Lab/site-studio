@@ -223,6 +223,50 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Usage limit reached.')).toBeInTheDocument();
 	});
 
+	it('handles a plain-text error frame body (CAIL quota) without noise or duplication', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		const quotaText =
+			"You've reached your AI usage limit for now. Try again in about 3600 seconds.";
+
+		// Real frame sequence captured live (2026-07-10): the transport sends the
+		// error text as a PLAIN body on an error frame, then the SAME text as a
+		// proper JSON error chunk, then an empty done frame.
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'quota-stream',
+			body: quotaText,
+			done: false,
+			error: true
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'quota-stream',
+			body: JSON.stringify({ type: 'error', errorText: quotaText }),
+			done: false
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'quota-stream',
+			body: '',
+			done: true
+		});
+		await settle();
+
+		// Rendered exactly once (from the persisted message), no generic fallback,
+		// and no "Failed to parse stream chunk" console noise for this known shape.
+		expect(screen.getAllByText(quotaText)).toHaveLength(1);
+		expect(
+			screen.queryByText('Something went wrong while generating this response.')
+		).not.toBeInTheDocument();
+		expect(warn).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
 	it('shows a visible fallback when an error frame body is malformed', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		mount();

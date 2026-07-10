@@ -892,13 +892,30 @@
 					try {
 						handleStreamChunk(parseStreamChunkBody(data.body));
 					} catch (error) {
-						console.warn('Failed to parse stream chunk', error);
-						if (data.error && activeStream) {
-							activeStream.parts.push({
-								type: 'text',
-								text: 'Something went wrong while generating this response.',
-								state: 'done'
-							});
+						// Error frames legitimately carry the human-readable error text as a
+						// plain (non-JSON) body. Observed live with the CAIL quota message:
+						// the transport sends `{error:true, body:"<text>"}` first and then the
+						// SAME text as a proper `{"type":"error","errorText":…}` JSON chunk,
+						// which handleStreamChunk renders. So rendering the plain body here
+						// would show the error twice: recognize the shape and stay quiet.
+						// Only a body that looks encoded (broken JSON / SSE framing) is a
+						// genuinely malformed frame — warn and surface a visible fallback so
+						// the user is not left hanging.
+						const bodyText = typeof data.body === 'string' ? data.body.trim() : '';
+						const looksLikeProse =
+							!!bodyText &&
+							!bodyText.startsWith('data:') &&
+							!bodyText.startsWith('{') &&
+							!bodyText.startsWith('[');
+						if (!(data.error && looksLikeProse)) {
+							console.warn('Failed to parse stream chunk', error);
+							if (data.error && activeStream) {
+								activeStream.parts.push({
+									type: 'text',
+									text: 'Something went wrong while generating this response.',
+									state: 'done'
+								});
+							}
 						}
 					}
 				}
