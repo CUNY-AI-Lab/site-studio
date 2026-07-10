@@ -20,6 +20,7 @@
 		type UIMessagePart,
 		type UIStreamChunk
 	} from '$lib/agents/chat';
+	import { shouldRefreshSocket } from '$lib/agents/socket-freshness';
 
 	interface ContentBlock {
 		type: 'text' | 'tools';
@@ -80,6 +81,7 @@
 	let isUploading = $state(false);
 	let socket = $state<WebSocket | null>(null);
 	let socketPromise: Promise<WebSocket> | null = null;
+	let socketOpenedAt: number | null = null;
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
 	let expectingContinuation = $state(false);
@@ -523,6 +525,7 @@
 
 		socket = null;
 		socketPromise = null;
+		socketOpenedAt = null;
 	}
 
 	function handleSocketClose(event: Event) {
@@ -541,6 +544,7 @@
 
 		socket = null;
 		socketPromise = null;
+		socketOpenedAt = null;
 
 		// Clean up listeners on the closed socket
 		if (closedSocket) {
@@ -655,6 +659,7 @@
 		socketPromise = new Promise((resolve, reject) => {
 			const onOpen = () => {
 				nextSocket.removeEventListener('error', onError);
+				socketOpenedAt = Date.now();
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
@@ -717,6 +722,15 @@
 	}
 
 	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
+		// Gate-injected identity JWTs expire after about five minutes, so reconnect
+		// before a new turn while there is still time to capture a fresh token.
+		if (
+			socket?.readyState === WebSocket.OPEN &&
+			shouldRefreshSocket(socketOpenedAt, Date.now())
+		) {
+			closeSocket();
+		}
+
 		const ws = await ensureSocket();
 		const requestId = generateId();
 		const startedAt = Date.now();

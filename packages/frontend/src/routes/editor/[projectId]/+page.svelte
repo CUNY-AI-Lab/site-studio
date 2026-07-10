@@ -5,6 +5,7 @@
 	import { base } from '$app/paths';
 	import { resolvePath } from '$lib/utils/paths';
 	import { createAutosave, type SaveSnapshot } from '$lib/editor/autosave';
+	import { buildKeepaliveSave } from '$lib/editor/keepalive-save';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
 	import CodeView from '$lib/components/CodeView.svelte';
@@ -13,7 +14,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
-	import { csrfFetch } from '$lib/api/csrf';
+	import { csrfFetch, getCsrfTokenFromCookie } from '$lib/api/csrf';
 	import { apiFetch, apiResponseFetch } from '$lib/api/errors';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
@@ -36,6 +37,7 @@
 	// Get projectId from URL params
 	let projectId = $derived($page.params.projectId ?? '');
 	let currentFile = $state('');
+	let currentFileEtag = $state<string | null>(null);
 	let fileContent = $state('');
 	let currentFileIsText = $state(true);
 	let currentFileContentType = $state('');
@@ -114,6 +116,19 @@
 		};
 		window.addEventListener('keydown', handleKeyPress);
 
+		const handleBeforeUnload = () => {
+			const snapshot = autosave.pending();
+			if (!snapshot) return;
+
+			const request = buildKeepaliveSave(snapshot, {
+				csrfToken: getCsrfTokenFromCookie() ?? '',
+				url: resolvePath(`/api/projects/${snapshot.projectId}/file`),
+				baseEtag: currentFileEtag
+			});
+			void fetch(request.url, request.init);
+		};
+		window.addEventListener('beforeunload', handleBeforeUnload);
+
 		// Expose function to force tutorial from console
 		(window as any).showEditorTutorial = async () => {
 			await maybeStartEditorTour(true);
@@ -121,6 +136,7 @@
 
 		return () => {
 			window.removeEventListener('keydown', handleKeyPress);
+			window.removeEventListener('beforeunload', handleBeforeUnload);
 			delete (window as any).showEditorTutorial;
 		};
 	});
@@ -184,6 +200,7 @@
 		const nextIsText = selectedFile?.isText ?? inferIsTextFile(filePath);
 
 		currentFile = filePath;
+		currentFileEtag = null;
 		currentFileIsText = nextIsText;
 		currentFileContentType = selectedFile?.contentType || '';
 
@@ -200,8 +217,10 @@
 				}
 			);
 			if (response.status === 415) {
+				if (requestId !== fileSelectCounter) return;
 				currentFileIsText = false;
 				fileContent = '';
+				currentFileEtag = null;
 				return;
 			}
 			if (!response.ok) throw new Error('Failed to load file');
@@ -213,8 +232,12 @@
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
 			currentFileIsText = data.isText ?? true;
 			fileContent = data.content;
+			currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
 		} catch (error) {
 			console.error('Error loading file:', error);
+			if (requestId === fileSelectCounter) {
+				currentFileEtag = null;
+			}
 		}
 	}
 
@@ -239,11 +262,30 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					path: filePath,
-					content
+					content,
+					...(currentFileEtag !== null ? { baseEtag: currentFileEtag } : {})
 				})
 			});
 
+			if (response.status === 409) {
+				const conflict = (await response.json()) as { error?: unknown };
+				if (conflict.error === 'file_conflict') {
+					toast.error('This file changed elsewhere. Loading the latest version now.');
+					await reloadFileAfterConflict(targetProjectId, filePath);
+					return true;
+				}
+			}
+
 			if (!response.ok) throw new Error('Failed to save file');
+
+			const data = (await response.json()) as { etag?: unknown };
+			if (
+				targetProjectId === projectId &&
+				filePath === currentFile &&
+				typeof data.etag === 'string'
+			) {
+				currentFileEtag = data.etag;
+			}
 
 			// Refresh preview after save
 			if (
@@ -259,6 +301,30 @@
 			console.error('Error saving file:', error);
 			toast.error('Failed to save file. Your latest changes were not saved.');
 			return false;
+		}
+	}
+
+	async function reloadFileAfterConflict(targetProjectId: string, filePath: string): Promise<void> {
+		try {
+			const response = await apiResponseFetch(
+				resolvePath(`/api/projects/${targetProjectId}/file?path=${encodeURIComponent(filePath)}`),
+				{ credentials: 'include' }
+			);
+			if (!response.ok) throw new Error('Failed to reload file after conflict');
+
+			const data = await response.json();
+			if (targetProjectId !== projectId || filePath !== currentFile) return;
+
+			currentFileContentType = data.contentType || '';
+			currentFileIsText = data.isText ?? true;
+			fileContent = data.content;
+			currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
+		} catch (error) {
+			console.error('Error reloading file after conflict:', error);
+			if (targetProjectId === projectId && filePath === currentFile) {
+				currentFileEtag = null;
+			}
+			toast.error('The latest file version could not be loaded. Reopen the file to try again.');
 		}
 	}
 
@@ -283,6 +349,7 @@
 
 	$effect(() => {
 		return () => {
+			void autosave.flush();
 			autosave.dispose();
 		};
 	});
@@ -323,6 +390,7 @@
 		}
 
 		currentFile = '';
+		currentFileEtag = null;
 		fileContent = '';
 		currentFileIsText = true;
 		currentFileContentType = '';
@@ -408,6 +476,7 @@
 
 		currentProject = null;
 		currentFile = '';
+		currentFileEtag = null;
 		fileContent = '';
 		currentFileIsText = true;
 		currentFileContentType = '';
