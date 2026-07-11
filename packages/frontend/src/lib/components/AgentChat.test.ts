@@ -158,6 +158,73 @@ describe('AgentChat', () => {
 		);
 	});
 
+	// SS-49: a failed history load must be distinguishable from an empty
+	// conversation. The old behavior set uiMessages = [] on any non-ok/catch,
+	// rendering a wiped transcript for a transient error.
+	it('surfaces a retryable error when history loading fails, not an empty transcript (SS-49)', async () => {
+		let historyRequests = 0;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyRequests += 1;
+				if (historyRequests === 1) {
+					return new Response('oops', { status: 500 });
+				}
+				return new Response(
+					JSON.stringify([
+						{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Recovered message' }] }
+					]),
+					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+
+		// The failure is surfaced as an error state with a retry affordance...
+		await waitFor(() =>
+			expect(screen.getByText(/chat history could not be loaded/i)).toBeInTheDocument()
+		);
+		// ...and NOT presented as a fresh, empty conversation.
+		expect(screen.queryByText("Let's Build Your Site")).not.toBeInTheDocument();
+
+		// Retrying recovers the real history and clears the error state.
+		screen.getByRole('button', { name: /retry loading history/i }).click();
+		await waitFor(() => expect(screen.getByText('Recovered message')).toBeInTheDocument());
+		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
+	});
+
+	it('shows the welcome empty state (no error) for genuinely empty history (SS-49)', async () => {
+		mount(); // default fetch stub returns [] for /get-messages
+		await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
+	});
+
+	it('a network failure loading history also surfaces the error state (SS-49)', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				throw new TypeError('Failed to fetch');
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+		await waitFor(() =>
+			expect(screen.getByText(/chat history could not be loaded/i)).toBeInTheDocument()
+		);
+		expect(screen.queryByText("Let's Build Your Site")).not.toBeInTheDocument();
+	});
+
 	it('populates history from an incoming CF_AGENT_CHAT_MESSAGES message', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));

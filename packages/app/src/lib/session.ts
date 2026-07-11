@@ -61,24 +61,83 @@ function isSessionRecord(value: unknown): value is LegacySessionRecord {
   );
 }
 
-async function readCurrentSession(env: Env, sessionId: string): Promise<User | null> {
-  try {
-    const fromKv = await env.SESSION_KV.get(sessionKey(sessionId), "json");
-    if (fromKv && typeof fromKv === "object" && typeof (fromKv as Record<string, unknown>).id === "string") {
-      return fromKv as User;
+/**
+ * SS-46: the session/migration store (KV, or the legacy R2 session record) was
+ * UNREACHABLE — distinct from "no record" / "invalid record". Callers must fail
+ * loud (503, retryable) instead of treating the session as absent: reading an
+ * outage as "absent" would mint a fresh identity or skip the migration marker,
+ * and the subsequent cookie write would permanently orphan the previous
+ * workspace namespace.
+ */
+export class SessionStoreUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "SessionStoreUnavailableError";
+  }
+}
+
+/** SS-46: retryable 503 for a session-store outage. Never "record absent". */
+function sessionStoreUnavailableResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "session_store_unavailable",
+      message: "Site Studio cannot reach its session store right now. Please retry in a moment.",
+    }),
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": "5",
+      },
     }
+  );
+}
+
+async function readCurrentSession(env: Env, sessionId: string): Promise<User | null> {
+  // SS-46 outage-vs-invalid distinction: fetch the raw text so a KV transport
+  // failure THROWS out of this function (store unavailable — must never be read
+  // as "record absent"), while a stored value that fails to parse is invalid
+  // data and safe to treat as absent.
+  let rawFromKv: string | null;
+  try {
+    rawFromKv = await env.SESSION_KV.get(sessionKey(sessionId), "text");
   } catch (error) {
-    console.warn(`Ignoring invalid KV session for ${sessionId}`, error);
+    throw new SessionStoreUnavailableError(`Session KV unavailable reading ${sessionId}`, {
+      cause: error,
+    });
   }
 
-  const legacy = await env.SITE_STUDIO_BUCKET.get(`sessions/${sessionId}.json`);
-  if (!legacy) {
+  if (rawFromKv !== null) {
+    try {
+      const fromKv: unknown = JSON.parse(rawFromKv);
+      if (fromKv && typeof fromKv === "object" && typeof (fromKv as Record<string, unknown>).id === "string") {
+        return fromKv as User;
+      }
+    } catch (error) {
+      console.warn(`Ignoring invalid KV session for ${sessionId}`, error);
+    }
+    // Invalid KV record: fall through to the legacy R2 record, as before.
+  }
+
+  let legacyText: string | null;
+  try {
+    const legacy = await env.SITE_STUDIO_BUCKET.get(`sessions/${sessionId}.json`);
+    legacyText = legacy ? await legacy.text() : null;
+  } catch (error) {
+    // SS-46: same distinction for the legacy store — an R2 transport failure is
+    // an outage, not an absent record.
+    throw new SessionStoreUnavailableError(
+      `Legacy session store unavailable reading ${sessionId}`,
+      { cause: error }
+    );
+  }
+  if (legacyText === null) {
     return null;
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await legacy.text()) as unknown;
+    parsed = JSON.parse(legacyText) as unknown;
   } catch (error) {
     console.warn(`Ignoring invalid legacy session for ${sessionId}`, error);
     return null;
@@ -162,12 +221,17 @@ async function migrateAnonymousSessionIfPresent(
         );
         decision = await stub.claim(anonId, subject);
       } catch (error) {
-        // If the coordinator is unreachable we fail CLOSED (skip migration)
-        // rather than fall back to the racy KV-only path — data safety over
-        // convenience. The anon data stays put and can be migrated on a retry
-        // once the DO is reachable.
-        console.error(`Migration claim gate failed for ${anonId} -> ${subject}`, error);
-        return;
+        // SS-46 (fail CLOSED, loud): if the coordinator is unreachable we cannot
+        // establish resumability for this still-unmigrated anon namespace, and we
+        // never fall back to the racy KV-only path. Silently skipping here would
+        // let the middleware overwrite the anon cookie with the subject cookie
+        // and permanently orphan the data (no cookie, no pending marker), so
+        // propagate as a storage outage: the request 503s and the user retries
+        // with the anon cookie intact.
+        throw new SessionStoreUnavailableError(
+          `Migration claim gate unavailable for ${anonId} -> ${subject}`,
+          { cause: error }
+        );
       }
 
       if (!decision.granted) {
@@ -175,14 +239,31 @@ async function migrateAnonymousSessionIfPresent(
         return;
       }
 
-      await migrateAnonymousData({
-        bucket: c.env.SITE_STUDIO_BUCKET,
-        kv: c.env.SESSION_KV,
-        anonUserId: anonId,
-        subject,
-        anonSessionId: cookieValue,
-        porter,
-      });
+      try {
+        await migrateAnonymousData({
+          bucket: c.env.SITE_STUDIO_BUCKET,
+          kv: c.env.SESSION_KV,
+          anonUserId: anonId,
+          subject,
+          anonSessionId: cookieValue,
+          porter,
+        });
+      } catch (error) {
+        // SS-46: a failure is only safe to absorb upstream once resumability is
+        // established — the subject-keyed pending marker written at claim time.
+        // If the failure predates the marker (e.g. the claim read/write hit a KV
+        // outage), swallowing it would let the middleware replace the anon
+        // cookie and orphan the namespace, so escalate to a storage outage.
+        // The marker probe's own failure conservatively counts as "no marker".
+        const marker = await c.env.SESSION_KV.get(migrationPendingKey(subject)).catch(() => null);
+        if (!marker) {
+          throw new SessionStoreUnavailableError(
+            `Migration for ${anonId} -> ${subject} failed before it became resumable`,
+            { cause: error }
+          );
+        }
+        throw error;
+      }
 
       // Flip the DO claim to complete (best-effort; the KV resume marker and
       // idempotent copy already make a missed completion safe to retry).
@@ -279,11 +360,21 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     // First-login migration: if this authenticated request still carries the
     // pre-SSO anonymous session cookie, claim that anonymous namespace for
     // this subject and re-home its data (lib/migration.ts). Also resume a
-    // previously interrupted migration recorded under the subject. Failures
-    // never block authentication — the pending marker makes them retryable.
+    // previously interrupted migration recorded under the subject.
     try {
       await migrateAnonymousSessionIfPresent(c, subject);
     } catch (error) {
+      if (error instanceof SessionStoreUnavailableError) {
+        // SS-46: a storage outage before migration resumability was established
+        // must fail loud. Proceeding would replace the anon cookie with the
+        // subject cookie below and permanently orphan the un-migrated anonymous
+        // namespace; a 503 lets the user retry with the anon cookie intact.
+        console.error(`Anonymous-data migration blocked by a storage outage for ${subject}`, error);
+        return sessionStoreUnavailableResponse();
+      }
+      // Other failures never block authentication — the pending marker written
+      // at claim time makes the interrupted migration resumable on a later
+      // login (migrateAnonymousSessionIfPresent escalates pre-marker failures).
       console.error(`Anonymous-data migration failed for ${subject}`, error);
     }
 
@@ -336,7 +427,19 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
   let user: User | null = null;
 
   if (sessionId) {
-    user = await readCurrentSession(c.env, sessionId);
+    // SS-46: a session-store outage must NOT mint a fresh anonymous identity —
+    // the replacement cookie would permanently orphan the previous workspace.
+    // Absent/invalid records (readCurrentSession → null) still fall through to
+    // a fresh anonymous session below.
+    try {
+      user = await readCurrentSession(c.env, sessionId);
+    } catch (error) {
+      if (error instanceof SessionStoreUnavailableError) {
+        console.error(`Session store unavailable for anonymous session ${sessionId}`, error);
+        return sessionStoreUnavailableResponse();
+      }
+      throw error;
+    }
   }
 
   if (!user) {

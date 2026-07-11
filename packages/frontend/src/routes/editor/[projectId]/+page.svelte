@@ -5,6 +5,7 @@
 	import { base } from '$app/paths';
 	import { resolvePath } from '$lib/utils/paths';
 	import { createAutosave, type SaveSnapshot } from '$lib/editor/autosave';
+	import { canQueueFileSave, type FileOpenStatus } from '$lib/editor/file-open-state';
 	import { buildKeepaliveSave } from '$lib/editor/keepalive-save';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
@@ -41,7 +42,15 @@
 	let fileContent = $state('');
 	let currentFileIsText = $state(true);
 	let currentFileContentType = $state('');
+	// SS-47: whether `fileContent` really holds `currentFile`'s loaded content.
+	// Autosave is gated on this so a failed/in-flight load can never write the
+	// previous file's text over the newly selected file.
+	let currentFileOpenStatus = $state<FileOpenStatus>('idle');
 	let files = $state<ProjectFile[]>([]);
+	// SS-48: a failed files/projects load is an ERROR state, not an empty
+	// project. Rendering `files = []` on an API failure made "the API is down"
+	// indistinguishable from "you have no files".
+	let filesLoadError = $state<string | null>(null);
 	let allProjects = $state<Project[]>([]);
 	let currentProject = $state<Project | null>(null);
 
@@ -141,31 +150,24 @@
 		};
 	});
 
-	async function loadAllProjects() {
-		try {
-			return await fetchProjects();
-		} catch (error) {
-			console.error('Error loading projects:', error);
-			return [];
-		}
+	// SS-48: these loaders THROW on failure. Substituting an empty default here
+	// silently rendered an API outage as an empty project; each call site now
+	// decides how to surface the error instead.
+	async function loadAllProjects(): Promise<Project[]> {
+		return fetchProjects();
 	}
 
 	async function loadFiles(targetProjectId = projectId): Promise<ProjectFile[]> {
 		if (!targetProjectId) return [];
 
-		try {
-			const data = await apiFetch<{ files: ProjectFile[] }>(
-				resolvePath(`/api/projects/${targetProjectId}/files`),
-				{
+		const data = await apiFetch<{ files: ProjectFile[] }>(
+			resolvePath(`/api/projects/${targetProjectId}/files`),
+			{
 				credentials: 'include'
-				}
-			);
+			}
+		);
 
-			return data.files;
-		} catch (error) {
-			console.error('Error loading files:', error);
-			return [];
-		}
+		return data.files;
 	}
 
 	function findFileByPath(nodes: ProjectFile[], filePath: string): ProjectFile | null {
@@ -203,9 +205,13 @@
 		currentFileEtag = null;
 		currentFileIsText = nextIsText;
 		currentFileContentType = selectedFile?.contentType || '';
+		// SS-47: the buffer still holds the PREVIOUS file until the fetch below
+		// resolves; block autosave until this selection is actually loaded.
+		currentFileOpenStatus = 'loading';
 
 		if (!nextIsText) {
 			fileContent = '';
+			currentFileOpenStatus = 'loaded';
 			return;
 		}
 
@@ -221,6 +227,7 @@
 				currentFileIsText = false;
 				fileContent = '';
 				currentFileEtag = null;
+				currentFileOpenStatus = 'loaded';
 				return;
 			}
 			if (!response.ok) throw new Error('Failed to load file');
@@ -233,10 +240,18 @@
 			currentFileIsText = data.isText ?? true;
 			fileContent = data.content;
 			currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
+			currentFileOpenStatus = 'loaded';
 		} catch (error) {
 			console.error('Error loading file:', error);
 			if (requestId === fileSelectCounter) {
+				// SS-47: the load FAILED — do not present the previous file's text as
+				// this file, and do not drop into an unguarded-write state (the etag
+				// is gone, so autosave would silently overwrite the file with stale
+				// content). Clear the buffer, mark the failure, and tell the user.
+				fileContent = '';
 				currentFileEtag = null;
+				currentFileOpenStatus = 'failed';
+				toast.error(`Could not load ${filePath}. The file was not changed - select it again to retry.`);
 			}
 		}
 	}
@@ -244,7 +259,11 @@
 	let isSaving = $state(false);
 
 	function getCurrentSaveSnapshot(): SaveSnapshot | null {
-		if (!projectId || !currentFile || !currentFileIsText) return null;
+		// SS-47: only snapshot when the buffer provably holds the current file's
+		// loaded text (see $lib/editor/file-open-state.ts).
+		if (!projectId || !currentFile || !canQueueFileSave(currentFileOpenStatus, currentFileIsText)) {
+			return null;
+		}
 
 		return {
 			projectId,
@@ -356,19 +375,47 @@
 
 	async function refreshProjectState(targetProjectId: string) {
 		const loadVersion = ++projectLoadVersion;
-		const [loadedFiles, loadedProjects] = await Promise.all([
-			loadFiles(targetProjectId),
-			loadAllProjects()
-		]);
+		let loadedFiles: ProjectFile[];
+		let loadedProjects: Project[];
+		try {
+			[loadedFiles, loadedProjects] = await Promise.all([
+				loadFiles(targetProjectId),
+				loadAllProjects()
+			]);
+		} catch (error) {
+			console.error('Error loading project state:', error);
+			if (loadVersion !== projectLoadVersion || targetProjectId !== projectId) {
+				return;
+			}
+			// SS-48: surface the failure instead of rendering an empty project. The
+			// file panel shows the error with a retry, mirroring ProjectDashboard.
+			filesLoadError = error instanceof Error ? error.message : 'Failed to load project files';
+			toast.error('Could not load the project. Check your connection and retry.');
+			return;
+		}
 
 		if (loadVersion !== projectLoadVersion || targetProjectId !== projectId) {
 			return;
 		}
 
+		filesLoadError = null;
 		files = loadedFiles;
 		allProjects = loadedProjects;
 		currentProject = loadedProjects.find((project) => project.id === targetProjectId) || null;
 		stableProjectId = targetProjectId;
+	}
+
+	/** Retry/refresh the file tree from CodeView; failures surface, never blank. */
+	async function handleRefreshFiles() {
+		try {
+			const loadedFiles = await loadFiles();
+			filesLoadError = null;
+			files = loadedFiles;
+		} catch (error) {
+			console.error('Error refreshing files:', error);
+			filesLoadError = error instanceof Error ? error.message : 'Failed to load project files';
+			toast.error('Could not refresh the file list. Check your connection and retry.');
+		}
 	}
 
 	async function navigateToProject(targetProjectId: string) {
@@ -394,7 +441,9 @@
 		fileContent = '';
 		currentFileIsText = true;
 		currentFileContentType = '';
+		currentFileOpenStatus = 'idle';
 		files = [];
+		filesLoadError = null;
 		currentProject = null;
 
 		await refreshProjectState(targetProjectId);
@@ -409,8 +458,16 @@
 	});
 
 	async function onAgentUpdate() {
-		// Reload files when agent makes changes
-		files = await loadFiles(projectId);
+		// Reload files when agent makes changes. SS-48: on failure keep the tree
+		// we already have (it is stale, not gone) and say so, rather than
+		// rendering the project as empty.
+		try {
+			files = await loadFiles(projectId);
+			filesLoadError = null;
+		} catch (error) {
+			console.error('Error reloading files after agent update:', error);
+			toast.error('Could not refresh the file list after the last change.');
+		}
 
 		// Reload current file if it's open
 		if (currentFile) {
@@ -457,7 +514,15 @@
 	}
 
 	async function handleRenameSuccess(renamedProject: Project) {
-		allProjects = await loadAllProjects();
+		try {
+			allProjects = await loadAllProjects();
+		} catch (error) {
+			// SS-48: the rename itself succeeded; on a list-refresh failure patch
+			// the in-memory list from the known result instead of blanking it.
+			console.error('Error refreshing projects after rename:', error);
+			allProjects = allProjects.map((p) => (p.id === renamedProject.id ? renamedProject : p));
+			toast.error('Renamed, but the project list could not be refreshed.');
+		}
 		currentProject = renamedProject;
 		stableProjectId = renamedProject.id;
 
@@ -467,7 +532,17 @@
 	}
 
 	async function handleDeleteSuccess(deletedProjectId: string) {
-		const remainingProjects = await loadAllProjects();
+		let remainingProjects: Project[];
+		try {
+			remainingProjects = await loadAllProjects();
+		} catch (error) {
+			// SS-48: the delete itself succeeded; on a list-refresh failure derive
+			// the remaining projects locally (used only to pick where to navigate)
+			// and say so, instead of navigating as if no projects exist.
+			console.error('Error refreshing projects after delete:', error);
+			remainingProjects = allProjects.filter((p) => p.id !== deletedProjectId);
+			toast.error('Deleted, but the project list could not be refreshed.');
+		}
 		allProjects = remainingProjects;
 
 		if (deletedProjectId !== projectId) {
@@ -480,7 +555,9 @@
 		fileContent = '';
 		currentFileIsText = true;
 		currentFileContentType = '';
+		currentFileOpenStatus = 'idle';
 		files = [];
+		filesLoadError = null;
 		stableProjectId = null;
 
 		if (remainingProjects.length > 0) {
@@ -728,6 +805,9 @@
 											{/if}
 										</DropdownMenu.Item>
 									{/each}
+								{:else if filesLoadError}
+									<!-- SS-48: a failed project load is not "no projects". -->
+									<DropdownMenu.Item disabled>Projects could not be loaded</DropdownMenu.Item>
 								{:else}
 									<DropdownMenu.Item disabled>No other projects</DropdownMenu.Item>
 								{/if}
@@ -866,15 +946,17 @@
 					<CodeView
 						{projectId}
 						{files}
+						{filesLoadError}
 						{currentFile}
 						{fileContent}
 						{currentFileIsText}
 						{currentFileContentType}
+						currentFileLoadFailed={currentFileOpenStatus === 'failed'}
 						{isSaving}
 						onFileSelect={onFileSelect}
 						onEditorChange={onEditorChange}
 						onDownloadFile={handleCurrentFileDownload}
-						onRefreshFiles={loadFiles}
+						onRefreshFiles={handleRefreshFiles}
 					/>
 				</aside>
 			</Resizable.Pane>

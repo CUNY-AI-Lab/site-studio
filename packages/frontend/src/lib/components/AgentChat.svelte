@@ -71,6 +71,10 @@
 	} = $props();
 
 	let uiMessages = $state<UIChatMessage[]>([]);
+	// SS-49: history LOAD FAILURE is a distinct state from "no history". Showing
+	// an empty transcript on a transient /get-messages error read as "my
+	// conversation was deleted"; instead we surface the error with a retry.
+	let historyLoadFailed = $state(false);
 	let input = $state('');
 	let isLoading = $state(false);
 	let messagesContainer: HTMLDivElement;
@@ -689,13 +693,18 @@
 	}
 
 	async function loadChatHistory(targetProjectId: string) {
+		historyLoadFailed = false;
 		try {
 			const response = await apiResponseFetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
 				credentials: 'include'
 			});
 
 			if (!response.ok) {
-				uiMessages = [];
+				// SS-49: a non-ok response is a load FAILURE, not empty history — keep
+				// whatever transcript we have and surface a retry affordance instead
+				// of rendering a wiped conversation.
+				console.error(`Failed to load chat history (${response.status})`);
+				historyLoadFailed = true;
 				return;
 			}
 
@@ -708,8 +717,15 @@
 				return;
 			}
 
-			uiMessages = [];
+			// SS-49: same as above for network/parse failures.
+			console.error('Failed to load chat history:', error);
+			historyLoadFailed = true;
 		}
+	}
+
+	function retryLoadChatHistory() {
+		if (!projectId) return;
+		void loadChatHistory(projectId);
 	}
 
 	function sendSocketMessage(payload: Record<string, unknown>) {
@@ -850,6 +866,9 @@
 				break;
 			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
 				uiMessages = Array.isArray(data.messages) ? (data.messages as UIChatMessage[]) : [];
+				// The agent socket just delivered the authoritative history, so a
+				// previously failed HTTP history load is moot (SS-49).
+				historyLoadFailed = false;
 				scrollToBottom();
 				break;
 			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
@@ -1264,11 +1283,24 @@
 
 <div class="agent-chat">
 	<div class="messages" bind:this={messagesContainer}>
-		{#if displayedMessages.length === 0}
-			<div class="welcome">
-				<h3>Let's Build Your Site</h3>
-				<p>Describe what you'd like to create or change.</p>
+		{#if historyLoadFailed}
+			<!-- SS-49: load failure is not "no history" — never show a wiped
+			     transcript for a transient error. -->
+			<div class="history-error" role="alert">
+				<p class="history-error-title">Your chat history could not be loaded.</p>
+				<p class="history-error-detail">The conversation is still saved; this is a loading problem.</p>
+				<button class="history-error-retry" type="button" onclick={retryLoadChatHistory}>
+					Retry loading history
+				</button>
 			</div>
+		{/if}
+		{#if displayedMessages.length === 0}
+			{#if !historyLoadFailed}
+				<div class="welcome">
+					<h3>Let's Build Your Site</h3>
+					<p>Describe what you'd like to create or change.</p>
+				</div>
+			{/if}
 		{:else}
 			{#if messages.length > MAX_DISPLAYED_MESSAGES}
 				<div class="conversation-notice">
@@ -1415,6 +1447,46 @@
 	.welcome {
 		text-align: center;
 		padding: 3rem 2rem;
+	}
+
+	.history-error {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		padding: 0.875rem 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg-elevated);
+	}
+
+	.history-error-title {
+		margin: 0;
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+
+	.history-error-detail {
+		margin: 0;
+		font-size: 0.8125rem;
+		color: var(--color-text-secondary);
+	}
+
+	.history-error-retry {
+		align-self: flex-start;
+		margin-top: 0.25rem;
+		padding: 0.375rem 0.75rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		font-size: 0.8125rem;
+		cursor: pointer;
+		transition: background 0.15s ease, border-color 0.15s ease;
+	}
+
+	.history-error-retry:hover {
+		background: var(--color-bg-tertiary);
 	}
 
 	.welcome h3 {
