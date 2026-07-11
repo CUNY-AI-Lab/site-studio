@@ -7,6 +7,7 @@ import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "..
 import { R2ProjectStorage } from "../storage/r2";
 import { createFileRouter } from "./files";
 import { createProjectRouter } from "./projects";
+import { requireProject } from "../lib/require-project";
 
 /**
  * SS-6: malformed / schema-invalid JSON bodies on the four mutation routes must
@@ -108,6 +109,8 @@ function createTestApp() {
   });
 
   app.use("/api/*", csrfProtect);
+  app.use("/api/projects/:id", requireProject());
+  app.use("/api/projects/:id/*", requireProject());
 
   app.route("/", createFileRouter());
   app.route("/", createProjectRouter());

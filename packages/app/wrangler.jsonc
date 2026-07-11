@@ -34,8 +34,7 @@
   ],
   "vars": {
     "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
-    "LEGACY_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
-    "R2_PUBLIC_DOMAIN": "https://tools.cuny.qzz.io",
+    "PUBLISHED_BASE_URL": "https://tools.cuny.qzz.io",
     // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----
     // CAIL_API_BASE: the one public base URL of the CAIL model proxy (serves
     // /v1/... model calls and /keys). Placeholder until launch — set to the real

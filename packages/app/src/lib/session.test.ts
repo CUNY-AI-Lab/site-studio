@@ -85,7 +85,6 @@ function createCoordinatorNamespace(): MockCoordinator {
 function createEnv(overrides?: Partial<Env>): Env {
   return {
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
-    LEGACY_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io",
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
     CAIL_MODEL: "test-model",

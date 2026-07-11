@@ -1,7 +1,7 @@
-import { renderNotFoundPage } from "./not-found-page";
-import { servedContentHeaders } from "./serving-headers";
+import { renderNotFoundPage } from "../../serving-core/src/not-found-page";
+import { servedContentHeaders } from "../../serving-core/src/serving-headers";
 // SS-8 served content-type resolver: single source of truth in
-// @site-studio/serving-core, shared with the app worker. Imported under this
+// packages/serving-core, shared with the app worker. Imported under this
 // worker's public name (getContentType) so callers/tests stay unchanged, then
 // re-exported below.
 import { getServedContentType as getContentType } from "../../serving-core/src/content-types";
@@ -288,7 +288,7 @@ export function responseHeaders(filePath: string, object: R2ObjectBody): Headers
   // origin so it can never read our cookie/session. The styled fallback 404
   // builds its own headers and is intentionally NOT covered (it is our own
   // trusted markup, not user bytes). See serving-headers.ts.
-  for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
+  for (const [key, value] of Object.entries(servedContentHeaders())) {
     headers.set(key, value);
   }
 
@@ -445,7 +445,7 @@ export default {
 
     // SS-14 extensionless resolution — one shared helper across all three
     // serving paths (preview, publish, this worker): try `{path}.html`, then
-    // `{path}/index.html`. See @site-studio/serving-core/extensionless.
+    // `{path}/index.html`. See packages/serving-core/src/extensionless.ts.
     const served = await resolveExtensionlessFile(parsed.filePath || "index.html", (candidate) =>
       readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, candidate)
     );

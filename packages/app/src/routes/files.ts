@@ -18,7 +18,7 @@ import {
   sniffImageType
 } from "../lib/image-validation";
 import { lintProject } from "../lib/a11y-lint";
-import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import type { RequireProjectVariables } from "../lib/require-project";
 
 const saveFileSchema = z.object({
   path: z.string().min(1),
@@ -125,8 +125,6 @@ function validateImageBytes(fileName: string, bytes: Uint8Array) {
 
 export function createFileRouter() {
   const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
-
-  app.use("/api/projects/:id/*", requireProject());
 
   app.get("/api/projects/:id/files", async (c) => {
     const storage = c.get("storage");

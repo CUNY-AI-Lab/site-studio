@@ -3,8 +3,8 @@ import type { Env } from "../types";
 import { addCacheBusterToHtml } from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
-import { renderNotFoundPage } from "../lib/not-found-page";
-import { servedContentHeaders } from "../lib/serving-headers";
+import { renderNotFoundPage } from "../../../serving-core/src/not-found-page";
+import { servedContentHeaders } from "../../../serving-core/src/serving-headers";
 import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
 import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
@@ -120,7 +120,7 @@ async function servePreviewFile(
   // nested fonts/background images still need a future CSS-aware pass.
 
   // §3¾: the preview renders agent/student-authored HTML on our origin. The
-  // opaque-origin CSP (see lib/serving-headers.ts) makes document.cookie /
+  // opaque-origin CSP (see serving-core/serving-headers.ts) makes document.cookie /
   // session / same-origin /api unreachable even on a direct top-level open.
   return new Response(binaryBody(content), {
     headers: {
@@ -128,7 +128,7 @@ async function servePreviewFile(
       "X-Frame-Options": "SAMEORIGIN",
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
-      ...servedContentHeaders(contentType)
+      ...servedContentHeaders()
     }
   });
 }

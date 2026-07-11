@@ -8,7 +8,7 @@ import { renderNotFoundPage } from "../../serving-core/src/not-found-page";
 import { looksLikePageNavigation } from "../../serving-core/src/page-navigation";
 
 /**
- * Unit coverage for @site-studio/serving-core — the single source of truth both
+ * Unit coverage for packages/serving-core — the single source of truth both
  * workers import. Formerly the app worker and the publisher worker each carried
  * hand-duplicated copies guarded by a cross-package parity test; now there is
  * one copy, and this suite owns its behavior directly. (The publisher's
@@ -73,17 +73,13 @@ describe("serving-core content-types (SS-8)", () => {
 
 describe("serving-core §3¾ security headers", () => {
   it("emits the load-bearing opaque-origin CSP (sandbox, NO allow-same-origin)", () => {
-    const headers = servedContentHeaders("text/html; charset=utf-8");
+    const headers = servedContentHeaders();
     expect(headers["Content-Security-Policy"]).toBe("sandbox allow-scripts");
     expect(headers["Content-Security-Policy"]).not.toContain("allow-same-origin");
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(headers["Referrer-Policy"]).toBe("no-referrer");
-  });
-
-  it("returns the same header set regardless of content-type argument", () => {
-    for (const ct of ["text/html; charset=utf-8", "image/svg+xml", "text/css", "application/octet-stream"]) {
-      expect(servedContentHeaders(ct)).toEqual(servedContentHeaders("text/html"));
-    }
+    expect(headers).not.toHaveProperty("Content-Disposition");
+    expect(headers["Content-Security-Policy"]).not.toContain("default-src");
   });
 });
 

@@ -4,8 +4,8 @@ import { getServedContentType } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
-import { renderNotFoundPage } from "../lib/not-found-page";
-import { servedContentHeaders } from "../lib/serving-headers";
+import { renderNotFoundPage } from "../../../serving-core/src/not-found-page";
+import { servedContentHeaders } from "../../../serving-core/src/serving-headers";
 import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
 import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
@@ -13,7 +13,7 @@ import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
-import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
@@ -78,7 +78,7 @@ async function missingPublishedFile(
     const custom = await storage.readObject(userId, projectId, "404.html");
     if (custom) {
       // Project-supplied 404.html is agent/student-authored active content served
-      // on our origin — §3¾ containment applies (see lib/serving-headers.ts). It
+      // on our origin — §3¾ containment applies (see serving-core/serving-headers.ts). It
       // goes through the same header builder as a 200 so the content-type,
       // caching validators, and CSP match the publisher's notFoundResponse.
       return new Response(binaryBody(new Uint8Array(await custom.arrayBuffer())), {
@@ -112,11 +112,6 @@ function getPublishedBaseUrl(c: AppContext): string {
     return normalizeBaseUrl(requestOrigin);
   }
 
-  const legacyConfiguredBaseUrl = c.env.R2_PUBLIC_DOMAIN?.trim();
-  if (legacyConfiguredBaseUrl) {
-    return normalizeBaseUrl(legacyConfiguredBaseUrl);
-  }
-
   const configuredBaseUrl = c.env.PUBLISHED_BASE_URL?.trim();
   if (configuredBaseUrl) {
     return normalizeBaseUrl(configuredBaseUrl);
@@ -129,8 +124,6 @@ type AppContext = Context<{ Bindings: Env; Variables: RequireProjectVariables }>
 
 export function createPublishRouter() {
   const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
-
-  app.use("/api/projects/:id/*", requireProject());
 
   app.post("/api/projects/:id/publish", async (c) => {
     const storage = c.get("storage");
@@ -394,7 +387,7 @@ async function servePublishedFile(
 
   // SS-14 extensionless resolution — one shared helper for all three serving
   // paths (preview, publish, publisher worker): try `{path}.html`, then
-  // `{path}/index.html`. See @site-studio/serving-core/extensionless.
+  // `{path}/index.html`. See packages/serving-core/src/extensionless.ts.
   const resolved = await resolveExtensionlessFile(rawPath || "index.html", (candidate) =>
     storage.readObject(userId, projectId, candidate)
   );
@@ -443,7 +436,7 @@ export function publishedResponseHeaders(filePath: string, object: R2ObjectBody)
   // with the caching validators above — the CSP/security keys and the caching
   // keys are disjoint, so neither clobbers the other. serveByHandle (/u/) and
   // serveLegacySite (/sites/) both funnel through here, covering every byte.
-  for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
+  for (const [key, value] of Object.entries(servedContentHeaders())) {
     headers.set(key, value);
   }
   return headers;

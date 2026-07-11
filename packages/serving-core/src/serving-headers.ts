@@ -45,7 +45,7 @@
  * weakening the cookie-theft containment — only `allow-same-origin` matters for
  * that, and it must never be added here.
  */
-export function servedContentHeaders(_contentType: string): Record<string, string> {
+export function servedContentHeaders(): Record<string, string> {
   return {
     // Opaque origin even on top-level nav (no allow-same-origin): the primary
     // containment. Scripts still run so the site renders.

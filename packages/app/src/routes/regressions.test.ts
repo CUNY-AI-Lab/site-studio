@@ -11,6 +11,7 @@ import { createHandleRouter } from "./handles";
 import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
 import { createProjectRouter } from "./projects";
+import { requireProject } from "../lib/require-project";
 
 vi.mock("agents", () => ({
   getAgentByName: vi.fn(async () => ({
@@ -140,6 +141,8 @@ function createTestApp() {
   // Mirror production (src/app.ts): every state-changing /api route sits
   // behind csrfProtect, so mutation tests must present the session token.
   app.use("/api/*", csrfProtect);
+  app.use("/api/projects/:id", requireProject());
+  app.use("/api/projects/:id/*", requireProject());
 
   app.route("/", createFileRouter());
   app.route("/", createPreviewRouter());
@@ -441,26 +444,6 @@ describe("route regressions", () => {
     });
   });
 
-  it("uses the legacy R2 public domain when provided", async () => {
-    await storage.createProject(userId, "legacy-domain", "Legacy Domain");
-    await storage.writeFile(userId, "legacy-domain", "index.html", "<h1>Legacy</h1>");
-
-    const response = await app.request(
-      "http://site-studio.test/api/projects/legacy-domain/publish",
-      { method: "POST", headers: csrf.headers },
-      {
-        ...createEnv(bucket),
-        R2_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io"
-      }
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      success: true,
-      url: "https://tools.cuny.qzz.io/u/janedoe/legacy-domain/"
-    });
-  });
-
   it("uses the local worker origin for published URLs during loopback development", async () => {
     await storage.createProject(userId, "local-publish", "Local Publish");
     await storage.writeFile(userId, "local-publish", "index.html", "<h1>Local</h1>");
@@ -470,7 +453,7 @@ describe("route regressions", () => {
       { method: "POST", headers: csrf.headers },
       {
         ...createEnv(bucket),
-        R2_PUBLIC_DOMAIN: "https://tools.cuny.qzz.io"
+        PUBLISHED_BASE_URL: "https://tools.cuny.qzz.io"
       }
     );
 

@@ -5,7 +5,7 @@ import worker, {
 } from "./index";
 // The two workers' serving logic (content-type table, §3¾ security headers, the
 // fallback 404 page, page-navigation detection, extensionless resolution) now
-// lives once in @site-studio/serving-core and is imported by both. The former
+// lives once in packages/serving-core and is imported by both. The former
 // table/header IDENTITY assertions here are therefore redundant — a single
 // source cannot drift from itself, and serving-core owns their unit coverage.
 // What remains below are the genuine ROUTE-BEHAVIOR checks: how the publisher

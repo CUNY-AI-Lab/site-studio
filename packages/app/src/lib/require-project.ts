@@ -12,16 +12,6 @@ export type RequireProjectVariables = {
 
 export function requireProject() {
   return createMiddleware<{ Bindings: Env; Variables: RequireProjectVariables }>(async (c, next) => {
-    // Each router registers this middleware so it stays self-contained (route
-    // tests mount routers standalone), but the routers are all root-mounted in
-    // app.ts, so EVERY matching `use` pattern runs per request. Skip when an
-    // earlier instance already ran — the projectExists R2 probe must execute
-    // once per request, not once per router.
-    if (c.get("projectId")) {
-      await next();
-      return;
-    }
-
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
     const projectId = c.req.param("id");

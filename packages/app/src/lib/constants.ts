@@ -90,7 +90,7 @@ export const CONTENT_TYPES: Record<string, string> = {
 
 /**
  * The AUTHORITATIVE served content-type table + resolver (SS-8) now live once in
- * @site-studio/serving-core and are shared with the standalone publisher worker.
+ * packages/serving-core and are shared with the standalone publisher worker.
  * Re-exported here so in-app callers keep importing from lib/constants.
  *
  * `SERVED_CONTENT_TYPES` differs from CONTENT_TYPES above (which stays bare for

@@ -7,7 +7,7 @@ import { ProjectExistsError, R2ProjectStorage } from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
-import { requireProject, type RequireProjectVariables } from "../lib/require-project";
+import type { RequireProjectVariables } from "../lib/require-project";
 import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
 
 const createProjectSchema = z.object({
@@ -35,9 +35,6 @@ function toProjectSummary(id: string, metadata: ProjectMetadata | null) {
 
 export function createProjectRouter() {
   const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
-
-  app.use("/api/projects/:id", requireProject());
-  app.use("/api/projects/:id/*", requireProject());
 
   app.get("/api/projects", async (c) => {
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);

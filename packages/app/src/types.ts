@@ -3,8 +3,6 @@ import type { MigrationCoordinator } from "./agents/migration-coordinator";
 
 export interface Env {
   APP_PUBLIC_DOMAIN?: string;
-  LEGACY_PUBLIC_DOMAIN?: string;
-  R2_PUBLIC_DOMAIN?: string;
   PUBLISHED_BASE_URL?: string;
   LOADER: WorkerLoader;
   // ---- CAIL backbone (docs/INTEGRATION.md) ----

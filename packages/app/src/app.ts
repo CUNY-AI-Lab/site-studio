@@ -13,6 +13,7 @@ import { createProjectRouter } from "./routes/projects";
 import { createPublishRouter } from "./routes/publish";
 import { createTemplateRouter } from "./routes/templates";
 import { previewTokenAuth } from "./lib/preview-token";
+import { requireProject, type RequireProjectVariables } from "./lib/require-project";
 
 /**
  * App assembly lives here (separate from index.ts) so tests can exercise the
@@ -20,7 +21,7 @@ import { previewTokenAuth } from "./lib/preview-token";
  * importing the SiteBuilderAgent Durable Object, whose dependency tree pulls in
  * `cloudflare:`-scheme modules that only exist in the Workers runtime.
  */
-const app = new Hono<{ Bindings: Env; Variables: { sessionId: string; user: { id: string; createdAt: string } } }>();
+const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & { sessionId: string } }>();
 
 // Rule 5 (docs/INTEGRATION.md §3¾): credentialed CORS must use a strict
 // allowlist — never a wildcard or reflected origin. Pinned by test.
@@ -58,6 +59,12 @@ app.use("/preview/:id", authMiddleware);
 // preflights stay open. WebSocket upgrades are GET and are gated separately
 // (rule 4) in routes/agents.ts.
 app.use("/api/*", csrfProtect);
+
+// One ownership/existence gate for every project-scoped API. Keep this at app
+// assembly so new project routes cannot bypass it and each request performs a
+// single R2 existence probe.
+app.use("/api/projects/:id", requireProject());
+app.use("/api/projects/:id/*", requireProject());
 
 // Token issuance for the shared contract (INTEGRATION.md §3¾ rule 3): GET
 // /api/csrf mints/looks-up the stable per-session KV token and DELIVERS it via
