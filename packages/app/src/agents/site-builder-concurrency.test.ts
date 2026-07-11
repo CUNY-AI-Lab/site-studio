@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storage = vi.hoisted(() => ({
   createSnapshot: vi.fn(),
+  fileExists: vi.fn(),
   readFileWithEtag: vi.fn(),
+  renameFile: vi.fn(),
   writeFileIfAbsent: vi.fn(),
   writeFileIfMatch: vi.fn()
 }));
@@ -20,7 +22,10 @@ vi.mock("@cloudflare/codemode", () => ({
   DynamicWorkerExecutor: class {}
 }));
 
-vi.mock("../storage/r2", () => ({
+// Keep the real error classes (FileExistsError etc.) so the `instanceof`
+// checks in site-builder.ts and the mocks here share the genuine exports.
+vi.mock("../storage/r2", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../storage/r2")>()),
   R2ProjectStorage: class {
     constructor() {
       return storage;
@@ -28,13 +33,14 @@ vi.mock("../storage/r2", () => ({
   }
 }));
 
+import { FileExistsError } from "../storage/r2";
 import {
   createProjectTools,
   describeModelStreamError,
   summarizeError
 } from "./site-builder";
 
-function projectTool(name: "edit_file" | "write_file") {
+function projectTool(name: "edit_file" | "write_file" | "rename_file") {
   const tools = createProjectTools(
     {} as any,
     { userId: "user-1", projectId: "project-1" },
@@ -154,6 +160,27 @@ describe("Site Builder file write concurrency", () => {
       "etag-2"
     );
     expect(storage.createSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("SS-50: rename_file surfaces a lost destination claim as a tool conflict, not a throw", async () => {
+    // Preflights pass — source exists, destination looks free — but the atomic
+    // claim inside renameFile loses to a concurrent write of the destination.
+    storage.fileExists
+      .mockResolvedValueOnce(true) // source exists
+      .mockResolvedValueOnce(false); // destination advisory probe: still free
+    storage.renameFile.mockRejectedValueOnce(new FileExistsError("new.html"));
+
+    const result = await projectTool("rename_file").execute({
+      oldPath: "old.html",
+      newPath: "new.html"
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      path: "new.html",
+      message: "The destination file already exists."
+    });
+    expect(storage.renameFile).toHaveBeenCalledWith("user-1", "project-1", "old.html", "new.html");
   });
 });
 

@@ -396,6 +396,8 @@ export async function claimHandle(
  *  - Move `userhandles/{anon}` -> `userhandles/{subject}` ONLY when the subject
  *    has no handle of its own; if the subject already has a primary handle it
  *    keeps it, and the anon handle survives as an alias (handle record only).
+ *    "Has no handle of its own" is decided ATOMICALLY by put-if-absent on the
+ *    reverse slot (SS-52), never by a read-then-plain-put — see below.
  */
 export async function migrateHandle(options: {
   bucket: R2Bucket;
@@ -419,15 +421,24 @@ export async function migrateHandle(options: {
     claimedAt
   } satisfies HandleRecord);
 
-  const subjectHandle = await getUserHandle(bucket, subject);
-  if (!subjectHandle) {
-    // Subject has no handle: promote the anon handle to the subject's primary.
-    await putR2Json(bucket, userHandleRecordKey(subject), {
-      handle: anonHandle,
-      claimedAt
-    } satisfies UserHandleRecord);
-  }
-  // else: subject keeps its existing primary; anon handle stays an alias.
+  // SS-52: promote the anon handle to the subject's primary ONLY by atomically
+  // claiming the reverse slot with put-if-absent. The subject's own concurrent
+  // POST /api/handle CAS-claims this same `userhandles/{subject}` key
+  // (claimHandle step 1); the old read-check-then-plain-put here could observe
+  // "no handle", lose that race, and then CLOBBER the just-claimed reverse slot
+  // — permanently orphaning the claimed handle (its forward record points at
+  // the subject, but no reverse slot names it, so it can neither be used nor
+  // ever re-claimed by anyone else). Losing this conditional write means the
+  // subject already holds (or just claimed) a primary handle — re-checking the
+  // settled mapping there is purely confirmatory, since either way the reverse
+  // slot must NOT be overwritten: the anon handle simply stays an alias (its
+  // forward record was re-homed to the subject above), which is exactly the
+  // documented outcome for a subject that already has a handle. Idempotent
+  // re-runs land here too (the reverse slot already names anonHandle).
+  await putJsonIfAbsent(bucket, userHandleRecordKey(subject), {
+    handle: anonHandle,
+    claimedAt
+  } satisfies UserHandleRecord);
 
   // Drop the anon reverse record (handle record already re-homed above).
   await bucket.delete(userHandleRecordKey(anonUserId)).catch(() => undefined);

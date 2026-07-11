@@ -107,6 +107,23 @@ describe("token mint/lookup", () => {
     const b = await getOrMintCsrfToken(kv, "user_anon");
     expect(a).not.toBe(b);
   });
+
+  // SS-53: two parallel FIRST requests both read "no token" and mint. The old
+  // read-check-write returned each racer its own mint, so one client held a
+  // token that no longer matched KV and every subsequent mutation 403'd until a
+  // refetch. All racers must converge on the token that actually settled in KV.
+  it("SS-53: two parallel first requests converge on the single stored token", async () => {
+    const kv = createMockKV();
+
+    const [a, b] = await Promise.all([
+      getOrMintCsrfToken(kv, "cail-a"),
+      getOrMintCsrfToken(kv, "cail-a")
+    ]);
+
+    expect(a).toBe(b);
+    // What each racer handed the client is exactly what verification will read.
+    await expect(getCsrfToken(kv, "cail-a")).resolves.toBe(a);
+  });
 });
 
 describe("setCsrfCookie (rule 3 delivery)", () => {

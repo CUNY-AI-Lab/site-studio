@@ -35,6 +35,12 @@ function createMockBucket() {
       };
     }),
     put: vi.fn(async (key: string, data: any, options?: any) => {
+      // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when
+      // the key is empty; a failed condition returns null (no write, no throw).
+      // migrateHandle's promotion (SS-52) relies on this contract.
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
       let stored: ArrayBuffer | string;
       if (typeof data === "string") {
         stored = data;
@@ -46,6 +52,7 @@ function createMockBucket() {
         stored = String(data);
       }
       store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
+      return { key };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);

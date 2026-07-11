@@ -13,7 +13,7 @@ import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
-import { R2ProjectStorage } from "../storage/r2";
+import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
@@ -745,7 +745,21 @@ export function createProjectTools(
         }
 
         await ensureSnapshot();
-        await storage.renameFile(scope.userId, scope.projectId, currentPath, nextPath);
+        // SS-50: the fileExists preflights above are advisory only. renameFile
+        // claims the destination atomically; losing that claim means a
+        // concurrent write or rename took the destination after the preflight.
+        try {
+          await storage.renameFile(scope.userId, scope.projectId, currentPath, nextPath);
+        } catch (error) {
+          if (error instanceof FileExistsError) {
+            return {
+              ok: false,
+              path: nextPath,
+              message: "The destination file already exists."
+            };
+          }
+          throw error;
+        }
 
         return {
           ok: true,

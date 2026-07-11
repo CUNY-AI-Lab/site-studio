@@ -12,11 +12,35 @@ import { isProtectedServedPath } from "../../../serving-core/src/protected-files
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
-import { R2ProjectStorage } from "../storage/r2";
+import { ProjectNotFoundError, R2ProjectStorage } from "../storage/r2";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
+import type { ProjectMetadata } from "../types";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
+
+/**
+ * SS-51: the requireProject/metadata preflights on these routes are advisory —
+ * a concurrent DELETE can remove the project between the preflight and the
+ * metadata update. updateProjectMetadata now refuses to fabricate a record for
+ * an absent project (it used to resurrect a deleted project as a published
+ * ghost); surface that refusal as the same 404 the preflight would have given.
+ */
+async function updateMetadataOr404(
+  storage: R2ProjectStorage,
+  userId: string,
+  projectId: string,
+  updates: Partial<ProjectMetadata>
+): Promise<ProjectMetadata> {
+  try {
+    return await storage.updateProjectMetadata(userId, projectId, updates);
+  } catch (error) {
+    if (error instanceof ProjectNotFoundError) {
+      jsonError("Project not found", 404);
+    }
+    throw error;
+  }
+}
 
 /**
  * Run the accessibility linter over the project's HTML after a successful
@@ -154,7 +178,7 @@ export function createPublishRouter() {
     const slug = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
     const url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
 
-    await storage.updateProjectMetadata(user.id, projectId, {
+    await updateMetadataOr404(storage, user.id, projectId, {
       published: true,
       publishedUrl: url,
       publishedAt: new Date().toISOString(),
@@ -181,7 +205,7 @@ export function createPublishRouter() {
       jsonError("Project is not currently published", 400);
     }
 
-    await storage.updateProjectMetadata(user.id, projectId, {
+    await updateMetadataOr404(storage, user.id, projectId, {
       published: false,
       publishedUrl: undefined,
       unpublishedAt: new Date().toISOString()
@@ -220,7 +244,7 @@ export function createPublishRouter() {
     }
 
     await storage.writeThumbnail(user.id, projectId, content);
-    await storage.updateProjectMetadata(user.id, projectId, {
+    await updateMetadataOr404(storage, user.id, projectId, {
       thumbnailUrl: `/api/projects/${projectId}/thumbnail`
     });
 

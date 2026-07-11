@@ -64,6 +64,18 @@ export async function getCsrfToken(kv: KVNamespace, userId: string): Promise<str
 /**
  * Lazily mint the session's CSRF token, persisting it in KV so it is stable
  * across requests for the session's life (same TTL as the session record).
+ *
+ * SS-53: the mint is a read-check-write and KV has NO conditional put, so two
+ * parallel first requests can both read "no token" and mint divergent tokens.
+ * The old code returned its own mint unconditionally: the racer whose put lost
+ * handed the client a token that no longer matches KV, and every mutation then
+ * 403s until a refetch. Since a true put-if-absent is unavailable on KV, we
+ * converge by RE-READING after the put and returning what actually settled —
+ * every racer that shares the KV view returns the same token that
+ * verifications (getCsrfToken) will read. Residual: an interleaving where a
+ * racer's put lands after another's re-read can still diverge (KV cannot close
+ * this without CAS), and cross-colo KV propagation lag is a separate, held
+ * concern.
  */
 export async function getOrMintCsrfToken(kv: KVNamespace, userId: string): Promise<string> {
   const existing = await getCsrfToken(kv, userId);
@@ -73,7 +85,8 @@ export async function getOrMintCsrfToken(kv: KVNamespace, userId: string): Promi
 
   const token = mintToken();
   await kv.put(csrfTokenKey(userId), token, { expirationTtl: SESSION_TTL_SECONDS });
-  return token;
+  const settled = await getCsrfToken(kv, userId);
+  return settled ?? token;
 }
 
 /**

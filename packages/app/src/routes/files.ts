@@ -10,7 +10,7 @@ import {
 import { binaryBody, jsonError } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
-import { FileNotFoundError } from "../storage/r2";
+import { FileExistsError, FileNotFoundError } from "../storage/r2";
 import { buildFileTree, getContentType } from "../lib/path";
 import {
   imageTypeForExtension,
@@ -288,7 +288,17 @@ export function createFileRouter() {
       jsonError("A file with that name already exists", 409);
     }
 
-    await storage.renameFile(user.id, projectId, currentPath, nextPath);
+    // SS-50: the fileExists preflights above are advisory only. The atomic
+    // destination claim inside renameFile is authoritative — losing it means a
+    // concurrent write or rename took the destination after the preflight.
+    try {
+      await storage.renameFile(user.id, projectId, currentPath, nextPath);
+    } catch (error) {
+      if (error instanceof FileExistsError) {
+        jsonError("A file with that name already exists", 409);
+      }
+      throw error;
+    }
     return c.json({ success: true, oldPath: currentPath, newPath: nextPath, message: "File renamed successfully" });
   });
 

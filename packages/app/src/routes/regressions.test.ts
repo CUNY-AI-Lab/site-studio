@@ -982,6 +982,69 @@ describe("served-bytes security headers (§3¾)", () => {
     await expect(storage.readFile(userId, "old-name", "index.html")).resolves.toBe("<h1>Old</h1>");
     await expect(storage.readFile(userId, "new-name", "index.html")).resolves.toBe("<h1>Concurrent</h1>");
   });
+
+  it("SS-50: PUT files/rename returns 409 when the destination appears after the preflight", async () => {
+    await storage.createProject(userId, "rename-race", "Rename Race");
+    await storage.writeFile(userId, "rename-race", "a.html", "mine");
+    const destKey = `projects/${userId}/rename-race/b.html`;
+    const originalPut = bucket.put;
+    let injected = false;
+
+    // A concurrent writer takes the destination between the route's advisory
+    // fileExists preflight and renameFile's atomic destination claim.
+    bucket.put = vi.fn(async (key, data, options) => {
+      if (key === destKey && options?.onlyIf?.etagDoesNotMatch === "*" && !injected) {
+        injected = true;
+        bucket.store.set(destKey, { data: "concurrent content", etag: `${destKey}:c1` });
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/rename-race/files/rename",
+      {
+        method: "PUT",
+        body: JSON.stringify({ oldPath: "a.html", newPath: "b.html" }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: "A file with that name already exists" });
+    // The concurrent writer's content was not clobbered and the source survives.
+    await expect(storage.readFile(userId, "rename-race", "b.html")).resolves.toBe("concurrent content");
+    await expect(storage.readFile(userId, "rename-race", "a.html")).resolves.toBe("mine");
+  });
+
+  it("SS-51: publish racing a delete returns 404 instead of resurrecting a published ghost", async () => {
+    await storage.createProject(userId, "pub-race", "Pub Race");
+    await storage.writeFile(userId, "pub-race", "index.html", "<h1>Hi</h1>");
+    const metadataKey = `projects/${userId}/pub-race/.metadata.json`;
+    const originalPut = bucket.put;
+    let injected = false;
+
+    // The slug-reservation write sits between the route's metadata preflight
+    // and the final metadata update — land the concurrent delete right there.
+    bucket.put = vi.fn(async (key, data, options) => {
+      if (typeof key === "string" && key.startsWith(`slugreservations/${userId}/`) && !injected) {
+        injected = true;
+        await storage.deleteProject(userId, "pub-race");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/pub-race/publish",
+      { method: "POST", headers: { "Content-Type": "application/json", ...csrf.headers } },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+    // The deleted project stays deleted — no fabricated {published: true} record.
+    expect(bucket.store.has(metadataKey)).toBe(false);
+  });
 });
 
 /** Minimal PNG magic-byte prefix, padded to a plausible file size. */

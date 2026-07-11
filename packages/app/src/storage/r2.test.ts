@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ProjectExistsError, R2ProjectStorage } from "./r2";
+import { FileExistsError, ProjectExistsError, ProjectNotFoundError, R2ProjectStorage } from "./r2";
 import { isSnapshotSkipped } from "../types";
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
@@ -459,6 +459,48 @@ describe("R2ProjectStorage", () => {
       const content = await storage.readFile(userId, projectId, "new.html");
       expect(content).toBe("content");
     });
+
+    it("SS-50: refuses to clobber an existing destination and keeps the source", async () => {
+      await storage.writeFile(userId, projectId, "old.html", "source");
+      await storage.writeFile(userId, projectId, "taken.html", "already here");
+
+      await expect(storage.renameFile(userId, projectId, "old.html", "taken.html")).rejects.toThrow(
+        FileExistsError
+      );
+
+      await expect(storage.readFile(userId, projectId, "taken.html")).resolves.toBe("already here");
+      await expect(storage.readFile(userId, projectId, "old.html")).resolves.toBe("source");
+    });
+
+    it("SS-50: two concurrent renames to the same destination — one wins, the loser's source survives", async () => {
+      await storage.writeFile(userId, projectId, "a.html", "content-a");
+      await storage.writeFile(userId, projectId, "b.html", "content-b");
+
+      // Both renames pass a probe-then-put fileExists check for "c.html"; only
+      // the atomic destination claim makes exactly one win. The old plain-put
+      // copy let the second write silently clobber the first, and BOTH deletes
+      // then removed both sources — one file's content lost.
+      const [a, b] = await Promise.allSettled([
+        storage.renameFile(userId, projectId, "a.html", "c.html"),
+        storage.renameFile(userId, projectId, "b.html", "c.html")
+      ]);
+
+      const outcomes = [a, b];
+      expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const rejected = outcomes.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(FileExistsError);
+
+      const winner = a.status === "fulfilled"
+        ? { source: "a.html", content: "content-a", loserSource: "b.html", loserContent: "content-b" }
+        : { source: "b.html", content: "content-b", loserSource: "a.html", loserContent: "content-a" };
+
+      // The winner's content landed and was never clobbered by the loser.
+      await expect(storage.readFile(userId, projectId, "c.html")).resolves.toBe(winner.content);
+      // The winner's source is gone; the loser's source (and content) survive.
+      expect(await storage.fileExists(userId, projectId, winner.source)).toBe(false);
+      await expect(storage.readFile(userId, projectId, winner.loserSource)).resolves.toBe(winner.loserContent);
+    });
   });
 
   describe("renameProject", () => {
@@ -616,10 +658,36 @@ describe("R2ProjectStorage", () => {
       expect(updated.name).toBe("My Project"); // preserved
     });
 
-    it("creates metadata if it doesn't exist", async () => {
-      const updated = await storage.updateProjectMetadata(userId, projectId, { name: "New" });
-      expect(updated.name).toBe("New");
-      expect(updated.id).toBe(projectId);
+    it("SS-51: refuses to fabricate metadata for a project that does not exist", async () => {
+      await expect(storage.updateProjectMetadata(userId, projectId, { name: "New" })).rejects.toThrow(
+        ProjectNotFoundError
+      );
+      // Nothing was written: the ghost record must not exist.
+      expect(bucket.store.has(`projects/${userId}/${projectId}/.metadata.json`)).toBe(false);
+    });
+
+    it("SS-51: a publish update racing a delete fails instead of resurrecting the project", async () => {
+      await storage.createProject(userId, projectId, "My Project");
+      const key = `projects/${userId}/${projectId}/.metadata.json`;
+      const originalPut = bucket.put;
+      let injected = false;
+
+      // Simulate a concurrent deleteProject landing between the CAS loop's read
+      // and its conditional write: the metadata object vanishes, so the
+      // etag-matched put loses and the retry observes an absent record.
+      bucket.put = vi.fn(async (putKey: string, data: any, options?: any) => {
+        if (putKey === key && options?.onlyIf?.etagMatches && !injected) {
+          injected = true;
+          bucket.store.delete(key);
+        }
+        return originalPut(putKey, data, options);
+      }) as unknown as typeof bucket.put;
+
+      await expect(
+        storage.updateProjectMetadata(userId, projectId, { published: true, slug: "blog" })
+      ).rejects.toThrow(ProjectNotFoundError);
+      // The deleted project stays deleted — no published ghost.
+      expect(bucket.store.has(key)).toBe(false);
     });
 
     it("SS-30: retries a stale metadata write and preserves both concurrent updates", async () => {

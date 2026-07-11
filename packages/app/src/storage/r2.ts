@@ -24,6 +24,22 @@ export class ProjectExistsError extends Error {
   }
 }
 
+/** SS-51: an update aimed at a project whose metadata no longer exists. */
+export class ProjectNotFoundError extends Error {
+  constructor(public readonly projectId: string) {
+    super("Project not found");
+    this.name = "ProjectNotFoundError";
+  }
+}
+
+/** SS-50: an atomic claim of a destination path lost to an existing object. */
+export class FileExistsError extends Error {
+  constructor(public readonly filePath: string) {
+    super("File already exists");
+    this.name = "FileExistsError";
+  }
+}
+
 function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
 }
@@ -309,9 +325,23 @@ export class R2ProjectStorage {
     // if the record never settles.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const object = await this.bucket.get(key);
-      const existing = object
-        ? safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key) || defaultMetadata()
-        : defaultMetadata();
+
+      // SS-51: an UPDATE of a project with no metadata object must FAIL, never
+      // fabricate the record. The old absent-object branch wrote a default
+      // record via `etagDoesNotMatch: "*"`, so a publish racing a delete could
+      // resurrect the just-deleted project as a `{published: true, slug}`
+      // ghost. Creation stays with the explicit create paths (createProject,
+      // createProjectIfAbsent, renameProject's target claim); an update of an
+      // absent record is always a caller bug or a concurrent delete, and both
+      // must surface.
+      if (!object) {
+        throw new ProjectNotFoundError(projectId);
+      }
+
+      // A present-but-corrupt record is repaired from defaults (parse failures
+      // never fabricate a project — the object demonstrably exists).
+      const existing =
+        safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key) || defaultMetadata();
 
       const next: ProjectMetadata = {
         ...existing,
@@ -321,7 +351,7 @@ export class R2ProjectStorage {
       };
 
       const result = await this.bucket.put(key, JSON.stringify(next), {
-        onlyIf: object ? { etagMatches: object.etag } : { etagDoesNotMatch: "*" },
+        onlyIf: { etagMatches: object.etag },
         httpMetadata: {
           contentType: "application/json"
         }
@@ -465,7 +495,18 @@ export class R2ProjectStorage {
 
   async renameFile(userId: string, projectId: string, oldPath: string, newPath: string): Promise<void> {
     const content = await this.readFileBuffer(userId, projectId, oldPath);
-    await this.writeFile(userId, projectId, newPath, content);
+    // SS-50: the copy half of copy+delete must CLAIM the destination atomically
+    // (put-if-absent), not trust the callers' advisory fileExists preflights.
+    // Two concurrent renames to the same target both pass a probe-then-put
+    // check; the later plain put would silently clobber the winner's content
+    // and both deletes would then remove both sources — one file's content
+    // lost. Losing the conditional write surfaces a conflict and leaves this
+    // rename's source untouched. (Uploads and agent writes already use the
+    // if-absent primitives — SS-40/SS-42; rename had been left behind.)
+    const claimed = await this.putIfAbsent(fileKey(userId, projectId, newPath), content);
+    if (!claimed) {
+      throw new FileExistsError(newPath);
+    }
     await this.deleteFile(userId, projectId, oldPath);
   }
 

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Env, ProjectMetadata } from "../types";
 import { isSnapshotSkipped } from "../types";
 import { getUser } from "../lib/session";
-import { ProjectExistsError, R2ProjectStorage } from "../storage/r2";
+import { ProjectExistsError, ProjectNotFoundError, R2ProjectStorage } from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
@@ -130,7 +130,19 @@ export function createProjectRouter() {
       }
     }
 
-    const updated = await storage.updateProjectMetadata(user.id, nextId, { name });
+    // SS-51: a concurrent DELETE can remove the project between the
+    // requireProject preflight and this metadata write; updateProjectMetadata
+    // refuses to fabricate a record for an absent project, so surface the same
+    // 404 the preflight would have given.
+    let updated;
+    try {
+      updated = await storage.updateProjectMetadata(user.id, nextId, { name });
+    } catch (error) {
+      if (error instanceof ProjectNotFoundError) {
+        jsonError("Project not found", 404);
+      }
+      throw error;
+    }
     return c.json(toProjectSummary(nextId, updated));
   });
 

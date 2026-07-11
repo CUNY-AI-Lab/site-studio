@@ -469,4 +469,38 @@ describe("migrateHandle", () => {
     await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
     expect(await getUserHandle(bucket, SUBJECT)).toBeNull();
   });
+
+  // SS-52: migrateHandle's promotion used to be read-check-then-plain-put on
+  // `userhandles/{subject}` — the one key the subject's own POST /api/handle
+  // CAS-claims concurrently (claimHandle step 1). Losing that race and then
+  // writing anyway CLOBBERED the just-claimed reverse slot, permanently
+  // orphaning the claimed handle: its forward record points at the subject
+  // forever, but no reverse slot names it, so it is neither usable nor
+  // re-claimable. The promotion must be put-if-absent and must NOT overwrite.
+  it("SS-52: does not clobber a reverse slot the subject CAS-claimed concurrently", async () => {
+    await claimHandle(bucket, ANON, "anon-handle");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === userHandleRecordKey(SUBJECT) && !injected) {
+        injected = true;
+        // Lands in migrateHandle's check-to-write window: the subject's own
+        // POST /api/handle claims a handle right before the promotion write.
+        const claim = await claimHandle(bucket, SUBJECT, "my-new-handle");
+        expect(claim.ok).toBe(true);
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
+
+    // The subject's own concurrent claim survives as the primary...
+    expect(await getUserHandle(bucket, SUBJECT)).toBe("my-new-handle");
+    expect(await resolveHandleOwner(bucket, "my-new-handle")).toBe(SUBJECT);
+    // ...and the anon handle stays an alias pointing at the subject.
+    expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
+    // The anon reverse record is still cleaned up.
+    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(false);
+  });
 });
