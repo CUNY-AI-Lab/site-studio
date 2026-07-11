@@ -1,23 +1,27 @@
 /**
- * AI image generation + a REQUIRED moderation gate, both via the CAIL model
- * proxy (docs/INTEGRATION.md §1). Same one-credential contract as model.ts: a
- * proxy request carries exactly ONE credential — the caller's identity travels
- * in `X-CAIL-Identity-JWT` (via buildProxyHeaders) and there is NEVER an
- * `Authorization` header. The proxy authenticates on the JWT, attaches the real
- * provider credentials, and forwards to Workers AI.
+ * AI image generation + a REQUIRED moderation gate, both via the CAIL gateway
+ * through the shared `@cuny-ai-lab/cail-client` library. Same one-credential
+ * contract as model.ts: the client sends the caller's identity in
+ * `X-CAIL-Identity-JWT` and NEVER an `Authorization` header. The gateway
+ * authenticates on the JWT, attaches the real provider credentials, and
+ * forwards to Workers AI.
  *
- * Unlike the chat path (which uses the OpenAI-compatible SDK at /v1/compat),
- * these call the proxy's pass-through /v1/* paths directly with `fetch`:
- *   - generation → the AI Gateway native workers-ai path
- *     `{CAIL_API_BASE}/v1/workers-ai/{model}`, which the proxy forwards verbatim.
- *   - moderation → the OpenAI-compatible `{CAIL_API_BASE}/v1/compat/chat/completions`
- *     so we can send a multimodal (image_url) message to a vision model.
+ * Unlike the chat path (which adapts the client for the OpenAI-compatible AI
+ * SDK), these call the client's model endpoints directly:
+ *   - generation → `client.run({model, input})`, the gateway's native
+ *     Cloudflare endpoint `POST {CAIL_API_BASE}/v1/run` (buffered; returns the
+ *     UNWRAPPED native result — the image payload directly).
+ *   - moderation → `client.chatCompletions(...)`, the OpenAI-compatible
+ *     `POST {CAIL_API_BASE}/v1/chat/completions`, so we can send a multimodal
+ *     (image_url) message to a vision model.
  *
- * Per-purpose spend is stamped with `X-CAIL-Metadata` so image spend is
- * distinguishable from chat spend in CAIL analytics.
+ * Per-purpose spend is stamped via the client's `options.metadata`
+ * (`X-CAIL-Metadata` on the wire) so image spend is distinguishable from chat
+ * spend in CAIL analytics.
  */
 
-import { buildProxyHeaders, type CailModelEnv } from "./model";
+import { CailError, createCailClient, type CailClient } from "@cuny-ai-lab/cail-client";
+import { CAIL_APP_SLUG, type CailModelEnv } from "./model";
 import { sniffImageType, type ImageType } from "./image-validation";
 
 /**
@@ -86,16 +90,9 @@ export function clampDimension(value: number | undefined): number {
   return Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, rounded));
 }
 
-/** Base URL for the AI Gateway native workers-ai pass-through path. */
-function workersAiUrl(apiBase: string, model: string): string {
-  const trimmed = apiBase.replace(/\/+$/, "");
-  return `${trimmed}/v1/workers-ai/${model}`;
-}
-
-/** Base URL for the OpenAI-compatible chat-completions path. */
-function chatCompletionsUrl(apiBase: string): string {
-  const trimmed = apiBase.replace(/\/+$/, "");
-  return `${trimmed}/v1/compat/chat/completions`;
+/** Build the shared CAIL client bound to this tool's spend-attribution slug. */
+function cailClient(apiBase: string, fetchImpl: typeof fetch): CailClient {
+  return createCailClient({ baseUrl: apiBase, app: CAIL_APP_SLUG, fetchImpl });
 }
 
 /**
@@ -113,18 +110,17 @@ function decodeBase64(data: string): Uint8Array {
   return bytes;
 }
 
-/** Pull a base64 image payload out of the various shapes Workers AI returns. */
+/**
+ * Pull a base64 image payload out of the native result `/v1/run` returns.
+ * The gateway unwraps Cloudflare's `{success, result, errors}` envelope, so
+ * the image fields arrive at the top level (`image` for flux; `image_b64` /
+ * `b64_json` cover other Workers AI image ids).
+ */
 function extractBase64Image(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
-  const record = payload as Record<string, unknown>;
-  // Workers AI wraps successful results in `{ result: {...} }`; some ids return
-  // the fields at the top level. Check both.
-  const result =
-    record.result && typeof record.result === "object"
-      ? (record.result as Record<string, unknown>)
-      : record;
+  const result = payload as Record<string, unknown>;
 
   const candidate =
     (typeof result.image === "string" && result.image) ||
@@ -146,13 +142,14 @@ export interface GenerateImageInput {
 }
 
 /**
- * Generate an image via the CAIL proxy's workers-ai pass-through path.
+ * Generate an image via the gateway's native `/v1/run` endpoint.
  *
- * One-credential contract: buildProxyHeaders(jwt) only — no Authorization. Adds
- * `X-CAIL-Metadata` with purpose "image-generation" for spend attribution.
+ * One-credential contract: `{kind: "jwt"}` only — the client guarantees no
+ * `Authorization` header. Spend metadata carries purpose "image-generation".
  *
- * On a proxy/provider error we pass the CAIL error envelope through unmodified
- * (per contract — do not reword proxy error messages).
+ * On a gateway/provider error the client throws a typed `CailError` whose
+ * `message` is the CAIL error envelope's message verbatim; we pass it through
+ * unmodified (per contract — do not reword gateway error messages).
  */
 export async function generateImage(
   env: CailImageEnv,
@@ -163,25 +160,29 @@ export async function generateImage(
   if (!env.CAIL_API_BASE) {
     return { ok: false, message: "CAIL_API_BASE is not configured" };
   }
+  if (!jwt) {
+    // The gateway is JWT-first/strict; without a verified identity the call
+    // could only ever earn its authentication_required envelope.
+    return { ok: false, message: "Image generation requires an authenticated caller" };
+  }
 
   const model = resolveImageModelId(env);
   const width = clampDimension(input.width);
   const height = clampDimension(input.height);
 
-  const response = await fetchImpl(workersAiUrl(env.CAIL_API_BASE, model), {
-    method: "POST",
-    headers: {
-      ...buildProxyHeaders(jwt),
-      "Content-Type": "application/json",
-      "X-CAIL-Metadata": JSON.stringify({ purpose: "image-generation" })
-    },
-    body: JSON.stringify({ prompt: input.prompt, width, height })
-  });
-
-  if (!response.ok) {
-    // Pass the CAIL error envelope through unmodified.
-    const text = await response.text();
-    return { ok: false, message: text || `Image generation failed (${response.status})` };
+  let response: Response;
+  try {
+    response = await cailClient(env.CAIL_API_BASE, fetchImpl).run(
+      { model, input: { prompt: input.prompt, width, height } },
+      { kind: "jwt", token: jwt },
+      { metadata: { purpose: "image-generation" } }
+    );
+  } catch (error) {
+    if (error instanceof CailError) {
+      // The envelope message, verbatim.
+      return { ok: false, message: error.message };
+    }
+    return { ok: false, message: "Image generation failed" };
   }
 
   let payload: unknown;
@@ -289,7 +290,7 @@ export async function screenImage(
   bytes: Uint8Array,
   fetchImpl: typeof fetch = fetch
 ): Promise<ScreenImageResult> {
-  if (!env.CAIL_API_BASE) {
+  if (!env.CAIL_API_BASE || !jwt) {
     return { allowed: false };
   }
 
@@ -298,14 +299,8 @@ export async function screenImage(
 
   let response: Response;
   try {
-    response = await fetchImpl(chatCompletionsUrl(env.CAIL_API_BASE), {
-      method: "POST",
-      headers: {
-        ...buildProxyHeaders(jwt),
-        "Content-Type": "application/json",
-        "X-CAIL-Metadata": JSON.stringify({ purpose: "image-moderation" })
-      },
-      body: JSON.stringify({
+    response = await cailClient(env.CAIL_API_BASE, fetchImpl).chatCompletions(
+      {
         model,
         temperature: 0,
         messages: [
@@ -318,13 +313,12 @@ export async function screenImage(
             ]
           }
         ]
-      })
-    });
+      },
+      { kind: "jwt", token: jwt },
+      { metadata: { purpose: "image-moderation" } }
+    );
   } catch {
-    return { allowed: false };
-  }
-
-  if (!response.ok) {
+    // FAIL CLOSED: CailError (any non-2xx) and network throws alike.
     return { allowed: false };
   }
 

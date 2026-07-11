@@ -83,14 +83,14 @@ describe("clampDimension", () => {
 });
 
 describe("generateImage wire contract", () => {
-  it("hits /v1/workers-ai/{model} with the image-generation purpose and one credential", async () => {
-    const { fetch: stub, captured } = captureFetch(() => json({ result: { image: PNG_BASE64 } }));
+  it("hits /v1/run with {model, input}, the image-generation purpose, and one credential", async () => {
+    const { fetch: stub, captured } = captureFetch(() => json({ image: PNG_BASE64 }));
 
     const result = await generateImage(env, "jwt-token", { prompt: "a quiet library" }, stub);
     expect(result.ok).toBe(true);
 
     const cap = captured();
-    expect(cap.url).toBe(`${BASE}/v1/workers-ai/${DEFAULT_CAIL_IMAGE_MODEL}`);
+    expect(cap.url).toBe(`${BASE}/v1/run`);
     // spend attribution slug + per-purpose metadata
     expect(cap.headers.get("x-cail-app")).toBe("site-studio");
     expect(cap.headers.get("x-cail-identity-jwt")).toBe("jwt-token");
@@ -100,31 +100,32 @@ describe("generateImage wire contract", () => {
     // one-credential contract: never an Authorization header
     expect(cap.headers.has("authorization")).toBe(false);
 
+    // Cloudflare's native {model, input} body.
     const body = JSON.parse(String(cap.init.body));
-    expect(body.prompt).toBe("a quiet library");
-    expect(body.width).toBe(1024);
-    expect(body.height).toBe(1024);
+    expect(body.model).toBe(DEFAULT_CAIL_IMAGE_MODEL);
+    expect(body.input.prompt).toBe("a quiet library");
+    expect(body.input.width).toBe(1024);
+    expect(body.input.height).toBe(1024);
   });
 
-  it("omits the identity header on the anonymous path but keeps X-CAIL-App", async () => {
-    const { fetch: stub, captured } = captureFetch(() => json({ result: { image: PNG_BASE64 } }));
-    await generateImage(env, null, { prompt: "x" }, stub);
-    const cap = captured();
-    expect(cap.headers.has("x-cail-identity-jwt")).toBe(false);
-    expect(cap.headers.get("x-cail-app")).toBe("site-studio");
-    expect(cap.headers.has("authorization")).toBe(false);
+  it("refuses the anonymous path without any request (gateway is JWT-first/strict)", async () => {
+    const { fetch: stub, captured } = captureFetch(() => json({ image: PNG_BASE64 }));
+    const result = await generateImage(env, null, { prompt: "x" }, stub);
+    expect(result.ok).toBe(false);
+    // No request left the tool.
+    expect(captured().url).toBe("");
   });
 
-  it("clamps requested dimensions in the request body", async () => {
-    const { fetch: stub, captured } = captureFetch(() => json({ result: { image: PNG_BASE64 } }));
+  it("clamps requested dimensions in the request input", async () => {
+    const { fetch: stub, captured } = captureFetch(() => json({ image: PNG_BASE64 }));
     await generateImage(env, "jwt", { prompt: "x", width: 700, height: 99999 }, stub);
     const body = JSON.parse(String(captured().init.body));
-    expect(body.width).toBe(704);
-    expect(body.height).toBe(2048);
+    expect(body.input.width).toBe(704);
+    expect(body.input.height).toBe(2048);
   });
 
-  it("base64-decodes the returned image into bytes", async () => {
-    const { fetch: stub } = captureFetch(() => json({ result: { image: PNG_BASE64 } }));
+  it("base64-decodes the unwrapped native result into bytes", async () => {
+    const { fetch: stub } = captureFetch(() => json({ image: PNG_BASE64 }));
     const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -133,15 +134,21 @@ describe("generateImage wire contract", () => {
     }
   });
 
-  it("passes the CAIL error envelope through unmodified (429 quota_exceeded)", async () => {
-    const envelope = JSON.stringify({ error: { code: "quota_exceeded", message: "Monthly quota exceeded." } });
+  it("errors when the response still carries Cloudflare's wrapped envelope (contract: /v1/run is unwrapped)", async () => {
+    const { fetch: stub } = captureFetch(() => json({ success: true, result: { image: PNG_BASE64 }, errors: [] }));
+    const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
+    expect(result.ok).toBe(false);
+  });
+
+  it("passes the CAIL envelope message through verbatim (429 quota_exceeded)", async () => {
+    const envelope = JSON.stringify({ error: "quota_exceeded", message: "Monthly quota exceeded." });
     const { fetch: stub } = captureFetch(
       () => new Response(envelope, { status: 429, headers: { "content-type": "application/json" } })
     );
     const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.message).toBe(envelope);
+      expect(result.message).toBe("Monthly quota exceeded.");
     }
   });
 
@@ -152,7 +159,7 @@ describe("generateImage wire contract", () => {
 });
 
 describe("screenImage moderation gate (fail closed)", () => {
-  it("hits /v1/compat/chat/completions with the image-moderation purpose and one credential", async () => {
+  it("hits /v1/chat/completions with the image-moderation purpose and one credential", async () => {
     const { fetch: stub, captured } = captureFetch(() =>
       json({ choices: [{ message: { content: '{"allowed": true, "reason": "ok"}' } }] })
     );
@@ -161,7 +168,7 @@ describe("screenImage moderation gate (fail closed)", () => {
     expect(result.allowed).toBe(true);
 
     const cap = captured();
-    expect(cap.url).toBe(`${BASE}/v1/compat/chat/completions`);
+    expect(cap.url).toBe(`${BASE}/v1/chat/completions`);
     expect(cap.headers.get("x-cail-app")).toBe("site-studio");
     expect(cap.headers.get("x-cail-identity-jwt")).toBe("jwt-token");
     expect(JSON.parse(cap.headers.get("x-cail-metadata") || "{}")).toEqual({
@@ -216,6 +223,14 @@ describe("screenImage moderation gate (fail closed)", () => {
 
   it("fails closed when CAIL_API_BASE is unset", async () => {
     expect((await screenImage({}, "jwt", PNG_BYTES)).allowed).toBe(false);
+  });
+
+  it("fails closed on the anonymous path without any request", async () => {
+    const { fetch: stub, captured } = captureFetch(() =>
+      json({ choices: [{ message: { content: '{"allowed": true}' } }] })
+    );
+    expect((await screenImage(env, null, PNG_BYTES, stub)).allowed).toBe(false);
+    expect(captured().url).toBe("");
   });
 
   it("parses JSON embedded in surrounding prose", async () => {

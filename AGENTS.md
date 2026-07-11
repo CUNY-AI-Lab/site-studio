@@ -69,7 +69,7 @@ The frontend no longer uses the old SSE `/api/query` path.
 - `@cloudflare/ai-chat`
 - `@cloudflare/codemode`
 - `ai`
-- `@ai-sdk/openai-compatible` (CAIL model proxy)
+- `@cuny-ai-lab/cail-client` + `@ai-sdk/openai-compatible` (CAIL gateway model access)
 - Cloudflare R2 / KV / Durable Objects
 - Worker Loader
 

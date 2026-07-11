@@ -108,7 +108,7 @@ Located in `packages/app/src/agents/site-builder.ts`:
 - Cloudflare Workers + Hono framework
 - `@cloudflare/ai-chat` - AIChatAgent base class
 - `@cloudflare/codemode` - Dynamic Worker code execution
-- `@ai-sdk/openai-compatible` - Model access via the CAIL model proxy (Workers AI)
+- `@cuny-ai-lab/cail-client` + `@ai-sdk/openai-compatible` - Model access via the CAIL gateway (Workers AI)
 - Vercel AI SDK (`ai`) - `streamText`, `tool()` definitions
 - Cloudflare R2 - File and snapshot storage
 - Cloudflare KV - Session management

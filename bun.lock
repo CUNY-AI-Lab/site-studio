@@ -16,6 +16,7 @@
         "@ai-sdk/provider": "3.0.8",
         "@cloudflare/ai-chat": "0.2.5",
         "@cloudflare/codemode": "0.3.1",
+        "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#82912b7",
         "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity",
         "agents": "0.8.4",
         "ai": "6.0.138",
@@ -208,6 +209,8 @@
     "@csstools/css-parser-algorithms": ["@csstools/css-parser-algorithms@3.0.5", "", { "peerDependencies": { "@csstools/css-tokenizer": "^3.0.4" } }, "sha512-DaDeUkXZKjdGhgYaHNJTV9pV7Y9B3b644jCLs9Upc3VeNGg6LWARAT6O+Q+/COo+2gg/bM5rhpMAtf70WqfBdQ=="],
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@3.0.4", "", {}, "sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw=="],
+
+    "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#82912b7", {}, "CUNY-AI-Lab-cail-client-82912b7"],
 
     "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#8f94f75", {}, "CUNY-AI-Lab-cail-identity-8f94f75"],
 

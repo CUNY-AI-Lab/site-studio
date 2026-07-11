@@ -4,48 +4,14 @@ import { generateText } from "ai";
 import {
   CAIL_APP_SLUG,
   DEFAULT_CAIL_MODEL,
-  buildProxyBaseUrl,
-  buildProxyHeaders,
   createCailModel,
   createQuotaAwareFetch,
   resolveModelId,
 } from "./model";
 
-describe("buildProxyBaseUrl", () => {
-  it("appends the OpenAI-compatible AI Gateway path", () => {
-    expect(buildProxyBaseUrl("https://cail.example/proxy")).toBe(
-      "https://cail.example/proxy/v1/compat"
-    );
-  });
-
-  it("normalizes a trailing slash so the path is not doubled", () => {
-    expect(buildProxyBaseUrl("https://cail.example/proxy/")).toBe(
-      "https://cail.example/proxy/v1/compat"
-    );
-  });
-});
-
-describe("buildProxyHeaders", () => {
-  it("always sends the X-CAIL-App spend-attribution slug", () => {
-    const headers = buildProxyHeaders(null);
-    expect(headers["X-CAIL-App"]).toBe(CAIL_APP_SLUG);
+describe("CAIL_APP_SLUG", () => {
+  it("is the stable spend-attribution slug for this tool", () => {
     expect(CAIL_APP_SLUG).toBe("site-studio");
-  });
-
-  it("forwards the caller identity JWT when present", () => {
-    const headers = buildProxyHeaders("jwt-token");
-    expect(headers["X-CAIL-Identity-JWT"]).toBe("jwt-token");
-    expect(headers["X-CAIL-App"]).toBe("site-studio");
-  });
-
-  it("omits the identity header when there is no JWT (proxy fails closed)", () => {
-    const headers = buildProxyHeaders(null);
-    expect(headers).not.toHaveProperty("X-CAIL-Identity-JWT");
-  });
-
-  it("never carries a provider Authorization header", () => {
-    const headers = buildProxyHeaders("jwt-token");
-    expect(headers).not.toHaveProperty("Authorization");
   });
 });
 
@@ -68,7 +34,13 @@ describe("createCailModel", () => {
     expect(() => createCailModel({}, "jwt")).toThrow(/CAIL_API_BASE/);
   });
 
-  it("builds a language model bound to the proxy compat path", () => {
+  it("throws when the caller has no identity JWT (gateway is JWT-first/strict)", () => {
+    expect(() =>
+      createCailModel({ CAIL_API_BASE: "https://cail.example/proxy" }, null)
+    ).toThrow(/identity JWT/i);
+  });
+
+  it("builds a language model bound to the gateway chat endpoint", () => {
     const model = createCailModel(
       { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
       "jwt-token"
@@ -92,7 +64,7 @@ describe("createQuotaAwareFetch", () => {
 
     let thrown: unknown;
     try {
-      await createQuotaAwareFetch(upstream)("https://cail.example/v1/compat/chat/completions");
+      await createQuotaAwareFetch(upstream)("https://cail.example/v1/chat/completions");
     } catch (error) {
       thrown = error;
     }
@@ -117,7 +89,7 @@ describe("createQuotaAwareFetch", () => {
     let calls = 0;
     const upstream = (async () => {
       calls += 1;
-      return new Response(JSON.stringify({ error: "quota_exceeded" }), {
+      return new Response(JSON.stringify({ error: "quota_exceeded", message: "Hourly quota exhausted" }), {
         status: 429,
         headers: { "content-type": "application/json", "retry-after": "3600" }
       });
@@ -132,13 +104,15 @@ describe("createQuotaAwareFetch", () => {
 });
 
 /**
- * Wire-level pin for the CAIL one-credential contract (docs/INTEGRATION.md,
- * commit 9a46de3): a model-proxy request must send exactly ONE credential. On
- * the browser/JWT path that is X-CAIL-Identity-JWT and there must be NO
- * Authorization header — the proxy is JWT-first/strict. We assert on the
- * CAPTURED OUTBOUND HEADERS a real request emits, so an SDK upgrade that starts
- * stamping a dummy `Authorization: Bearer` (some OpenAI-compatible SDKs do when
- * given an apiKey) fails this test instead of silently breaking the proxy.
+ * Wire-level pin for the CAIL one-credential contract: a model-proxy request
+ * must send exactly ONE credential. On the browser/JWT path that is
+ * X-CAIL-Identity-JWT and there must be NO Authorization header — the gateway
+ * is JWT-first/strict. The AI SDK is handed a dummy apiKey (it refuses to run
+ * without one), so the cail-client chatFetch adapter MUST strip the resulting
+ * `Authorization: Bearer cail-proxy` before the request reaches the wire. We
+ * assert on the CAPTURED OUTBOUND REQUEST at the underlying fetch (the
+ * adapter's test seam), so a regression in either the SDK or the adapter
+ * fails this test instead of silently breaking the gateway.
  */
 describe("createCailModel wire contract", () => {
   /** Minimal valid OpenAI-style chat-completions body — enough for doGenerate. */
@@ -162,21 +136,30 @@ describe("createCailModel wire contract", () => {
     );
 
   /**
-   * Build a fetch stub that records the outbound headers as a case-insensitive
-   * `Headers` object, then returns a canned successful completion.
+   * Build a fetch stub that records the outbound URL and headers (as a
+   * case-insensitive `Headers` object), then returns a canned completion.
    */
-  function makeCaptureFetch(): { fetch: typeof fetch; captured: () => Headers } {
-    let seen: Headers | undefined;
-    const stub = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      // The provider-utils POST path calls fetch(url, init) with init.headers as
-      // a plain object; wrap it in Headers for robust case-insensitive lookup.
-      seen = new Headers((init?.headers ?? {}) as HeadersInit);
+  function makeCaptureFetch(): {
+    fetch: typeof fetch;
+    captured: () => { url: string; headers: Headers };
+  } {
+    let seen: { url: string; headers: Headers } | undefined;
+    const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      // cail-client calls fetchImpl(url, init) with init.headers as a plain
+      // record; wrap it in Headers for robust case-insensitive lookup.
+      seen = {
+        url: String(input),
+        headers: new Headers((init?.headers ?? {}) as HeadersInit),
+      };
       return chatCompletionResponse();
     }) as typeof fetch;
-    return { fetch: stub, captured: () => seen ?? new Headers() };
+    return {
+      fetch: stub,
+      captured: () => seen ?? { url: "", headers: new Headers() },
+    };
   }
 
-  it("JWT path: sends X-CAIL-Identity-JWT and X-CAIL-App, never Authorization", async () => {
+  it("sends X-CAIL-Identity-JWT and X-CAIL-App to /v1/chat/completions, never Authorization", async () => {
     const { fetch: stub, captured } = makeCaptureFetch();
     const model = createCailModel(
       { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
@@ -186,28 +169,15 @@ describe("createCailModel wire contract", () => {
 
     await generateText({ model, prompt: "hi" });
 
-    const headers = captured();
-    // (a) no provider Authorization header on the JWT path
+    const { url, headers } = captured();
+    // (a) the new gateway contract: the OpenAI-compatible chat endpoint
+    expect(url).toBe("https://cail.example/proxy/v1/chat/completions");
+    // (b) the adapter stripped the SDK's dummy bearer — no Authorization on
+    //     the JWT path
     expect(headers.has("authorization")).toBe(false);
-    // (b) the caller identity travels in X-CAIL-Identity-JWT
+    // (c) the caller identity travels in X-CAIL-Identity-JWT
     expect(headers.get("x-cail-identity-jwt")).toBe("jwt-token");
-    // (c) spend attribution slug is always present
-    expect(headers.get("x-cail-app")).toBe("site-studio");
-  });
-
-  it("anonymous path: no Authorization and no identity JWT, but X-CAIL-App still present", async () => {
-    const { fetch: stub, captured } = makeCaptureFetch();
-    const model = createCailModel(
-      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
-      null,
-      stub
-    );
-
-    await generateText({ model, prompt: "hi" });
-
-    const headers = captured();
-    expect(headers.has("authorization")).toBe(false);
-    expect(headers.has("x-cail-identity-jwt")).toBe(false);
+    // (d) spend attribution slug is always present
     expect(headers.get("x-cail-app")).toBe("site-studio");
   });
 });
