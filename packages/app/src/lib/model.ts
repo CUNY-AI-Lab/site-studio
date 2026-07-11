@@ -17,7 +17,6 @@
  */
 
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { APICallError } from "@ai-sdk/provider";
 import type { LanguageModel } from "ai";
 import { createCailClient } from "@cuny-ai-lab/cail-client";
 
@@ -49,48 +48,6 @@ export function resolveModelId(env: CailModelEnv): string {
   return env.CAIL_MODEL || DEFAULT_CAIL_MODEL;
 }
 
-function requestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  return input instanceof URL ? input.toString() : input.url;
-}
-
-/**
- * Mark the CAIL gateway's hard hourly quota response as non-retryable while
- * leaving every other response untouched for the AI SDK's normal policy.
- * (The `chatFetch` adapter keeps raw fetch semantics — non-2xx responses are
- * returned, not thrown — so without this the SDK would retry a quota 429.)
- */
-export function createQuotaAwareFetch(fetchImpl: typeof fetch = globalThis.fetch): typeof fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const response = await fetchImpl(input, init);
-    if (response.status !== 429) {
-      return response;
-    }
-
-    const responseBody = await response.clone().text();
-    if (!/quota_exceeded/i.test(responseBody)) {
-      return response;
-    }
-
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-
-    throw new APICallError({
-      message: "Too Many Requests",
-      url: requestUrl(input),
-      requestBodyValues: {},
-      statusCode: 429,
-      responseHeaders,
-      responseBody,
-      isRetryable: false
-    });
-  }) as typeof fetch;
-}
-
 /**
  * Build an AI-SDK language model bound to the CAIL gateway for the given
  * caller.
@@ -102,8 +59,13 @@ export function createQuotaAwareFetch(fetchImpl: typeof fetch = globalThis.fetch
  * this: the `apiKey` handed to the SDK below is a dummy the adapter strips
  * before the request reaches the wire (pinned by the wire test in
  * model.test.ts). Non-2xx responses keep raw fetch semantics, so gateway
- * error envelopes (authentication_required / quota_exceeded / …) surface to
- * the AI SDK unmodified.
+ * error envelopes (authentication_required / upstream errors / …) surface to
+ * the AI SDK unmodified — with ONE library-owned carve-out: a 429
+ * `quota_exceeded` envelope makes `chatFetch` THROW the parsed `CailError`
+ * (verbatim message, `extras.retry_after_seconds`) instead of returning the
+ * Response, so the AI SDK never retries a budget-window 429 and the quota
+ * envelope reaches error surfacing intact (pinned in model.test.ts;
+ * surfaced to the user by lib/model-stream-error.ts).
  *
  * Throws when `CAIL_API_BASE` is unset — the placeholder is filled in at
  * launch (cail-gateway docs/LAUNCH_CHECKLIST.md); there is no local fallback
@@ -135,9 +97,7 @@ export function createCailModel(
     // Dummy — the chatFetch adapter strips it and sends X-CAIL-Identity-JWT
     // instead (one-credential contract).
     apiKey: "cail-proxy",
-    fetch: createQuotaAwareFetch(
-      client.chatFetch({ kind: "jwt", token: identityJwt }) as typeof fetch
-    ),
+    fetch: client.chatFetch({ kind: "jwt", token: identityJwt }) as typeof fetch,
   });
 
   return provider(resolveModelId(env));

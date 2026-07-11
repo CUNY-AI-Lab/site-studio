@@ -25,6 +25,7 @@ export function describeModelStreamError(error: unknown): { message: string; quo
   const seen = new Set<object>();
   let quota = false;
   let retryAfter: string | undefined;
+  let verbatimQuotaMessage: string | undefined;
 
   while (layers.length > 0) {
     const layer = layers.shift();
@@ -39,6 +40,26 @@ export function describeModelStreamError(error: unknown): { message: string; quo
 
     const record = layer as Record<string, unknown>;
     quota ||= record.statusCode === 429;
+
+    // cail-client's chatFetch throws the parsed CailError on a 429
+    // quota_exceeded envelope (before any wrapper sees the Response). Its
+    // `message` is the gateway envelope's message VERBATIM — safe to show
+    // the user as-is. Match on the envelope `code` shape (not `instanceof
+    // CailError`) so a wrapped or structured-cloned copy — e.g. inside an
+    // AI SDK RetryError's `errors` array — still counts.
+    if (record.code === "quota_exceeded") {
+      quota = true;
+      if (typeof record.message === "string" && record.message.trim().length > 0) {
+        verbatimQuotaMessage ||= record.message;
+      }
+      const extras = record.extras;
+      if (extras && typeof extras === "object") {
+        const seconds = (extras as Record<string, unknown>).retry_after_seconds;
+        if (typeof seconds === "number" || typeof seconds === "string") {
+          retryAfter ||= String(seconds);
+        }
+      }
+    }
 
     for (const value of [record.responseBody, record.data, record.message]) {
       if (typeof value === "string" && /quota_exceeded/i.test(value)) {
@@ -62,10 +83,11 @@ export function describeModelStreamError(error: unknown): { message: string; quo
   if (quota) {
     return {
       quota: true,
-      message: "You've reached your AI usage limit for now."
-        + (retryAfter
-          ? ` Try again in about ${retryAfter} seconds.`
-          : " Please try again shortly.")
+      message: verbatimQuotaMessage
+        ?? ("You've reached your AI usage limit for now."
+          + (retryAfter
+            ? ` Try again in about ${retryAfter} seconds.`
+            : " Please try again shortly."))
     };
   }
 

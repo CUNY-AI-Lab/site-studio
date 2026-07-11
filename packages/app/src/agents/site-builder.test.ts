@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { generateTypes } from "@cloudflare/codemode/ai";
 import { tool } from "ai";
 import { z } from "zod";
+import { CailError } from "@cuny-ai-lab/cail-client";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -31,6 +32,30 @@ describe("describeModelStreamError", () => {
 
     expect(described.quota).toBe(true);
     expect(described.message).toContain("3600 seconds");
+  });
+
+  it("surfaces a thrown CailError's verbatim quota message (cail-client 2d51745 contract)", () => {
+    const verbatim = "You have used your hourly AI quota. It resets on the hour.";
+    const cailError = new CailError("quota_exceeded", verbatim, 429, { retry_after_seconds: 1800 });
+
+    expect(describeModelStreamError(cailError)).toEqual({
+      quota: true,
+      message: verbatim
+    });
+  });
+
+  it("surfaces the verbatim quota message even when the CailError is wrapped", () => {
+    const verbatim = "Hourly quota exhausted.";
+    const wrapped = {
+      name: "AI_RetryError",
+      message: "Failed after 1 attempt.",
+      errors: [new CailError("quota_exceeded", verbatim, 429, {})],
+    };
+
+    expect(describeModelStreamError(wrapped)).toEqual({
+      quota: true,
+      message: verbatim
+    });
   });
 });
 
