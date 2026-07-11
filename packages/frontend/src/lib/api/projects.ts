@@ -91,61 +91,6 @@ export async function deleteProject(projectId: string): Promise<void> {
 }
 
 /**
- * Fetch files for a specific project
- */
-export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[]> {
-	const data = await apiFetch<{ files: ProjectFile[] }>(`${API_BASE}/projects/${projectId}/files`);
-	return data.files;
-}
-
-/**
- * Fetch a specific file's content
- */
-export async function fetchFileContent(projectId: string, filePath: string): Promise<string> {
-	const data = await apiFetch<{ content: string }>(
-		`${API_BASE}/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`
-	);
-	return data.content;
-}
-
-/**
- * Save file content
- */
-export async function saveFileContent(
-	projectId: string,
-	filePath: string,
-	content: string
-): Promise<void> {
-	await apiFetch<void>(`${API_BASE}/projects/${projectId}/file`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-		},
-		body: JSON.stringify({ path: filePath, content }),
-	});
-}
-
-/**
- * Upload a file to the project
- */
-export async function uploadFile(projectId: string, file: File): Promise<string> {
-	const formData = new FormData();
-	formData.append('file', file);
-
-	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/upload`, {
-		method: 'POST',
-		body: formData,
-	});
-
-	if (!response.ok) {
-		await handleApiError(response);
-	}
-
-	const data = await response.json();
-	return data.filename;
-}
-
-/**
  * Upload an image into the project's images/ folder. The backend validates the
  * magic bytes against the extension and rejects non-image or oversized files.
  * Returns the stored path (e.g. "images/photo.png").
@@ -220,24 +165,6 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 	a.click();
 	document.body.removeChild(a);
 	window.URL.revokeObjectURL(url);
-}
-
-/**
- * Upload a generated thumbnail image (PNG) for a project
- */
-export async function uploadThumbnail(projectId: string, blob: Blob): Promise<void> {
-	const form = new FormData();
-	form.append('image', blob, 'thumbnail.png');
-
-	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/thumbnail`, {
-		method: 'POST',
-		body: form,
-	});
-
-	if (!response.ok) {
-		// Non-fatal for UX; throw structured error so callers can handle
-		await handleApiError(response);
-	}
 }
 
 /**

@@ -14,12 +14,6 @@ export function markOnboardingComplete(): void {
 	}
 }
 
-export function resetOnboarding(): void {
-	if (typeof localStorage !== 'undefined') {
-		localStorage.removeItem(ONBOARDING_KEY);
-	}
-}
-
 export function createDashboardTour() {
 	const steps: DriveStep[] = [
 		{

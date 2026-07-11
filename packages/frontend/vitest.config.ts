@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig({
 	plugins: [
 		svelte({
-			preprocess: vitePreprocess(),
+			preprocess: vitePreprocess({ script: true }),
 			// Compile in dev/browser mode so runes-based components mount and update
 			// under jsdom the way they do in the app.
 			compilerOptions: { dev: true }

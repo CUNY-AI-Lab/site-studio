@@ -1,41 +1,27 @@
 {
   "name": "site-studio",
   "version": "0.1.0",
-  "description": "AI-powered static site builder with community features",
+  "description": "Cloudflare-native AI website builder for academics and researchers",
   "private": true,
   "type": "module",
   "workspaces": [
-    "packages/frontend"
+    "packages/*"
   ],
   "scripts": {
-    "postinstall": "npm --prefix packages/app install && npm --prefix packages/worker install",
-    "build": "npm run build --workspaces --if-present && npm --prefix packages/app run build",
-    "dev:app": "npm --prefix packages/app run dev",
-    "dev:frontend": "npm run dev --workspace=packages/frontend",
-    "dev": "concurrently \"npm run dev:app\" \"npm run dev:frontend\"",
+    "build": "bun run --cwd packages/frontend build && bun run --cwd packages/app build && bun run --cwd packages/worker build",
+    "dev:app": "bun run --cwd packages/app dev",
+    "dev:frontend": "bun run --cwd packages/frontend dev",
+    "dev": "bun run --parallel --filter @site-studio/app --filter @site-studio/frontend dev",
     "chat:debug": "node ./scripts/project-chat-debug.mjs",
     "trace": "node ./scripts/project-observability.mjs",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
-    "check": "npm --prefix packages/app run check && npm --prefix packages/worker run check && npm run check --workspace=packages/frontend && npm run build --workspace=packages/frontend"
+    "check": "bun run --cwd packages/app check && bun run --cwd packages/worker check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
   },
-  "keywords": [
-    "claude",
-    "ai",
-    "agent",
-    "static-site",
-    "site-builder",
-    "community"
-  ],
-  "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.16",
-    "@types/node": "^20.19.24",
-    "@vitest/ui": "^4.0.7",
-    "concurrently": "^8.2.2",
-    "tailwindcss": "^4.1.16",
-    "typescript": "^5.5.0",
-    "vitest": "^4.0.7",
-    "ws": "^8.20.0"
+    "ws": "8.20.0"
+  },
+  "overrides": {
+    "vite": "5.4.21"
   }
 }

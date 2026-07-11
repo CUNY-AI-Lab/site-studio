@@ -32,7 +32,6 @@
 		role: 'user' | 'assistant';
 		content: string; // For user messages
 		blocks?: ContentBlock[]; // For assistant messages with interleaved content
-		tools?: ToolExecution[]; // Deprecated, keeping for backwards compat
 	}
 
 	interface ToolExecution {

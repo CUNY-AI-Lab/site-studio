@@ -15,12 +15,6 @@ export type ClaimHandleResult =
 	| { ok: true; handle: string; alreadyOwned: boolean }
 	| { ok: false; message: string };
 
-/** The current user's handle, or null if they have not claimed one. */
-export async function getHandle(): Promise<string | null> {
-	const data = await apiFetch<{ handle: string | null }>(`${API_BASE}/handle`);
-	return data.handle;
-}
-
 /** Validate + availability check for a candidate handle. */
 export async function checkHandle(handle: string): Promise<HandleCheckResult> {
 	return apiFetch<HandleCheckResult>(

@@ -23,8 +23,9 @@ site-studio/
 │   │   │   ├── storage/    # R2-backed project storage
 │   │   │   └── lib/        # Auth, paths, templates, HTTP helpers
 │   │   └── wrangler.jsonc
-│   └── frontend/           # SvelteKit dashboard/editor
-└── dynamic-workers-plan.md # Rewrite / cutover plan
+│   ├── frontend/           # SvelteKit dashboard/editor
+│   ├── serving-core/       # Shared published/preview HTTP behavior
+│   └── worker/             # Legacy-domain published-site Worker
 ```
 
 ## What Works
@@ -40,8 +41,8 @@ site-studio/
 ## Local Development
 
 ```bash
-npm install
-./dev.sh
+bun install
+bun run dev
 ```
 
 This starts:
@@ -49,7 +50,7 @@ This starts:
 - App: [http://localhost:8792](http://localhost:8792)
 - Frontend: [http://localhost:5173](http://localhost:5173)
 
-The root `postinstall` installs frontend dependencies and the standalone Worker app dependencies.
+All packages share one Bun workspace and lockfile. To use different local ports, run the package commands directly and pass Vite/Wrangler `--port` flags.
 
 ## Environment
 
@@ -69,7 +70,7 @@ model proxy, which attaches credentials itself.
 The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/stephenzweibel/Apps/site-studio/packages/app/wrangler.jsonc):
 
 - `APP_PUBLIC_DOMAIN`
-- `LEGACY_PUBLIC_DOMAIN`
+- `PUBLISHED_BASE_URL`
 - `CAIL_API_BASE`
 - `CAIL_MODEL` (Workers AI `@cf/...` id only — CAIL policy is Cloudflare models only)
 - `CAIL_REQUIRE_IDENTITY`
@@ -96,7 +97,7 @@ For production, configure secrets with Wrangler / Cloudflare, not by committing 
 
 - The new app is a static-file site builder. Runtime build tools are out of scope.
 - The normal chat path is execute-first, not approve-first.
-- The blank template is the only built-in template currently wired in the Worker app.
+- The built-in gallery includes blank, CV, course, portfolio, publication, event, photo, resource, timeline, and data-visualization templates.
 - Canonical published URLs are `/u/:handle/:slug/`, keyed by a user-chosen handle so the owner id never appears in a public URL. Old published sites remain readable from the same R2 bucket via the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves content directly.
 
 ## License

@@ -6,11 +6,9 @@ export const AgentMessageType = {
 	CF_AGENT_CHAT_REQUEST_CANCEL: 'cf_agent_chat_request_cancel',
 	CF_AGENT_STREAM_RESUMING: 'cf_agent_stream_resuming',
 	CF_AGENT_STREAM_RESUME_ACK: 'cf_agent_stream_resume_ack',
-	CF_AGENT_STREAM_RESUME_REQUEST: 'cf_agent_stream_resume_request',
 	CF_AGENT_STREAM_RESUME_NONE: 'cf_agent_stream_resume_none',
 	CF_AGENT_TOOL_RESULT: 'cf_agent_tool_result',
-	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated',
-	CF_AGENT_TOOL_APPROVAL: 'cf_agent_tool_approval'
+	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated'
 } as const;
 
 export type ToolPartState =
@@ -412,32 +410,6 @@ export function mergeUpdatedMessage(messages: UIChatMessage[], updatedMessage: U
 		id: messages[index].id
 	};
 	return nextMessages;
-}
-
-export function applyLocalToolApproval(
-	messages: UIChatMessage[],
-	approvalId: string,
-	approved: boolean,
-	reason?: string
-): UIChatMessage[] {
-	return messages.map((message) => ({
-		...message,
-		parts: message.parts.map((part) => {
-			if (!isToolPart(part) || part.state !== 'approval-requested' || part.approval?.id !== approvalId) {
-				return part;
-			}
-
-			return {
-				...part,
-				state: 'approval-responded',
-				approval: {
-					id: approvalId,
-					approved,
-					...(reason ? { reason } : {})
-				}
-			};
-		})
-	}));
 }
 
 export function applyLocalToolOutput(

@@ -4,7 +4,3 @@
 // tests, matching the default (root) deployment.
 export const base = '';
 export const assets = '';
-
-export function resolveRoute(id: string): string {
-	return id;
-}
