@@ -92,7 +92,9 @@ export function clampDimension(value: number | undefined): number {
 
 /** Build the shared CAIL client bound to this tool's spend-attribution slug. */
 function cailClient(apiBase: string, fetchImpl: typeof fetch): CailClient {
-  return createCailClient({ baseUrl: apiBase, app: CAIL_APP_SLUG, fetchImpl });
+  // Image generation and moderation are billed POSTs. Disable automatic
+  // retries until the gateway can deduplicate execution, not only ledger rows.
+  return createCailClient({ baseUrl: apiBase, app: CAIL_APP_SLUG, fetchImpl, maxRetries: 0 });
 }
 
 /**

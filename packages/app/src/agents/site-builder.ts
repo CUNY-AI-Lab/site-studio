@@ -1218,6 +1218,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
       const result = streamText({
         model,
+        // Model POSTs are billed and the gateway does not yet provide
+        // execution idempotency. Retrying an uncertain request can run it
+        // twice, so fail once and let the user explicitly retry.
+        maxRetries: 0,
         abortSignal: options?.abortSignal,
         system: systemPrompt,
         messages: pruneMessages({

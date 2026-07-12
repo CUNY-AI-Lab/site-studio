@@ -27,9 +27,12 @@ type Captured = { url: string; init: RequestInit; headers: Headers };
 function captureFetch(response: () => Response): {
   fetch: typeof fetch;
   captured: () => Captured;
+  calls: () => number;
 } {
   let seen: Captured | undefined;
+  let callCount = 0;
   const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    callCount += 1;
     seen = {
       url: String(input),
       init: init ?? {},
@@ -37,7 +40,11 @@ function captureFetch(response: () => Response): {
     };
     return response();
   }) as typeof fetch;
-  return { fetch: stub, captured: () => seen ?? { url: "", init: {}, headers: new Headers() } };
+  return {
+    fetch: stub,
+    captured: () => seen ?? { url: "", init: {}, headers: new Headers() },
+    calls: () => callCount
+  };
 }
 
 function json(body: unknown, status = 200): Response {
@@ -152,6 +159,17 @@ describe("generateImage wire contract", () => {
     }
   });
 
+  it("does not retry an uncertain image-generation 5xx", async () => {
+    const { fetch: stub, calls } = captureFetch(
+      () => new Response("upstream error", { status: 503 })
+    );
+
+    const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
+
+    expect(result.ok).toBe(false);
+    expect(calls()).toBe(1);
+  });
+
   it("fails when CAIL_API_BASE is unset", async () => {
     const result = await generateImage({}, "jwt", { prompt: "x" });
     expect(result.ok).toBe(false);
@@ -203,8 +221,9 @@ describe("screenImage moderation gate (fail closed)", () => {
   });
 
   it("fails closed on a classifier 500", async () => {
-    const { fetch: stub } = captureFetch(() => new Response("upstream error", { status: 500 }));
+    const { fetch: stub, calls } = captureFetch(() => new Response("upstream error", { status: 500 }));
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
+    expect(calls()).toBe(1);
   });
 
   it("fails closed on a gibberish (non-JSON) answer", async () => {
@@ -215,10 +234,13 @@ describe("screenImage moderation gate (fail closed)", () => {
   });
 
   it("fails closed on a network throw", async () => {
+    let calls = 0;
     const stub = (async () => {
+      calls += 1;
       throw new Error("network down");
     }) as typeof fetch;
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
+    expect(calls).toBe(1);
   });
 
   it("fails closed when CAIL_API_BASE is unset", async () => {
