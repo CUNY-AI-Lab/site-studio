@@ -16,8 +16,8 @@
         "@ai-sdk/provider": "3.0.8",
         "@cloudflare/ai-chat": "0.2.5",
         "@cloudflare/codemode": "0.3.1",
-        "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#2d51745",
-        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity",
+        "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#1c0752edd90544574635ab1dd1faadb8d556c006",
+        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#220e9b0d86adb049a7a29702a3ff2e8a6bfd13e0",
         "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4",
         "agents": "0.8.4",
         "ai": "6.0.138",
@@ -214,9 +214,9 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@3.0.4", "", {}, "sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw=="],
 
-    "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#2d51745", {}, "CUNY-AI-Lab-cail-client-2d51745"],
+    "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#1c0752e", { "dependencies": { "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4" } }, "CUNY-AI-Lab-cail-client-1c0752e"],
 
-    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#8f94f75", {}, "CUNY-AI-Lab-cail-identity-8f94f75"],
+    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#220e9b0", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-220e9b0"],
 
     "@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#95b45c4", {}, "CUNY-AI-Lab-cail-log-95b45c4"],
 

@@ -16,10 +16,19 @@ describe("describeModelStreamError", () => {
       message: "Too Many Requests",
       statusCode: 429,
       responseBody: JSON.stringify({
-        error: "quota_exceeded",
-        message: "Hourly quota exhausted"
+        error: {
+          message: "Hourly quota exhausted",
+          type: "rate_limit_error",
+          param: null,
+          code: "quota_exceeded",
+          cail: { retry_after_seconds: 3600 },
+        },
       }),
-      responseHeaders: { "retry-after": "3600" }
+      responseHeaders: {
+        "retry-after": "3600",
+        "x-request-id": "req-site-retry-wrapper-1",
+        "x-should-retry": "false",
+      }
     };
     const retryError = {
       name: "AI_RetryError",

@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { authMiddleware } from "./session";
 
-const JWT_SECRET = "session-test-secret";
+const JWT_SECRET = "session-test-secret-at-least-32-bytes";
 
 function base64url(bytes: Uint8Array): string {
   let binary = "";

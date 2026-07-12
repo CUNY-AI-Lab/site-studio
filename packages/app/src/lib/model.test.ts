@@ -137,13 +137,15 @@ describe("gateway quota errors at the adapter boundary", () => {
 
     const thrown = await generateText({ model, prompt: "hi" }).catch((error: unknown) => error);
 
-    expect(thrown).toBeInstanceOf(CailError);
-    const cailError = thrown as CailError;
-    expect(cailError.code).toBe("authentication_required");
-    expect(cailError.message).toBe("Sign in to use CAIL models.");
-    expect(cailError.extras.login_url).toBe("/login");
-    expect(cailError.extras.request_id).toBe("req-site-auth-1");
-    expect(cailError.extras.should_retry).toBe(false);
+    expect(thrown).toMatchObject({
+      name: "AI_APICallError",
+      message: "Sign in to use CAIL models.",
+      statusCode: 401,
+      responseHeaders: expect.objectContaining({
+        "x-request-id": "req-site-auth-1",
+        "x-should-retry": "false",
+      }),
+    });
     expect(calls).toBe(1);
   });
 });

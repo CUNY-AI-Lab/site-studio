@@ -5,7 +5,7 @@ import {
   getRequestIdentity,
 } from "./cail-identity";
 
-const SECRET = "test-shared-secret";
+const SECRET = "test-shared-secret-at-least-32-bytes";
 const ENV = { CAIL_IDENTITY_JWT_SECRET: SECRET };
 
 function base64url(bytes: Uint8Array): string {
@@ -93,7 +93,7 @@ describe("getRequestIdentity — JWT verification", () => {
   });
 
   it("rejects a token signed with a different secret", async () => {
-    const token = await mintJwt(validClaims(), { secret: "wrong-secret" });
+    const token = await mintJwt(validClaims(), { secret: "wrong-shared-secret-at-least-32-bytes" });
     expect(await getRequestIdentity(requestWithToken(token), ENV)).toBeNull();
   });
 
