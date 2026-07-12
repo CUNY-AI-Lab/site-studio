@@ -68,8 +68,24 @@ describe("gateway quota errors at the adapter boundary", () => {
     const upstream = (async () => {
       calls += 1;
       return new Response(
-        JSON.stringify({ error: "quota_exceeded", message: verbatim, retry_after_seconds: 1800 }),
-        { status: 429, headers: { "content-type": "application/json", "retry-after": "1800" } }
+        JSON.stringify({
+          error: {
+            message: verbatim,
+            type: "rate_limit_error",
+            param: null,
+            code: "quota_exceeded",
+            cail: { retry_after_seconds: 1800 },
+          },
+        }),
+        {
+          status: 429,
+          headers: {
+            "content-type": "application/json",
+            "retry-after": "1800",
+            "x-request-id": "req-site-quota-1",
+            "x-should-retry": "false",
+          },
+        }
       );
     }) as typeof fetch;
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
@@ -87,6 +103,47 @@ describe("gateway quota errors at the adapter boundary", () => {
     expect(cailError.status).toBe(429);
     expect(cailError.message).toBe(verbatim);
     expect(cailError.extras.retry_after_seconds).toBe(1800);
+    expect(cailError.extras.retry_after).toBe("1800");
+    expect(cailError.extras.request_id).toBe("req-site-quota-1");
+    expect(cailError.extras.should_retry).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it("preserves a nested authentication error without retrying", async () => {
+    let calls = 0;
+    const upstream = (async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: "Sign in to use CAIL models.",
+            type: "authentication_error",
+            param: null,
+            code: "authentication_required",
+            cail: { login_url: "/login" },
+          },
+        }),
+        {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "x-request-id": "req-site-auth-1",
+            "x-should-retry": "false",
+          },
+        }
+      );
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
+
+    const thrown = await generateText({ model, prompt: "hi" }).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(CailError);
+    const cailError = thrown as CailError;
+    expect(cailError.code).toBe("authentication_required");
+    expect(cailError.message).toBe("Sign in to use CAIL models.");
+    expect(cailError.extras.login_url).toBe("/login");
+    expect(cailError.extras.request_id).toBe("req-site-auth-1");
+    expect(cailError.extras.should_retry).toBe(false);
     expect(calls).toBe(1);
   });
 });

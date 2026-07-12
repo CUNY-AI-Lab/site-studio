@@ -8,6 +8,9 @@ import { getServedContentType as getContentType } from "../../serving-core/src/c
 import { looksLikePageNavigation as looksLikePageNavigationCore } from "../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../serving-core/src/extensionless";
 import { isProtectedServedPath } from "../../serving-core/src/protected-files";
+import { createCailLogger, workersStructuredSink } from "@cuny-ai-lab/cail-log";
+
+const log = createCailLogger({ service: "site-studio-publisher", sink: workersStructuredSink });
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -90,8 +93,8 @@ export async function loadMigrationPointer(
       return null;
     }
     return pointer;
-  } catch (error) {
-    console.warn(`Skipping invalid migration pointer for ${userId}`, error);
+  } catch {
+    log.warn("storage.invalid_record_skipped", { error_code: "invalid_migration_pointer" });
     return null;
   }
 }
@@ -213,8 +216,8 @@ export async function getProjectMetadata(
 
   try {
     return JSON.parse(await object.text()) as ProjectMetadata;
-  } catch (error) {
-    console.warn(`Skipping invalid project metadata: ${metadataKey(userId, projectId)}`, error);
+  } catch {
+    log.warn("storage.invalid_record_skipped", { error_code: "invalid_project_metadata" });
     return null;
   }
 }
