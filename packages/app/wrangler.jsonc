@@ -60,14 +60,10 @@
     // still allowed). Flip to "true" in lockstep with the gateway's
     // CAIL_SSO_MODE=enforce so the workers.dev URL is not an anonymous bypass.
     "CAIL_REQUIRE_IDENTITY": "false",
-    // CSRF_COOKIE_PATH: Path scope for the anti-CSRF delivery cookie
-    // (cail_csrf_sitestudio). "/" is safe on this dedicated hostname, where the
-    // tool owns the whole origin. At a shared-host launch — this tool mounted
-    // under a path prefix like /site-studio alongside sibling tools and /sites/
-    // user content — set this to the tool's own path prefix so sibling tools and
-    // published-site JS cannot read the cookie (browsers only expose a cookie to
-    // pages under its Path).
-    "CSRF_COOKIE_PATH": "/"
+    // Script-readable anti-CSRF delivery cookie scope. This deployment shares
+    // its origin with sibling tools and untrusted /sites/ content, so runtime
+    // validation requires this exact path and rejects a root-scoped cookie.
+    "CSRF_COOKIE_PATH": "/site-studio"
   },
   // ---- Secrets (never real values here) ----
   // Set via `wrangler secret put` (ops-managed; cail-gateway push-secrets.sh):

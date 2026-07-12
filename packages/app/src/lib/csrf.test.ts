@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import { readFileSync } from "node:fs";
 import type { Env } from "../types";
 import {
   CSRF_ERROR_BODY,
@@ -9,8 +10,10 @@ import {
   getCsrfToken,
   getOrMintCsrfToken,
   isLoopbackOrigin,
+  SITE_STUDIO_CSRF_COOKIE_PATH,
   setCsrfCookie,
   timingSafeEqual,
+  validateCsrfCookiePath,
   verifyWsUpgrade,
   type CsrfRequestFacts
 } from "./csrf";
@@ -155,24 +158,46 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
     return res.headers.get("set-cookie") || "";
   }
 
-  it("emits Secure + SameSite=Lax + Path=/, NOT HttpOnly, over https", async () => {
-    const setCookie = await setCookieHeader("https://site-studio.example/x");
+  it("emits Secure + SameSite=Lax + Path=/site-studio, NOT HttpOnly, over https", async () => {
+    const setCookie = await setCookieHeader(
+      "https://tools.example/site-studio/x",
+      SITE_STUDIO_CSRF_COOKIE_PATH
+    );
     expect(setCookie).toContain(`cail_csrf_sitestudio=${TOKEN}`);
     expect(setCookie).toContain("Secure");
     expect(setCookie).toContain("SameSite=Lax");
-    expect(setCookie).toContain("Path=/");
+    expect(setCookie).toContain("Path=/site-studio");
     expect(setCookie).not.toContain("HttpOnly");
   });
 
-  it("honors CSRF_COOKIE_PATH for a shared-host path prefix", async () => {
-    const setCookie = await setCookieHeader("https://tools.example/site-studio/x", "/site-studio");
-    expect(setCookie).toContain("Path=/site-studio");
+  it("rejects missing and root-scoped cookie configuration", () => {
+    expect(() => validateCsrfCookiePath(undefined)).toThrow("CSRF_COOKIE_PATH must be /site-studio");
+    expect(() => validateCsrfCookiePath("/")).toThrow("CSRF_COOKIE_PATH must be /site-studio");
   });
 
   it("drops Secure on plain http (local dev), matching the session cookie", async () => {
-    const setCookie = await setCookieHeader("http://localhost:8792/x");
+    const setCookie = await setCookieHeader(
+      "http://localhost:8792/site-studio/x",
+      SITE_STUDIO_CSRF_COOKIE_PATH
+    );
     expect(setCookie).toContain("cail_csrf_sitestudio=");
     expect(setCookie).not.toContain("Secure");
+  });
+
+  it("keeps the cookie out of a hostile /sites page's browser path scope", async () => {
+    const setCookie = await setCookieHeader(
+      "https://tools.ailab.gc.cuny.edu/site-studio/api/csrf",
+      SITE_STUDIO_CSRF_COOKIE_PATH
+    );
+    expect(setCookie).toMatch(/(?:^|;\s*)Path=\/site-studio(?:;|$)/);
+    expect(setCookie).not.toMatch(/(?:^|;\s*)Path=\/(?:;|$)/);
+    expect("/sites/attacker/index.html".startsWith(SITE_STUDIO_CSRF_COOKIE_PATH)).toBe(false);
+  });
+
+  it("pins the checked-in Wrangler production value to /site-studio", () => {
+    const config = readFileSync(new URL("../../wrangler.jsonc", import.meta.url), "utf8");
+    expect(config).toMatch(/"CSRF_COOKIE_PATH"\s*:\s*"\/site-studio"/);
+    expect(config).not.toMatch(/"CSRF_COOKIE_PATH"\s*:\s*"\/"/);
   });
 });
 

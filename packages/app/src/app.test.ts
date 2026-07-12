@@ -47,6 +47,7 @@ function createEnv(): Env {
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
+    CSRF_COOKIE_PATH: "/site-studio",
     ASSETS: undefined
   };
 }
@@ -162,7 +163,8 @@ describe("GET /api/csrf (rule 3 cookie delivery)", () => {
     // Secure + SameSite=Lax + Path present; NOT HttpOnly (page JS must read it).
     expect(segment).toContain("Secure");
     expect(segment).toContain("SameSite=Lax");
-    expect(segment).toContain("Path=/");
+    expect(segment).toContain("Path=/site-studio");
+    expect(segment).not.toMatch(/(?:^|;\s*)Path=\/(?:;|$)/);
     expect(segment).not.toContain("HttpOnly");
 
     expect(csrfCookieToken(res)).toMatch(/^[0-9a-f]{64}$/);

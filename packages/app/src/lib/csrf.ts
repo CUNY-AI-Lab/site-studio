@@ -27,12 +27,25 @@ import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
  */
 
 export const CSRF_HEADER_NAME = "X-CAIL-CSRF";
+export const SITE_STUDIO_CSRF_COOKIE_PATH = "/site-studio";
 
 /** Exact 403 body for every CSRF rejection (shared contract with the frontend). */
 export const CSRF_ERROR_BODY = {
   error: "csrf_verification_failed",
   message: "This request was blocked because it did not come from Site Studio. Refresh the page and try again."
 } as const;
+
+/**
+ * The production app shares an origin with sibling tools and untrusted
+ * `/sites/*` content. Keep the script-readable delivery cookie inside Site
+ * Studio's mount point; a root-scoped value would expose it to that content.
+ */
+export function validateCsrfCookiePath(path: string | undefined): string {
+  if (path !== SITE_STUDIO_CSRF_COOKIE_PATH) {
+    throw new Error(`CSRF_COOKIE_PATH must be ${SITE_STUDIO_CSRF_COOKIE_PATH}`);
+  }
+  return path;
+}
 
 /**
  * R2 key for the per-session CSRF token. Keyed by the session's durable user
@@ -97,8 +110,8 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
  *
  * Attributes:
  *  - name `cail_csrf_sitestudio`, value = the R2 token.
- *  - Path = CSRF_COOKIE_PATH (default "/"). At a shared-host launch set this to
- *    the tool's own prefix so siblings/published-site JS can't read the cookie.
+ *  - Path = /site-studio. This is validated rather than defaulted so a missing
+ *    or root-scoped production value cannot expose the token to sibling pages.
  *  - Secure (dev-aware, matching lib/session.ts: only over https), SameSite=Lax
  *    (per contract — Lax here, not the session cookie's Strict, so a top-level
  *    navigation into the SPA still carries it), and NOT HttpOnly so page JS can
@@ -114,7 +127,7 @@ export function setCsrfCookie<E extends HonoEnv & { Bindings: Env }>(
   setCookie(c, CSRF_COOKIE_NAME, token, {
     httpOnly: false,
     maxAge: SESSION_TTL_SECONDS,
-    path: c.env.CSRF_COOKIE_PATH || "/",
+    path: validateCsrfCookiePath(c.env.CSRF_COOKIE_PATH),
     sameSite: "Lax",
     secure: new URL(c.req.url).protocol === "https:"
   });

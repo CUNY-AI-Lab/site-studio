@@ -27,12 +27,9 @@ export interface Env {
   // lockstep with the gateway's CAIL_SSO_MODE=enforce.
   CAIL_REQUIRE_IDENTITY?: string;
   // Path scope for the anti-CSRF delivery cookie (cail_csrf_sitestudio).
-  // Default "/". At a shared-host launch — this tool mounted under a path
-  // prefix like /site-studio alongside sibling tools and /sites/ user content —
-  // this MUST be set to the tool's own path prefix so sibling tools and
-  // published-site JS cannot read the cookie (browsers only expose a cookie to
-  // pages under its Path). On a dedicated hostname the tool owns the whole
-  // origin, so "/" is safe. See lib/csrf.ts setCsrfCookie().
+  // Production is mounted at /site-studio on a shared origin alongside
+  // sibling tools and untrusted /sites/ content. Runtime validation rejects a
+  // missing value or any value other than "/site-studio".
   CSRF_COOKIE_PATH?: string;
   SESSION_KV: KVNamespace;
   SITE_STUDIO_BUCKET: R2Bucket;
