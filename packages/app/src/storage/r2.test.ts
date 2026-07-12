@@ -938,9 +938,8 @@ describe("R2ProjectStorage", () => {
 
     it("SS-38: returns the created snapshot when prune delete fails, then converges on the next create", async () => {
       vi.useFakeTimers();
-      // The prune failure is surfaced as a structured cail-log event (one JSON
-      // object on console.log), not an ad-hoc console.warn.
-      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      // The prune failure is surfaced through the structured Worker sink.
+      const logSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         await storage.createProject(userId, projectId, "Test");
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
@@ -967,7 +966,7 @@ describe("R2ProjectStorage", () => {
         expect((resilient as ProjectSnapshot).label).toBe("Resilient");
         expect(
           logSpy.mock.calls.some(
-            ([line]) => typeof line === "string" && line.includes('"event":"snapshot.prune_failed"')
+            ([event]) => JSON.stringify(event).includes('"event":"snapshot.prune_failed"')
           )
         ).toBe(true);
         expect(await storage.listSnapshots(userId, projectId)).toHaveLength(SNAPSHOT_KEEP_COUNT + 1);
@@ -1048,9 +1047,8 @@ describe("R2ProjectStorage", () => {
       const oversized = "x".repeat(MAX_SNAPSHOT_BYTES + 1);
       await storage.writeFile(userId, projectId, "big.txt", oversized);
 
-      // The skip is surfaced as a structured cail-log event (one JSON object
-      // on console.log), not an ad-hoc console.warn.
-      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      // The skip is surfaced through the structured Worker sink.
+      const logSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const result = await storage.createSnapshot(userId, projectId, { trigger: "agent" });
 
       // Skip is signalled, not silent.
@@ -1062,7 +1060,7 @@ describe("R2ProjectStorage", () => {
       }
       expect(
         logSpy.mock.calls.some(
-          ([line]) => typeof line === "string" && line.includes('"event":"snapshot.skipped"')
+          ([event]) => JSON.stringify(event).includes('"event":"snapshot.skipped"')
         )
       ).toBe(true);
       logSpy.mockRestore();

@@ -25,6 +25,7 @@ import {
   correlationFromHeaders,
   createCailLogger,
   outboundCorrelationHeaders,
+  workersStructuredSink,
   type CailCorrelation,
   type CailLogger,
   type CailOutcome,
@@ -34,10 +35,13 @@ import {
 export const LOG_SERVICE = "site-studio";
 
 /**
- * The one process-wide logger. Default sink: one JSON object per event on
- * `console.log`, which Workers Logs indexes per key.
+ * The one process-wide logger. The Cloudflare-native sink sends the event
+ * object directly to Workers Logs for field indexing and native severity.
  */
-export const log: CailLogger = createCailLogger({ service: LOG_SERVICE });
+export const log: CailLogger = createCailLogger({
+  service: LOG_SERVICE,
+  sink: workersStructuredSink,
+});
 
 /** Context variables the boundary middleware provides to downstream handlers. */
 export type LoggingVariables = {

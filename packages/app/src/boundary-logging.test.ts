@@ -3,7 +3,7 @@
  *
  * Pins the adoption contract:
  *  - ONE wide `request.completed` / `auth.denied` event per request, emitted
- *    as a single JSON object on console.log (the Workers Logs sink);
+ *    as a structured object through Cloudflare's native severity console method;
  *  - the event carries ONLY the typed safe-to-log allowlist — subject
  *    (pseudonymous, never email), correlation ids, classified route, method,
  *    status, outcome, duration — and NO content/PII: no query strings, no
@@ -120,31 +120,28 @@ function createEnv(extra?: Partial<Env>): Env {
   };
 }
 
-/** Capture cail-log wide events (single JSON objects on console.log). */
+/** Capture cail-log wide events across Cloudflare's native severity methods. */
 function captureLog() {
-  const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+  const spies = [
+    vi.spyOn(console, "log").mockImplementation(() => {}),
+    vi.spyOn(console, "warn").mockImplementation(() => {}),
+    vi.spyOn(console, "error").mockImplementation(() => {})
+  ];
   return {
     lines(): string[] {
-      return spy.mock.calls
-        .map(([line]) => (typeof line === "string" ? line : ""))
-        .filter((line) => line.startsWith("{"));
+      return spies.flatMap((spy) => spy.mock.calls)
+        .map(([event]) => JSON.stringify(event));
     },
     events(): Array<Record<string, unknown>> {
-      return this.lines()
-        .map((line) => {
-          try {
-            return JSON.parse(line) as Record<string, unknown>;
-          } catch {
-            return null;
-          }
-        })
+      return spies.flatMap((spy) => spy.mock.calls)
+        .map(([event]) => event)
         .filter(
           (event): event is Record<string, unknown> =>
             !!event && typeof event === "object" && "event" in event
         );
     },
     restore() {
-      spy.mockRestore();
+      for (const spy of spies) spy.mockRestore();
     }
   };
 }
