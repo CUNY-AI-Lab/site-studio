@@ -9,6 +9,7 @@ import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
+import { errorCodeFrom, log } from "../lib/logging";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -121,11 +122,9 @@ export function createProjectRouter() {
       try {
         await moveProjectAgentHistory(c.env, user.id, currentId, nextId);
       } catch (error) {
-        console.warn("Failed to move agent history on rename", {
-          userId: user.id,
-          currentId,
-          nextId,
-          error
+        log.warn("agent_history.move_failed", {
+          subject: user.id,
+          error_code: errorCodeFrom(error)
         });
       }
     }
@@ -159,10 +158,9 @@ export function createProjectRouter() {
     try {
       await clearProjectAgentHistory(c.env, user.id, projectId);
     } catch (error) {
-      console.warn("Failed to clear agent history on delete", {
-        userId: user.id,
-        projectId,
-        error
+      log.warn("agent_history.clear_failed", {
+        subject: user.id,
+        error_code: errorCodeFrom(error)
       });
     }
     return c.json({ success: true, message: "Project deleted successfully" });

@@ -14,6 +14,7 @@ import {
   migrationPendingKey
 } from "./migration";
 import { createAgentHistoryPorter } from "./agent-porter";
+import { errorCodeFrom, log } from "./logging";
 
 type SessionVariables = {
   sessionId: string;
@@ -113,8 +114,8 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
       if (fromKv && typeof fromKv === "object" && typeof (fromKv as Record<string, unknown>).id === "string") {
         return fromKv as User;
       }
-    } catch (error) {
-      console.warn(`Ignoring invalid KV session for ${sessionId}`, error);
+    } catch {
+      log.warn("session.invalid_record", { error_code: "invalid_kv_session" });
     }
     // Invalid KV record: fall through to the legacy R2 record, as before.
   }
@@ -138,8 +139,8 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
   let parsed: unknown;
   try {
     parsed = JSON.parse(legacyText) as unknown;
-  } catch (error) {
-    console.warn(`Ignoring invalid legacy session for ${sessionId}`, error);
+  } catch {
+    log.warn("session.invalid_record", { error_code: "invalid_legacy_session" });
     return null;
   }
 
@@ -273,7 +274,7 @@ async function migrateAnonymousSessionIfPresent(
         );
         await stub.markComplete(anonId, subject);
       } catch (error) {
-        console.warn(`Migration markComplete failed for ${anonId} -> ${subject}`, error);
+        log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
       }
       return;
     }
@@ -296,7 +297,11 @@ async function migrateAnonymousSessionIfPresent(
       );
       decision = await stub.claim(pendingAnonId, subject);
     } catch (error) {
-      console.error(`Migration resume gate failed for ${pendingAnonId} -> ${subject}`, error);
+      log.error("migration.resume_gate_failed", {
+        subject,
+        outcome: "error",
+        error_code: errorCodeFrom(error)
+      });
       return;
     }
     if (!decision.granted) {
@@ -317,7 +322,7 @@ async function migrateAnonymousSessionIfPresent(
       );
       await stub.markComplete(pendingAnonId, subject);
     } catch (error) {
-      console.warn(`Migration resume markComplete failed for ${pendingAnonId} -> ${subject}`, error);
+      log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
     }
   }
 }
@@ -369,13 +374,22 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
         // must fail loud. Proceeding would replace the anon cookie with the
         // subject cookie below and permanently orphan the un-migrated anonymous
         // namespace; a 503 lets the user retry with the anon cookie intact.
-        console.error(`Anonymous-data migration blocked by a storage outage for ${subject}`, error);
+        log.error("migration.blocked_by_storage_outage", {
+          subject,
+          status: 503,
+          outcome: "error",
+          error_code: "session_store_unavailable"
+        });
         return sessionStoreUnavailableResponse();
       }
       // Other failures never block authentication — the pending marker written
       // at claim time makes the interrupted migration resumable on a later
       // login (migrateAnonymousSessionIfPresent escalates pre-marker failures).
-      console.error(`Anonymous-data migration failed for ${subject}`, error);
+      log.error("migration.failed", {
+        subject,
+        outcome: "error",
+        error_code: errorCodeFrom(error)
+      });
     }
 
     const kvKey = cailSessionKey(subject);
@@ -435,7 +449,11 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
       user = await readCurrentSession(c.env, sessionId);
     } catch (error) {
       if (error instanceof SessionStoreUnavailableError) {
-        console.error(`Session store unavailable for anonymous session ${sessionId}`, error);
+        log.error("session.store_unavailable", {
+          status: 503,
+          outcome: "error",
+          error_code: "session_store_unavailable"
+        });
         return sessionStoreUnavailableResponse();
       }
       throw error;

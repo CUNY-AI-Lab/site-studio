@@ -17,6 +17,8 @@ import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
+import { CAIL_EVENTS, correlationFromHeaders, type CailCorrelation, type CailLogFields } from "@cuny-ai-lab/cail-log";
+import { errorCodeFrom, log, mintCorrelation, withCorrelationFetch } from "../lib/logging";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -314,7 +316,8 @@ export function createProjectTools(
   snapshotOptions?: {
     label?: string;
     trigger?: "agent";
-  }
+  },
+  fetchImpl?: typeof fetch
 ) {
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   let snapshotPromise: Promise<SnapshotResult> | null = null;
@@ -322,7 +325,8 @@ export function createProjectTools(
   // SS-28: creating the pre-mutation snapshot is non-fatal. If the project is
   // too large to snapshot (createSnapshot returns a skip signal), the mutation
   // still proceeds — the user just has no restore point for this turn. Make the
-  // skip visible via observability (console.warn) rather than swallowing it.
+  // skip visible via observability (a structured wide event) rather than
+  // swallowing it.
   async function ensureSnapshot() {
     if (!snapshotPromise) {
       snapshotPromise = storage.createSnapshot(scope.userId, scope.projectId, {
@@ -333,9 +337,10 @@ export function createProjectTools(
 
     const result = await snapshotPromise;
     if (isSnapshotSkipped(result)) {
-      console.warn(
-        `[site-builder] snapshot skipped for ${scope.userId}/${scope.projectId} (project ${result.totalBytes} bytes > ${result.limitBytes} cap); proceeding with mutation, no restore point for this turn.`
-      );
+      log.warn("snapshot.skipped", {
+        subject: scope.userId,
+        error_code: "snapshot_too_large"
+      });
     }
   }
 
@@ -965,8 +970,8 @@ export function createProjectTools(
         // Ordering (generate → sniff → gate → save) lives in the extracted,
         // integration-tested flow — keep this body a thin binding.
         return runGenerateImageFlow(filename, {
-          generate: () => generateImage(env, identityJwt, { prompt, width, height }),
-          screen: (bytes) => screenImage(env, identityJwt, bytes),
+          generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
+          screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
           saveIfAbsent: (path, bytes) =>
             storage.uploadToProjectIfAbsent(scope.userId, scope.projectId, path, bytes)
         });
@@ -980,12 +985,13 @@ function createChatTools(
   scope: Scope,
   identityJwt: string | null,
   latestUserRequest: string | undefined,
-  clientTools?: Parameters<typeof createToolsFromClientSchemas>[0]
+  clientTools?: Parameters<typeof createToolsFromClientSchemas>[0],
+  fetchImpl?: typeof fetch
 ) {
   const projectTools = createProjectTools(env, scope, identityJwt, {
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
-  });
+  }, fetchImpl);
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
@@ -1089,6 +1095,14 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private identityJwt: string | null = null;
 
   /**
+   * Correlation for the wide events this agent emits and for its outbound CAIL
+   * gateway calls. Adopted from the forwarded request's `traceparent` /
+   * `X-CAIL-Request-Id` at connection time (routes/agents.ts stamps them);
+   * minted fresh only when no captured request exists (cail-log L7).
+   */
+  private correlation: CailCorrelation | null = null;
+
+  /**
    * Capture the caller JWT from connection props on first wake. `onStart` runs
    * once per DO lifetime, so `onConnect` (below) is the per-connection refresh.
    */
@@ -1107,6 +1121,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    * binds the freshest identity available at connection time to the instance.
    */
   onConnect(_connection: Connection, ctx: ConnectionContext): void {
+    // Adopt the boundary's correlation for this connection's unit(s) of work.
+    this.correlation = correlationFromHeaders(ctx.request);
+
     const direct = ctx.request.headers.get("X-CAIL-Identity-JWT");
     if (direct) {
       this.identityJwt = direct;
@@ -1168,7 +1185,45 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     options?: Parameters<ChatHandler>[1]
   ) {
     const requestId = options?.requestId ?? "unknown";
+
+    // ONE wide event per chat turn (cail-log fleet standard): whichever
+    // terminal path runs first — finish, abort, stream error, or setup
+    // failure — emits the single structured event; later callbacks no-op.
+    // Metadata only: subject (the pseudonymous owner id, never email),
+    // correlation ids, model, outcome, duration, token COUNTS. Prompts and
+    // completions never reach the logger (its typed allowlist has no field
+    // that could carry them).
+    const correlation = this.correlation ?? (this.correlation = mintCorrelation());
+    const startedAt = Date.now();
+    let subject: string | undefined;
+    let modelId: string | undefined;
+    let wideEventEmitted = false;
+    const emitWideEvent = (
+      level: "info" | "warn" | "error",
+      event: string,
+      fields: CailLogFields
+    ) => {
+      if (wideEventEmitted) {
+        return;
+      }
+      wideEventEmitted = true;
+      log.log(level, event, {
+        ...correlation,
+        subject,
+        route: "agent.chat",
+        http_method: "POST",
+        model: modelId,
+        duration_ms: Date.now() - startedAt,
+        ...fields
+      });
+    };
+
     if (!this.env.CAIL_API_BASE) {
+      emitWideEvent("error", CAIL_EVENTS.REQUEST_COMPLETED, {
+        status: 500,
+        outcome: "error",
+        error_code: "cail_api_base_missing"
+      });
       return new Response(JSON.stringify({ error: "CAIL_API_BASE is not configured" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
@@ -1179,15 +1234,26 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     try {
       scope = parseScope(this.name);
     } catch {
+      emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
+        status: 400,
+        outcome: "client_error",
+        error_code: "invalid_agent_scope"
+      });
       return new Response(JSON.stringify({ error: "Invalid agent scope" }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
       });
     }
+    subject = scope.userId;
 
     const storage = new R2ProjectStorage(this.env.SITE_STUDIO_BUCKET);
 
     if (!(await storage.projectExists(scope.userId, scope.projectId))) {
+      emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
+        status: 404,
+        outcome: "client_error",
+        error_code: "project_not_found"
+      });
       return new Response(JSON.stringify({ error: "Project not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
@@ -1201,12 +1267,18 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // quota_exceeded, upstream_auth_error, …) surface to the client via the
       // stream unmodified.
       const modelName = resolveModelId(this.env);
-      const model = createCailModel(this.env, this.identityJwt);
+      modelId = modelName;
+      // Correlation propagation: every outbound gateway call (chat completions
+      // via the AI SDK, image generation/moderation from the tools) carries
+      // this request's traceparent + X-CAIL-Request-Id so spend and upstream
+      // errors are followable end to end (browser → worker → DO → gateway).
+      const gatewayFetch = withCorrelationFetch(correlation);
+      const model = createCailModel(this.env, this.identityJwt, gatewayFetch);
       const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
       const systemPrompt = `${SITE_BUILDER_PROMPT}\n\n${buildProjectContext(projectFiles)}`;
-      const tools = createChatTools(this.env, scope, this.identityJwt, latestUserRequest, options?.clientTools);
+      const tools = createChatTools(this.env, scope, this.identityJwt, latestUserRequest, options?.clientTools, gatewayFetch);
 
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
       this.pushObservabilityEvent(requestId, "request-start", "Chat request started", "info", {
@@ -1254,6 +1326,12 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             totalUsage: event.totalUsage,
             responseId: event.response?.id
           });
+          emitWideEvent("info", CAIL_EVENTS.REQUEST_COMPLETED, {
+            status: 200,
+            outcome: "ok",
+            input_tokens: event.totalUsage?.inputTokens,
+            output_tokens: event.totalUsage?.outputTokens
+          });
           if (onFinish) {
             (onFinish as (event: unknown) => unknown)(event);
           }
@@ -1262,18 +1340,21 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           this.finalizeObservabilityRequest(requestId, "aborted", "Chat request aborted", {
             steps: steps.length
           }, "warn");
+          emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
+            outcome: "client_error",
+            error_code: "aborted"
+          });
         },
         onError: (error) => {
           this.finalizeObservabilityRequest(requestId, "error", "streamText reported an error", {
             error: summarizeError(error.error)
           }, "error");
-          console.error("SiteBuilderAgent streamText error", {
-            userId: scope.userId,
-            projectId: scope.projectId,
-            requestId,
-            // SS-45: AI_APICallError carries requestBodyValues (full prompts and
-            // extracted documents). Log only the clipped name/message summary.
-            error: summarizeError(error.error)
+          // SS-45: AI_APICallError carries requestBodyValues (full prompts and
+          // extracted documents). The structured event carries only the stable
+          // error class code — never the error object or its message.
+          emitWideEvent("error", CAIL_EVENTS.UPSTREAM_ERROR, {
+            outcome: "error",
+            error_code: errorCodeFrom(error.error)
           });
         }
       });
@@ -1288,11 +1369,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             : "UI message stream failed", {
             error: summarizeError(error)
           }, "error");
-          console.error("SiteBuilderAgent chat stream failed", {
-            userId: scope.userId,
-            projectId: scope.projectId,
-            requestId,
-            error: summarizeError(error)
+          emitWideEvent("error", CAIL_EVENTS.UPSTREAM_ERROR, {
+            outcome: "error",
+            error_code: described.quota ? "quota_exceeded" : errorCodeFrom(error)
           });
           return described.message;
         }
@@ -1301,11 +1380,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       this.finalizeObservabilityRequest(requestId, "error", "Chat failed before streaming began", {
         error: summarizeError(error)
       }, "error");
-      console.error("Agent streaming error:", {
-        userId: scope.userId,
-        projectId: scope.projectId,
-        requestId,
-        error: summarizeError(error)
+      emitWideEvent("error", CAIL_EVENTS.REQUEST_COMPLETED, {
+        status: 500,
+        outcome: "error",
+        error_code: errorCodeFrom(error)
       });
       return new Response(JSON.stringify({ error: "Failed to process request" }), {
         status: 500,

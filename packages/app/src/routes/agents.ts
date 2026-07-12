@@ -6,11 +6,34 @@ import { jsonError } from "../lib/http";
 import { getCailIdentityJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
 import { R2ProjectStorage } from "../storage/r2";
+import { getCorrelation, type LoggingVariables } from "../lib/logging";
+import { outboundCorrelationHeaders } from "@cuny-ai-lab/cail-log";
 
-type AgentRouterVariables = { user: { id: string }; cailIdentityJwt?: string };
+type AgentRouterVariables = LoggingVariables & { user: { id: string }; cailIdentityJwt?: string };
 
 function agentInstanceName(userId: string, projectId: string): string {
   return `${userId}:${projectId}`;
+}
+
+/**
+ * Correlation propagation (cail-log L7, "adopt, never regenerate"): stamp the
+ * request forwarded into the SiteBuilderAgent Durable Object with this
+ * request's `traceparent` + `X-CAIL-Request-Id` so the agent's events — and
+ * its onward CAIL gateway/model-proxy calls — share the boundary's trace.
+ */
+function withCorrelationHeaders(
+  request: Request,
+  c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>
+): Request {
+  const correlation = getCorrelation(c);
+  if (!correlation) {
+    return request;
+  }
+  const forwarded = new Request(request);
+  for (const [name, value] of Object.entries(outboundCorrelationHeaders(correlation))) {
+    forwarded.headers.set(name, value);
+  }
+  return forwarded;
 }
 
 export function createAgentRouter() {
@@ -87,7 +110,7 @@ export function createAgentRouter() {
       // Strip the csrf param before forwarding so the token never reaches the
       // Durable Object (or its logs/history).
       url.searchParams.delete("csrf");
-      return stub.fetch(new Request(url.toString(), c.req.raw));
+      return stub.fetch(withCorrelationHeaders(new Request(url.toString(), c.req.raw), c));
     }
 
     // Non-WS requests: mutations (POSTs) to this route are covered by the
@@ -97,7 +120,7 @@ export function createAgentRouter() {
       return stub;
     }
 
-    return stub.fetch(c.req.raw);
+    return stub.fetch(withCorrelationHeaders(c.req.raw, c));
   }
 
   app.get("/api/projects/:projectId/observability", async (c) => {

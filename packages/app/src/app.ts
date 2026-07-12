@@ -14,6 +14,7 @@ import { createPublishRouter } from "./routes/publish";
 import { createTemplateRouter } from "./routes/templates";
 import { previewTokenAuth } from "./lib/preview-token";
 import { requireProject, type RequireProjectVariables } from "./lib/require-project";
+import { requestLogging, type LoggingVariables } from "./lib/logging";
 
 /**
  * App assembly lives here (separate from index.ts) so tests can exercise the
@@ -21,7 +22,14 @@ import { requireProject, type RequireProjectVariables } from "./lib/require-proj
  * importing the SiteBuilderAgent Durable Object, whose dependency tree pulls in
  * `cloudflare:`-scheme modules that only exist in the Workers runtime.
  */
-const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & { sessionId: string } }>();
+const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & LoggingVariables & { sessionId: string } }>();
+
+// Fleet logging standard (cail-log): adopt/mint correlation at the fetch
+// boundary and emit ONE wide `request.completed` / `auth.denied` event per
+// request — metadata only (subject, classified route, status, outcome,
+// duration), never content. Registered first so it wraps every route,
+// including the error and not-found paths.
+app.use("*", requestLogging());
 
 // Rule 5 (docs/INTEGRATION.md §3¾): credentialed CORS must use a strict
 // allowlist — never a wildcard or reflected origin. Pinned by test.
@@ -93,7 +101,11 @@ app.onError((error, c) => {
     return c.json({ error: error.message }, error.status);
   }
 
-  console.error("site-studio-app error", error);
+  // No ad-hoc console logging here: the requestLogging boundary middleware
+  // emits the single structured wide event for this request (status 500,
+  // outcome "error", error_code from the error class) after this handler
+  // shapes the response. Raw error objects can interpolate user content and
+  // never reach the logs.
   return c.json({ error: "Internal server error" }, 500);
 });
 

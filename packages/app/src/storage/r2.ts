@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
+import { errorCodeFrom, log } from "../lib/logging";
 
 export class FileNotFoundError extends Error {
   constructor(public readonly filePath: string) {
@@ -84,11 +85,15 @@ function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt;
 }
 
-function safeParseJson<T>(value: string, label: string, key: string): T | null {
+function safeParseJson<T>(value: string, label: string, _key: string): T | null {
   try {
     return JSON.parse(value) as T;
-  } catch (error) {
-    console.warn(`Skipping invalid ${label}: ${key}`, error);
+  } catch {
+    // Structured, metadata-only: the label is one of a handful of fixed
+    // strings; the R2 key (which embeds project names) never reaches the logs.
+    log.warn("storage.invalid_record_skipped", {
+      error_code: `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`
+    });
     return null;
   }
 }
@@ -610,9 +615,11 @@ export class R2ProjectStorage {
     if (totalBytes > MAX_SNAPSHOT_BYTES) {
       // Surface the skip — never silent. Callers also relay it (see
       // ensureSnapshot in site-builder.ts and the manual snapshot route).
-      console.warn(
-        `Skipping snapshot for ${userId}/${projectId}: project size ${totalBytes} bytes exceeds MAX_SNAPSHOT_BYTES ${MAX_SNAPSHOT_BYTES}. Mutation proceeds with no restore point for this turn.`
-      );
+      log.warn("snapshot.skipped", {
+        subject: userId,
+        error_code: "snapshot_too_large",
+        req_bytes: totalBytes
+      });
       return { skipped: true, reason: "too-large", totalBytes, limitBytes: MAX_SNAPSHOT_BYTES };
     }
 
@@ -655,7 +662,10 @@ export class R2ProjectStorage {
     try {
       await this.pruneSnapshots(userId, projectId);
     } catch (error) {
-      console.warn("Snapshot retention prune failed", { userId, projectId, error });
+      log.warn("snapshot.prune_failed", {
+        subject: userId,
+        error_code: errorCodeFrom(error)
+      });
     }
 
     return snapshot;

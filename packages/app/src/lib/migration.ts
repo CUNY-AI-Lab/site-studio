@@ -40,6 +40,7 @@
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { getUserHandle, migrateHandle } from "./handles";
 import { readR2Json, putR2Json } from "./r2-json";
+import { errorCodeFrom, log } from "./logging";
 
 export interface MigrationClaim {
   subject: string;
@@ -370,10 +371,10 @@ async function copyAnonymousNamespace(options: {
       try {
         await porter.port(anonUserId, plan.oldId, subject, plan.newId);
       } catch (error) {
-        console.warn(
-          `Chat-history migration failed for ${anonUserId}:${plan.oldId} -> ${subject}:${plan.newId}`,
-          error
-        );
+        log.warn("migration.chat_history_port_failed", {
+          subject,
+          error_code: errorCodeFrom(error)
+        });
       }
     }
   }

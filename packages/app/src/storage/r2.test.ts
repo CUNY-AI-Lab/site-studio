@@ -938,7 +938,9 @@ describe("R2ProjectStorage", () => {
 
     it("SS-38: returns the created snapshot when prune delete fails, then converges on the next create", async () => {
       vi.useFakeTimers();
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The prune failure is surfaced as a structured cail-log event (one JSON
+      // object on console.log), not an ad-hoc console.warn.
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       try {
         await storage.createProject(userId, projectId, "Test");
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
@@ -963,7 +965,11 @@ describe("R2ProjectStorage", () => {
         });
         expect(isSnapshotSkipped(resilient)).toBe(false);
         expect((resilient as ProjectSnapshot).label).toBe("Resilient");
-        expect(warnSpy).toHaveBeenCalled();
+        expect(
+          logSpy.mock.calls.some(
+            ([line]) => typeof line === "string" && line.includes('"event":"snapshot.prune_failed"')
+          )
+        ).toBe(true);
         expect(await storage.listSnapshots(userId, projectId)).toHaveLength(SNAPSHOT_KEEP_COUNT + 1);
 
         vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 1)));
@@ -979,7 +985,7 @@ describe("R2ProjectStorage", () => {
         expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 0")).toBe(false);
         expect(snapshots.some((snapshot) => snapshot.label === "Snapshot 1")).toBe(false);
       } finally {
-        warnSpy.mockRestore();
+        logSpy.mockRestore();
         vi.useRealTimers();
       }
     });
@@ -1042,7 +1048,9 @@ describe("R2ProjectStorage", () => {
       const oversized = "x".repeat(MAX_SNAPSHOT_BYTES + 1);
       await storage.writeFile(userId, projectId, "big.txt", oversized);
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      // The skip is surfaced as a structured cail-log event (one JSON object
+      // on console.log), not an ad-hoc console.warn.
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       const result = await storage.createSnapshot(userId, projectId, { trigger: "agent" });
 
       // Skip is signalled, not silent.
@@ -1052,8 +1060,12 @@ describe("R2ProjectStorage", () => {
         expect(result.totalBytes).toBeGreaterThan(MAX_SNAPSHOT_BYTES);
         expect(result.limitBytes).toBe(MAX_SNAPSHOT_BYTES);
       }
-      expect(warnSpy).toHaveBeenCalled();
-      warnSpy.mockRestore();
+      expect(
+        logSpy.mock.calls.some(
+          ([line]) => typeof line === "string" && line.includes('"event":"snapshot.skipped"')
+        )
+      ).toBe(true);
+      logSpy.mockRestore();
 
       // No snapshot archive/metadata was written for the skipped turn.
       const snapshots = await storage.listSnapshots(userId, projectId);
