@@ -22,6 +22,10 @@
  *   deterministically (`<id>-imported`, `<id>-imported-2`, …); migrated
  *   metadata is stamped `importedFrom`/`importedOriginalId` so retries and
  *   concurrent runs recognize our own copies instead of re-suffixing.
+ * - **Mid-run writes survive**: the copy phase runs twice — a second
+ *   idempotent sweep immediately before the delete pass catches anonymous
+ *   direct file-API writes that landed during the first sweep (SS-54; only
+ *   a sub-second residual window remains).
  * - **Published-site continuity**: published sites serve live from
  *   `projects/{userId}/…` and the public URL embeds the anonymous id. After
  *   copying, a permanent forwarding pointer (`projects/<anonId>/.migrated.json`)
@@ -238,6 +242,152 @@ function suffixSlug(base: string, used: Set<string>): string {
 }
 
 /**
+ * One idempotent copy sweep: list the anonymous namespace and copy every
+ * project (metadata rewritten), snapshot, and upload into the subject
+ * namespace — copy-if-absent throughout, so re-running only does work for
+ * objects that appeared since the previous sweep. Mappings from an earlier
+ * sweep are passed back in so the SAME anonymous project resolves to the SAME
+ * subject id and slug on every sweep (and a project whose metadata never
+ * existed cannot be re-suffixed into a duplicate on a later sweep).
+ */
+async function copyAnonymousNamespace(options: {
+  bucket: R2Bucket;
+  anonUserId: string;
+  subject: string;
+  subjectHandle: string | null;
+  porter?: ChatHistoryPorter;
+  /** old anonymous projectId -> subject projectId from an earlier sweep */
+  knownProjects?: Record<string, string>;
+  /** old published slug -> subject slug from an earlier sweep */
+  knownSlugs?: Record<string, string>;
+}): Promise<{
+  projectMap: Record<string, string>;
+  slugMap: Record<string, string>;
+}> {
+  const { bucket, anonUserId, subject, subjectHandle, porter } = options;
+  const projectMap: Record<string, string> = { ...options.knownProjects };
+  const slugMap: Record<string, string> = { ...options.knownSlugs };
+
+  // ---- Plan: destination ids and published slugs ----
+  const taken = new Set<string>(Object.values(projectMap));
+  const plans: Array<{
+    oldId: string;
+    newId: string;
+    metadata: ProjectMetadata | null;
+    newSlug?: string;
+    /** first sweep to see this project ports its chat history */
+    portHistory: boolean;
+  }> = [];
+
+  for (const oldId of await listProjectIds(bucket, anonUserId)) {
+    let newId = projectMap[oldId];
+    const portHistory = !newId; // already ported by the sweep that first saw it
+    if (!newId) {
+      newId = await resolveTargetProjectId(bucket, subject, anonUserId, oldId, taken);
+      taken.add(newId);
+      projectMap[oldId] = newId;
+    }
+
+    const metadata = await getMetadata(bucket, anonUserId, oldId);
+    let newSlug: string | undefined;
+    if (metadata?.published) {
+      const oldSlug = metadata.slug || oldId;
+      newSlug = slugMap[oldSlug];
+      if (!newSlug) {
+        const used = await usedSubjectSlugs(bucket, subject, anonUserId, oldId);
+        newSlug = suffixSlug(metadata.slug ? oldSlug : newId, used);
+        slugMap[oldSlug] = newSlug;
+      }
+    }
+    plans.push({ oldId, newId, metadata, newSlug, portHistory });
+  }
+
+  // ---- Copy projects (metadata rewritten; every object copy-if-absent) ----
+  for (const plan of plans) {
+    const fromPrefix = `${projectPrefix(anonUserId)}${plan.oldId}/`;
+    const toPrefix = `${projectPrefix(subject)}${plan.newId}/`;
+
+    // Metadata first, so concurrent/resumed runs can recognize our copy.
+    if (plan.metadata) {
+      const rewritten: ProjectMetadata = {
+        ...plan.metadata,
+        id: plan.newId,
+        importedFrom: anonUserId,
+        importedOriginalId: plan.oldId,
+        ...(plan.newSlug ? { slug: plan.newSlug } : {}),
+        ...(plan.metadata.publishedUrl && plan.newSlug
+          ? {
+              // Never let the subject id into a client-visible URL. When the
+              // subject has a handle, rewrite to the canonical /u/{handle}/
+              // form; otherwise drop the stored URL (it will be regenerated on
+              // the next publish once a handle exists).
+              ...(subjectHandle
+                ? {
+                    publishedUrl: rewritePublishedUrl(
+                      plan.metadata.publishedUrl,
+                      subjectHandle,
+                      plan.newSlug
+                    )
+                  }
+                : { publishedUrl: undefined })
+            }
+          : {})
+      };
+      if (!(await bucket.head(`${toPrefix}.metadata.json`))) {
+        await putR2Json(bucket, `${toPrefix}.metadata.json`, rewritten);
+      }
+    }
+
+    for (const key of await listKeys(bucket, fromPrefix)) {
+      const relative = key.slice(fromPrefix.length);
+      if (relative === ".metadata.json") continue; // handled above
+      await copyIfAbsent(bucket, key, `${toPrefix}${relative}`);
+    }
+
+    // Snapshots: archives copied verbatim, snapshot records re-pointed.
+    const fromSnapshots = `${snapshotUserPrefix(anonUserId)}${plan.oldId}/`;
+    const toSnapshots = `${snapshotUserPrefix(subject)}${plan.newId}/`;
+    for (const key of await listKeys(bucket, fromSnapshots)) {
+      const relative = key.slice(fromSnapshots.length);
+      const toKey = `${toSnapshots}${relative}`;
+      if (key.endsWith(".json")) {
+        if (!(await bucket.head(toKey))) {
+          const record = await readR2Json<ProjectSnapshot>(bucket, key);
+          if (record) {
+            await putR2Json(bucket, toKey, { ...record, projectId: plan.newId });
+          }
+        }
+      } else {
+        await copyIfAbsent(bucket, key, toKey);
+      }
+    }
+
+    // Agent chat history (Durable Object SQLite) — best-effort, never fatal.
+    // Only the sweep that first sees a project ports it: chat history lives
+    // in the DO, not in R2, so a mid-run file write never needs a re-port
+    // (and the destination agent's import never overwrites anyway).
+    if (porter && plan.portHistory) {
+      try {
+        await porter.port(anonUserId, plan.oldId, subject, plan.newId);
+      } catch (error) {
+        console.warn(
+          `Chat-history migration failed for ${anonUserId}:${plan.oldId} -> ${subject}:${plan.newId}`,
+          error
+        );
+      }
+    }
+  }
+
+  // ---- Uploads ----
+  for (const key of await listKeys(bucket, uploadsPrefix(anonUserId))) {
+    const relative = key.slice(uploadsPrefix(anonUserId).length);
+    await copyIfAbsent(bucket, key, `${uploadsPrefix(subject)}${relative}`);
+  }
+
+  return { projectMap, slugMap };
+}
+
+/**
  * Migrate one anonymous user's data into the subject namespace. Safe to call
  * repeatedly and concurrently; see the module doc for the guarantees.
  */
@@ -319,113 +469,40 @@ export async function migrateAnonymousData(options: {
     return finish("nothing-to-migrate", {});
   }
 
-  // ---- Plan: destination ids and published slugs ----
-  const projectMap: Record<string, string> = {};
-  const slugMap: Record<string, string> = {};
-  const taken = new Set<string>();
-  const plans: Array<{
-    oldId: string;
-    newId: string;
-    metadata: ProjectMetadata | null;
-    newSlug?: string;
-  }> = [];
+  // ---- First copy sweep ----
+  const firstSweep = await copyAnonymousNamespace({
+    bucket,
+    anonUserId,
+    subject,
+    subjectHandle,
+    porter
+  });
 
-  for (const oldId of anonProjectIds) {
-    const newId = await resolveTargetProjectId(bucket, subject, anonUserId, oldId, taken);
-    taken.add(newId);
-    projectMap[oldId] = newId;
-
-    const metadata = await getMetadata(bucket, anonUserId, oldId);
-    let newSlug: string | undefined;
-    if (metadata?.published) {
-      const oldSlug = metadata.slug || oldId;
-      const used = await usedSubjectSlugs(bucket, subject, anonUserId, oldId);
-      newSlug = suffixSlug(metadata.slug ? oldSlug : newId, used);
-      slugMap[oldSlug] = newSlug;
-    }
-    plans.push({ oldId, newId, metadata, newSlug });
-  }
-
-  // ---- Copy projects (metadata rewritten; every object copy-if-absent) ----
-  for (const plan of plans) {
-    const fromPrefix = `${projectPrefix(anonUserId)}${plan.oldId}/`;
-    const toPrefix = `${projectPrefix(subject)}${plan.newId}/`;
-
-    // Metadata first, so concurrent/resumed runs can recognize our copy.
-    if (plan.metadata) {
-      const rewritten: ProjectMetadata = {
-        ...plan.metadata,
-        id: plan.newId,
-        importedFrom: anonUserId,
-        importedOriginalId: plan.oldId,
-        ...(plan.newSlug ? { slug: plan.newSlug } : {}),
-        ...(plan.metadata.publishedUrl && plan.newSlug
-          ? {
-              // Never let the subject id into a client-visible URL. When the
-              // subject has a handle, rewrite to the canonical /u/{handle}/
-              // form; otherwise drop the stored URL (it will be regenerated on
-              // the next publish once a handle exists).
-              ...(subjectHandle
-                ? {
-                    publishedUrl: rewritePublishedUrl(
-                      plan.metadata.publishedUrl,
-                      subjectHandle,
-                      plan.newSlug
-                    )
-                  }
-                : { publishedUrl: undefined })
-            }
-          : {})
-      };
-      if (!(await bucket.head(`${toPrefix}.metadata.json`))) {
-        await putR2Json(bucket, `${toPrefix}.metadata.json`, rewritten);
-      }
-    }
-
-    for (const key of await listKeys(bucket, fromPrefix)) {
-      const relative = key.slice(fromPrefix.length);
-      if (relative === ".metadata.json") continue; // handled above
-      await copyIfAbsent(bucket, key, `${toPrefix}${relative}`);
-    }
-
-    // Snapshots: archives copied verbatim, snapshot records re-pointed.
-    const fromSnapshots = `${snapshotUserPrefix(anonUserId)}${plan.oldId}/`;
-    const toSnapshots = `${snapshotUserPrefix(subject)}${plan.newId}/`;
-    for (const key of await listKeys(bucket, fromSnapshots)) {
-      const relative = key.slice(fromSnapshots.length);
-      const toKey = `${toSnapshots}${relative}`;
-      if (key.endsWith(".json")) {
-        if (!(await bucket.head(toKey))) {
-          const record = await readR2Json<ProjectSnapshot>(bucket, key);
-          if (record) {
-            await putR2Json(bucket, toKey, { ...record, projectId: plan.newId });
-          }
-        }
-      } else {
-        await copyIfAbsent(bucket, key, toKey);
-      }
-    }
-
-    // Agent chat history (Durable Object SQLite) — best-effort, never fatal.
-    if (porter) {
-      try {
-        await porter.port(anonUserId, plan.oldId, subject, plan.newId);
-      } catch (error) {
-        console.warn(
-          `Chat-history migration failed for ${anonUserId}:${plan.oldId} -> ${subject}:${plan.newId}`,
-          error
-        );
-      }
-    }
-  }
-
-  // ---- Uploads ----
-  for (const key of await listKeys(bucket, uploadsPrefix(anonUserId))) {
-    const relative = key.slice(uploadsPrefix(anonUserId).length);
-    await copyIfAbsent(bucket, key, `${uploadsPrefix(subject)}${relative}`);
-  }
+  // ---- Second copy sweep, immediately before delete ----
+  // SS-54: an anonymous direct file-API write (PUT/DELETE/rename straight to
+  // R2, no fence) can land DURING the first sweep — after its listing, before
+  // the delete pass below — and would be deleted without ever being copied:
+  // silent loss of that edit. The copy sweep is fully idempotent (copy-if-
+  // absent + metadata head-checks), so re-running it here re-lists the anon
+  // namespace and catches both new files in already-copied projects and a
+  // brand-new project created mid-run, at no-op cost for everything already
+  // copied. Residual: a write landing between THIS sweep's final list and the
+  // delete below (sub-second) is still lost — acknowledged; this shrinks the
+  // window from the whole run to that gap. A hot-path write fence was
+  // deliberately rejected (KV/architecture cost, and it would reintroduce
+  // eventual-consistency races on every file write).
+  const { projectMap, slugMap } = await copyAnonymousNamespace({
+    bucket,
+    anonUserId,
+    subject,
+    subjectHandle,
+    porter,
+    knownProjects: firstSweep.projectMap,
+    knownSlugs: firstSweep.slugMap
+  });
 
   // ---- Forwarding pointer BEFORE deleting originals (URL continuity) ----
+  // Written after the second sweep so a project first seen there is in it.
   const pointer: MigrationPointer = {
     version: 1,
     subject,

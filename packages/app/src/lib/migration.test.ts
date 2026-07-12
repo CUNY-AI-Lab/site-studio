@@ -301,6 +301,99 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
   });
 
+  /**
+   * SS-54 regression rig: run `inject()` right after the nth bucket.list call
+   * with exactly `triggerPrefix`. The injected keys are added AFTER the list
+   * result is computed, so the listing that triggered the injection does not
+   * see them — simulating a direct file-API write racing the migration.
+   */
+  function injectAfterList(triggerPrefix: string, nth: number, inject: () => void) {
+    const original = bucket.list.bind(bucket);
+    let count = 0;
+    bucket.list = vi.fn(async (options: any = {}) => {
+      const result = await original(options);
+      if (options?.prefix === triggerPrefix && ++count === nth) {
+        inject();
+      }
+      return result;
+    }) as typeof bucket.list;
+  }
+
+  it("SS-54: a file written into the anon namespace during the copy sweep is migrated, not deleted", async () => {
+    seedAnonProject(bucket, "portfolio");
+
+    // The first list of `projects/<anon>/portfolio/` is the first sweep's
+    // copy loop enumerating the project's files. A write landing right after
+    // it was, before this fix, invisible to the (single) copy pass yet still
+    // caught by the delete pass — silently lost.
+    injectAfterList(`projects/${ANON}/portfolio/`, 1, () => {
+      bucket.store.set(`projects/${ANON}/portfolio/late-edit.html`, {
+        data: "<h1>written mid-migration</h1>"
+      });
+    });
+
+    const result = await run();
+    expect(result.status).toBe("migrated");
+
+    // The mid-run write survived into the subject namespace...
+    expect(textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/late-edit.html`))).toContain(
+      "written mid-migration"
+    );
+    // ...and the anon original is gone (only the pointer remains).
+    const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
+    expect(anonKeys).toEqual([migrationPointerKey(ANON)]);
+  });
+
+  it("SS-54: a brand-new anon project created during the copy sweep is migrated and in the pointer", async () => {
+    seedAnonProject(bucket, "portfolio");
+
+    // Lists of `projects/<anon>/` (exact prefix): #1 is the inventory, #2 is
+    // the first sweep's plan listing. A project created right after #2 was,
+    // before this fix, never planned or copied yet still deleted.
+    injectAfterList(`projects/${ANON}/`, 2, () => {
+      bucket.store.set(`projects/${ANON}/newproj/.metadata.json`, { data: metadataFor("newproj") });
+      bucket.store.set(`projects/${ANON}/newproj/index.html`, { data: "<h1>newproj (anon)</h1>" });
+    });
+
+    const result = await run();
+    expect(result.status).toBe("migrated");
+    expect(result.projects).toEqual({ portfolio: "portfolio", newproj: "newproj" });
+
+    // The mid-run project survived into the subject namespace...
+    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`).data);
+    expect(meta.importedFrom).toBe(ANON);
+    expect(textOf(bucket.store.get(`projects/${SUBJECT}/newproj/index.html`))).toContain("newproj (anon)");
+    // ...is in the forwarding pointer...
+    const pointer = (await loadMigrationPointer(bucket, ANON)) as MigrationPointer;
+    expect(pointer.projects).toEqual({ portfolio: "portfolio", newproj: "newproj" });
+    // ...and the anon originals are gone (only the pointer remains).
+    const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
+    expect(anonKeys).toEqual([migrationPointerKey(ANON)]);
+  });
+
+  it("SS-54: the second sweep does not disturb what the first sweep copied", async () => {
+    // Subject already owns "site", so the incoming project is suffixed; the
+    // second sweep must resolve the SAME anon project to the SAME subject id
+    // (via the importedFrom stamp) instead of re-suffixing, and must not
+    // overwrite the metadata or files the first sweep wrote.
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, { data: metadataFor("site") });
+    bucket.store.set(`projects/${SUBJECT}/site/index.html`, { data: "<h1>subject original</h1>" });
+    seedAnonProject(bucket, "site");
+
+    const result = await run();
+    expect(result.status).toBe("migrated");
+    expect(result.projects).toEqual({ site: "site-imported" });
+
+    // Exactly one imported copy — no site-imported-2 from the second sweep.
+    const importedIds = new Set(
+      [...bucket.store.keys()]
+        .filter((k) => k.startsWith(`projects/${SUBJECT}/`))
+        .map((k) => k.slice(`projects/${SUBJECT}/`.length).split("/")[0])
+    );
+    expect([...importedIds].sort()).toEqual(["site", "site-imported"]);
+    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`).data).toBe("<h1>subject original</h1>");
+  });
+
   it("porter failures are non-fatal: files still migrate", async () => {
     seedAnonProject(bucket, "portfolio");
     const porter: ChatHistoryPorter = {
