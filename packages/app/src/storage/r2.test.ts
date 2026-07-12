@@ -306,22 +306,24 @@ describe("R2ProjectStorage", () => {
 
   describe("resolvePublishedSlug (atomic slug reservation, SS-5)", () => {
     it("returns the normalized slug when free", async () => {
-      const slug = await storage.resolvePublishedSlug(userId, "My Blog!");
-      expect(slug).toBe("my-blog");
+      const claim = await storage.resolvePublishedSlug(userId, "My Blog!");
+      expect(claim.slug).toBe("my-blog");
+      expect(claim.etag).toBeTruthy();
     });
 
     it("suffixes when the desired slug is already published by another project", async () => {
       await storage.createProject(userId, "p1", "P1");
       await storage.updateProjectMetadata(userId, "p1", { published: true, slug: "blog" });
-      const slug = await storage.resolvePublishedSlug(userId, "blog", "p2");
-      expect(slug).toBe("blog-2");
+      const claim = await storage.resolvePublishedSlug(userId, "blog", "p2");
+      expect(claim.slug).toBe("blog-2");
     });
 
     it("is idempotent for the same project re-publishing its slug", async () => {
       const first = await storage.resolvePublishedSlug(userId, "portfolio", "same-proj");
       const second = await storage.resolvePublishedSlug(userId, "portfolio", "same-proj");
-      expect(first).toBe("portfolio");
-      expect(second).toBe("portfolio");
+      expect(first.slug).toBe("portfolio");
+      expect(second.slug).toBe("portfolio");
+      expect(second.etag).not.toBe(first.etag);
     });
 
     it("SS-5 race: two concurrent publishes of different projects can't both take the same slug", async () => {
@@ -329,8 +331,8 @@ describe("R2ProjectStorage", () => {
         storage.resolvePublishedSlug(userId, "blog", "proj-a"),
         storage.resolvePublishedSlug(userId, "blog", "proj-b")
       ]);
-      expect(new Set([a, b]).size).toBe(2); // distinct slugs
-      expect([a, b].sort()).toEqual(["blog", "blog-2"]);
+      expect(new Set([a.slug, b.slug]).size).toBe(2); // distinct slugs
+      expect([a.slug, b.slug].sort()).toEqual(["blog", "blog-2"]);
     });
 
     it("reuses an ABANDONED (aged) reservation rather than holding the slug forever", async () => {
@@ -343,8 +345,8 @@ describe("R2ProjectStorage", () => {
       );
 
       // proj-b can reclaim the aged slug.
-      const slug = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
-      expect(slug).toBe("notes");
+      const claim = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
+      expect(claim.slug).toBe("notes");
     });
 
     it("does NOT reclaim a FRESH reservation held by another project (concurrency guard holds)", async () => {
@@ -353,8 +355,8 @@ describe("R2ProjectStorage", () => {
         `slugreservations/${userId}/notes.json`,
         JSON.stringify({ projectId: "proj-a", reservedAt: fresh })
       );
-      const slug = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
-      expect(slug).toBe("notes-2");
+      const claim = await storage.resolvePublishedSlug(userId, "notes", "proj-b");
+      expect(claim.slug).toBe("notes-2");
     });
   });
 
@@ -1014,6 +1016,65 @@ describe("R2ProjectStorage", () => {
 
       // Extra file should be deleted
       expect(await storage.fileExists(userId, projectId, "extra.css")).toBe(false);
+    });
+
+    it("rolls back every partial write when restoring a snapshot fails", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "a.txt", "snapshot-a");
+      await storage.writeFile(userId, projectId, "b.txt", "snapshot-b");
+      const snapshot = (await storage.createSnapshot(userId, projectId, {
+        trigger: "manual"
+      })) as ProjectSnapshot;
+
+      await storage.writeFile(userId, projectId, "a.txt", "current-a");
+      await storage.writeFile(userId, projectId, "b.txt", "current-b");
+      await storage.writeFile(userId, projectId, "extra.txt", "current-extra");
+
+      const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
+      const originalPut = putMock.getMockImplementation()!;
+      let injected = false;
+      putMock.mockImplementation(async (key: string, data: unknown, options?: unknown) => {
+        if (key.endsWith("/b.txt") && !injected) {
+          injected = true;
+          throw new Error("restore write failed");
+        }
+        return originalPut(key, data, options);
+      });
+
+      await expect(storage.restoreSnapshot(userId, projectId, snapshot.id)).rejects.toThrow(
+        "restore write failed"
+      );
+      await expect(storage.readFile(userId, projectId, "a.txt")).resolves.toBe("current-a");
+      await expect(storage.readFile(userId, projectId, "b.txt")).resolves.toBe("current-b");
+      await expect(storage.readFile(userId, projectId, "extra.txt")).resolves.toBe("current-extra");
+    });
+
+    it("rolls back overwritten and deleted files when a restore delete fails", async () => {
+      await storage.createProject(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "snapshot");
+      const snapshot = (await storage.createSnapshot(userId, projectId, {
+        trigger: "manual"
+      })) as ProjectSnapshot;
+
+      await storage.writeFile(userId, projectId, "index.html", "current");
+      await storage.writeFile(userId, projectId, "extra.txt", "keep me");
+
+      const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
+      const originalDelete = deleteMock.getMockImplementation()!;
+      let injected = false;
+      deleteMock.mockImplementation(async (key: string) => {
+        if (key.endsWith("/extra.txt") && !injected) {
+          injected = true;
+          throw new Error("restore delete failed");
+        }
+        return originalDelete(key);
+      });
+
+      await expect(storage.restoreSnapshot(userId, projectId, snapshot.id)).rejects.toThrow(
+        "restore delete failed"
+      );
+      await expect(storage.readFile(userId, projectId, "index.html")).resolves.toBe("current");
+      await expect(storage.readFile(userId, projectId, "extra.txt")).resolves.toBe("keep me");
     });
 
     it("throws when restoring non-existent snapshot", async () => {

@@ -41,6 +41,18 @@ export class FileExistsError extends Error {
   }
 }
 
+export class SlugReservationLostError extends Error {
+  constructor(public readonly slug: string) {
+    super("Published slug reservation was lost");
+    this.name = "SlugReservationLostError";
+  }
+}
+
+export interface PublishedSlugClaim {
+  slug: string;
+  etag: string;
+}
+
 function metadataKey(userId: string, projectId: string): string {
   return `projects/${userId}/${projectId}/.metadata.json`;
 }
@@ -686,21 +698,55 @@ export class R2ProjectStorage {
     const extracted = unzipSync(new Uint8Array(await archiveObject.arrayBuffer()));
     const restoredPaths = new Set(Object.keys(extracted));
 
-    // Write all restored files first (overwrites existing)
-    for (const [path, content] of Object.entries(extracted)) {
-      await this.bucket.put(fileKey(userId, projectId, path), content, {
-        httpMetadata: {
-          contentType: getContentType(path)
-        }
+    // R2 has no multi-object transaction. Capture the complete visible state
+    // before changing any key so a failed write or delete can be compensated
+    // before the error reaches the caller.
+    const originalEntries = new Map<
+      string,
+      { content: ArrayBuffer; httpMetadata: R2HTTPMetadata }
+    >();
+    for (const file of await this.listProjectEntries(userId, projectId)) {
+      const object = await this.bucket.get(file.key);
+      if (!object) {
+        continue;
+      }
+      originalEntries.set(file.path, {
+        content: await object.arrayBuffer(),
+        httpMetadata: object.httpMetadata ?? {}
       });
     }
 
-    // Only then delete files that aren't in the snapshot
-    const currentFiles = await this.listProjectEntries(userId, projectId);
-    for (const file of currentFiles) {
-      if (!restoredPaths.has(file.path)) {
-        await this.bucket.delete(fileKey(userId, projectId, file.path));
+    try {
+      // Write all restored files first (overwrites existing).
+      for (const [path, content] of Object.entries(extracted)) {
+        await this.bucket.put(fileKey(userId, projectId, path), content, {
+          httpMetadata: {
+            contentType: getContentType(path)
+          }
+        });
       }
+
+      // Only then delete files that aren't in the snapshot.
+      const currentFiles = await this.listProjectEntries(userId, projectId);
+      for (const file of currentFiles) {
+        if (!restoredPaths.has(file.path)) {
+          await this.bucket.delete(fileKey(userId, projectId, file.path));
+        }
+      }
+    } catch (error) {
+      // Restore every original object, then remove anything introduced by the
+      // partial restore. A one-shot R2 failure cannot leave a mixed project.
+      for (const [path, original] of originalEntries) {
+        await this.bucket.put(fileKey(userId, projectId, path), original.content, {
+          httpMetadata: original.httpMetadata
+        });
+      }
+      for (const file of await this.listProjectEntries(userId, projectId)) {
+        if (!originalEntries.has(file.path)) {
+          await this.bucket.delete(file.key);
+        }
+      }
+      throw error;
     }
 
     await this.updateProjectMetadata(userId, projectId, {});
@@ -717,7 +763,11 @@ export class R2ProjectStorage {
     return safeParseJson<ProjectSnapshot>(await object.text(), "snapshot metadata", key);
   }
 
-  async resolvePublishedSlug(userId: string, desiredSlug: string, excludeProjectId?: string): Promise<string> {
+  async resolvePublishedSlug(
+    userId: string,
+    desiredSlug: string,
+    excludeProjectId?: string
+  ): Promise<PublishedSlugClaim> {
     const normalized = desiredSlug
       .trim()
       .toLowerCase()
@@ -754,8 +804,9 @@ export class R2ProjectStorage {
       if (usedSlugs.has(candidate)) {
         continue;
       }
-      if (await this.claimSlugReservation(userId, candidate, excludeProjectId)) {
-        return candidate;
+      const claim = await this.claimSlugReservation(userId, candidate, excludeProjectId);
+      if (claim) {
+        return claim;
       }
     }
 
@@ -764,12 +815,10 @@ export class R2ProjectStorage {
 
   /**
    * Atomically reserve `slug` for the given project within a user's namespace.
-   * Returns `true` when the reservation now belongs to this project — because
-   * the put-if-absent won the empty key, the existing reservation already names
-   * this project (idempotent re-publish), or the existing reservation is STALE
-   * (older than the publish-in-flight window) and we successfully re-claimed it.
-   * Returns `false` when a live reservation by another project holds the slug,
-   * so the caller advances to the next suffix.
+   * Returns the slug and its current R2 generation when the reservation now
+   * belongs to this project. Returns null when a live reservation by another
+   * project holds the slug or a competing CAS changed the generation, so the
+   * caller advances to the next suffix.
    *
    * Why a timestamp and not a metadata check: `resolvePublishedSlug` runs
    * BEFORE the caller writes the slug into project metadata, so during a genuine
@@ -786,23 +835,28 @@ export class R2ProjectStorage {
     userId: string,
     slug: string,
     projectId?: string
-  ): Promise<boolean> {
+  ): Promise<PublishedSlugClaim | null> {
     const STALE_RESERVATION_MS = 60_000;
     const key = slugReservationKey(userId, slug);
     const makeRecord = () => JSON.stringify({ projectId: projectId ?? null, reservedAt: new Date().toISOString() });
-    const won = await this.putIfAbsent(key, makeRecord(), {
+    const won = await this.bucket.put(key, makeRecord(), {
+      onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: { contentType: "application/json" }
     });
     if (won) {
-      return true;
+      return { slug, etag: won.etag };
     }
 
     // The key was already reserved. Read who holds it and when.
     const existing = await this.bucket.get(key);
     if (!existing) {
       // Reservation vanished between the failed put and this read — try to
-      // reclaim it; a concurrent winner still makes this return false.
-      return this.putIfAbsent(key, makeRecord(), { httpMetadata: { contentType: "application/json" } });
+      // reclaim it; a concurrent winner still makes this return null.
+      const reclaimed = await this.bucket.put(key, makeRecord(), {
+        onlyIf: { etagDoesNotMatch: "*" },
+        httpMetadata: { contentType: "application/json" }
+      });
+      return reclaimed ? { slug, etag: reclaimed.etag } : null;
     }
     const parsed = safeParseJson<{ projectId?: string | null; reservedAt?: string }>(
       await existing.text(),
@@ -813,22 +867,50 @@ export class R2ProjectStorage {
 
     // Ours already (idempotent re-publish of the same project).
     if (projectId && holder === projectId) {
-      return true;
+      const renewed = await this.bucket.put(key, makeRecord(), {
+        onlyIf: { etagMatches: existing.etag },
+        httpMetadata: { contentType: "application/json" }
+      });
+      return renewed ? { slug, etag: renewed.etag } : null;
     }
 
     // Stale (aged past the publish-in-flight window) → reclaim atomically.
     const reservedAtMs = parsed?.reservedAt ? Date.parse(parsed.reservedAt) : NaN;
     const isStale = !Number.isFinite(reservedAtMs) || Date.now() - reservedAtMs > STALE_RESERVATION_MS;
     if (isStale) {
-      // Safe to swallow: clearing the stale reservation is best-effort. The
-      // putIfAbsent below is the real atomic reclaim, so a failed delete just
-      // means this attempt loses the race and retries via the next suffix.
-      await this.bucket.delete(key).catch(() => undefined);
-      return this.putIfAbsent(key, makeRecord(), { httpMetadata: { contentType: "application/json" } });
+      // Replace the exact generation we inspected. Delete-and-recreate opens a
+      // gap where both the former owner and the reclaimer can believe they won.
+      const reclaimed = await this.bucket.put(key, makeRecord(), {
+        onlyIf: { etagMatches: existing.etag },
+        httpMetadata: { contentType: "application/json" }
+      });
+      return reclaimed ? { slug, etag: reclaimed.etag } : null;
     }
 
     // A live, different project holds it — advance to the next suffix.
-    return false;
+    return null;
+  }
+
+  async updateProjectMetadataForSlugClaim(
+    userId: string,
+    projectId: string,
+    claim: PublishedSlugClaim,
+    updates: Partial<ProjectMetadata>
+  ): Promise<ProjectMetadata> {
+    const key = slugReservationKey(userId, claim.slug);
+    const renewed = await this.bucket.put(
+      key,
+      JSON.stringify({ projectId, reservedAt: new Date().toISOString() }),
+      {
+        onlyIf: { etagMatches: claim.etag },
+        httpMetadata: { contentType: "application/json" }
+      }
+    );
+    if (!renewed) {
+      throw new SlugReservationLostError(claim.slug);
+    }
+
+    return this.updateProjectMetadata(userId, projectId, updates);
   }
 
   async findPublishedProjectBySlug(userId: string, slug: string): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {

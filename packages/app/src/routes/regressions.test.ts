@@ -424,6 +424,90 @@ describe("route regressions", () => {
     expect(await publishedSiteResponse.text()).toContain("<h1>Beta</h1>");
   });
 
+  it("fences a stale publisher after another project reclaims its slug", async () => {
+    await storage.createProject(userId, "former-owner", "Shared");
+    await storage.writeFile(userId, "former-owner", "index.html", "<h1>Former</h1>");
+    await storage.createProject(userId, "new-owner", "Shared");
+    await storage.writeFile(userId, "new-owner", "index.html", "<h1>New</h1>");
+
+    const reservationKey = `slugreservations/${userId}/shared.json`;
+    const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
+    const originalPut = putMock.getMockImplementation()!;
+    let releaseFormer!: () => void;
+    const formerReleased = new Promise<void>((resolve) => {
+      releaseFormer = resolve;
+    });
+    let formerReachedFence!: () => void;
+    const reachedFence = new Promise<void>((resolve) => {
+      formerReachedFence = resolve;
+    });
+    let paused = false;
+
+    putMock.mockImplementation(async (key: string, data: unknown, options?: any) => {
+      const record =
+        key === reservationKey && typeof data === "string"
+          ? (JSON.parse(data) as { projectId?: string })
+          : null;
+      if (
+        !paused &&
+        record?.projectId === "former-owner" &&
+        options?.onlyIf?.etagMatches
+      ) {
+        paused = true;
+        formerReachedFence();
+        await formerReleased;
+      }
+      return originalPut(key, data, options);
+    });
+
+    const formerPublish = app.request(
+      "http://site-studio.test/api/projects/former-owner/publish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+    await reachedFence;
+
+    // Age the exact generation the former request resolved. The new owner can
+    // now take it with an ETag CAS while the former request remains paused.
+    const reservation = bucket.store.get(reservationKey)!;
+    bucket.store.set(reservationKey, {
+      ...reservation,
+      data: JSON.stringify({
+        projectId: "former-owner",
+        reservedAt: "2020-01-01T00:00:00.000Z"
+      })
+    });
+
+    const newPublish = await app.request(
+      "http://site-studio.test/api/projects/new-owner/publish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+    expect(newPublish.status).toBe(200);
+
+    releaseFormer();
+    const formerResponse = await formerPublish;
+    expect(formerResponse.status).toBe(200);
+
+    await expect(storage.getProjectMetadata(userId, "new-owner")).resolves.toMatchObject({
+      published: true,
+      slug: "shared"
+    });
+    await expect(storage.getProjectMetadata(userId, "former-owner")).resolves.toMatchObject({
+      published: true,
+      slug: "shared-2"
+    });
+    expect(
+      putMock.mock.calls.some(([key, data]) => {
+        if (key !== `projects/${userId}/former-owner/.metadata.json` || typeof data !== "string") {
+          return false;
+        }
+        const written = JSON.parse(data) as { slug?: string };
+        return written.slug === "shared";
+      })
+    ).toBe(false);
+  });
+
   it("uses the configured published base URL when provided", async () => {
     await storage.createProject(userId, "configured-url", "Configured Url");
     await storage.writeFile(userId, "configured-url", "index.html", "<h1>Configured</h1>");

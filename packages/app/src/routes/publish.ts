@@ -12,7 +12,7 @@ import { isProtectedServedPath } from "../../../serving-core/src/protected-files
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
-import { ProjectNotFoundError, R2ProjectStorage } from "../storage/r2";
+import { ProjectNotFoundError, R2ProjectStorage, SlugReservationLostError } from "../storage/r2";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
 import type { ProjectMetadata } from "../types";
@@ -175,15 +175,35 @@ export function createPublishRouter() {
     }
 
     const desiredSlug = metadata.slug || slugify(metadata.name || projectId) || projectId;
-    const slug = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
-    const url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
+    let slug = "";
+    let url = "";
 
-    await updateMetadataOr404(storage, user.id, projectId, {
-      published: true,
-      publishedUrl: url,
-      publishedAt: new Date().toISOString(),
-      slug
-    });
+    // The reservation ETag is the publish generation. A stale request that was
+    // paused after resolving a slug must renew that exact generation before it
+    // can write metadata; if another project reclaimed it, resolve again and
+    // publish only under a reservation this request still owns.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const claim = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
+      slug = claim.slug;
+      url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
+
+      try {
+        await storage.updateProjectMetadataForSlugClaim(user.id, projectId, claim, {
+          published: true,
+          publishedUrl: url,
+          publishedAt: new Date().toISOString(),
+          slug
+        });
+        break;
+      } catch (error) {
+        if (error instanceof ProjectNotFoundError) {
+          jsonError("Project not found", 404);
+        }
+        if (!(error instanceof SlugReservationLostError) || attempt === 4) {
+          throw error;
+        }
+      }
+    }
 
     const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
 
