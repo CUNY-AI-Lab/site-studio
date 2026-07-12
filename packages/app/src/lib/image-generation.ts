@@ -72,15 +72,15 @@ export function resolveImageClassifierId(env: CailImageEnv): string {
   return env.CAIL_IMAGE_CLASSIFIER || DEFAULT_CAIL_IMAGE_CLASSIFIER;
 }
 
-/** Bounds for generated image dimensions: multiples of 64, clamped to [64, 2048]. */
-const MIN_DIMENSION = 64;
-const MAX_DIMENSION = 2048;
+/** Flux 2 Klein dimensions: multiples of 64, clamped to [256, 1920]. */
+const MIN_DIMENSION = 256;
+const MAX_DIMENSION = 1920;
 const DIMENSION_STEP = 64;
 const DEFAULT_DIMENSION = 1024;
 
 /**
  * Clamp a requested dimension to a sane, model-friendly value: a multiple of 64
- * within [64, 2048]. Non-finite or missing input falls back to 1024.
+ * within [256, 1920]. Non-finite or missing input falls back to 1024.
  */
 export function clampDimension(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {

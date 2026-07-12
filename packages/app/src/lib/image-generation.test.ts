@@ -83,9 +83,11 @@ describe("clampDimension", () => {
     expect(clampDimension(1000)).toBe(1024);
   });
 
-  it("clamps to [64, 2048]", () => {
-    expect(clampDimension(10)).toBe(64);
-    expect(clampDimension(99999)).toBe(2048);
+  it("clamps to Flux's supported [256, 1920] range", () => {
+    expect(clampDimension(10)).toBe(256);
+    expect(clampDimension(256)).toBe(256);
+    expect(clampDimension(1920)).toBe(1920);
+    expect(clampDimension(99999)).toBe(1920);
   });
 });
 
@@ -128,7 +130,7 @@ describe("generateImage wire contract", () => {
     await generateImage(env, "jwt", { prompt: "x", width: 700, height: 99999 }, stub);
     const body = JSON.parse(String(captured().init.body));
     expect(body.input.width).toBe(704);
-    expect(body.input.height).toBe(2048);
+    expect(body.input.height).toBe(1920);
   });
 
   it("base64-decodes the unwrapped native result into bytes", async () => {
