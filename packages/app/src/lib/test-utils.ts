@@ -38,11 +38,11 @@ export type CsrfSession = {
 };
 
 /**
- * Mint (and persist in the mock KV) the CSRF token for a user, returning the
+ * Mint (and persist in the mock R2 bucket) the CSRF token for a user, returning the
  * headers a compliant first-party request would send.
  */
-export async function mintCsrfSession(kv: KVNamespace, userId: string): Promise<CsrfSession> {
-  const token = await getOrMintCsrfToken(kv, userId);
+export async function mintCsrfSession(bucket: R2Bucket, userId: string): Promise<CsrfSession> {
+  const token = await getOrMintCsrfToken(bucket, userId);
   return {
     token,
     headers: {

@@ -26,31 +26,42 @@ const OWN_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 
 function createMockBucket(): R2Bucket {
-  const store = new Set([`projects/${USER_ID}/${PROJECT_ID}/.metadata.json`]);
+  const store = new Map<string, string>([[`projects/${USER_ID}/${PROJECT_ID}/.metadata.json`, "{}"]]);
   return {
     head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
-    get: vi.fn(async () => null),
-    put: vi.fn(async () => undefined),
+    get: vi.fn(async (key: string) => {
+      const value = store.get(key);
+      return value === undefined ? null : { key, text: async () => value };
+    }),
+    put: vi.fn(async (key: string, value: string, options?: R2PutOptions) => {
+      if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
+      store.set(key, value);
+      return { key };
+    }),
     list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
   } as unknown as R2Bucket;
 }
 
 describe("agent route WebSocket gate (rule 4)", () => {
   let kv: ReturnType<typeof createMockKV>;
+  let bucket: R2Bucket;
   let csrf: CsrfSession;
   let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
 
   const env = () =>
     ({
       SESSION_KV: kv,
-      SITE_STUDIO_BUCKET: createMockBucket(),
+      SITE_STUDIO_BUCKET: bucket,
       SITE_BUILDER_AGENT: {} as DurableObjectNamespace<never>,
       APP_PUBLIC_DOMAIN
     }) as unknown as Env;
 
   beforeEach(async () => {
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, USER_ID);
+    bucket = createMockBucket();
+    csrf = await mintCsrfSession(bucket, USER_ID);
     app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: USER_ID });

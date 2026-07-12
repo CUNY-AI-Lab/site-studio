@@ -155,7 +155,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
   });
 
   describe("POST /api/projects", () => {

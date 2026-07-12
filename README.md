@@ -77,6 +77,13 @@ The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/ste
 
 For production, configure secrets with Wrangler / Cloudflare, not by committing env files.
 
+The app stores CSRF tokens under the `csrf/` prefix in the existing private R2
+bucket. Match their 30-day session lifetime with a bucket lifecycle rule:
+
+```bash
+bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --expire-days 30 --force
+```
+
 ## Main Routes
 
 - `GET /api/health`

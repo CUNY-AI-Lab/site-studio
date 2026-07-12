@@ -67,14 +67,14 @@ app.use("/api/projects/:id", requireProject());
 app.use("/api/projects/:id/*", requireProject());
 
 // Token issuance for the shared contract (INTEGRATION.md §3¾ rule 3): GET
-// /api/csrf mints/looks-up the stable per-session KV token and DELIVERS it via
+// /api/csrf mints/looks-up the stable per-session R2 token and DELIVERS it via
 // a path-scoped Set-Cookie (setCsrfCookie) — never in the response body. A body
 // token would be readable by any same-origin sibling or /sites/ script that
 // fetches this endpoint with the ambient session cookie, defeating rule 3. The
 // body is 204 with no token anywhere.
 app.get("/api/csrf", async (c) => {
   const user = c.get("user");
-  const token = await getOrMintCsrfToken(c.env.SESSION_KV, user.id);
+  const token = await getOrMintCsrfToken(c.env.SITE_STUDIO_BUCKET, user.id);
   setCsrfCookie(c, token);
   return c.body(null, 204);
 });

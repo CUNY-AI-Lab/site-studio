@@ -35,14 +35,14 @@ export const CSRF_ERROR_BODY = {
 } as const;
 
 /**
- * KV key for the per-session CSRF token. Keyed by the session's durable user
+ * R2 key for the per-session CSRF token. Keyed by the session's durable user
  * id. Judgment call vs. the contract's "keyed by X-CAIL-Subject": when the
  * request carries a verified CAIL identity the durable id IS the subject
  * (`cail-…`); anonymous pre-SSO sessions have no subject, so their anonymous
  * `user_…` id stands in. Same key space, same lifetime as the session record.
  */
 function csrfTokenKey(userId: string): string {
-  return `csrf:${userId}`;
+  return `csrf/${encodeURIComponent(userId)}`;
 }
 
 /** Mint 32 random bytes as lowercase hex (64 chars). */
@@ -56,41 +56,39 @@ function mintToken(): string {
 }
 
 /** Look up the session's CSRF token without minting one. */
-export async function getCsrfToken(kv: KVNamespace, userId: string): Promise<string | null> {
-  const stored = await kv.get(csrfTokenKey(userId));
-  return typeof stored === "string" && stored.length > 0 ? stored : null;
+export async function getCsrfToken(bucket: R2Bucket, userId: string): Promise<string | null> {
+  const stored = await bucket.get(csrfTokenKey(userId));
+  if (!stored) return null;
+  const token = await stored.text();
+  return token.length > 0 ? token : null;
 }
 
 /**
- * Lazily mint the session's CSRF token, persisting it in KV so it is stable
+ * Lazily mint the session's CSRF token, persisting it in strongly consistent R2
  * across requests for the session's life (same TTL as the session record).
  *
- * SS-53: the mint is a read-check-write and KV has NO conditional put, so two
- * parallel first requests can both read "no token" and mint divergent tokens.
- * The old code returned its own mint unconditionally: the racer whose put lost
- * handed the client a token that no longer matches KV, and every mutation then
- * 403s until a refetch. Since a true put-if-absent is unavailable on KV, we
- * converge by RE-READING after the put and returning what actually settled —
- * every racer that shares the KV view returns the same token that
- * verifications (getCsrfToken) will read. Residual: an interleaving where a
- * racer's put lands after another's re-read can still diverge (KV cannot close
- * this without CAS), and cross-colo KV propagation lag is a separate, held
- * concern.
+ * SS-53: R2 conditional puts are strongly consistent. Exactly one parallel
+ * first request can create the object; losers read and return the winner.
  */
-export async function getOrMintCsrfToken(kv: KVNamespace, userId: string): Promise<string> {
-  const existing = await getCsrfToken(kv, userId);
+export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Promise<string> {
+  const existing = await getCsrfToken(bucket, userId);
   if (existing) {
     return existing;
   }
 
   const token = mintToken();
-  await kv.put(csrfTokenKey(userId), token, { expirationTtl: SESSION_TTL_SECONDS });
-  const settled = await getCsrfToken(kv, userId);
-  return settled ?? token;
+  const created = await bucket.put(csrfTokenKey(userId), token, {
+    onlyIf: { etagDoesNotMatch: "*" }
+  });
+  if (created) return token;
+
+  const winner = await getCsrfToken(bucket, userId);
+  if (!winner) throw new Error("CSRF token create lost but no winner was readable");
+  return winner;
 }
 
 /**
- * Deliver the KV token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
+ * Deliver the R2 token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
  * "Delivery"). The token must NEVER appear in a response body — a same-origin
  * sibling or student-authored /sites/ script could fetch GET /api/csrf with the
  * ambient session cookie and read a JSON token straight out of the body,
@@ -98,16 +96,16 @@ export async function getOrMintCsrfToken(kv: KVNamespace, userId: string): Promi
  * browsers only expose a cookie to pages under its Path.
  *
  * Attributes:
- *  - name `cail_csrf_sitestudio`, value = the KV token.
+ *  - name `cail_csrf_sitestudio`, value = the R2 token.
  *  - Path = CSRF_COOKIE_PATH (default "/"). At a shared-host launch set this to
  *    the tool's own prefix so siblings/published-site JS can't read the cookie.
  *  - Secure (dev-aware, matching lib/session.ts: only over https), SameSite=Lax
  *    (per contract — Lax here, not the session cookie's Strict, so a top-level
  *    navigation into the SPA still carries it), and NOT HttpOnly so page JS can
  *    read it via document.cookie. This is stateful double-submit: the server
- *    still verifies the request header against the KV token, so a readable
+ *    still verifies the request header against the R2 token, so a readable
  *    cookie does not weaken the check — a sibling that plants its own
- *    cookie+header pair still can't produce the real KV token.
+ *    cookie+header pair still can't produce the real R2 token.
  */
 export function setCsrfCookie<E extends HonoEnv & { Bindings: Env }>(
   c: Context<E>,
@@ -289,7 +287,7 @@ export const csrfProtect = createMiddleware<{ Bindings: Env }>(async (c, next) =
   // The session user is set by authMiddleware upstream. A mutation path with
   // no session in scope has no token to verify against and fails closed.
   const user = (c as unknown as { get: (key: string) => unknown }).get("user") as User | undefined;
-  const expected = user ? await getCsrfToken(c.env.SESSION_KV, user.id) : null;
+  const expected = user ? await getCsrfToken(c.env.SITE_STUDIO_BUCKET, user.id) : null;
 
   if (!verifyCsrf(c, { token: expected })) {
     return c.json(CSRF_ERROR_BODY, 403);

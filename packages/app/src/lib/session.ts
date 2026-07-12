@@ -445,6 +445,17 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
   if (!user) {
     sessionId = crypto.randomUUID().replace(/-/g, "");
     user = createAnonymousUser();
+    // R2 is the strongly consistent identity backstop. Write it before issuing
+    // the cookie so a subsequent request in another colo cannot interpret KV
+    // propagation lag as an absent session and mint a replacement identity.
+    await c.env.SITE_STUDIO_BUCKET.put(
+      `sessions/${sessionId}.json`,
+      JSON.stringify({
+        user,
+        expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()
+      } satisfies LegacySessionRecord),
+      { httpMetadata: { contentType: "application/json" } }
+    );
     await c.env.SESSION_KV.put(sessionKey(sessionId), JSON.stringify(user), {
       expirationTtl: SESSION_TTL_SECONDS
     });

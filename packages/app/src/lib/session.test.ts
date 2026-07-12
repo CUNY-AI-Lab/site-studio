@@ -93,7 +93,8 @@ function createEnv(overrides?: Partial<Env>): Env {
       put: vi.fn(async () => undefined)
     } as unknown as KVNamespace,
     SITE_STUDIO_BUCKET: {
-      get: vi.fn(async () => null)
+      get: vi.fn(async () => null),
+      put: vi.fn(async (key: string) => ({ key }))
     } as unknown as R2Bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: createCoordinatorNamespace().namespace,
@@ -117,7 +118,8 @@ describe("authMiddleware", () => {
       SITE_STUDIO_BUCKET: {
         get: vi.fn(async () => ({
           text: async () => "{not valid json"
-        }))
+        })),
+        put: vi.fn(async (key: string) => ({ key }))
       } as unknown as R2Bucket
     });
 
@@ -607,6 +609,30 @@ describe("authMiddleware anonymous-data migration", () => {
     const body = (await response.json()) as { user: { id: string } };
     expect(body.user.id).toMatch(/^user_/);
     expect(response.headers.get("set-cookie")).toContain("site-studio-session=");
+  });
+
+  it("keeps a new anonymous identity when the next colo cannot see its KV write", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const testEnv = createEnv({ SESSION_KV: kv, SITE_STUDIO_BUCKET: bucket });
+
+    const first = await buildApp().request("http://site-studio.test/api/test", {}, testEnv);
+    expect(first.status).toBe(200);
+    const original = (await first.json()) as { user: { id: string } };
+    const cookie = first.headers.get("set-cookie")?.match(/site-studio-session=([^;]+)/)?.[1];
+    expect(cookie).toBeTruthy();
+
+    // Simulate a read in a colo where the just-written KV value has not arrived.
+    kv.store.delete(`session:${cookie}`);
+    const second = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { Cookie: `site-studio-session=${cookie}` } },
+      testEnv
+    );
+
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { user: { id: string } }).user.id).toBe(original.user.id);
+    expect(second.headers.get("set-cookie")).toBeNull();
   });
 
   it("pure anonymous flow is untouched: no migration traces, data stays put", async () => {

@@ -194,7 +194,7 @@ describe("route regressions", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
     // The publish flow now requires a public handle; give the test user one so
     // the existing publish/serve regressions exercise the /u/{handle}/ path.
     seedHandle(bucket, userId, handle);
@@ -673,7 +673,7 @@ describe("served-bytes security headers (§3¾)", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
     seedHandle(bucket, userId, handle);
   });
 
@@ -1080,7 +1080,7 @@ describe("image upload hardening", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
     await storage.createProject(userId, "imgproj", "Image Project");
   });
 
@@ -1283,7 +1283,7 @@ describe("images inventory endpoint", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
   });
 
   it("lists project images and placeholder findings with an extractable src", async () => {
@@ -1341,7 +1341,7 @@ describe("csrf protection on all mutation routes", () => {
     bucket = createMockBucket();
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
   });
 
   const json = (body: unknown): Pick<RequestInit, "body" | "headers"> => ({
@@ -1430,7 +1430,7 @@ describe("SS-28 manual snapshot cap (over-cap → 413, normal → 201)", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, userId);
+    csrf = await mintCsrfSession(bucket, userId);
     await storage.createProject(userId, "snapproj", "Snap Project");
   });
 

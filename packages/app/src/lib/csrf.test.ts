@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import {
@@ -14,11 +14,28 @@ import {
   verifyWsUpgrade,
   type CsrfRequestFacts
 } from "./csrf";
-import { createMockKV, mintCsrfSession } from "./test-utils";
+import { mintCsrfSession } from "./test-utils";
 
 const REQUEST_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 const TOKEN = "a".repeat(64);
+
+function createCsrfBucket(): R2Bucket {
+  const store = new Map<string, string>();
+  return {
+    get: vi.fn(async (key: string) => {
+      const value = store.get(key);
+      return value === undefined ? null : { key, text: async () => value };
+    }),
+    put: vi.fn(async (key: string, value: string, options?: R2PutOptions) => {
+      if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
+      store.set(key, value);
+      return { key };
+    })
+  } as unknown as R2Bucket;
+}
 
 function facts(overrides: Partial<CsrfRequestFacts>): CsrfRequestFacts {
   return {
@@ -90,39 +107,39 @@ describe("csrfDecision (rules 2+3 matrix)", () => {
 
 describe("token mint/lookup", () => {
   it("mints a 64-char hex token lazily and keeps it stable per user", async () => {
-    const kv = createMockKV();
-    expect(await getCsrfToken(kv, "cail-a")).toBeNull();
+    const bucket = createCsrfBucket();
+    expect(await getCsrfToken(bucket, "cail-a")).toBeNull();
 
-    const first = await getOrMintCsrfToken(kv, "cail-a");
+    const first = await getOrMintCsrfToken(bucket, "cail-a");
     expect(first).toMatch(/^[0-9a-f]{64}$/);
 
-    const second = await getOrMintCsrfToken(kv, "cail-a");
+    const second = await getOrMintCsrfToken(bucket, "cail-a");
     expect(second).toBe(first);
-    expect(await getCsrfToken(kv, "cail-a")).toBe(first);
+    expect(await getCsrfToken(bucket, "cail-a")).toBe(first);
   });
 
   it("mints different tokens for different users", async () => {
-    const kv = createMockKV();
-    const a = await getOrMintCsrfToken(kv, "cail-a");
-    const b = await getOrMintCsrfToken(kv, "user_anon");
+    const bucket = createCsrfBucket();
+    const a = await getOrMintCsrfToken(bucket, "cail-a");
+    const b = await getOrMintCsrfToken(bucket, "user_anon");
     expect(a).not.toBe(b);
   });
 
   // SS-53: two parallel FIRST requests both read "no token" and mint. The old
   // read-check-write returned each racer its own mint, so one client held a
   // token that no longer matched KV and every subsequent mutation 403'd until a
-  // refetch. All racers must converge on the token that actually settled in KV.
+  // refetch. All racers must converge on the token atomically created in R2.
   it("SS-53: two parallel first requests converge on the single stored token", async () => {
-    const kv = createMockKV();
+    const bucket = createCsrfBucket();
 
     const [a, b] = await Promise.all([
-      getOrMintCsrfToken(kv, "cail-a"),
-      getOrMintCsrfToken(kv, "cail-a")
+      getOrMintCsrfToken(bucket, "cail-a"),
+      getOrMintCsrfToken(bucket, "cail-a")
     ]);
 
     expect(a).toBe(b);
     // What each racer handed the client is exactly what verification will read.
-    await expect(getCsrfToken(kv, "cail-a")).resolves.toBe(a);
+    await expect(getCsrfToken(bucket, "cail-a")).resolves.toBe(a);
   });
 });
 
@@ -250,58 +267,58 @@ describe("csrfProtect middleware", () => {
     return app;
   }
 
-  const env = (kv: KVNamespace) => ({ SESSION_KV: kv, APP_PUBLIC_DOMAIN }) as unknown as Env;
+  const env = (bucket: R2Bucket) => ({ SITE_STUDIO_BUCKET: bucket, APP_PUBLIC_DOMAIN }) as unknown as Env;
 
   it("no-ops on GET and OPTIONS", async () => {
-    const kv = createMockKV();
+    const bucket = createCsrfBucket();
     const app = buildApp("cail-me");
 
-    const get = await app.request(`${REQUEST_ORIGIN}/api/thing`, {}, env(kv));
+    const get = await app.request(`${REQUEST_ORIGIN}/api/thing`, {}, env(bucket));
     expect(get.status).toBe(200);
 
-    const options = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "OPTIONS" }, env(kv));
+    const options = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "OPTIONS" }, env(bucket));
     expect(options.status).toBe(204);
   });
 
   it("rejects a tokenless POST with the exact 403 envelope", async () => {
-    const kv = createMockKV();
+    const bucket = createCsrfBucket();
     const app = buildApp("cail-me");
 
-    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST" }, env(kv));
+    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST" }, env(bucket));
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
   });
 
   it("accepts a POST with a valid token + same-origin posture", async () => {
-    const kv = createMockKV();
-    const { headers } = await mintCsrfSession(kv, "cail-me");
+    const bucket = createCsrfBucket();
+    const { headers } = await mintCsrfSession(bucket, "cail-me");
     const app = buildApp("cail-me");
 
-    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(kv));
+    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(bucket));
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ wrote: true });
   });
 
   it("rejects a valid token when Sec-Fetch-Site says cross-site", async () => {
-    const kv = createMockKV();
-    const { token } = await mintCsrfSession(kv, "cail-me");
+    const bucket = createCsrfBucket();
+    const { token } = await mintCsrfSession(bucket, "cail-me");
     const app = buildApp("cail-me");
 
     const res = await app.request(
       `${REQUEST_ORIGIN}/api/thing`,
       { method: "POST", headers: { [CSRF_HEADER_NAME]: token, "Sec-Fetch-Site": "cross-site" } },
-      env(kv)
+      env(bucket)
     );
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
   });
 
   it("fails closed when no session user is in scope", async () => {
-    const kv = createMockKV();
-    const { headers } = await mintCsrfSession(kv, "cail-me");
+    const bucket = createCsrfBucket();
+    const { headers } = await mintCsrfSession(bucket, "cail-me");
     const app = buildApp(undefined);
 
-    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(kv));
+    const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(bucket));
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
   });

@@ -72,7 +72,7 @@ export function createAgentRouter() {
         requestOrigin: url.origin,
         appPublicDomain: c.env.APP_PUBLIC_DOMAIN,
         presentedToken: url.searchParams.get("csrf"),
-        expectedToken: await getCsrfToken(c.env.SESSION_KV, user.id)
+        expectedToken: await getCsrfToken(c.env.SITE_STUDIO_BUCKET, user.id)
       });
 
       if (!accepted) {

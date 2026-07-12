@@ -341,7 +341,7 @@ describe("createHandleRouter", () => {
   beforeEach(async () => {
     bucket = createMockBucket();
     kv = createMockKV();
-    csrf = await mintCsrfSession(kv, "cail-me");
+    csrf = await mintCsrfSession(bucket, "cail-me");
     app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: "cail-me" });

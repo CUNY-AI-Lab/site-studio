@@ -18,21 +18,32 @@ const BASE = "https://site-studio.example";
 const ALLOWED_ORIGIN = "https://tools.ailab.gc.cuny.edu";
 
 function createMockBucket(): R2Bucket {
+  const store = new Map<string, string>();
   return {
-    head: vi.fn(async () => null),
-    get: vi.fn(async () => null),
-    put: vi.fn(async (key: string) => ({ key, etag: `${key}:1` })),
+    head: vi.fn(async (key: string) => (store.has(key) ? { key } : null)),
+    get: vi.fn(async (key: string) => {
+      const value = store.get(key);
+      return value === undefined ? null : { key, text: async () => value };
+    }),
+    put: vi.fn(async (key: string, value: string, options?: R2PutOptions) => {
+      if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && store.has(key)) {
+        return null;
+      }
+      store.set(key, value);
+      return { key, etag: `${key}:1` };
+    }),
     delete: vi.fn(async () => undefined),
     list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
   } as unknown as R2Bucket;
 }
 
 let kv: MockKV;
+let bucket: R2Bucket;
 
 function createEnv(): Env {
   return {
     SESSION_KV: kv,
-    SITE_STUDIO_BUCKET: createMockBucket(),
+    SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
@@ -79,6 +90,7 @@ function csrfCookieSegment(res: Response): string {
 
 beforeEach(() => {
   kv = createMockKV();
+  bucket = createMockBucket();
 });
 
 describe("CORS allowlist (rule 5)", () => {
