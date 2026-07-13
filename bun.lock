@@ -17,8 +17,8 @@
         "@cloudflare/ai-chat": "0.2.5",
         "@cloudflare/codemode": "0.3.1",
         "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#1c0752edd90544574635ab1dd1faadb8d556c006",
-        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#220e9b0d86adb049a7a29702a3ff2e8a6bfd13e0",
-        "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4",
+        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#b8738b2372f4cde14aa1a0ab3d7fd096c6a9645a",
+        "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c429c05e42557143ddfc1ff8afaf5b7b1c1",
         "agents": "0.8.4",
         "ai": "6.0.138",
         "fflate": "0.8.2",
@@ -75,7 +75,7 @@
       "name": "@site-studio/worker",
       "version": "0.1.0",
       "dependencies": {
-        "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4",
+        "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c429c05e42557143ddfc1ff8afaf5b7b1c1",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "4.20260627.1",
@@ -216,7 +216,7 @@
 
     "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#1c0752e", { "dependencies": { "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4" } }, "CUNY-AI-Lab-cail-client-1c0752e"],
 
-    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#220e9b0", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-220e9b0"],
+    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#b8738b2", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-b8738b2"],
 
     "@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#95b45c4", {}, "CUNY-AI-Lab-cail-log-95b45c4"],
 
@@ -1185,6 +1185,8 @@
     "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
 
     "@rolldown/binding-wasm32-wasi/@emnapi/runtime": ["@emnapi/runtime@1.11.1", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-vgj7R3y3Wgx24IQaGPA/R6YFXLHVMOZ0uVEyIQPaWs+rd1AzfEMXlAC22FYwO1XkKR6NPsq7mUandH8oIRdZFw=="],
+
+    "@site-studio/worker/@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#95b45c4", {}, "CUNY-AI-Lab-cail-log-95b45c4"],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" }, "bundled": true }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 
