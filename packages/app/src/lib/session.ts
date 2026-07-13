@@ -328,19 +328,17 @@ async function migrateAnonymousSessionIfPresent(
 /**
  * Auth middleware for protected routes.
  *
- * Identity precedence (docs/INTEGRATION.md §3):
- *   1. A present `X-CAIL-Identity-JWT-V2` is authoritative and must verify;
- *      failure rejects with no V1 fallback. Otherwise a verified legacy
- *      `X-CAIL-Identity-JWT` wins. The durable
- *      owner key becomes the CAIL subject; the KV session is bound to that
- *      subject so the browser cookie remains a convenience affordance but never
- *      the source of ownership. Bare X-CAIL-* headers are ignored — this worker
- *      is reachable on workers.dev, where anyone can set them.
- *   2. No legacy identity + CAIL_REQUIRE_IDENTITY="true" → 401
+ * Identity contract (docs/INTEGRATION.md §3):
+ *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
+ *      `CAIL_IDENTITY_JWKS` for audience `cail:site-studio`. The durable owner
+ *      key becomes the CAIL subject; the KV session is bound to that subject so
+ *      the browser cookie remains a convenience affordance but never the source
+ *      of ownership. Other bare X-CAIL-* headers are ignored — this worker is
+ *      reachable on workers.dev, where anyone can set them.
+ *   2. No identity + CAIL_REQUIRE_IDENTITY="true" → 401
  *      `authentication_required` envelope (this is a protected kind=api route;
  *      browsers redirect to /login?rt=…).
- *   3. No/invalid V1 identity + not required → anonymous KV session
- *      (pre-SSO-rollout behavior, unchanged).
+ *   3. No identity + not required → anonymous KV session.
  */
 export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: SessionVariables }>(async (c, next) => {
   const existingSessionId = c.get("sessionId") as string | undefined;
@@ -353,8 +351,8 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
 
   const identityResolution = await resolveRequestIdentity(c.req.raw, c.env);
 
-  // A present V2 header is authoritative. Invalid V2, malformed JWKS, or
-  // missing JWKS rejects even while anonymous/V1 compatibility remains on.
+  // A presented credential must verify. Invalid tokens and missing or malformed
+  // JWKS configuration reject even while anonymous access remains enabled.
   if (identityResolution.status === "invalid") {
     return cailAuthRequiredResponse();
   }
@@ -440,7 +438,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     return cailAuthRequiredResponse();
   }
 
-  // Anonymous fallback (pre-SSO-rollout). Unchanged from the original flow.
+  // Anonymous session path while identity enforcement is disabled.
   let sessionId = getCookie(c, SESSION_COOKIE_NAME) || "";
   let user: User | null = null;
 

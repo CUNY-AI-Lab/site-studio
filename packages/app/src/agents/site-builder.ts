@@ -1116,9 +1116,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
   /**
    * Refresh the caller JWT on every new WebSocket connection. The upgrade
-   * request carries the middleware-selected token in connection props. Prefer
-   * that verified selection over raw headers, since a dual-issued request also
-   * carries a stale-compatible V1 token alongside authoritative V2.
+   * request carries the middleware-verified token in connection props.
    */
   onConnect(_connection: Connection, ctx: ConnectionContext): void {
     // Adopt the boundary's correlation for this connection's unit(s) of work.

@@ -2,24 +2,22 @@ import { describe, expect, it } from "vitest";
 import { getAgentConnectionIdentityJwt } from "./agent-identity";
 
 describe("getAgentConnectionIdentityJwt", () => {
-  it("prefers the middleware-selected props token over raw identity headers", () => {
+  it("reads the middleware-verified token from agent props", () => {
     const request = new Request("https://site-studio.example/agent", {
       headers: {
-        "x-partykit-props": JSON.stringify({ identityJwt: "selected-v2-token" }),
-        "X-CAIL-Identity-JWT": "stale-v1-token",
-        "X-CAIL-Identity-JWT-V2": "raw-v2-token"
+        "x-partykit-props": JSON.stringify({ identityJwt: "verified-token" }),
+        "X-CAIL-Identity-JWT": "unverified-raw-token"
       }
     });
-    expect(getAgentConnectionIdentityJwt(request)).toBe("selected-v2-token");
+    expect(getAgentConnectionIdentityJwt(request)).toBe("verified-token");
   });
 
-  it("uses V2 before V1 on the direct-header compatibility path", () => {
+  it("does not trust a raw identity header without verified agent props", () => {
     const request = new Request("https://site-studio.example/agent", {
       headers: {
-        "X-CAIL-Identity-JWT": "stale-v1-token",
-        "X-CAIL-Identity-JWT-V2": "selected-v2-token"
+        "X-CAIL-Identity-JWT": "unverified-raw-token"
       }
     });
-    expect(getAgentConnectionIdentityJwt(request)).toBe("selected-v2-token");
+    expect(getAgentConnectionIdentityJwt(request)).toBeNull();
   });
 });

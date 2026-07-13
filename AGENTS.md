@@ -88,8 +88,7 @@ Local development uses:
 Important vars:
 
 ```bash
-CAIL_IDENTITY_JWT_SECRET=...   # secret (wrangler secret put / .dev.vars)
-CAIL_IDENTITY_JWKS=...         # JSON public JWKS for RS256 identity V2
+CAIL_IDENTITY_JWKS=...         # JSON public JWKS for RS256 X-CAIL-Identity-JWT
 APP_PUBLIC_DOMAIN=https://tools.ailab.gc.cuny.edu
 PUBLISHED_BASE_URL=https://tools.cuny.qzz.io
 CAIL_API_BASE=...              # CAIL model proxy base URL (set at launch)

@@ -67,7 +67,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
     app = new Hono<{ Bindings: Env; Variables: { user: { id: string }; cailIdentityJwt?: string } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: USER_ID });
-      c.set("cailIdentityJwt", "selected-v2-token");
+      c.set("cailIdentityJwt", "verified-token");
       await next();
     });
     app.route("/", createAgentRouter());
@@ -145,14 +145,14 @@ describe("agent route WebSocket gate (rule 4)", () => {
   it("forwards the middleware-selected identity token in agent props", async () => {
     const res = await app.request(
       `${OWN_ORIGIN}/api/agents/site-builder/${PROJECT_ID}/get-messages`,
-      { headers: { "X-CAIL-Identity-JWT": "stale-v1-token" } },
+      { headers: { "X-CAIL-Identity-JWT": "unverified-raw-token" } },
       env()
     );
     expect(res.status).toBe(200);
     expect(vi.mocked(getAgentByName)).toHaveBeenLastCalledWith(
       expect.anything(),
       `${USER_ID}:${PROJECT_ID}`,
-      { props: { userId: USER_ID, projectId: PROJECT_ID, identityJwt: "selected-v2-token" } }
+      { props: { userId: USER_ID, projectId: PROJECT_ID, identityJwt: "verified-token" } }
     );
   });
 });

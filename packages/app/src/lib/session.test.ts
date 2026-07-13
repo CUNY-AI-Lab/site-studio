@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { authMiddleware, getCailIdentityJwt } from "./session";
-
-const JWT_SECRET = "session-test-secret-at-least-32-bytes";
 
 function base64url(bytes: Uint8Array): string {
   let binary = "";
@@ -11,15 +9,40 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-async function mintIdentityJwt(sub: string, secret = JWT_SECRET): Promise<string> {
+let identityPrivateKey: CryptoKey;
+let identityJwks: string;
+
+beforeAll(async () => {
+  const pair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256"
+    },
+    true,
+    ["sign", "verify"]
+  ) as CryptoKeyPair;
+  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  identityPrivateKey = pair.privateKey;
+  identityJwks = JSON.stringify({
+    keys: [{ ...publicJwk, kid: "session-test", alg: "RS256", use: "sig" }]
+  });
+});
+
+async function mintIdentityJwt(sub: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const enc = new TextEncoder();
-  const headerB64 = base64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const payloadB64 = base64url(
+  const header = base64url(enc.encode(JSON.stringify({
+    alg: "RS256",
+    typ: "JWT",
+    kid: "session-test"
+  })));
+  const payload = base64url(
     enc.encode(
       JSON.stringify({
         iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
-        aud: "cail-internal",
+        aud: "cail:site-studio",
         sub,
         email: "u@gc.cuny.edu",
         exp: now + 300,
@@ -27,43 +50,12 @@ async function mintIdentityJwt(sub: string, secret = JWT_SECRET): Promise<string
       })
     )
   );
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`${headerB64}.${payloadB64}`));
-  return `${headerB64}.${payloadB64}.${base64url(new Uint8Array(sig))}`;
-}
-
-async function mintV2IdentityJwt(sub: string): Promise<{ token: string; jwks: string }> {
-  const pair = await crypto.subtle.generateKey(
-    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-    true,
-    ["sign", "verify"]
-  ) as CryptoKeyPair;
-  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
-  const now = Math.floor(Date.now() / 1000);
-  const enc = new TextEncoder();
-  const header = base64url(enc.encode(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "session-v2" })));
-  const payload = base64url(enc.encode(JSON.stringify({
-    iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
-    aud: "cail:site-studio",
-    sub,
-    exp: now + 300,
-    iat: now
-  })));
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
-    pair.privateKey,
+    identityPrivateKey,
     enc.encode(`${header}.${payload}`)
   );
-  return {
-    token: `${header}.${payload}.${base64url(new Uint8Array(signature))}`,
-    jwks: JSON.stringify({ keys: [{ ...publicJwk, kid: "session-v2", alg: "RS256", use: "sig" }] })
-  };
+  return `${header}.${payload}.${base64url(new Uint8Array(signature))}`;
 }
 
 /**
@@ -175,7 +167,7 @@ describe("authMiddleware", () => {
 
     const kvPut = vi.fn(async () => undefined);
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: {
         get: vi.fn(async () => null),
         put: kvPut
@@ -204,7 +196,7 @@ describe("authMiddleware", () => {
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       CAIL_REQUIRE_IDENTITY: "true"
     });
 
@@ -214,32 +206,20 @@ describe("authMiddleware", () => {
     expect(body.error).toBe("authentication_required");
   });
 
-  it("fails closed when identity is required with only V2 configured but no token", async () => {
-    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
-    app.use("*", authMiddleware);
-    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
-
-    const response = await app.request("http://site-studio.test/api/test", {}, createEnv({
-      CAIL_IDENTITY_JWKS: '{"keys":[]}',
-      CAIL_REQUIRE_IDENTITY: "true"
-    }));
-    expect(response.status).toBe(401);
-  });
-
-  it("rejects a present invalid V2 token even when identity is optional", async () => {
+  it("rejects a presented invalid identity token even when identity is optional", async () => {
     const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
 
     const response = await app.request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Identity-JWT-V2": "not-a-jwt" } },
-      createEnv({ CAIL_IDENTITY_JWT_SECRET: JWT_SECRET })
+      { headers: { "X-CAIL-Identity-JWT": "not-a-jwt" } },
+      createEnv({ CAIL_IDENTITY_JWKS: identityJwks })
     );
     expect(response.status).toBe(401);
   });
 
-  it("stores the selected V2 token instead of the stale V1 token", async () => {
+  it("stores the verified canonical token for downstream calls", async () => {
     const app = new Hono<{
       Bindings: Env;
       Variables: { user: { id: string; createdAt: string }; cailIdentityJwt?: string };
@@ -247,18 +227,17 @@ describe("authMiddleware", () => {
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user"), forwardedToken: getCailIdentityJwt(c) }));
 
-    const v1 = await mintIdentityJwt("cail-v1-subject");
-    const v2 = await mintV2IdentityJwt("cail-v2-subject");
+    const token = await mintIdentityJwt("cail-subject");
     const response = await app.request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Identity-JWT": v1, "X-CAIL-Identity-JWT-V2": v2.token } },
-      createEnv({ CAIL_IDENTITY_JWT_SECRET: JWT_SECRET, CAIL_IDENTITY_JWKS: v2.jwks })
+      { headers: { "X-CAIL-Identity-JWT": token } },
+      createEnv({ CAIL_IDENTITY_JWKS: identityJwks })
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      user: { id: "cail-v2-subject" },
-      forwardedToken: v2.token
+      user: { id: "cail-subject" },
+      forwardedToken: token
     });
   });
 
@@ -267,7 +246,7 @@ describe("authMiddleware", () => {
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
 
-    const env = createEnv({ CAIL_IDENTITY_JWT_SECRET: JWT_SECRET });
+    const env = createEnv({ CAIL_IDENTITY_JWKS: identityJwks });
     const response = await app.request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Subject": "cail-forged" } },
@@ -359,7 +338,7 @@ describe("authMiddleware anonymous-data migration", () => {
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket
     });
@@ -397,7 +376,7 @@ describe("authMiddleware anonymous-data migration", () => {
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket
     });
@@ -441,7 +420,7 @@ describe("authMiddleware anonymous-data migration", () => {
     coordinator.records.set(ANON, { subject: OTHER_SUBJECT, status: "complete" });
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
       MIGRATION_COORDINATOR: coordinator.namespace
@@ -489,7 +468,7 @@ describe("authMiddleware anonymous-data migration", () => {
     // that all claimants of this anonId reach).
     const coordinator = createCoordinatorNamespace();
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
       MIGRATION_COORDINATOR: coordinator.namespace
@@ -540,7 +519,7 @@ describe("authMiddleware anonymous-data migration", () => {
 
     const kvPut = vi.fn(async () => undefined);
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: {
         // Transient outage: reads fail, writes would succeed.
         get: vi.fn(async () => {
@@ -578,7 +557,7 @@ describe("authMiddleware anonymous-data migration", () => {
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
       MIGRATION_COORDINATOR: {
@@ -626,7 +605,7 @@ describe("authMiddleware anonymous-data migration", () => {
     });
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET,
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket
     });
@@ -646,7 +625,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-46: KV outage on the pure anonymous path fails 503 instead of minting a fresh identity", async () => {
     const kvPut = vi.fn(async () => undefined);
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET, // secret set, but no JWT on the request
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: {
         get: vi.fn(async () => {
           throw new Error("KV transport failure");
@@ -721,7 +700,7 @@ describe("authMiddleware anonymous-data migration", () => {
     );
 
     const env = createEnv({
-      CAIL_IDENTITY_JWT_SECRET: JWT_SECRET, // secret set, but no JWT on the request
+      CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket
     });

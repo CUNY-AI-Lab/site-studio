@@ -17,7 +17,7 @@
         "@cloudflare/ai-chat": "0.2.5",
         "@cloudflare/codemode": "0.3.1",
         "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#c42d0fa353e06574e7021e4c12a91a74e00904a4",
-        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#b8738b2372f4cde14aa1a0ab3d7fd096c6a9645a",
+        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#3a76084a87ee3e004454c599fdd5f0565f82f32f",
         "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c429c05e42557143ddfc1ff8afaf5b7b1c1",
         "agents": "0.8.4",
         "ai": "6.0.138",
@@ -216,7 +216,7 @@
 
     "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#c42d0fa", { "dependencies": { "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c4" } }, "CUNY-AI-Lab-cail-client-c42d0fa"],
 
-    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#b8738b2", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-b8738b2"],
+    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#3a76084", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-3a76084"],
 
     "@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#95b45c4", {}, "CUNY-AI-Lab-cail-log-95b45c4"],
 

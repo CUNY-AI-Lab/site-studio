@@ -2,7 +2,6 @@ import type { SiteBuilderAgentProps } from "../types";
 
 /**
  * Read the identity selected by auth middleware from serialized agent props.
- * Raw headers are compatibility fallbacks only and retain V2 precedence.
  */
 export function getAgentConnectionIdentityJwt(request: Request): string | null {
   const propsHeader = request.headers.get("x-partykit-props");
@@ -13,10 +12,9 @@ export function getAgentConnectionIdentityJwt(request: Request): string | null {
         return parsed.identityJwt;
       }
     } catch {
-      // Fall through to the direct-header compatibility path.
+      return null;
     }
   }
 
-  return request.headers.get("X-CAIL-Identity-JWT-V2")
-    ?? request.headers.get("X-CAIL-Identity-JWT");
+  return null;
 }

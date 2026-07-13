@@ -9,20 +9,15 @@
  * them. Identity is accepted ONLY from the verified JWT.
  *
  * JWT verification is delegated to the shared `@cuny-ai-lab/cail-identity`
- * primitive. V1 pins HS256 and the legacy `cail-internal` audience. V2 pins
- * RS256, selects a public key from the configured JWKS, and requires the
- * service-specific `cail:site-studio` audience. Both exact-match `iss` against
- * the allowlist below. The stable pseudonymous CAIL subject (`sub`) is the only
- * durable key for workspace ownership. Never key anything by email.
- *
- * V2 is authoritative when its header is present: malformed/missing JWKS or an
- * invalid V2 token rejects the request, with no V1 fallback. When V2 is absent,
- * the existing V1 behavior is unchanged.
+ * primitive. Site Studio accepts one contract: RS256, a public key selected
+ * from `CAIL_IDENTITY_JWKS`, and the service-specific `cail:site-studio`
+ * audience. The issuer must exactly match the allowlist below. The stable
+ * pseudonymous CAIL subject (`sub`) is the only durable key for workspace
+ * ownership. Never key anything by email.
  */
 
 import {
   verifyIdentityJwt,
-  verifyIdentityJwtV2,
   CAIL_CANONICAL_ISSUER,
   CAIL_STAGING_ISSUER,
   type CailIdentity,
@@ -31,12 +26,11 @@ import {
 export type { CailIdentity };
 
 export interface IdentityVerificationEnv {
-  CAIL_IDENTITY_JWT_SECRET?: string;
   CAIL_IDENTITY_JWKS?: string;
 }
 
 export type RequestIdentityResolution =
-  | { status: "verified"; identity: CailIdentity; token: string; version: "v1" | "v2" }
+  | { status: "verified"; identity: CailIdentity; token: string }
   | { status: "absent" }
   | { status: "invalid" };
 
@@ -49,61 +43,45 @@ const ALLOWED_ISSUERS = [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER];
 
 /** The header the SSO gate injects. Bare `X-CAIL-*` headers are never trusted. */
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
-export const CAIL_IDENTITY_V2_HEADER = "X-CAIL-Identity-JWT-V2";
-export const CAIL_IDENTITY_V2_AUDIENCE = "cail:site-studio";
+export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
 
-function parseJwks(raw: string | undefined): Parameters<typeof verifyIdentityJwtV2>[1] | null {
+function parseJwks(raw: string | undefined): Parameters<typeof verifyIdentityJwt>[1] | null {
   if (!raw) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    return parsed as Parameters<typeof verifyIdentityJwtV2>[1];
+    return parsed as Parameters<typeof verifyIdentityJwt>[1];
   } catch {
     return null;
   }
 }
 
-/** True when either generation of identity verification material is present. */
-export function cailIdentityConfigured(env: IdentityVerificationEnv): boolean {
-  return Boolean(env.CAIL_IDENTITY_JWT_SECRET || env.CAIL_IDENTITY_JWKS);
-}
-
 /**
- * Select and verify the request identity while preserving strict V2
- * precedence. The selected raw token is returned with the normalized identity
- * so downstream model calls cannot accidentally re-read a stale V1 header.
+ * Verify the canonical request identity. The raw token is returned with the
+ * normalized identity so downstream model calls forward the verified value.
  */
 export async function resolveRequestIdentity(
   request: Request,
   env: IdentityVerificationEnv
 ): Promise<RequestIdentityResolution> {
-  if (request.headers.has(CAIL_IDENTITY_V2_HEADER)) {
-    const token = request.headers.get(CAIL_IDENTITY_V2_HEADER)?.trim() ?? "";
-    const jwks = parseJwks(env.CAIL_IDENTITY_JWKS);
-    if (!token || !jwks) return { status: "invalid" };
+  if (!request.headers.has(CAIL_IDENTITY_HEADER)) return { status: "absent" };
 
-    const identity = await verifyIdentityJwtV2(token, jwks, {
-      expectedAudience: CAIL_IDENTITY_V2_AUDIENCE,
-      allowedIssuers: ALLOWED_ISSUERS,
-    });
-    return identity
-      ? { status: "verified", identity, token, version: "v2" }
-      : { status: "invalid" };
-  }
-
-  const secret = env.CAIL_IDENTITY_JWT_SECRET;
   const token = request.headers.get(CAIL_IDENTITY_HEADER)?.trim() ?? "";
-  if (!secret || !token) return { status: "absent" };
+  const jwks = parseJwks(env.CAIL_IDENTITY_JWKS);
+  if (!token || !jwks) return { status: "invalid" };
 
-  const identity = await verifyIdentityJwt(token, secret, { allowedIssuers: ALLOWED_ISSUERS });
+  const identity = await verifyIdentityJwt(token, jwks, {
+    expectedAudience: CAIL_IDENTITY_AUDIENCE,
+    allowedIssuers: ALLOWED_ISSUERS,
+  });
   return identity
-    ? { status: "verified", identity, token, version: "v1" }
-    : { status: "absent" };
+    ? { status: "verified", identity, token }
+    : { status: "invalid" };
 }
 
 /**
  * Verify the selected CAIL identity carried on a request, if any. Returns the
- * identity or `null`; callers that must distinguish invalid V2 from absence
+ * identity or `null`; callers that must distinguish invalid credentials from absence
  * use `resolveRequestIdentity`. Never throws.
  */
 export async function getRequestIdentity(
@@ -116,7 +94,7 @@ export async function getRequestIdentity(
 
 /**
  * True when the worker must reject anonymous requests to protected routes (401).
- * Flip `CAIL_REQUIRE_IDENTITY="true"` (with V1 or V2 verification configured) at the same time the
+ * Flip `CAIL_REQUIRE_IDENTITY="true"` with JWKS verification configured at the same time the
  * gateway lands `CAIL_SSO_MODE=enforce` — otherwise the workers.dev URL stays an
  * anonymous bypass around SSO and budgets. If the flag is on but verification
  * material is missing or malformed, protected routes close by misconfiguration.

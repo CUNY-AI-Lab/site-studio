@@ -145,7 +145,7 @@ Located in `packages/app/src/agents/site-builder.ts`:
 ### Secrets
 ```bash
 # Set via wrangler secret put (ops-managed)
-CAIL_IDENTITY_JWT_SECRET=...   # shared HS256 secret to verify X-CAIL-Identity-JWT
+CAIL_IDENTITY_JWKS=...         # public JWKS for RS256 X-CAIL-Identity-JWT
 # Site Studio holds NO provider API keys — the CAIL model proxy attaches them.
 ```
 
