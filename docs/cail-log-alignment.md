@@ -58,6 +58,15 @@ an offline lifecycle-pair auditor. The auditor detects missing or duplicate
 request/action events, route drift, and invalid terminal duration in a closed
 export window. It evaluates the diagnostic projection, never product state.
 
+Contract version 2 also fixes the initial operating posture: full-sampled
+bounded custom events, invocation logs off, no v1 external exporter, default-
+deny `kale-admin` access, a one-minute `ENAM` synthetic profile, rolling 24-hour
+SLOs, latency and reliability thresholds, and month-to-date gateway-ledger spend
+bands. Its action SLI sub-contract versions admission-window assignment, a
+15-minute terminal grace period, exact terminal matching, durable-success
+semantics, and separate build/publish denominators. See
+`docs/observability-design-gate.md` for the complete values and rationale.
+
 ## Decisive sources
 
 - The local CAIL gateway `docs/INTEGRATION.md` defines the stable
@@ -75,7 +84,21 @@ export window. It evaluates the diagnostic projection, never product state.
   measures without creating or mutating a live saved query.
 - [Cloudflare Load Balancing monitors](https://developers.cloudflare.com/load-balancing/monitors/create-monitor/)
   (updated April 16, 2026) evaluate expected status and a relatively static body
-  substring within the first 10 KB. That drove the fixed liveness markers.
+  substring within the first 10 KB and document interval, timeout, retry, and
+  consecutive-state controls. That drove the fixed liveness markers and the
+  conservative one-minute monitor profile.
+- [Cloudflare Health Check regions](https://developers.cloudflare.com/health-checks/concepts/health-checks-regions/)
+  (updated April 16, 2026) documents three data centers per selected region and
+  majority health. The initial CUNY-centered check uses `ENAM`; adding every
+  region would add traffic without improving the initial source seam.
+- [Cloudflare Health Check notifications](https://developers.cloudflare.com/health-checks/how-to/health-checks-notifications/)
+  (updated April 16, 2026) supports state-change notification after regional
+  majority. The source recipe notifies for failure and recovery while leaving
+  actual recipients external.
+- [Cloudflare HTTP traffic alerts](https://developers.cloudflare.com/notifications/reference/traffic-alerts/)
+  (updated April 24, 2026) recommends multi-window burn-rate alerting and warns
+  about high sensitivity on low traffic. That drove explicit sample floors and
+  two consecutive evaluations alongside the fast native health transition.
 - [Cloudflare cache configuration](https://developers.cloudflare.com/workers/cache/configuration/)
   (updated July 6, 2026) documents heuristic caching for a 200 without an
   explicit directive. Health responses therefore use `Cache-Control: no-store`.
@@ -114,7 +137,8 @@ export window. It evaluates the diagnostic projection, never product state.
 No bindings, secrets, ingress, spend rules, live Cloudflare settings, saved
 queries, monitors, exporters, or production state are changed here. There is no
 reviewed-commit dependency blocker: the exact cail-log commit is available and
-pinned. Source privacy, health, action seams, and dashboard fields are settled.
-Remaining operations-owned policy inputs are retention duration, alert
-thresholds, monitor cadence/regions, the publisher monitor's approved
-ingress/hostname, and whether/where to export the events.
+pinned. Source privacy, health, action seams, dashboards, alert thresholds,
+monitor profile, access posture, sampling, and the no-exporter v1 decision are
+settled. Remaining external inputs are production hostnames/ingress,
+notification recipients, institution-approved retention, the approved monthly
+product budget, secrets, and deployment authorization.

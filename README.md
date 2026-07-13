@@ -131,7 +131,10 @@ invocation logs so user-controlled URL segments are not stored as raw invocation
 messages. Build and publish events use fixed route templates from
 [`packages/observability-core/src/contract.ts`](packages/observability-core/src/contract.ts),
 which also defines dashboard groupings, lifecycle-pair quality checks, and the
-versioned liveness responses.
+versioned liveness responses. The same source contract fixes the initial
+one-minute Eastern North America synthetic profile, rolling 24-hour SLO and
+alert thresholds, month-to-date gateway-ledger spend bands, Kale-admin-only
+access, full custom-log sampling, and no v1 external exporter.
 
 `GET /api/health` and the publisher's `GET /healthz` return static
 `cail.health.v1` liveness markers with `Cache-Control: no-store`. They prove that
@@ -140,7 +143,7 @@ claim readiness for R2, KV, Durable Objects, or the model gateway.
 
 See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map
 and [`docs/observability-design-gate.md`](docs/observability-design-gate.md) for
-the source decisions and remaining operations-owned policy inputs.
+the exact denominator rules, operating defaults, and remaining external inputs.
 
 ## Notes
 

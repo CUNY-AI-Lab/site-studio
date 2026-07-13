@@ -1,4 +1,4 @@
-export const OBSERVABILITY_CONTRACT_VERSION = 1;
+export const OBSERVABILITY_CONTRACT_VERSION = 2;
 export const PRODUCT_ID = "site-studio";
 export const SERVICE_VERSION = "0.1.0";
 
@@ -29,6 +29,150 @@ export const OBSERVABILITY_CONTRACT = {
       method: "POST",
     },
   },
+  collection: {
+    customLogs: {
+      enabled: true,
+      persist: true,
+      headSamplingRate: 1,
+      boundedCatalogEventsOnly: true,
+    },
+    invocationLogs: false,
+    externalExporter: null,
+  },
+  access: {
+    role: "kale-admin",
+    defaultDecision: "deny",
+    resources: [
+      "dashboards",
+      "saved_queries",
+      "monitor_configuration",
+      "spend_views",
+    ],
+  },
+  syntheticMonitor: {
+    provider: "cloudflare-health-checks",
+    type: "HTTPS",
+    checkRegions: ["ENAM"],
+    intervalSeconds: 60,
+    timeoutSeconds: 5,
+    retries: 2,
+    consecutiveFailures: 2,
+    consecutiveSuccesses: 2,
+    method: "GET",
+    port: 443,
+    expectedCodes: ["200"],
+    followRedirects: false,
+    allowInsecure: false,
+    notifyOn: ["unhealthy", "healthy"],
+  },
+  serviceLevels: {
+    evaluation: {
+      reliabilityWindowHours: 24,
+      evaluationIntervalMinutes: 15,
+      consecutiveBreaches: 2,
+    },
+    syntheticAvailability: {
+      unit: "basis_points",
+      target: 9_950,
+      warningBelow: 9_950,
+      criticalBelow: 9_900,
+      minimumEligibleProbes: 100,
+    },
+    requestReliability: {
+      denominator: {
+        eventName: "cail.request.completed",
+        uniqueBy: ["service.name", "cail.request.id"],
+        excludeRouteTemplates: ["/api/health", "/healthz"],
+        excludeOutcomes: ["client_error", "denied"],
+      },
+      successOutcomes: ["ok"],
+      unit: "basis_points",
+      target: 9_950,
+      warningBelow: 9_950,
+      criticalBelow: 9_800,
+      minimumEligibleRequests: 100,
+    },
+    requestLatency: {
+      percentile: 95,
+      warningMillisecondsByService: {
+        "site-studio-app": 5_000,
+        "site-studio-publisher": 1_000,
+      },
+      criticalMultiplier: 2,
+      minimumEligibleRequests: 100,
+    },
+    actionReliability: {
+      contractVersion: 1,
+      windowAssignment: "admission_time",
+      terminalGraceMinutes: 15,
+      separateBy: ["service.name", "url.template"],
+      denominator: {
+        eventName: "cail.action.admitted",
+        uniqueBy: ["service.name", "cail.action.id"],
+        includeAllAdmittedOutcomes: true,
+        eligibleBeforeWindowEndMinutes: 15,
+      },
+      terminalMatch: {
+        eventName: "cail.action.terminal",
+        cardinality: "exactly_one",
+        fields: [
+          "service.name",
+          "url.template",
+          "cail.action.id",
+          "cail.principal.type",
+          "cail.principal.subject",
+        ],
+        requestId: "equal_when_present",
+      },
+      successNumerator: {
+        terminalOutcome: "ok",
+        requiresAcknowledgedDurableMutation: true,
+      },
+      coverageNumerator: {
+        terminalCardinality: "exactly_one",
+        terminalOutcome: "any",
+      },
+      success: {
+        unit: "basis_points",
+        target: 9_500,
+        warningBelow: 9_500,
+        criticalBelow: 8_000,
+        minimumEligibleActions: 10,
+      },
+      coverage: {
+        unit: "basis_points",
+        target: 9_950,
+        warningBelow: 9_950,
+        criticalBelow: 9_800,
+        minimumEligibleActions: 10,
+        immediateCriticalIssueCodes: [
+          "admission_duplicate",
+          "terminal_duplicate",
+          "route_mismatch",
+          "action_route_unrecognized",
+        ],
+      },
+      latency: {
+        percentile: 95,
+        warningMillisecondsByAction: {
+          build: 600_000,
+          publish: 30_000,
+        },
+        criticalMultiplier: 2,
+        minimumEligibleActions: 10,
+      },
+    },
+    spend: {
+      source: "cail-gateway-usage-ledger",
+      productId: PRODUCT_ID,
+      window: "calendar_month_to_date_utc",
+      measure: "sum_cost_micro_usd",
+      budgetInput: "monthly_budget_micro_usd",
+      warningPercent: 80,
+      criticalPercent: 95,
+      exhaustedPercent: 100,
+    },
+  },
   dashboardViews: {
     requestReliability: {
       eventName: "cail.request.completed",
@@ -56,6 +200,19 @@ export const OBSERVABILITY_CONTRACT = {
         { operation: "p99", field: "duration_ms" },
       ],
       groupBy: ["service.name", "url.template", "cail.outcome"],
+      drilldown: [
+        "cail.request.id",
+        "cail.action.id",
+        "cail.principal.type",
+        "cail.principal.subject",
+        "trace_id",
+      ],
+    },
+    actionAdmissions: {
+      eventName: "cail.action.admitted",
+      filter: { "cail.product.id": PRODUCT_ID },
+      measures: [{ operation: "count" }],
+      groupBy: ["service.name", "url.template"],
       drilldown: [
         "cail.request.id",
         "cail.action.id",
@@ -125,6 +282,69 @@ export type TelemetryQualityIssue = Readonly<{
 }>;
 
 export type TelemetryRecord = Readonly<Record<string, unknown>>;
+
+export type CloudflareHealthCheckSpec = Readonly<{
+  address: string;
+  name: string;
+  description: string;
+  type: "HTTPS";
+  check_regions: readonly ["ENAM"];
+  interval: number;
+  timeout: number;
+  retries: number;
+  consecutive_fails: number;
+  consecutive_successes: number;
+  http_config: Readonly<{
+    allow_insecure: false;
+    expected_body: string;
+    expected_codes: readonly ["200"];
+    follow_redirects: false;
+    method: "GET";
+    path: string;
+    port: 443;
+  }>;
+}>;
+
+/** Build an API-ready standalone Cloudflare Health Check without mutating Cloudflare. */
+export function createCloudflareHealthCheckSpec(
+  service: SiteStudioService,
+  hostname: string,
+): CloudflareHealthCheckSpec {
+  const address = hostname.trim().toLowerCase();
+  const labels = address.split(".");
+  const validLabel = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+  if (
+    address.length > 253
+    || labels.length < 2
+    || labels.some((label) => !validLabel.test(label))
+  ) {
+    throw new TypeError("hostname must be a DNS hostname without a scheme, port, or path");
+  }
+
+  const definition = OBSERVABILITY_CONTRACT.services[service];
+  const monitor = OBSERVABILITY_CONTRACT.syntheticMonitor;
+  return {
+    address,
+    name: `${PRODUCT_ID}-${service}`,
+    description: `${definition.name} liveness (${definition.healthPath})`,
+    type: monitor.type,
+    check_regions: monitor.checkRegions,
+    interval: monitor.intervalSeconds,
+    timeout: monitor.timeoutSeconds,
+    retries: monitor.retries,
+    consecutive_fails: monitor.consecutiveFailures,
+    consecutive_successes: monitor.consecutiveSuccesses,
+    http_config: {
+      allow_insecure: monitor.allowInsecure,
+      expected_body: definition.healthMarker,
+      expected_codes: monitor.expectedCodes,
+      follow_redirects: monitor.followRedirects,
+      method: monitor.method,
+      path: definition.healthPath,
+      port: monitor.port,
+    },
+  };
+}
 
 /**
  * Audit a closed export window after its terminal grace period. This checks log
