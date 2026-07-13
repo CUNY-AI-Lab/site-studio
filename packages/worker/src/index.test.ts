@@ -620,3 +620,73 @@ describe("worker.fetch (integration)", () => {
     expect(res.headers.get("Content-Security-Policy")).toBeNull();
   });
 });
+
+describe("CAIL boundary logging", () => {
+  it("maps publisher requests to safe canonical received/completed events", async () => {
+    const bucket = createMockBucket();
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const response = await worker.fetch(
+        new Request("https://x.test/u/private-handle/private-slug/secret-file.html?token=secret", {
+          method: "HEAD",
+          headers: {
+            Accept: "text/html",
+            traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+          }
+        }),
+        createEnv(bucket)
+      );
+      expect(response.status).toBe(404);
+
+      const events = [...info.mock.calls, ...warn.mock.calls].map(
+        ([event]) => event as Record<string, unknown>
+      );
+      const received = events.find((event) => event["event.name"] === "cail.request.received");
+      const completed = events.find((event) => event["event.name"] === "cail.request.completed");
+
+      expect(received).toMatchObject({
+        "service.name": "site-studio-publisher",
+        "cail.product.id": "site-studio",
+        "http.request.method": "HEAD",
+        "url.template": "/u/{handle}/{slug}/{path}",
+        trace_id: "0123456789abcdef0123456789abcdef"
+      });
+      expect(completed).toMatchObject({
+        "http.response.status_code": 404,
+        "cail.outcome": "client_error",
+        "cail.outcome.reason": "client_error",
+        "cail.principal.type": "anonymous"
+      });
+
+      const serialized = JSON.stringify(events);
+      expect(serialized).not.toContain("private-handle");
+      expect(serialized).not.toContain("private-slug");
+      expect(serialized).not.toContain("secret-file.html");
+      expect(serialized).not.toContain("token");
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it("maps malformed migration records to a bounded publisher diagnostic", async () => {
+    const bucket = createMockBucket();
+    bucket.store.set("projects/legacy/.migrated.json", { data: "not-json-secret" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(loadMigrationPointer(bucket, "legacy")).resolves.toBeNull();
+      expect(warn.mock.calls[0]?.[0]).toMatchObject({
+        "event.name": "site_studio_publisher.diagnostic.warning",
+        "service.name": "site-studio-publisher",
+        "cail.product.id": "site-studio",
+        "error.type": "invalid_migration_pointer"
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("not-json-secret");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

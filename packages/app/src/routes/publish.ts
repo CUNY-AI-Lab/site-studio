@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
@@ -16,6 +17,14 @@ import { ProjectNotFoundError, R2ProjectStorage, SlugReservationLostError } from
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
 import type { ProjectMetadata } from "../types";
+import {
+  SiteStudioActionLifecycle,
+  errorCodeFrom,
+  getCorrelation,
+  mintCorrelation,
+  principalForOwnerId,
+  type LoggingVariables,
+} from "../lib/logging";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -144,10 +153,16 @@ function getPublishedBaseUrl(c: AppContext): string {
   return normalizeBaseUrl(requestOrigin);
 }
 
-type AppContext = Context<{ Bindings: Env; Variables: RequireProjectVariables }>;
+type AppContext = Context<{
+  Bindings: Env;
+  Variables: RequireProjectVariables & LoggingVariables;
+}>;
 
 export function createPublishRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+  const app = new Hono<{
+    Bindings: Env;
+    Variables: RequireProjectVariables & LoggingVariables;
+  }>();
 
   app.post("/api/projects/:id/publish", async (c) => {
     const storage = c.get("storage");
@@ -177,42 +192,61 @@ export function createPublishRouter() {
     const desiredSlug = metadata.slug || slugify(metadata.name || projectId) || projectId;
     let slug = "";
     let url = "";
+    const publishAction = new SiteStudioActionLifecycle({
+      principal: principalForOwnerId(user.id),
+      correlation: getCorrelation(c) ?? mintCorrelation(),
+      route: "/api/projects/{id}/publish",
+      http_method: "POST",
+    });
+    publishAction.admit();
 
-    // The reservation ETag is the publish generation. A stale request that was
-    // paused after resolving a slug must renew that exact generation before it
-    // can write metadata; if another project reclaimed it, resolve again and
-    // publish only under a reservation this request still owns.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const claim = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
-      slug = claim.slug;
-      url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
+    try {
+      // The reservation ETag is the publish generation. A stale request that was
+      // paused after resolving a slug must renew that exact generation before it
+      // can write metadata; if another project reclaimed it, resolve again and
+      // publish only under a reservation this request still owns.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const claim = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
+        slug = claim.slug;
+        url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
 
-      try {
-        await storage.updateProjectMetadataForSlugClaim(user.id, projectId, claim, {
-          published: true,
-          publishedUrl: url,
-          publishedAt: new Date().toISOString(),
-          slug
-        });
-        break;
-      } catch (error) {
-        if (error instanceof ProjectNotFoundError) {
-          jsonError("Project not found", 404);
-        }
-        if (!(error instanceof SlugReservationLostError) || attempt === 4) {
-          throw error;
+        try {
+          await storage.updateProjectMetadataForSlugClaim(user.id, projectId, claim, {
+            published: true,
+            publishedUrl: url,
+            publishedAt: new Date().toISOString(),
+            slug
+          });
+          publishAction.acknowledgeMutation();
+          break;
+        } catch (error) {
+          if (error instanceof ProjectNotFoundError) {
+            jsonError("Project not found", 404);
+          }
+          if (!(error instanceof SlugReservationLostError) || attempt === 4) {
+            throw error;
+          }
         }
       }
+
+      const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
+      publishAction.completeSuccess();
+
+      return c.json({
+        success: true,
+        message: "Project published successfully",
+        url,
+        a11yFindings
+      });
+    } catch (error) {
+      publishAction.completeFailure(
+        error instanceof HTTPException && error.status < 500
+          ? { outcome: "client_error", reason: "client_error" }
+          : { outcome: "error", reason: "application_failure" },
+        errorCodeFrom(error),
+      );
+      throw error;
     }
-
-    const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
-
-    return c.json({
-      success: true,
-      message: "Project published successfully",
-      url,
-      a11yFindings
-    });
   });
 
   app.post("/api/projects/:id/unpublish", async (c) => {

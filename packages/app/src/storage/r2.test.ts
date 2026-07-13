@@ -967,9 +967,13 @@ describe("R2ProjectStorage", () => {
         expect(isSnapshotSkipped(resilient)).toBe(false);
         expect((resilient as ProjectSnapshot).label).toBe("Resilient");
         expect(
-          logSpy.mock.calls.some(
-            ([event]) => JSON.stringify(event).includes('"event":"snapshot.prune_failed"')
-          )
+          logSpy.mock.calls.some(([event]) => {
+            const record = event as Record<string, unknown>;
+            return (
+              record["event.name"] === "site_studio.diagnostic.warning" &&
+              record["error.type"] === "snapshot_prune_failed"
+            );
+          })
         ).toBe(true);
         expect(await storage.listSnapshots(userId, projectId)).toHaveLength(SNAPSHOT_KEEP_COUNT + 1);
 
@@ -1031,7 +1035,11 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "extra.txt", "current-extra");
 
       const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
-      const originalPut = putMock.getMockImplementation()!;
+      const originalPut = putMock.getMockImplementation() as (
+        key: string,
+        data: unknown,
+        options?: unknown,
+      ) => unknown;
       let injected = false;
       putMock.mockImplementation(async (key: string, data: unknown, options?: unknown) => {
         if (key.endsWith("/b.txt") && !injected) {
@@ -1060,7 +1068,9 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "extra.txt", "keep me");
 
       const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
-      const originalDelete = deleteMock.getMockImplementation()!;
+      const originalDelete = deleteMock.getMockImplementation() as (
+        key: string,
+      ) => unknown;
       let injected = false;
       deleteMock.mockImplementation(async (key: string) => {
         if (key.endsWith("/extra.txt") && !injected) {
@@ -1120,9 +1130,13 @@ describe("R2ProjectStorage", () => {
         expect(result.limitBytes).toBe(MAX_SNAPSHOT_BYTES);
       }
       expect(
-        logSpy.mock.calls.some(
-          ([event]) => JSON.stringify(event).includes('"event":"snapshot.skipped"')
-        )
+        logSpy.mock.calls.some(([event]) => {
+          const record = event as Record<string, unknown>;
+          return (
+            record["event.name"] === "site_studio.diagnostic.warning" &&
+            record["error.type"] === "snapshot_too_large"
+          );
+        })
       ).toBe(true);
       logSpy.mockRestore();
 

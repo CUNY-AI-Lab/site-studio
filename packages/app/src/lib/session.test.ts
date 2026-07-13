@@ -346,7 +346,7 @@ function createLiveBucket() {
 }
 
 describe("authMiddleware anonymous-data migration", () => {
-  const SUBJECT = "cail-subject-xyz";
+  const SUBJECT = "cail-0123456789abcdef0123456789abcdef";
   const ANON = "user_anon42";
 
   function buildApp() {
@@ -423,8 +423,14 @@ describe("authMiddleware anonymous-data migration", () => {
 
       expect(response.status).toBe(200);
       const events = info.mock.calls.map(([event]) => event as Record<string, unknown>);
-      const completed = events.find((event) => event.event === "account_import.completed");
-      expect(completed).toMatchObject({ subject: SUBJECT, outcome: "ok" });
+      const completed = events.find(
+        (event) => event["event.name"] === "site_studio.diagnostic.info"
+      );
+      expect(completed).toMatchObject({
+        "error.type": "account_import_completed",
+        "enduser.pseudo.id": SUBJECT,
+        "cail.product.id": "site-studio",
+      });
       expect(JSON.stringify(completed)).not.toContain(ANON);
       expect(JSON.stringify(completed)).not.toContain("anon-cookie-telemetry");
     } finally {
@@ -502,11 +508,12 @@ describe("authMiddleware anonymous-data migration", () => {
       expect(coordinator.records.size).toBe(0);
       expect(kv.get).not.toHaveBeenCalledWith("session:anon-cookie-1", "text");
 
-      const events = warn.mock.calls.map(([event]) => event as { event?: string; error_code?: string });
+      const events = warn.mock.calls.map(([event]) => event as Record<string, unknown>);
       expect(events).toContainEqual(
         expect.objectContaining({
-          event: "account_import.refused",
-          error_code: "account_import_expired",
+          "event.name": "site_studio.diagnostic.warning",
+          "error.type": "account_import_expired",
+          "enduser.pseudo.id": SUBJECT,
         })
       );
     } finally {

@@ -1,70 +1,133 @@
-/**
- * Structured logging for the site-studio worker, via the shared
- * `@cuny-ai-lab/cail-log` primitive (CAIL fleet logging standard).
- *
- * ONE wide event per unit of work: the request-boundary middleware below emits
- * a single `request.completed` (or `auth.denied`) event when the response is
- * known, carrying only the typed safe-to-log allowlist — the pseudonymous
- * subject (NEVER email), correlation ids, the CLASSIFIED route (a Hono route
- * pattern, never a raw URL), method, status, outcome, and duration. Prompts,
- * completions, file contents, emails, keys, and header values are structurally
- * impossible to log: the logger has no free-text parameter and drops unknown
- * keys.
- *
- * Correlation follows the fleet contract ("adopt, never regenerate"): inbound
- * `traceparent` / `X-CAIL-Request-Id` are adopted at the boundary, stored on
- * the request context, forwarded to the SiteBuilderAgent Durable Object, and
- * attached (via {@link withCorrelationFetch}) to every outbound CAIL
- * gateway/model-proxy call so one user action is followable end to end.
- */
-
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
+import { matchedRoutes } from "hono/route";
 import {
   CAIL_EVENTS,
   correlationFromHeaders,
   createCailLogger,
+  extendCailEventCatalog,
   outboundCorrelationHeaders,
   workersStructuredSink,
   type CailCorrelation,
+  type CailHttpMethod,
+  type CailLogEnvironment,
+  type CailLogSink,
   type CailLogger,
-  type CailOutcome,
+  type CailPrincipalFields,
+  type CailTerminalFields,
 } from "@cuny-ai-lab/cail-log";
 
-/** The fleet service slug for every event this worker emits. */
-export const LOG_SERVICE = "site-studio";
+export const LOG_SERVICE = "site-studio-app";
+export const LOG_RELEASE = "0.1.0";
+export const PRODUCT_ID = "site-studio";
 
-/**
- * The one process-wide logger. The Cloudflare-native sink sends the event
- * object directly to Workers Logs for field indexing and native severity.
- */
-export const log: CailLogger = createCailLogger({
-  service: LOG_SERVICE,
-  sink: workersStructuredSink,
+export const SITE_STUDIO_EVENTS = Object.freeze({
+  DIAGNOSTIC_INFO: "site_studio.diagnostic.info",
+  DIAGNOSTIC_WARNING: "site_studio.diagnostic.warning",
+  DIAGNOSTIC_ERROR: "site_studio.diagnostic.error",
+} as const);
+
+export const SITE_STUDIO_EVENT_CATALOG = extendCailEventCatalog({
+  [SITE_STUDIO_EVENTS.DIAGNOSTIC_INFO]: {
+    body: "Site Studio diagnostic condition observed.",
+    source: "platform",
+    severity: "info",
+    required: ["product_id", "error_type"],
+    optional: ["request_id", "action_id", "trace", "principal", "http_method", "route", "status", "duration_ms", "retry_count", "req_bytes"],
+  },
+  [SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING]: {
+    body: "Site Studio diagnostic condition observed.",
+    source: "platform",
+    severity: "warn",
+    required: ["product_id", "error_type"],
+    optional: ["request_id", "action_id", "trace", "principal", "http_method", "route", "status", "duration_ms", "retry_count", "req_bytes"],
+  },
+  [SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR]: {
+    body: "Site Studio diagnostic condition observed.",
+    source: "platform",
+    severity: "error",
+    required: ["product_id", "error_type"],
+    optional: ["request_id", "action_id", "trace", "principal", "http_method", "route", "status", "duration_ms", "retry_count", "req_bytes"],
+  },
 });
 
-/** Context variables the boundary middleware provides to downstream handlers. */
+export type SiteStudioLogger = CailLogger<typeof SITE_STUDIO_EVENT_CATALOG, "platform">;
+
+export function createSiteStudioLogger(options: {
+  sink: CailLogSink;
+  env?: CailLogEnvironment;
+  release?: string;
+  clock?: () => number;
+}): SiteStudioLogger {
+  return createCailLogger({
+    service: LOG_SERVICE,
+    release: options.release ?? LOG_RELEASE,
+    env: options.env ?? "production",
+    sourceClass: "platform",
+    catalog: SITE_STUDIO_EVENT_CATALOG,
+    sink: options.sink,
+    clock: options.clock,
+  });
+}
+
+/** The Worker sink is explicit; release/environment are constructor-owned. */
+export const log = createSiteStudioLogger({ sink: workersStructuredSink });
+
 export type LoggingVariables = {
   correlation?: CailCorrelation;
 };
 
-/** Mint a fresh correlation (used when no inbound headers exist, e.g. a DO woken without a captured request). */
 export function mintCorrelation(): CailCorrelation {
   return correlationFromHeaders({ get: () => null });
 }
 
-/** Normalized outcome for an HTTP status (fleet vocabulary). */
-export function outcomeForStatus(status: number): CailOutcome {
-  if (status >= 500) return "error";
-  if (status === 401 || status === 403) return "denied";
-  if (status >= 400) return "client_error";
-  return "ok";
+export function traceFromCorrelation(correlation: CailCorrelation) {
+  return {
+    trace_id: correlation.trace_id,
+    span_id: correlation.span_id,
+    trace_flags: correlation.trace_flags,
+  } as const;
 }
 
-/**
- * Stable, content-free machine code for an error: the error CLASS name,
- * slugified. Never the error message — messages can interpolate user input.
- */
+/** Only verified CAIL subjects are linkable principals. Legacy owners stay anonymous. */
+export function principalForOwnerId(ownerId?: string): CailPrincipalFields {
+  return ownerId && /^cail-[0-9a-f]{32}$/.test(ownerId)
+    ? { type: "user", subject: ownerId }
+    : { type: "anonymous" };
+}
+
+export function httpMethod(method: string): CailHttpMethod {
+  const normalized = method.toUpperCase();
+  switch (normalized) {
+    case "CONNECT":
+    case "DELETE":
+    case "GET":
+    case "HEAD":
+    case "OPTIONS":
+    case "PATCH":
+    case "POST":
+    case "PUT":
+    case "TRACE":
+      return normalized;
+    default:
+      return "_OTHER";
+  }
+}
+
+export function terminalForStatus(status: number): CailTerminalFields {
+  if (status === 408 || status === 504) return { outcome: "timeout", reason: "timeout" };
+  if (status === 429) return { outcome: "denied", reason: "rate_limited" };
+  if (status === 401 || status === 403) return { outcome: "denied", reason: "denied" };
+  if (status >= 500) return { outcome: "error", reason: "application_failure" };
+  if (status >= 400) return { outcome: "client_error", reason: "client_error" };
+  return { outcome: "ok", reason: "completed" };
+}
+
+export function outcomeForStatus(status: number): CailTerminalFields["outcome"] {
+  return terminalForStatus(status).outcome;
+}
+
+/** Stable machine type derived only from the exception class, never its message. */
 export function errorCodeFrom(error: unknown): string {
   const name =
     error instanceof Error && typeof error.name === "string" && error.name
@@ -78,32 +141,23 @@ export function errorCodeFrom(error: unknown): string {
   return slug || "error";
 }
 
-/**
- * The CLASSIFIED route label for a request: the matched Hono route pattern
- * (e.g. `/api/projects/:id/files`), never the raw URL (which can carry user
- * content in path segments or query strings). Falls back to "unclassified"
- * when only wildcard middleware matched (assets, 404s).
- */
+/** Convert Hono syntax to a bounded url.template; never return the raw path. */
 export function classifiedRoute(c: Context): string {
-  const routes = c.req.matchedRoutes;
-  for (let i = routes.length - 1; i >= 0; i -= 1) {
-    const path = routes[i]?.path;
-    if (path && path !== "*" && path !== "/*") {
-      return path;
-    }
+  const routes = matchedRoutes(c);
+  for (let index = routes.length - 1; index >= 0; index -= 1) {
+    const path = routes[index]?.path;
+    if (!path || path === "*" || path === "/*") continue;
+    const template = path
+      .replace(/:([A-Za-z][A-Za-z0-9_]*)/g, "{$1}")
+      .replace(/\*/g, "{path}");
+    return template.length <= 160 ? template : "/unclassified";
   }
-  return "unclassified";
+  return "/unclassified";
 }
 
-/**
- * Wrap a fetch implementation so every outbound call carries this request's
- * correlation (`traceparent` + `X-CAIL-Request-Id`), letting the CAIL
- * gateway/model proxy log spend under the same trace. Used for the AI-SDK
- * chat path and the image generation/moderation calls.
- */
 export function withCorrelationFetch(
   correlation: CailCorrelation,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
 ): typeof fetch {
   const extra = outboundCorrelationHeaders(correlation);
   const wrapped = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -116,47 +170,183 @@ export function withCorrelationFetch(
   return wrapped as typeof fetch;
 }
 
+type DiagnosticSeverity = "info" | "warning" | "error";
+
+export function emitDiagnostic(
+  severity: DiagnosticSeverity,
+  errorType: string,
+  fields: { subject?: string; status?: number; retry_count?: number; req_bytes?: number } = {},
+  logger: SiteStudioLogger = log,
+): void {
+  const event = severity === "info"
+    ? SITE_STUDIO_EVENTS.DIAGNOSTIC_INFO
+    : severity === "warning"
+      ? SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING
+      : SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR;
+  logger.emit(event, {
+    product_id: PRODUCT_ID,
+    error_type: errorType,
+    ...(fields.subject ? { principal: principalForOwnerId(fields.subject) } : {}),
+    ...(fields.status !== undefined ? { status: fields.status } : {}),
+    ...(fields.retry_count !== undefined ? { retry_count: fields.retry_count } : {}),
+    ...(fields.req_bytes !== undefined ? { req_bytes: fields.req_bytes } : {}),
+  });
+}
+
+type FailureTerminal = Exclude<CailTerminalFields, { outcome: "ok" }>;
+
 /**
- * Request-boundary middleware: adopt/mint correlation at entry, expose it via
- * `c.get("correlation")`, and emit exactly ONE wide event once the response is
- * known. 401/403 responses are emitted as `auth.denied`; everything else as
- * `request.completed`. Hono's per-frame error handling means `await next()`
- * resolves even when a handler throws (app.onError shapes the response first),
- * so `c.res.status` and `c.error` are always available here.
+ * One admitted build/publish attempt. Success is emitted only after the caller
+ * acknowledges its durable mutation; logs remain projections, not the ledger.
  */
-export function requestLogging() {
+export class SiteStudioActionLifecycle {
+  readonly actionId = crypto.randomUUID();
+  private readonly startedAt: number;
+  private admitted = false;
+  private mutationAcknowledged = false;
+  private terminal = false;
+
+  constructor(
+    private readonly fields: {
+      principal: CailPrincipalFields;
+      correlation: CailCorrelation;
+      route: string;
+      http_method: CailHttpMethod;
+    },
+    private readonly logger: SiteStudioLogger = log,
+    private readonly clock: () => number = Date.now,
+  ) {
+    this.startedAt = this.clock();
+  }
+
+  admit(): void {
+    if (this.admitted) return;
+    this.admitted = true;
+    this.logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+      action_id: this.actionId,
+      product_id: PRODUCT_ID,
+      principal: this.fields.principal,
+      request_id: this.fields.correlation.request_id,
+      trace: traceFromCorrelation(this.fields.correlation),
+      http_method: this.fields.http_method,
+      route: this.fields.route,
+    });
+  }
+
+  acknowledgeMutation(): void {
+    this.mutationAcknowledged = true;
+  }
+
+  completeSuccess(): void {
+    if (!this.admitted || this.terminal) return;
+    if (!this.mutationAcknowledged) {
+      this.completeFailure(
+        { outcome: "error", reason: "application_failure" },
+        "mutation_unacknowledged",
+      );
+      return;
+    }
+    this.terminal = true;
+    this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
+      action_id: this.actionId,
+      product_id: PRODUCT_ID,
+      principal: this.fields.principal,
+      request_id: this.fields.correlation.request_id,
+      trace: traceFromCorrelation(this.fields.correlation),
+      http_method: this.fields.http_method,
+      route: this.fields.route,
+      terminal: { outcome: "ok", reason: "completed" },
+      duration_ms: Math.max(0, this.clock() - this.startedAt),
+    });
+  }
+
+  completeFailure(terminal: FailureTerminal, errorType?: string): void {
+    if (!this.admitted || this.terminal) return;
+    this.terminal = true;
+    this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
+      action_id: this.actionId,
+      product_id: PRODUCT_ID,
+      principal: this.fields.principal,
+      request_id: this.fields.correlation.request_id,
+      trace: traceFromCorrelation(this.fields.correlation),
+      http_method: this.fields.http_method,
+      route: this.fields.route,
+      terminal,
+      duration_ms: Math.max(0, this.clock() - this.startedAt),
+      ...(errorType ? { error_type: errorType } : {}),
+    });
+  }
+
+  wasAdmitted(): boolean {
+    return this.admitted;
+  }
+}
+
+export function requestLogging(logger: SiteStudioLogger = log) {
   return createMiddleware<{
     Variables: LoggingVariables & { user?: { id: string } };
   }>(async (c, next) => {
     const correlation = correlationFromHeaders(c.req.raw);
     c.set("correlation", correlation);
     const started = Date.now();
+    const method = httpMethod(c.req.method);
+    const route = classifiedRoute(c);
+
+    logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+      request_id: correlation.request_id,
+      product_id: PRODUCT_ID,
+      http_method: method,
+      route,
+      trace: traceFromCorrelation(correlation),
+    });
 
     await next();
 
     const status = c.res?.status ?? 500;
-    const outcome = outcomeForStatus(status);
-    // The session user is set by authMiddleware during next(); its id is the
-    // pseudonymous CAIL subject (or an anonymous `user_…` id) — never email.
+    const terminal = terminalForStatus(status);
     const user = c.get("user") as { id?: string } | undefined;
+    const principal = user?.id ? principalForOwnerId(user.id) : undefined;
+    const errorType = c.error ? errorCodeFrom(c.error) : undefined;
 
-    const level = outcome === "error" ? "error" : outcome === "ok" ? "info" : "warn";
-    const event = outcome === "denied" ? CAIL_EVENTS.AUTH_DENIED : CAIL_EVENTS.REQUEST_COMPLETED;
-
-    log.log(level, event, {
-      ...correlation,
-      subject: typeof user?.id === "string" ? user.id : undefined,
-      http_method: c.req.method,
-      route: classifiedRoute(c),
+    const completedBase = {
+      request_id: correlation.request_id,
+      product_id: PRODUCT_ID,
+      http_method: method,
+      route,
       status,
-      outcome,
       duration_ms: Date.now() - started,
-      error_code: c.error ? errorCodeFrom(c.error) : undefined,
-    });
+      trace: traceFromCorrelation(correlation),
+      ...(principal ? { principal } : {}),
+    };
+    if (terminal.outcome === "ok") {
+      logger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+        ...completedBase,
+        terminal,
+      });
+    } else {
+      logger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+        ...completedBase,
+        terminal,
+        ...(errorType ? { error_type: errorType } : {}),
+      });
+    }
+
+    if (status === 401 || status === 403) {
+      logger.emit(CAIL_EVENTS.AUTH_DENIED, {
+        request_id: correlation.request_id,
+        product_id: PRODUCT_ID,
+        principal: principal ?? { type: "anonymous" },
+        http_method: method,
+        route,
+        status,
+        terminal: { outcome: "denied", reason: "denied" },
+        trace: traceFromCorrelation(correlation),
+        ...(errorType ? { error_type: errorType } : {}),
+      });
+    }
   });
 }
 
-/** The verified per-request correlation, when the boundary middleware ran. */
 export function getCorrelation(c: {
   get: (key: "correlation") => CailCorrelation | undefined;
 }): CailCorrelation | undefined {

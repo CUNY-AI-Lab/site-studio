@@ -14,7 +14,7 @@ import {
   migrationPendingKey
 } from "./migration";
 import { createAgentHistoryPorter } from "./agent-porter";
-import { errorCodeFrom, log } from "./logging";
+import { emitDiagnostic } from "./logging";
 import {
   AccountImportConfigurationError,
   resolveAccountImportWindow,
@@ -131,7 +131,7 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
         return fromKv as User;
       }
     } catch {
-      log.warn("session.invalid_record", { error_code: "invalid_kv_session" });
+      emitDiagnostic("warning", "invalid_kv_session");
     }
     // Invalid KV record: fall through to the legacy R2 record, as before.
   }
@@ -156,7 +156,7 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
   try {
     parsed = JSON.parse(legacyText) as unknown;
   } catch {
-    log.warn("session.invalid_record", { error_code: "invalid_legacy_session" });
+    emitDiagnostic("warning", "invalid_legacy_session");
     return null;
   }
 
@@ -290,7 +290,7 @@ async function migrateAnonymousSessionIfPresent(
         );
         await stub.markComplete(anonId, subject);
       } catch (error) {
-        log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
+        emitDiagnostic("warning", "migration_mark_complete_failed", { subject });
       }
       return true;
     }
@@ -313,10 +313,8 @@ async function migrateAnonymousSessionIfPresent(
       );
       decision = await stub.claim(pendingAnonId, subject);
     } catch (error) {
-      log.error("migration.resume_gate_failed", {
+      emitDiagnostic("error", "migration_resume_gate_failed", {
         subject,
-        outcome: "error",
-        error_code: errorCodeFrom(error)
       });
       return false;
     }
@@ -338,7 +336,7 @@ async function migrateAnonymousSessionIfPresent(
       );
       await stub.markComplete(pendingAnonId, subject);
     } catch (error) {
-      log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
+      emitDiagnostic("warning", "migration_mark_complete_failed", { subject });
     }
     return true;
   }
@@ -353,10 +351,8 @@ async function discardClosedImportState(env: Env, subject: string): Promise<void
   try {
     await env.SESSION_KV.delete(migrationPendingKey(subject));
   } catch (error) {
-    log.warn("account_import.pending_cleanup_failed", {
+    emitDiagnostic("warning", "account_import_pending_cleanup_failed", {
       subject,
-      outcome: "error",
-      error_code: errorCodeFrom(error),
     });
   }
 }
@@ -369,10 +365,8 @@ function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
       error instanceof AccountImportConfigurationError
         ? error.code
         : "account_import_config_invalid";
-    log.error("account_import.config_invalid", {
+    emitDiagnostic("error", errorCode, {
       status: 500,
-      outcome: "error",
-      error_code: errorCode,
     });
     return accountImportConfigurationResponse();
   }
@@ -440,10 +434,8 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
           error instanceof AccountImportConfigurationError
             ? error.code
             : "account_import_config_invalid";
-        log.warn("account_import.config_invalid", {
+        emitDiagnostic("warning", errorCode, {
           subject,
-          outcome: "client_error",
-          error_code: errorCode,
         });
       }
     }
@@ -456,21 +448,20 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
       if (importWindow?.state === "open") {
         const imported = await migrateAnonymousSessionIfPresent(c, subject);
         if (imported) {
-          log.info("account_import.completed", { subject, outcome: "ok" });
+          emitDiagnostic("info", "account_import_completed", { subject });
         }
       } else {
         const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
         if (cookieValue && cookieValue !== subject) {
-          log.warn("account_import.refused", {
-            subject,
-            outcome: "denied",
-            error_code:
-              importWindow?.state === "not_started"
-                ? "account_import_not_started"
-                : importWindow?.state === "expired"
-                  ? "account_import_expired"
-                  : "account_import_config_invalid",
-          });
+          emitDiagnostic(
+            "warning",
+            importWindow?.state === "not_started"
+              ? "account_import_not_started"
+              : importWindow?.state === "expired"
+                ? "account_import_expired"
+                : "account_import_config_invalid",
+            { subject },
+          );
         }
         // Do not resolve, claim, or copy from the old cookie outside the window.
         // The subject cookie written below replaces it in the browser; this
@@ -483,21 +474,17 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
         // must fail loud. Proceeding would replace the anon cookie with the
         // subject cookie below and permanently orphan the un-migrated anonymous
         // namespace; a 503 lets the user retry with the anon cookie intact.
-        log.error("migration.blocked_by_storage_outage", {
+        emitDiagnostic("error", "session_store_unavailable", {
           subject,
           status: 503,
-          outcome: "error",
-          error_code: "session_store_unavailable"
         });
         return sessionStoreUnavailableResponse();
       }
       // Other failures never block authentication — the pending marker written
       // at claim time makes the interrupted migration resumable on a later
       // login (migrateAnonymousSessionIfPresent escalates pre-marker failures).
-      log.error("migration.failed", {
+      emitDiagnostic("error", "account_import_migration_failed", {
         subject,
-        outcome: "error",
-        error_code: errorCodeFrom(error)
       });
     }
 
@@ -558,10 +545,8 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
       user = await readCurrentSession(c.env, sessionId);
     } catch (error) {
       if (error instanceof SessionStoreUnavailableError) {
-        log.error("session.store_unavailable", {
+        emitDiagnostic("error", "session_store_unavailable", {
           status: 503,
-          outcome: "error",
-          error_code: "session_store_unavailable"
         });
         return sessionStoreUnavailableResponse();
       }

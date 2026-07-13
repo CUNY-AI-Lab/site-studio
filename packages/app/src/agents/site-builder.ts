@@ -1,4 +1,8 @@
-import { AIChatAgent, createToolsFromClientSchemas } from "@cloudflare/ai-chat";
+import {
+  AIChatAgent,
+  createToolsFromClientSchemas,
+  type ChatResponseResult,
+} from "@cloudflare/ai-chat";
 import { callable, type Connection, type ConnectionContext } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
@@ -17,8 +21,15 @@ import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
-import { CAIL_EVENTS, correlationFromHeaders, type CailCorrelation, type CailLogFields } from "@cuny-ai-lab/cail-log";
-import { errorCodeFrom, log, mintCorrelation, withCorrelationFetch } from "../lib/logging";
+import { correlationFromHeaders, type CailCorrelation } from "@cuny-ai-lab/cail-log";
+import {
+  SiteStudioActionLifecycle,
+  emitDiagnostic,
+  errorCodeFrom,
+  mintCorrelation,
+  principalForOwnerId,
+  withCorrelationFetch,
+} from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
@@ -38,7 +49,6 @@ type SiteBuilderObservabilityToolCall = {
   deltaCount: number;
   startedAt: string;
   updatedAt: string;
-  lastPreview?: string;
 };
 
 type SiteBuilderObservabilityRequest = {
@@ -51,7 +61,6 @@ type SiteBuilderObservabilityRequest = {
   idleMs: number;
   suspectedStall: boolean;
   projectId: string;
-  latestUserRequest?: string;
   steps: number;
   chunkCounts: {
     text: number;
@@ -60,7 +69,7 @@ type SiteBuilderObservabilityRequest = {
     toolResult: number;
     raw: number;
   };
-  errors: string[];
+  errorTypes: string[];
   tools: SiteBuilderObservabilityToolCall[];
   finishReason?: string;
   rawFinishReason?: string;
@@ -146,17 +155,6 @@ export function summarizeError(error: unknown): string {
   }
 }
 
-function summarizeUnknown(value: unknown): string | undefined {
-  if (value == null) return undefined;
-  if (typeof value === "string") return clipPreview(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  try {
-    return clipPreview(JSON.stringify(value));
-  } catch {
-    return undefined;
-  }
-}
-
 function summarizeChunkData(chunk: { type: string } & Record<string, unknown>): Record<string, unknown> | undefined {
   switch (chunk.type) {
     case "text-delta":
@@ -171,25 +169,20 @@ function summarizeChunkData(chunk: { type: string } & Record<string, unknown>): 
       return {
         toolCallId: typeof chunk.id === "string" ? chunk.id : undefined,
         chars: typeof chunk.delta === "string" ? chunk.delta.length : 0,
-        preview: typeof chunk.delta === "string" ? clipPreview(chunk.delta) : undefined
       };
     case "tool-call":
       return {
         toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
         toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
         invalid: Boolean(chunk.invalid),
-        inputPreview: summarizeUnknown(chunk.input)
       };
     case "tool-result":
       return {
         toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
         toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
-        outputPreview: summarizeUnknown(chunk.output)
       };
     case "raw":
-      return {
-        preview: summarizeUnknown(chunk.rawValue)
-      };
+      return undefined;
     default:
       return undefined;
   }
@@ -318,7 +311,8 @@ export function createProjectTools(
     label?: string;
     trigger?: "agent";
   },
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch,
+  mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
 ) {
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   let snapshotPromise: Promise<SnapshotResult> | null = null;
@@ -338,9 +332,8 @@ export function createProjectTools(
 
     const result = await snapshotPromise;
     if (isSnapshotSkipped(result)) {
-      log.warn("snapshot.skipped", {
+      emitDiagnostic("warning", "snapshot_too_large", {
         subject: scope.userId,
-        error_code: "snapshot_too_large"
       });
     }
   }
@@ -517,6 +510,7 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
 
         // SS-40: creation is put-if-absent and overwrites/appends are CAS. A
@@ -530,6 +524,7 @@ export function createProjectTools(
             nextContent
           );
           if (createdEtag !== null) {
+            mutationLifecycle?.acknowledgeMutation();
             return {
               ok: true,
               path: filePath,
@@ -549,6 +544,7 @@ export function createProjectTools(
               content
             );
             if (createdEtag !== null) {
+              mutationLifecycle?.acknowledgeMutation();
               return {
                 ok: true,
                 path: filePath,
@@ -580,6 +576,7 @@ export function createProjectTools(
             current.etag
           );
           if (writtenEtag !== null) {
+            mutationLifecycle?.acknowledgeMutation();
             return {
               ok: true,
               path: filePath,
@@ -662,6 +659,7 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -673,6 +671,7 @@ export function createProjectTools(
             current.etag
           );
           if (writtenEtag !== null) {
+            mutationLifecycle?.acknowledgeMutation();
             return {
               ok: true,
               path: filePath,
@@ -750,6 +749,7 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
         // SS-50: the fileExists preflights above are advisory only. renameFile
         // claims the destination atomically; losing that claim means a
@@ -766,6 +766,8 @@ export function createProjectTools(
           }
           throw error;
         }
+
+        mutationLifecycle?.acknowledgeMutation();
 
         return {
           ok: true,
@@ -809,8 +811,10 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
         await storage.deleteFile(scope.userId, scope.projectId, filePath);
+        mutationLifecycle?.acknowledgeMutation();
 
         return {
           ok: true,
@@ -845,6 +849,7 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
 
         if (replaceExisting) {
@@ -860,11 +865,13 @@ export function createProjectTools(
             await storage.writeFile(scope.userId, scope.projectId, filePath, content);
             count++;
           }
+          mutationLifecycle?.acknowledgeMutation();
           return { ok: true as const, templateId, filesWritten: count };
         }
 
         // Fallback for blank if not in bundled templates
         await storage.writeFile(scope.userId, scope.projectId, "index.html", createBlankIndexHtml(scope.projectId));
+        mutationLifecycle?.acknowledgeMutation();
         return { ok: true as const, templateId, filesWritten: 1 };
       }
     }),
@@ -897,8 +904,10 @@ export function createProjectTools(
           };
         }
 
+        mutationLifecycle?.admit();
         await ensureSnapshot();
         await storage.writeFile(scope.userId, scope.projectId, filePath, createPageHtml(title));
+        mutationLifecycle?.acknowledgeMutation();
 
         return {
           ok: true,
@@ -966,16 +975,21 @@ export function createProjectTools(
       ]),
       execute: async ({ prompt, filename, width, height }) => {
         // Writes a project file, so snapshot first (mutation, unlike audit_accessibility).
+        mutationLifecycle?.admit();
         await ensureSnapshot();
 
         // Ordering (generate → sniff → gate → save) lives in the extracted,
         // integration-tested flow — keep this body a thin binding.
-        return runGenerateImageFlow(filename, {
+        const result = await runGenerateImageFlow(filename, {
           generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
           screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
           saveIfAbsent: (path, bytes) =>
             storage.uploadToProjectIfAbsent(scope.userId, scope.projectId, path, bytes)
         });
+        if (result.ok) {
+          mutationLifecycle?.acknowledgeMutation();
+        }
+        return result;
       }
     }),
   };
@@ -987,12 +1001,13 @@ function createChatTools(
   identityJwt: string | null,
   latestUserRequest: string | undefined,
   clientTools?: Parameters<typeof createToolsFromClientSchemas>[0],
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch,
+  mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
 ) {
   const projectTools = createProjectTools(env, scope, identityJwt, {
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
-  }, fetchImpl);
+  }, fetchImpl, mutationLifecycle);
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
@@ -1087,6 +1102,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
+  private buildActionAwaitingPersistence: SiteStudioActionLifecycle | null = null;
   /**
    * The verified caller JWT, captured from connection props (routes/agents.ts).
    * Forwarded to the CAIL model proxy on each model call. The browser opens the
@@ -1128,7 +1144,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     }
   }
 
-  @callable()
   async getObservability(): Promise<SiteBuilderObservabilitySnapshot> {
     return this.snapshotObservability();
   }
@@ -1166,50 +1181,33 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.messages = [];
   }
 
+  /** Complete the build only after AIChatAgent has persisted its response. */
+  protected override onChatResponse(result: ChatResponseResult): void {
+    const pending = this.buildActionAwaitingPersistence;
+    if (!pending) return;
+    if (result.status === "completed") {
+      pending.completeSuccess();
+    } else if (result.status === "aborted") {
+      pending.completeFailure({ outcome: "cancelled", reason: "cancelled" });
+    } else {
+      pending.completeFailure(
+        { outcome: "error", reason: "upstream_failure" },
+        "chat_response_failed",
+      );
+    }
+    this.buildActionAwaitingPersistence = null;
+  }
+
   async onChatMessage(
     onFinish?: Parameters<ChatHandler>[0],
     options?: Parameters<ChatHandler>[1]
   ) {
     const requestId = options?.requestId ?? "unknown";
 
-    // ONE wide event per chat turn (cail-log fleet standard): whichever
-    // terminal path runs first — finish, abort, stream error, or setup
-    // failure — emits the single structured event; later callbacks no-op.
-    // Metadata only: subject (the pseudonymous owner id, never email),
-    // correlation ids, model, outcome, duration, token COUNTS. Prompts and
-    // completions never reach the logger (its typed allowlist has no field
-    // that could carry them).
     const correlation = this.correlation ?? (this.correlation = mintCorrelation());
-    const startedAt = Date.now();
-    let subject: string | undefined;
-    let modelId: string | undefined;
-    let wideEventEmitted = false;
-    const emitWideEvent = (
-      level: "info" | "warn" | "error",
-      event: string,
-      fields: CailLogFields
-    ) => {
-      if (wideEventEmitted) {
-        return;
-      }
-      wideEventEmitted = true;
-      log.log(level, event, {
-        ...correlation,
-        subject,
-        route: "agent.chat",
-        http_method: "POST",
-        model: modelId,
-        duration_ms: Date.now() - startedAt,
-        ...fields
-      });
-    };
 
     if (!this.env.CAIL_API_BASE) {
-      emitWideEvent("error", CAIL_EVENTS.REQUEST_COMPLETED, {
-        status: 500,
-        outcome: "error",
-        error_code: "cail_api_base_missing"
-      });
+      emitDiagnostic("error", "cail_api_base_missing", { status: 500 });
       return new Response(JSON.stringify({ error: "CAIL_API_BASE is not configured" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
@@ -1220,31 +1218,31 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     try {
       scope = parseScope(this.name);
     } catch {
-      emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
-        status: 400,
-        outcome: "client_error",
-        error_code: "invalid_agent_scope"
-      });
+      emitDiagnostic("warning", "invalid_agent_scope", { status: 400 });
       return new Response(JSON.stringify({ error: "Invalid agent scope" }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
       });
     }
-    subject = scope.userId;
-
     const storage = new R2ProjectStorage(this.env.SITE_STUDIO_BUCKET);
 
     if (!(await storage.projectExists(scope.userId, scope.projectId))) {
-      emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
+      emitDiagnostic("warning", "project_not_found", {
+        subject: scope.userId,
         status: 404,
-        outcome: "client_error",
-        error_code: "project_not_found"
       });
       return new Response(JSON.stringify({ error: "Project not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
       });
     }
+
+    const buildAction = new SiteStudioActionLifecycle({
+      principal: principalForOwnerId(scope.userId),
+      correlation,
+      route: "/api/agents/site-builder/{project_id}",
+      http_method: "POST",
+    });
 
     try {
       // Model calls go through the CAIL model proxy (no provider keys here).
@@ -1253,7 +1251,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // quota_exceeded, upstream_auth_error, …) surface to the client via the
       // stream unmodified.
       const modelName = resolveModelId(this.env);
-      modelId = modelName;
       // Correlation propagation: every outbound gateway call (chat completions
       // via the AI SDK, image generation/moderation from the tools) carries
       // this request's traceparent + X-CAIL-Request-Id so spend and upstream
@@ -1264,15 +1261,18 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
       const systemPrompt = `${SITE_BUILDER_PROMPT}\n\n${buildProjectContext(projectFiles)}`;
-      const tools = createChatTools(this.env, scope, this.identityJwt, latestUserRequest, options?.clientTools, gatewayFetch);
+      const tools = createChatTools(
+        this.env,
+        scope,
+        this.identityJwt,
+        latestUserRequest,
+        options?.clientTools,
+        gatewayFetch,
+        buildAction,
+      );
 
-      this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
-      this.pushObservabilityEvent(requestId, "request-start", "Chat request started", "info", {
-        userId: scope.userId,
-        projectId: scope.projectId,
-        model: modelName,
-        latestUserRequest
-      });
+      this.ensureObservabilityRequest(requestId, modelName, scope.projectId);
+      this.pushObservabilityEvent(requestId, "request-start", "Chat request started");
 
       const result = streamText({
         model,
@@ -1291,7 +1291,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         temperature: 0.2,
         includeRawChunks: true,
         experimental_onStepStart: () => {
-          const request = this.ensureObservabilityRequest(requestId, modelName, scope.projectId, latestUserRequest);
+          const request = this.ensureObservabilityRequest(requestId, modelName, scope.projectId);
           request.steps += 1;
           this.markObservabilityUpdated(request, false);
           this.pushObservabilityEvent(requestId, "step-start", `Model step ${request.steps} started`, "info");
@@ -1301,7 +1301,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             requestId,
             modelName,
             scope.projectId,
-            latestUserRequest,
             chunk as { type: string } & Record<string, unknown>
           );
         },
@@ -1309,15 +1308,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           this.finalizeObservabilityRequest(requestId, "finished", "Chat request finished", {
             finishReason: event.finishReason,
             rawFinishReason: event.rawFinishReason,
-            totalUsage: event.totalUsage,
-            responseId: event.response?.id
           });
-          emitWideEvent("info", CAIL_EVENTS.REQUEST_COMPLETED, {
-            status: 200,
-            outcome: "ok",
-            input_tokens: event.totalUsage?.inputTokens,
-            output_tokens: event.totalUsage?.outputTokens
-          });
+          if (buildAction.wasAdmitted()) {
+            this.buildActionAwaitingPersistence = buildAction;
+          }
           if (onFinish) {
             (onFinish as (event: unknown) => unknown)(event);
           }
@@ -1326,22 +1320,21 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           this.finalizeObservabilityRequest(requestId, "aborted", "Chat request aborted", {
             steps: steps.length
           }, "warn");
-          emitWideEvent("warn", CAIL_EVENTS.REQUEST_COMPLETED, {
-            outcome: "client_error",
-            error_code: "aborted"
-          });
+          buildAction.completeFailure({ outcome: "cancelled", reason: "cancelled" });
+          this.buildActionAwaitingPersistence = null;
         },
         onError: (error) => {
+          const described = describeModelStreamError(error.error);
           this.finalizeObservabilityRequest(requestId, "error", "streamText reported an error", {
-            error: summarizeError(error.error)
+            error_type: described.quota ? "quota_exceeded" : errorCodeFrom(error.error),
           }, "error");
-          // SS-45: AI_APICallError carries requestBodyValues (full prompts and
-          // extracted documents). The structured event carries only the stable
-          // error class code — never the error object or its message.
-          emitWideEvent("error", CAIL_EVENTS.UPSTREAM_ERROR, {
-            outcome: "error",
-            error_code: errorCodeFrom(error.error)
-          });
+          buildAction.completeFailure(
+            described.quota
+              ? { outcome: "denied", reason: "quota_blocked" }
+              : { outcome: "error", reason: "upstream_failure" },
+            described.quota ? "quota_exceeded" : errorCodeFrom(error.error),
+          );
+          this.buildActionAwaitingPersistence = null;
         }
       });
 
@@ -1353,24 +1346,27 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           this.finalizeObservabilityRequest(requestId, "error", described.quota
             ? "Model quota exhausted"
             : "UI message stream failed", {
-            error: summarizeError(error)
+            error_type: described.quota ? "quota_exceeded" : errorCodeFrom(error),
           }, "error");
-          emitWideEvent("error", CAIL_EVENTS.UPSTREAM_ERROR, {
-            outcome: "error",
-            error_code: described.quota ? "quota_exceeded" : errorCodeFrom(error)
-          });
+          buildAction.completeFailure(
+            described.quota
+              ? { outcome: "denied", reason: "quota_blocked" }
+              : { outcome: "error", reason: "upstream_failure" },
+            described.quota ? "quota_exceeded" : errorCodeFrom(error),
+          );
+          this.buildActionAwaitingPersistence = null;
           return described.message;
         }
       });
     } catch (error) {
       this.finalizeObservabilityRequest(requestId, "error", "Chat failed before streaming began", {
-        error: summarizeError(error)
+        error_type: errorCodeFrom(error),
       }, "error");
-      emitWideEvent("error", CAIL_EVENTS.REQUEST_COMPLETED, {
-        status: 500,
-        outcome: "error",
-        error_code: errorCodeFrom(error)
-      });
+      buildAction.completeFailure(
+        { outcome: "error", reason: "application_failure" },
+        errorCodeFrom(error),
+      );
+      this.buildActionAwaitingPersistence = null;
       return new Response(JSON.stringify({ error: "Failed to process request" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
@@ -1389,7 +1385,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           idleMs,
           suspectedStall: request.status === "streaming" && idleMs >= OBSERVABILITY_STALL_MS,
           tools: request.tools.map((toolCall) => ({ ...toolCall })),
-          errors: [...request.errors]
+          errorTypes: [...request.errorTypes]
         };
       })
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
@@ -1405,7 +1401,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     requestId: string,
     model: string,
     projectId: string,
-    latestUserRequest?: string
   ): SiteBuilderObservabilityRequest {
     const existing = this.observabilityRequests.get(requestId);
     if (existing) {
@@ -1423,7 +1418,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       idleMs: 0,
       suspectedStall: false,
       projectId,
-      latestUserRequest,
       steps: 0,
       chunkCounts: {
         text: 0,
@@ -1432,7 +1426,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         toolResult: 0,
         raw: 0
       },
-      errors: [],
+      errorTypes: [],
       tools: []
     };
     this.observabilityRequests.set(requestId, request);
@@ -1505,10 +1499,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     requestId: string,
     model: string,
     projectId: string,
-    latestUserRequest: string | undefined,
     chunk: { type: string } & Record<string, unknown>
   ) {
-    const request = this.ensureObservabilityRequest(requestId, model, projectId, latestUserRequest);
+    const request = this.ensureObservabilityRequest(requestId, model, projectId);
     this.markObservabilityUpdated(request, true);
 
     switch (chunk.type) {
@@ -1541,7 +1534,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         toolTrace.inputChars += delta.length;
         toolTrace.deltaCount += 1;
         toolTrace.updatedAt = new Date().toISOString();
-        toolTrace.lastPreview = clipPreview(delta);
         const shouldLogProgress = toolTrace.deltaCount <= 3
           || toolTrace.deltaCount % 10 === 0
           || toolTrace.inputChars % 1000 < delta.length;
@@ -1551,7 +1543,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             deltaChars: delta.length,
             inputChars: toolTrace.inputChars,
             deltaCount: toolTrace.deltaCount,
-            preview: toolTrace.lastPreview
           });
         }
         break;
@@ -1562,7 +1553,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
         toolTrace.state = "input-available";
         toolTrace.updatedAt = new Date().toISOString();
-        toolTrace.lastPreview = summarizeUnknown(chunk.input);
         this.pushObservabilityEvent(requestId, "tool-call", `Tool call ready: ${toolName}`, "info", summarizeChunkData(chunk));
         break;
       }
@@ -1573,7 +1563,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
         toolTrace.state = "output-available";
         toolTrace.updatedAt = new Date().toISOString();
-        toolTrace.lastPreview = summarizeUnknown(chunk.output);
         this.pushObservabilityEvent(requestId, "tool-result", `Tool result available: ${toolName}`, "info", summarizeChunkData(chunk));
         break;
       }
@@ -1599,8 +1588,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     if (request) {
       request.status = status;
       this.markObservabilityUpdated(request, false);
-      if (status === "error" && data?.error) {
-        request.errors.push(String(data.error));
+      if (status === "error" && typeof data?.error_type === "string") {
+        request.errorTypes.push(data.error_type);
       }
       if (typeof data?.finishReason === "string") {
         request.finishReason = data.finishReason;
@@ -1612,3 +1601,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.pushObservabilityEvent(requestId, status === "finished" ? "finish" : status === "aborted" ? "abort" : "error", detail, level, data);
   }
 }
+
+// Register the RPC method without decorator syntax so the same source can be
+// loaded by both workerd and Node-based unit-test transforms.
+callable()(SiteBuilderAgent.prototype.getObservability, {} as ClassMethodDecoratorContext);

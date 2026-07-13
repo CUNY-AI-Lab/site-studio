@@ -40,7 +40,7 @@
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { getUserHandle, migrateHandle } from "./handles";
 import { readR2Json, putR2Json } from "./r2-json";
-import { errorCodeFrom, log } from "./logging";
+import { emitDiagnostic } from "./logging";
 
 export interface MigrationClaim {
   subject: string;
@@ -371,9 +371,8 @@ async function copyAnonymousNamespace(options: {
       try {
         await porter.port(anonUserId, plan.oldId, subject, plan.newId);
       } catch (error) {
-        log.warn("migration.chat_history_port_failed", {
+        emitDiagnostic("warning", "migration_chat_history_port_failed", {
           subject,
-          error_code: errorCodeFrom(error)
         });
       }
     }

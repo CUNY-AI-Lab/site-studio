@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
-import { errorCodeFrom, log } from "../lib/logging";
+import { emitDiagnostic } from "../lib/logging";
 
 export class FileNotFoundError extends Error {
   constructor(public readonly filePath: string) {
@@ -103,9 +103,10 @@ function safeParseJson<T>(value: string, label: string, _key: string): T | null 
   } catch {
     // Structured, metadata-only: the label is one of a handful of fixed
     // strings; the R2 key (which embeds project names) never reaches the logs.
-    log.warn("storage.invalid_record_skipped", {
-      error_code: `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`
-    });
+    emitDiagnostic(
+      "warning",
+      `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+    );
     return null;
   }
 }
@@ -627,9 +628,8 @@ export class R2ProjectStorage {
     if (totalBytes > MAX_SNAPSHOT_BYTES) {
       // Surface the skip — never silent. Callers also relay it (see
       // ensureSnapshot in site-builder.ts and the manual snapshot route).
-      log.warn("snapshot.skipped", {
+      emitDiagnostic("warning", "snapshot_too_large", {
         subject: userId,
-        error_code: "snapshot_too_large",
         req_bytes: totalBytes
       });
       return { skipped: true, reason: "too-large", totalBytes, limitBytes: MAX_SNAPSHOT_BYTES };
@@ -674,9 +674,8 @@ export class R2ProjectStorage {
     try {
       await this.pruneSnapshots(userId, projectId);
     } catch (error) {
-      log.warn("snapshot.prune_failed", {
+      emitDiagnostic("warning", "snapshot_prune_failed", {
         subject: userId,
-        error_code: errorCodeFrom(error)
       });
     }
 

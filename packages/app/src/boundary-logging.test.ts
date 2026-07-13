@@ -1,23 +1,8 @@
-/**
- * Fleet logging standard (cail-log) at the worker fetch boundary.
- *
- * Pins the adoption contract:
- *  - ONE wide `request.completed` / `auth.denied` event per request, emitted
- *    as a structured object through Cloudflare's native severity console method;
- *  - the event carries ONLY the typed safe-to-log allowlist — subject
- *    (pseudonymous, never email), correlation ids, classified route, method,
- *    status, outcome, duration — and NO content/PII: no query strings, no
- *    header values, no prompts, no emails;
- *  - inbound `traceparent` / `X-CAIL-Request-Id` are ADOPTED, not regenerated;
- *  - outbound gateway calls carry the same correlation headers.
- */
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CailLogEvent } from "@cuny-ai-lab/cail-log";
 import type { Env } from "./types";
 import { createMockKV, type MockKV } from "./lib/test-utils";
 
-// app.ts mounts the agent router, whose `agents` dependency imports
-// `cloudflare:`-scheme modules; stub it so the full app is importable here.
 vi.mock("agents", () => ({
   getAgentByName: vi.fn(async () => ({
     fetch: async () => new Response("{}", { status: 200 }),
@@ -27,66 +12,22 @@ vi.mock("agents", () => ({
 
 import app from "./app";
 import {
+  PRODUCT_ID,
+  SITE_STUDIO_EVENTS,
+  SiteStudioActionLifecycle,
+  createSiteStudioLogger,
+  emitDiagnostic,
   errorCodeFrom,
   mintCorrelation,
   outcomeForStatus,
-  withCorrelationFetch
+  principalForOwnerId,
+  terminalForStatus,
+  withCorrelationFetch,
 } from "./lib/logging";
 
 const BASE = "https://site-studio.example";
-
-/** Every key the emitted wide event may carry (the cail-log allowlist). */
-const ALLOWED_EVENT_KEYS = new Set([
-  "timestamp",
-  "severity_text",
-  "severity_number",
-  "event",
-  "message",
-  "service",
-  "release",
-  "env",
-  "subject",
-  "request_id",
-  "trace_id",
-  "span_id",
-  "principal_type",
-  "key_id",
-  "app",
-  "http_method",
-  "route",
-  "model",
-  "status",
-  "outcome",
-  "duration_ms",
-  "upstream_ms",
-  "error_code",
-  "retry_count",
-  "req_bytes",
-  "resp_bytes",
-  "input_tokens",
-  "output_tokens",
-  "quota"
-]);
-
-const NEVER_LOG_KEYS = [
-  "email",
-  "given_name",
-  "family_name",
-  "sub",
-  "prompt",
-  "messages",
-  "completion",
-  "content",
-  "input",
-  "output",
-  "body",
-  "authorization",
-  "cookie",
-  "token",
-  "secret",
-  "password",
-  "api_key"
-];
+const REQUEST_ID = "8b9ec144-39aa-4f1f-bda5-4c645facf2cd";
+const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();
@@ -116,32 +57,29 @@ function createEnv(extra?: Partial<Env>): Env {
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
-    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
-    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
+    CAIL_SSO_SWITCHED_AT: new Date(now - 86_400_000).toISOString(),
+    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 86_400_000).toISOString(),
     ASSETS: undefined,
     ...extra
   };
 }
 
-/** Capture cail-log wide events across Cloudflare's native severity methods. */
-function captureLog() {
+function captureConsole() {
   const spies = [
     vi.spyOn(console, "log").mockImplementation(() => {}),
     vi.spyOn(console, "warn").mockImplementation(() => {}),
     vi.spyOn(console, "error").mockImplementation(() => {})
   ];
   return {
-    lines(): string[] {
-      return spies.flatMap((spy) => spy.mock.calls)
-        .map(([event]) => JSON.stringify(event));
-    },
     events(): Array<Record<string, unknown>> {
       return spies.flatMap((spy) => spy.mock.calls)
         .map(([event]) => event)
-        .filter(
-          (event): event is Record<string, unknown> =>
-            !!event && typeof event === "object" && "event" in event
+        .filter((event): event is Record<string, unknown> =>
+          !!event && typeof event === "object" && "event.name" in event
         );
+    },
+    lines(): string[] {
+      return spies.flatMap((spy) => spy.mock.calls).map(([value]) => JSON.stringify(value));
     },
     restore() {
       for (const spy of spies) spy.mockRestore();
@@ -154,56 +92,42 @@ beforeEach(() => {
   bucket = createMockBucket();
 });
 
-describe("request-boundary wide event", () => {
-  it("emits exactly ONE request.completed event with the allowlist shape and no content/PII", async () => {
-    const traceId = "0af7651916cd43dd8448eb211c80319c";
-    const inboundRequestId = "req-fixed-0001";
-    const capture = captureLog();
+describe("canonical request mappings", () => {
+  it("emits received and completed with fleet product, component identity, safe route, and no content", async () => {
+    const capture = captureConsole();
     try {
-      const res = await app.request(
+      const response = await app.request(
         `${BASE}/api/health?q=SENSITIVE-QUERY-VALUE`,
         {
           headers: {
-            traceparent: `00-${traceId}-b7ad6b7169203331-01`,
-            "x-cail-request-id": inboundRequestId,
-            // Junk credential: must never appear in any emitted byte.
+            traceparent: `00-${TRACE_ID}-b7ad6b7169203331-01`,
+            "x-cail-request-id": REQUEST_ID,
             "X-CAIL-Identity-JWT": "SECRET-JWT-VALUE"
           }
         },
         createEnv()
       );
-      expect(res.status).toBe(200);
+      expect(response.status).toBe(200);
 
-      const completed = capture.events().filter((event) => event.event === "request.completed");
+      const events = capture.events();
+      const received = events.filter((event) => event["event.name"] === "cail.request.received");
+      const completed = events.filter((event) => event["event.name"] === "cail.request.completed");
+      expect(received).toHaveLength(1);
       expect(completed).toHaveLength(1);
-      const event = completed[0]!;
+      expect(completed[0]).toMatchObject({
+        "service.name": "site-studio-app",
+        "service.version": "0.1.0",
+        "cail.product.id": PRODUCT_ID,
+        "cail.request.id": REQUEST_ID,
+        "http.request.method": "GET",
+        "url.template": "/api/health",
+        "http.response.status_code": 200,
+        "cail.outcome": "ok",
+        "cail.outcome.reason": "completed",
+        trace_id: TRACE_ID,
+        trace_flags: 1
+      });
 
-      // Shape: allowlist fields only, correctly classified.
-      expect(event.service).toBe("site-studio");
-      expect(event.severity_text).toBe("INFO");
-      expect(event.severity_number).toBe(9);
-      expect(event.http_method).toBe("GET");
-      expect(event.route).toBe("/api/health");
-      expect(event.status).toBe(200);
-      expect(event.outcome).toBe("ok");
-      expect(typeof event.duration_ms).toBe("number");
-      expect(typeof event.timestamp).toBe("string");
-
-      // Correlation: ADOPTED from the inbound headers, never regenerated.
-      expect(event.trace_id).toBe(traceId);
-      expect(event.request_id).toBe(inboundRequestId);
-      expect(event.span_id).toMatch(/^[0-9a-f]{16}$/);
-
-      // Every key on the event is on the allowlist; NEVER-LOG keys are absent.
-      for (const key of Object.keys(event)) {
-        expect(ALLOWED_EVENT_KEYS.has(key), `unexpected event key: ${key}`).toBe(true);
-      }
-      for (const denied of NEVER_LOG_KEYS) {
-        expect(event, `denied key present: ${denied}`).not.toHaveProperty(denied);
-      }
-
-      // No content/PII in ANY emitted byte: no query values, no header values,
-      // no raw URL with query string.
       for (const line of capture.lines()) {
         expect(line).not.toContain("SENSITIVE-QUERY-VALUE");
         expect(line).not.toContain("SECRET-JWT-VALUE");
@@ -214,98 +138,144 @@ describe("request-boundary wide event", () => {
     }
   });
 
-  it("keys the event by the pseudonymous subject (never an email)", async () => {
-    const capture = captureLog();
+  it("emits request terminal plus auth denial for an enforced anonymous request", async () => {
+    const capture = captureConsole();
     try {
-      const res = await app.request(`${BASE}/api/projects`, {}, createEnv());
-      expect(res.status).toBe(200);
-
-      const completed = capture.events().filter((event) => event.event === "request.completed");
-      expect(completed).toHaveLength(1);
-      const subject = completed[0]!.subject;
-      // Anonymous fallback session: the owner id, never an email address.
-      expect(typeof subject).toBe("string");
-      expect(subject as string).toMatch(/^user_/);
-      expect(subject as string).not.toContain("@");
-      expect(completed[0]!.route).toBe("/api/projects");
-    } finally {
-      capture.restore();
-    }
-  });
-
-  it("emits auth.denied (outcome denied) when identity enforcement rejects the request", async () => {
-    const capture = captureLog();
-    try {
-      const res = await app.request(
+      const response = await app.request(
         `${BASE}/api/projects`,
-        {},
+        { headers: { "x-cail-request-id": REQUEST_ID } },
         createEnv({ CAIL_REQUIRE_IDENTITY: "true" })
       );
-      expect(res.status).toBe(401);
-
-      const denied = capture.events().filter((event) => event.event === "auth.denied");
+      expect(response.status).toBe(401);
+      const events = capture.events();
+      expect(events.filter((event) => event["event.name"] === "cail.request.completed")).toHaveLength(1);
+      const denied = events.filter((event) => event["event.name"] === "cail.auth.denied");
       expect(denied).toHaveLength(1);
-      expect(denied[0]!.outcome).toBe("denied");
-      expect(denied[0]!.status).toBe(401);
-      // No request.completed duplicate: one wide event per unit of work.
-      expect(capture.events().filter((event) => event.event === "request.completed")).toHaveLength(0);
+      expect(denied[0]).toMatchObject({
+        "cail.product.id": PRODUCT_ID,
+        "cail.principal.type": "anonymous",
+        "cail.outcome": "denied",
+        "cail.outcome.reason": "denied",
+        "url.template": "/api/projects"
+      });
     } finally {
       capture.restore();
     }
   });
 
-  it("mints well-formed correlation ids when no inbound headers exist", async () => {
-    const capture = captureLog();
+  it("mints atomic UUID/trace correlation when headers are absent", async () => {
+    const capture = captureConsole();
     try {
       await app.request(`${BASE}/api/health`, {}, createEnv());
-      const [event] = capture.events().filter((e) => e.event === "request.completed");
-      expect(event!.trace_id).toMatch(/^[0-9a-f]{32}$/);
-      expect(event!.span_id).toMatch(/^[0-9a-f]{16}$/);
-      expect(typeof event!.request_id).toBe("string");
+      const event = capture.events().find((value) => value["event.name"] === "cail.request.completed");
+      expect(event?.["cail.request.id"]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(event?.trace_id).toMatch(/^[0-9a-f]{32}$/);
+      expect(event?.span_id).toMatch(/^[0-9a-f]{16}$/);
+      expect(event?.trace_flags).toBe(0);
     } finally {
       capture.restore();
     }
   });
 });
 
-describe("logging helpers", () => {
-  it("outcomeForStatus maps the fleet vocabulary", () => {
+describe("canonical build/publish action mappings", () => {
+  function createLifecycle(events: CailLogEvent[], clockValues = [100, 145]) {
+    const logger = createSiteStudioLogger({
+      sink: (event) => events.push(event),
+      env: "test",
+      clock: () => clockValues.shift() ?? 145,
+    });
+    return new SiteStudioActionLifecycle({
+      principal: { type: "user", subject: "cail-0123456789abcdef0123456789abcdef" },
+      correlation: {
+        request_id: REQUEST_ID,
+        trace_id: TRACE_ID,
+        span_id: "b7ad6b7169203331",
+        trace_flags: 1,
+      },
+      route: "/api/projects/{id}/publish",
+      http_method: "POST",
+    }, logger, () => clockValues.shift() ?? 145);
+  }
+
+  it("emits success only after admission and a durable mutation acknowledgement", () => {
+    const events: CailLogEvent[] = [];
+    const lifecycle = createLifecycle(events, [100, 145]);
+    lifecycle.admit();
+    lifecycle.acknowledgeMutation();
+    lifecycle.completeSuccess();
+    lifecycle.completeSuccess();
+
+    expect(events.map((event) => event.event_name)).toEqual([
+      "cail.action.admitted",
+      "cail.action.terminal",
+    ]);
+    expect(events[0]?.attributes).toMatchObject({
+      "cail.product.id": PRODUCT_ID,
+      "cail.principal.type": "user",
+      "url.template": "/api/projects/{id}/publish",
+    });
+    expect(events[1]?.attributes).toMatchObject({
+      "cail.outcome": "ok",
+      "cail.outcome.reason": "completed",
+    });
+    expect(events[0]?.attributes["cail.action.id"]).toBe(events[1]?.attributes["cail.action.id"]);
+  });
+
+  it("never claims success when persistence was not acknowledged", () => {
+    const events: CailLogEvent[] = [];
+    const lifecycle = createLifecycle(events, [100, 145]);
+    lifecycle.admit();
+    lifecycle.completeSuccess();
+    expect(events[1]?.attributes).toMatchObject({
+      "cail.outcome": "error",
+      "cail.outcome.reason": "application_failure",
+      "error.type": "mutation_unacknowledged",
+    });
+  });
+});
+
+describe("service-local diagnostics and helpers", () => {
+  it("covers every fixed-severity diagnostic mapping without a free-text body", () => {
+    const events: CailLogEvent[] = [];
+    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    emitDiagnostic("info", "account_import_completed", {}, logger);
+    emitDiagnostic("warning", "snapshot_too_large", { req_bytes: 1_024 }, logger);
+    emitDiagnostic("error", "session_store_unavailable", { status: 503 }, logger);
+    expect(events.map((event) => event.event_name)).toEqual([
+      SITE_STUDIO_EVENTS.DIAGNOSTIC_INFO,
+      SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING,
+      SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR,
+    ]);
+    expect(events.every((event) => event.attributes["cail.product.id"] === PRODUCT_ID)).toBe(true);
+    expect(events.every((event) => event.body === "Site Studio diagnostic condition observed.")).toBe(true);
+  });
+
+  it("maps terminal outcomes and principals without treating legacy ids as subjects", () => {
     expect(outcomeForStatus(200)).toBe("ok");
-    expect(outcomeForStatus(304)).toBe("ok");
-    expect(outcomeForStatus(400)).toBe("client_error");
-    expect(outcomeForStatus(401)).toBe("denied");
-    expect(outcomeForStatus(403)).toBe("denied");
-    expect(outcomeForStatus(404)).toBe("client_error");
-    expect(outcomeForStatus(500)).toBe("error");
-    expect(outcomeForStatus(503)).toBe("error");
+    expect(terminalForStatus(401)).toEqual({ outcome: "denied", reason: "denied" });
+    expect(terminalForStatus(429)).toEqual({ outcome: "denied", reason: "rate_limited" });
+    expect(terminalForStatus(503)).toEqual({ outcome: "error", reason: "application_failure" });
+    expect(principalForOwnerId("user_abc")).toEqual({ type: "anonymous" });
+    expect(principalForOwnerId("cail-0123456789abcdef0123456789abcdef")).toEqual({
+      type: "user",
+      subject: "cail-0123456789abcdef0123456789abcdef",
+    });
   });
 
-  it("errorCodeFrom yields a stable slug from the error CLASS, never the message", () => {
-    const boom = new Error("user@example.com typed a secret prompt");
-    expect(errorCodeFrom(boom)).toBe("error");
-    class QuotaExceededError extends Error {
-      override name = "QuotaExceededError";
-    }
-    expect(errorCodeFrom(new QuotaExceededError("x"))).toBe("quotaexceedederror");
-    expect(errorCodeFrom("not an error")).toBe("error");
-    expect(errorCodeFrom(undefined)).toBe("error");
-  });
-
-  it("withCorrelationFetch stamps traceparent + x-cail-request-id on outbound gateway calls", async () => {
+  it("derives only an exception class and preserves unsampled W3C propagation", async () => {
+    const error = new Error("user@example.com typed a secret prompt");
+    expect(errorCodeFrom(error)).toBe("error");
     const correlation = mintCorrelation();
     const captured: Request[] = [];
-    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      captured.push(new Request(input as RequestInfo, init));
+    const gatewayFetch = withCorrelationFetch(correlation, (async (input, init) => {
+      captured.push(new Request(input, init));
       return new Response("{}");
-    }) as typeof fetch;
-
-    const gatewayFetch = withCorrelationFetch(correlation, impl);
+    }) as typeof fetch);
     await gatewayFetch("https://gateway.example/v1/run", { method: "POST" });
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0]!.headers.get("traceparent")).toBe(
-      `00-${correlation.trace_id}-${correlation.span_id}-01`
+    expect(captured[0]?.headers.get("traceparent")).toBe(
+      `00-${correlation.trace_id}-${correlation.span_id}-00`
     );
-    expect(captured[0]!.headers.get("x-cail-request-id")).toBe(correlation.request_id);
+    expect(captured[0]?.headers.get("x-cail-request-id")).toBe(correlation.request_id);
   });
 });

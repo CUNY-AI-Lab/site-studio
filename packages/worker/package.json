@@ -14,13 +14,13 @@
     "check": "vitest run && tsc --noEmit"
   },
   "dependencies": {
-    "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#95b45c429c05e42557143ddfc1ff8afaf5b7b1c1"
+    "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#862067d3ac83d0cde456eb38d3a6bad6df0476e5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "4.20260627.1",
-    "@types/node": "20.19.24",
+    "@cloudflare/workers-types": "5.20260713.1",
+    "@types/node": "26.1.1",
     "typescript": "5.9.3",
-    "vitest": "3.2.6",
-    "wrangler": "4.105.0"
+    "vitest": "4.1.10",
+    "wrangler": "4.110.0"
   }
 }

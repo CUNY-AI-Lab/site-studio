@@ -8,9 +8,90 @@ import { getServedContentType as getContentType } from "../../serving-core/src/c
 import { looksLikePageNavigation as looksLikePageNavigationCore } from "../../serving-core/src/page-navigation";
 import { resolveExtensionlessFile } from "../../serving-core/src/extensionless";
 import { isProtectedServedPath } from "../../serving-core/src/protected-files";
-import { createCailLogger, workersStructuredSink } from "@cuny-ai-lab/cail-log";
+import {
+  CAIL_EVENTS,
+  correlationFromHeaders,
+  createCailLogger,
+  extendCailEventCatalog,
+  workersStructuredSink,
+  type CailCorrelation,
+  type CailHttpMethod,
+  type CailTerminalFields,
+} from "@cuny-ai-lab/cail-log";
 
-const log = createCailLogger({ service: "site-studio-publisher", sink: workersStructuredSink });
+const PRODUCT_ID = "site-studio";
+const PUBLISHER_DIAGNOSTIC = "site_studio_publisher.diagnostic.warning";
+const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
+  [PUBLISHER_DIAGNOSTIC]: {
+    body: "Site Studio publisher diagnostic condition observed.",
+    source: "platform",
+    severity: "warn",
+    required: ["product_id", "error_type"],
+    optional: ["request_id", "trace", "status", "http_method", "route"],
+  },
+});
+const log = createCailLogger({
+  service: "site-studio-publisher",
+  release: "0.1.0",
+  env: "production",
+  sourceClass: "platform",
+  catalog: PUBLISHER_EVENT_CATALOG,
+  sink: workersStructuredSink,
+});
+
+function traceFromCorrelation(correlation: CailCorrelation) {
+  return {
+    trace_id: correlation.trace_id,
+    span_id: correlation.span_id,
+    trace_flags: correlation.trace_flags,
+  } as const;
+}
+
+function publisherRoute(parsed: ParsedPublishedRequest | null): string {
+  if (parsed?.kind === "handle") return "/u/{handle}/{slug}/{path}";
+  if (parsed?.kind === "legacy") return "/sites/{user_id}/{slug}/{path}";
+  return "/unclassified";
+}
+
+function terminalForStatus(status: number): CailTerminalFields {
+  if (status >= 500) return { outcome: "error", reason: "application_failure" };
+  if (status >= 400) return { outcome: "client_error", reason: "client_error" };
+  return { outcome: "ok", reason: "completed" };
+}
+
+function httpMethod(method: string): CailHttpMethod {
+  const normalized = method.toUpperCase();
+  switch (normalized) {
+    case "CONNECT":
+    case "DELETE":
+    case "GET":
+    case "HEAD":
+    case "OPTIONS":
+    case "PATCH":
+    case "POST":
+    case "PUT":
+    case "TRACE":
+      return normalized;
+    default:
+      return "_OTHER";
+  }
+}
+
+function warnDiagnostic(errorType: string): void {
+  log.emit(PUBLISHER_DIAGNOSTIC, {
+    product_id: PRODUCT_ID,
+    error_type: errorType,
+  });
+}
+
+function errorTypeFrom(error: unknown): string {
+  const name = error instanceof Error ? error.name : "error";
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "_")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 64) || "error";
+}
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
@@ -94,7 +175,7 @@ export async function loadMigrationPointer(
     }
     return pointer;
   } catch {
-    log.warn("storage.invalid_record_skipped", { error_code: "invalid_migration_pointer" });
+    warnDiagnostic("invalid_migration_pointer");
     return null;
   }
 }
@@ -217,7 +298,7 @@ export async function getProjectMetadata(
   try {
     return JSON.parse(await object.text()) as ProjectMetadata;
   } catch {
-    log.warn("storage.invalid_record_skipped", { error_code: "invalid_project_metadata" });
+    warnDiagnostic("invalid_project_metadata");
     return null;
   }
 }
@@ -377,8 +458,7 @@ export async function notFoundResponse(
   return fallbackNotFoundResponse(request, filePath, rootPath);
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+async function handlePublishedRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const parsed = parsePublishedRequest(url);
     if (!parsed) {
@@ -479,5 +559,61 @@ export default {
       status: 200,
       headers: responseHeaders(served.filePath, served.object)
     });
-  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const correlation = correlationFromHeaders(request);
+    const startedAt = Date.now();
+    const route = publisherRoute(parsePublishedRequest(new URL(request.url)));
+    const method = httpMethod(request.method);
+    log.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+      request_id: correlation.request_id,
+      product_id: PRODUCT_ID,
+      http_method: method,
+      route,
+      trace: traceFromCorrelation(correlation),
+    });
+
+    try {
+      const response = await handlePublishedRequest(request, env);
+      const terminal = terminalForStatus(response.status);
+      const completedBase = {
+        request_id: correlation.request_id,
+        product_id: PRODUCT_ID,
+        http_method: method,
+        route,
+        status: response.status,
+        duration_ms: Date.now() - startedAt,
+        trace: traceFromCorrelation(correlation),
+        principal: { type: "anonymous" } as const,
+      };
+      if (terminal.outcome === "ok") {
+        log.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+          ...completedBase,
+          terminal,
+        });
+      } else {
+        log.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+          ...completedBase,
+          terminal,
+        });
+      }
+      return response;
+    } catch (error) {
+      log.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+        request_id: correlation.request_id,
+        product_id: PRODUCT_ID,
+        http_method: method,
+        route,
+        status: 500,
+        terminal: { outcome: "error", reason: "application_failure" },
+        duration_ms: Date.now() - startedAt,
+        trace: traceFromCorrelation(correlation),
+        principal: { type: "anonymous" },
+        error_type: errorTypeFrom(error),
+      });
+      throw error;
+    }
+  },
 };

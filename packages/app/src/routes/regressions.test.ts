@@ -432,7 +432,11 @@ describe("route regressions", () => {
 
     const reservationKey = `slugreservations/${userId}/shared.json`;
     const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
-    const originalPut = putMock.getMockImplementation()!;
+    const originalPut = putMock.getMockImplementation() as (
+      key: string,
+      data: unknown,
+      options?: unknown,
+    ) => unknown;
     let releaseFormer!: () => void;
     const formerReleased = new Promise<void>((resolve) => {
       releaseFormer = resolve;
