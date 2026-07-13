@@ -6,7 +6,15 @@
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": {
+      // Published paths may contain user-controlled segments. Persist only the
+      // publisher's structured template events, never raw-URL invocation logs.
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    }
   },
   "workers_dev": true,
   "routes": [

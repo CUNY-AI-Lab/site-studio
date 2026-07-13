@@ -46,11 +46,17 @@ generation are committed. Agent messages use the installed `@cloudflare/ai-chat`
 assistant message is persisted, so the implementation completes an admitted build
 there without overriding the framework's persistence method.
 
-`/api/health` is a liveness response only. It does not probe R2, KV, Durable
-Objects, or the model gateway. The publisher has no dedicated health route.
-Cloudflare's native request/error/CPU/wall-time signals remain the canonical
-platform-health layer; adding dependency probes or exporters would be a separate
-operational decision.
+`/api/health` and the publisher's `/healthz` are versioned liveness responses.
+Each contains a static monitor marker, is smaller than Cloudflare's 10 KB body
+matching limit, and returns `Cache-Control: no-store`. They do not probe R2, KV,
+Durable Objects, or the model gateway. Cloudflare's native request/error/CPU/
+wall-time signals remain the canonical platform-health layer.
+
+The shared source contract in `packages/observability-core/src/contract.ts`
+defines both services, action route templates, dashboard measures/groupings, and
+an offline lifecycle-pair auditor. The auditor detects missing or duplicate
+request/action events, route drift, and invalid terminal duration in a closed
+export window. It evaluates the diagnostic projection, never product state.
 
 ## Decisive sources
 
@@ -60,10 +66,19 @@ operational decision.
   `site-studio` low-cardinality and leaves model accounting at that boundary.
 - [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
   (updated June 9, 2026) recommends structured JSON but documents that default
-  invocation logs include request metadata and the request URL. This implementation
-  emits only safe templates. Before a production pilot, operators must either
-  disable invocation logs or explicitly accept/redact their raw-URL exposure.
-  Changing that production setting is outside this source-only task.
+  invocation logs include request metadata and the request URL. Both Wrangler
+  sources now explicitly retain structured custom logs at full sampling and set
+  `observability.logs.invocation_logs=false`.
+- [Cloudflare Query Builder](https://developers.cloudflare.com/workers/observability/query-builder/)
+  (updated April 23, 2026) supports counts, grouping, and duration percentiles
+  over structured fields. The source contract records those dashboard-ready
+  measures without creating or mutating a live saved query.
+- [Cloudflare Load Balancing monitors](https://developers.cloudflare.com/load-balancing/monitors/create-monitor/)
+  (updated April 16, 2026) evaluate expected status and a relatively static body
+  substring within the first 10 KB. That drove the fixed liveness markers.
+- [Cloudflare cache configuration](https://developers.cloudflare.com/workers/cache/configuration/)
+  (updated July 6, 2026) documents heuristic caching for a 200 without an
+  explicit directive. Health responses therefore use `Cache-Control: no-store`.
 - [Cloudflare Workers Observability](https://developers.cloudflare.com/workers/observability/)
   (updated July 3, 2026) documents native metrics and tracing. It kept health and
   infrastructure collection out of the application event catalog.
@@ -75,6 +90,10 @@ operational decision.
   (updated June 26, 2026) informed the durable-message acknowledgement. Their
   hook guidance now matches the upgraded `@cloudflare/ai-chat` version and replaced
   the earlier persistence override.
+- [SvelteKit observability](https://svelte.dev/docs/kit/observability) documents
+  experimental server tracing with nontrivial overhead. Site Studio uses
+  `adapter-static`, so no Svelte server or browser telemetry was added; the
+  Worker boundaries remain authoritative.
 - [Hono route helper](https://hono.dev/docs/helpers/route) replaced deprecated
   request route access with `matchedRoutes()` for safe templates.
 - The stable [OpenTelemetry Logs data model](https://opentelemetry.io/docs/specs/otel/logs/data-model/)
@@ -92,7 +111,10 @@ operational decision.
 
 ## Source-ready boundary
 
-No bindings, secrets, ingress, spend rules, Cloudflare observability settings, or
-production state are changed here. There is no reviewed-commit dependency blocker:
-the exact cail-log commit is available and pinned. The remaining pre-pilot decision
-is operational, not a source dependency: Cloudflare invocation-log URL handling.
+No bindings, secrets, ingress, spend rules, live Cloudflare settings, saved
+queries, monitors, exporters, or production state are changed here. There is no
+reviewed-commit dependency blocker: the exact cail-log commit is available and
+pinned. Source privacy, health, action seams, and dashboard fields are settled.
+Remaining operations-owned policy inputs are retention duration, alert
+thresholds, monitor cadence/regions, the publisher monitor's approved
+ingress/hostname, and whether/where to export the events.

@@ -1,0 +1,64 @@
+import { describe, expect, it, vi } from "vitest";
+import { OBSERVABILITY_CONTRACT } from "../../observability-core/src/contract";
+import worker, { type Env } from "./index";
+
+describe("publisher observability contract", () => {
+  it("serves the versioned publisher liveness response without touching R2", async () => {
+    const bucket = { get: vi.fn() } as unknown as R2Bucket;
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    let response!: Response;
+    try {
+      response = await worker.fetch(
+        new Request("https://publisher.example/healthz?private=value"),
+        { SITE_STUDIO_BUCKET: bucket } satisfies Env,
+      );
+
+      const events = [...info.mock.calls, ...log.mock.calls].map(([event]) =>
+        event as Record<string, unknown>
+      );
+      expect(events.find((event) => event["event.name"] === "cail.request.completed"))
+        .toMatchObject({
+          "service.name": "site-studio-publisher",
+          "cail.product.id": "site-studio",
+          "url.template": "/healthz",
+          "http.response.status_code": 200,
+          "cail.outcome": "ok",
+        });
+      expect(JSON.stringify(events)).not.toContain("private=value");
+
+      const head = await worker.fetch(
+        new Request("https://publisher.example/healthz", { method: "HEAD" }),
+        { SITE_STUDIO_BUCKET: bucket } satisfies Env,
+      );
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+      expect(head.headers.get("cache-control")).toBe("no-store");
+    } finally {
+      info.mockRestore();
+      log.mockRestore();
+    }
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      schema_version: "cail.health.v1",
+      status: "ok",
+      check: "liveness",
+      marker: "site-studio-publisher:alive:v1",
+      product_id: "site-studio",
+      service: {
+        name: "site-studio-publisher",
+        version: "0.1.0",
+      },
+    });
+    expect(bucket.get).not.toHaveBeenCalled();
+  });
+
+  it("classifies health as a safe dashboard route", () => {
+    expect(OBSERVABILITY_CONTRACT.services.publisher.healthPath).toBe("/healthz");
+    expect(OBSERVABILITY_CONTRACT.dashboardViews.requestReliability.groupBy).toContain(
+      "url.template",
+    );
+  });
+});

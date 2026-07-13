@@ -1238,10 +1238,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     }
 
     const buildAction = new SiteStudioActionLifecycle({
+      action: "build",
       principal: principalForOwnerId(scope.userId),
       correlation,
-      route: "/api/agents/site-builder/{project_id}",
-      http_method: "POST",
     });
 
     try {

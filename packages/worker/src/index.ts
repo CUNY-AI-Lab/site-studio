@@ -18,8 +18,12 @@ import {
   type CailHttpMethod,
   type CailTerminalFields,
 } from "@cuny-ai-lab/cail-log";
+import {
+  OBSERVABILITY_CONTRACT,
+  PRODUCT_ID,
+  healthResponse,
+} from "../../observability-core/src/contract";
 
-const PRODUCT_ID = "site-studio";
 const PUBLISHER_DIAGNOSTIC = "site_studio_publisher.diagnostic.warning";
 const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
   [PUBLISHER_DIAGNOSTIC]: {
@@ -31,8 +35,8 @@ const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
   },
 });
 const log = createCailLogger({
-  service: "site-studio-publisher",
-  release: "0.1.0",
+  service: OBSERVABILITY_CONTRACT.services.publisher.name,
+  release: OBSERVABILITY_CONTRACT.services.publisher.version,
   env: "production",
   sourceClass: "platform",
   catalog: PUBLISHER_EVENT_CATALOG,
@@ -47,7 +51,10 @@ function traceFromCorrelation(correlation: CailCorrelation) {
   } as const;
 }
 
-function publisherRoute(parsed: ParsedPublishedRequest | null): string {
+function publisherRoute(url: URL, parsed: ParsedPublishedRequest | null): string {
+  if (url.pathname === OBSERVABILITY_CONTRACT.services.publisher.healthPath) {
+    return OBSERVABILITY_CONTRACT.services.publisher.healthPath;
+  }
   if (parsed?.kind === "handle") return "/u/{handle}/{slug}/{path}";
   if (parsed?.kind === "legacy") return "/sites/{user_id}/{slug}/{path}";
   return "/unclassified";
@@ -459,113 +466,124 @@ export async function notFoundResponse(
 }
 
 async function handlePublishedRequest(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    const parsed = parsePublishedRequest(url);
-    if (!parsed) {
-      // No site context to link back to — styled/terse 404 with no home link.
-      return fallbackNotFoundResponse(request, url.pathname);
-    }
+  const url = new URL(request.url);
+  if (
+    url.pathname === OBSERVABILITY_CONTRACT.services.publisher.healthPath
+    && (request.method === "GET" || request.method === "HEAD")
+  ) {
+    const response = healthResponse("publisher");
+    return request.method === "HEAD"
+      ? new Response(null, { status: response.status, headers: response.headers })
+      : response;
+  }
 
-    // Canonical /u/{handle}/{slug}/ — resolve the handle to its owner id first;
-    // the owner id (CAIL subject) never appears in the URL.
-    let ownerId: string;
-    let rootPath: string | undefined;
-    if (parsed.kind === "handle") {
-      const owner = await resolveHandleOwner(env.SITE_STUDIO_BUCKET, parsed.handle);
-      if (!owner) {
-        return fallbackNotFoundResponse(request, parsed.filePath);
-      }
-      ownerId = owner;
-      rootPath = `/u/${parsed.handle}/${parsed.slug}/`;
-    } else {
-      ownerId = parsed.userId;
-      rootPath = siteRootPath(parsed.userId, parsed.slug);
-    }
+  const parsed = parsePublishedRequest(url);
+  if (!parsed) {
+    // No site context to link back to — styled/terse 404 with no home link.
+    return fallbackNotFoundResponse(request, url.pathname);
+  }
 
-    let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug);
-
-    if (!resolved) {
-      // The owner id in the URL may be an anonymous namespace re-homed to a
-      // CAIL subject; follow the forwarding pointer so old links keep working.
-      const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId);
-      if (pointer) {
-        ownerId = pointer.subject;
-        const mappedSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
-        resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug);
-      }
-    }
-
-    if (!resolved) {
-      // Unknown site: the slug does not resolve, so we cannot promise a home
-      // link points at a live page. Styled/terse 404 without a home link.
+  // Canonical /u/{handle}/{slug}/ — resolve the handle to its owner id first;
+  // the owner id (CAIL subject) never appears in the URL.
+  let ownerId: string;
+  let rootPath: string | undefined;
+  if (parsed.kind === "handle") {
+    const owner = await resolveHandleOwner(env.SITE_STUDIO_BUCKET, parsed.handle);
+    if (!owner) {
       return fallbackNotFoundResponse(request, parsed.filePath);
     }
+    ownerId = owner;
+    rootPath = `/u/${parsed.handle}/${parsed.slug}/`;
+  } else {
+    ownerId = parsed.userId;
+    rootPath = siteRootPath(parsed.userId, parsed.slug);
+  }
 
-    // Legacy /sites/ (and bare) URLs: if the resolved owner has a handle, the
-    // canonical home is /u/{handle}/…; 301 there, preserving sub-path + query.
-    // Owners with no handle keep serving legacy content directly.
-    if (parsed.kind === "legacy") {
-      const handle = await getUserHandle(env.SITE_STUDIO_BUCKET, ownerId);
-      if (handle) {
-        // Preserve the exact sub-path from the request (not the defaulted
-        // filePath) and the query string, so deep links redirect faithfully.
-        const subPath = legacySubPath(url);
-        const location = `/u/${handle}/${parsed.slug}/${subPath}${url.search}`;
-        return Response.redirect(new URL(location, url).toString(), 301);
-      }
+  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug);
+
+  if (!resolved) {
+    // The owner id in the URL may be an anonymous namespace re-homed to a
+    // CAIL subject; follow the forwarding pointer so old links keep working.
+    const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId);
+    if (pointer) {
+      ownerId = pointer.subject;
+      const mappedSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
+      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug);
     }
+  }
 
-    if (isProtectedServedPath(parsed.filePath)) {
-      return notFoundResponse(
-        env.SITE_STUDIO_BUCKET,
-        ownerId,
-        resolved.projectId,
-        request,
-        parsed.filePath,
-        rootPath
-      );
+  if (!resolved) {
+    // Unknown site: the slug does not resolve, so we cannot promise a home
+    // link points at a live page. Styled/terse 404 without a home link.
+    return fallbackNotFoundResponse(request, parsed.filePath);
+  }
+
+  // Legacy /sites/ URLs: if the resolved owner has a handle, the canonical
+  // home is /u/{handle}/…; 301 there, preserving sub-path + query. Owners with
+  // no handle keep serving legacy content directly.
+  if (parsed.kind === "legacy") {
+    const handle = await getUserHandle(env.SITE_STUDIO_BUCKET, ownerId);
+    if (handle) {
+      // Preserve the exact sub-path from the request (not the defaulted
+      // filePath) and the query string, so deep links redirect faithfully.
+      const subPath = legacySubPath(url);
+      const location = `/u/${handle}/${parsed.slug}/${subPath}${url.search}`;
+      return Response.redirect(new URL(location, url).toString(), 301);
     }
+  }
 
-    // SS-14 extensionless resolution — one shared helper across all three
-    // serving paths (preview, publish, this worker): try `{path}.html`, then
-    // `{path}/index.html`. See packages/serving-core/src/extensionless.ts.
-    const served = await resolveExtensionlessFile(parsed.filePath || "index.html", (candidate) =>
-      readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, candidate)
+  if (isProtectedServedPath(parsed.filePath)) {
+    return notFoundResponse(
+      env.SITE_STUDIO_BUCKET,
+      ownerId,
+      resolved.projectId,
+      request,
+      parsed.filePath,
+      rootPath
     );
+  }
 
-    if (!served) {
-      return notFoundResponse(
-        env.SITE_STUDIO_BUCKET,
-        ownerId,
-        resolved.projectId,
-        request,
-        parsed.filePath,
-        rootPath
-      );
-    }
+  // SS-14 extensionless resolution — one shared helper across all three
+  // serving paths (preview, publish, this worker): try `{path}.html`, then
+  // `{path}/index.html`. See packages/serving-core/src/extensionless.ts.
+  const served = await resolveExtensionlessFile(parsed.filePath || "index.html", (candidate) =>
+    readObject(env.SITE_STUDIO_BUCKET, ownerId, resolved.projectId, candidate)
+  );
 
-    if (isProtectedServedPath(served.filePath)) {
-      return notFoundResponse(
-        env.SITE_STUDIO_BUCKET,
-        ownerId,
-        resolved.projectId,
-        request,
-        parsed.filePath,
-        rootPath
-      );
-    }
+  if (!served) {
+    return notFoundResponse(
+      env.SITE_STUDIO_BUCKET,
+      ownerId,
+      resolved.projectId,
+      request,
+      parsed.filePath,
+      rootPath
+    );
+  }
 
-    return new Response(served.object.body, {
-      status: 200,
-      headers: responseHeaders(served.filePath, served.object)
-    });
+  if (isProtectedServedPath(served.filePath)) {
+    return notFoundResponse(
+      env.SITE_STUDIO_BUCKET,
+      ownerId,
+      resolved.projectId,
+      request,
+      parsed.filePath,
+      rootPath
+    );
+  }
+
+  return new Response(served.object.body, {
+    status: 200,
+    headers: responseHeaders(served.filePath, served.object)
+  });
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const correlation = correlationFromHeaders(request);
     const startedAt = Date.now();
-    const route = publisherRoute(parsePublishedRequest(new URL(request.url)));
+    const url = new URL(request.url);
+    const route = publisherRoute(url, parsePublishedRequest(url));
     const method = httpMethod(request.method);
     log.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
       request_id: correlation.request_id,

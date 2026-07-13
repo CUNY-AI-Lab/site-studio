@@ -110,6 +110,7 @@ bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --ex
 ## Main Routes
 
 - `GET /api/health`
+- `GET /healthz` on the published-site Worker
 - `GET /api/projects`
 - `POST /api/projects`
 - `GET /api/projects/:id/files`
@@ -122,6 +123,24 @@ bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --ex
 - `ALL /api/agents/site-builder/:projectId`
 - `GET /u/:handle/:slug/*` (canonical published sites)
 - `GET /sites/:userId/:slug/*` (legacy: 301s to `/u/…` when the owner has a handle, else serves)
+
+## Observability contract
+
+Both Workers persist structured custom events and explicitly disable Cloudflare
+invocation logs so user-controlled URL segments are not stored as raw invocation
+messages. Build and publish events use fixed route templates from
+[`packages/observability-core/src/contract.ts`](packages/observability-core/src/contract.ts),
+which also defines dashboard groupings, lifecycle-pair quality checks, and the
+versioned liveness responses.
+
+`GET /api/health` and the publisher's `GET /healthz` return static
+`cail.health.v1` liveness markers with `Cache-Control: no-store`. They prove that
+the relevant Worker loaded and dispatched the request; they deliberately do not
+claim readiness for R2, KV, Durable Objects, or the model gateway.
+
+See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map
+and [`docs/observability-design-gate.md`](docs/observability-design-gate.md) for
+the source decisions and remaining operations-owned policy inputs.
 
 ## Notes
 

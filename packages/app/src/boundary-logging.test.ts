@@ -186,6 +186,7 @@ describe("canonical build/publish action mappings", () => {
       clock: () => clockValues.shift() ?? 145,
     });
     return new SiteStudioActionLifecycle({
+      action: "publish",
       principal: { type: "user", subject: "cail-0123456789abcdef0123456789abcdef" },
       correlation: {
         request_id: REQUEST_ID,
@@ -193,8 +194,6 @@ describe("canonical build/publish action mappings", () => {
         span_id: "b7ad6b7169203331",
         trace_flags: 1,
       },
-      route: "/api/projects/{id}/publish",
-      http_method: "POST",
     }, logger, () => clockValues.shift() ?? 145);
   }
 

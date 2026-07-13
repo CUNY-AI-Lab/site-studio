@@ -193,10 +193,9 @@ export function createPublishRouter() {
     let slug = "";
     let url = "";
     const publishAction = new SiteStudioActionLifecycle({
+      action: "publish",
       principal: principalForOwnerId(user.id),
       correlation: getCorrelation(c) ?? mintCorrelation(),
-      route: "/api/projects/{id}/publish",
-      http_method: "POST",
     });
     publishAction.admit();
 

@@ -6,7 +6,15 @@
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": {
+      // Custom cail-log events contain safe route templates. Cloudflare fetch
+      // invocation logs contain the raw request URL, so keep them off.
+      "enabled": true,
+      "persist": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    }
   },
   "durable_objects": {
     "bindings": [

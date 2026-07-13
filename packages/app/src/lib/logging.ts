@@ -16,10 +16,14 @@ import {
   type CailPrincipalFields,
   type CailTerminalFields,
 } from "@cuny-ai-lab/cail-log";
+import {
+  OBSERVABILITY_CONTRACT,
+  PRODUCT_ID,
+} from "../../../observability-core/src/contract";
 
-export const LOG_SERVICE = "site-studio-app";
-export const LOG_RELEASE = "0.1.0";
-export const PRODUCT_ID = "site-studio";
+export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;
+export const LOG_RELEASE = OBSERVABILITY_CONTRACT.services.app.version;
+export { PRODUCT_ID };
 
 export const SITE_STUDIO_EVENTS = Object.freeze({
   DIAGNOSTIC_INFO: "site_studio.diagnostic.info",
@@ -208,10 +212,9 @@ export class SiteStudioActionLifecycle {
 
   constructor(
     private readonly fields: {
+      action: keyof typeof OBSERVABILITY_CONTRACT.actions;
       principal: CailPrincipalFields;
       correlation: CailCorrelation;
-      route: string;
-      http_method: CailHttpMethod;
     },
     private readonly logger: SiteStudioLogger = log,
     private readonly clock: () => number = Date.now,
@@ -222,14 +225,15 @@ export class SiteStudioActionLifecycle {
   admit(): void {
     if (this.admitted) return;
     this.admitted = true;
+    const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
     this.logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
       principal: this.fields.principal,
       request_id: this.fields.correlation.request_id,
       trace: traceFromCorrelation(this.fields.correlation),
-      http_method: this.fields.http_method,
-      route: this.fields.route,
+      http_method: action.method,
+      route: action.route,
     });
   }
 
@@ -247,14 +251,15 @@ export class SiteStudioActionLifecycle {
       return;
     }
     this.terminal = true;
+    const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
     this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
       principal: this.fields.principal,
       request_id: this.fields.correlation.request_id,
       trace: traceFromCorrelation(this.fields.correlation),
-      http_method: this.fields.http_method,
-      route: this.fields.route,
+      http_method: action.method,
+      route: action.route,
       terminal: { outcome: "ok", reason: "completed" },
       duration_ms: Math.max(0, this.clock() - this.startedAt),
     });
@@ -263,14 +268,15 @@ export class SiteStudioActionLifecycle {
   completeFailure(terminal: FailureTerminal, errorType?: string): void {
     if (!this.admitted || this.terminal) return;
     this.terminal = true;
+    const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
     this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
       principal: this.fields.principal,
       request_id: this.fields.correlation.request_id,
       trace: traceFromCorrelation(this.fields.correlation),
-      http_method: this.fields.http_method,
-      route: this.fields.route,
+      http_method: action.method,
+      route: action.route,
       terminal,
       duration_ms: Math.max(0, this.clock() - this.startedAt),
       ...(errorType ? { error_type: errorType } : {}),
