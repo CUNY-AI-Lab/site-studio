@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "site-studio-app",
+  "account_id": "452c33847cf5cb1e46f391fca32fd1b5",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
@@ -37,11 +38,10 @@
     "PUBLISHED_BASE_URL": "https://tools.cuny.qzz.io",
     // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----
     // CAIL_API_BASE: the one public base URL of the CAIL model proxy (serves
-    // /v1/... model calls and /keys). Placeholder until launch — set to the real
-    // value from cail-gateway docs/LAUNCH_CHECKLIST.md (institutional Cloudflare
-    // account). Chat calls hit {CAIL_API_BASE}/v1/chat/completions; image
+    // /v1/... model calls and /keys) in the institutional Cloudflare account.
+    // Chat calls hit {CAIL_API_BASE}/v1/chat/completions; image
     // generation hits the native {CAIL_API_BASE}/v1/run.
-    "CAIL_API_BASE": "https://REPLACE-AT-LAUNCH.example/cail",
+    "CAIL_API_BASE": "https://cail-model-proxy.ailab-452.workers.dev",
     // CAIL_MODEL: Workers AI catalog id. CAIL policy (2026-07-04): Cloudflare
     // models only — any override must also be a `@cf/...` id. Default is the
     // agentic-coding flagship; `@cf/openai/gpt-oss-120b` is the cheaper fallback.
