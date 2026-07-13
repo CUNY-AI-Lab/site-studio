@@ -19,6 +19,7 @@ import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 import { CAIL_EVENTS, correlationFromHeaders, type CailCorrelation, type CailLogFields } from "@cuny-ai-lab/cail-log";
 import { errorCodeFrom, log, mintCorrelation, withCorrelationFetch } from "../lib/logging";
+import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -1115,30 +1116,17 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
   /**
    * Refresh the caller JWT on every new WebSocket connection. The upgrade
-   * request carries either the gate-injected `X-CAIL-Identity-JWT` directly (the
-   * real deployment behind the SSO gate) or the same value forwarded via
-   * connection props (`x-partykit-props`, see routes/agents.ts). Either way this
-   * binds the freshest identity available at connection time to the instance.
+   * request carries the middleware-selected token in connection props. Prefer
+   * that verified selection over raw headers, since a dual-issued request also
+   * carries a stale-compatible V1 token alongside authoritative V2.
    */
   onConnect(_connection: Connection, ctx: ConnectionContext): void {
     // Adopt the boundary's correlation for this connection's unit(s) of work.
     this.correlation = correlationFromHeaders(ctx.request);
 
-    const direct = ctx.request.headers.get("X-CAIL-Identity-JWT");
-    if (direct) {
-      this.identityJwt = direct;
-      return;
-    }
-    const propsHeader = ctx.request.headers.get("x-partykit-props");
-    if (propsHeader) {
-      try {
-        const parsed = JSON.parse(propsHeader) as SiteBuilderAgentProps;
-        if (parsed?.identityJwt) {
-          this.identityJwt = parsed.identityJwt;
-        }
-      } catch {
-        // Ignore malformed props; the model call will fail closed at the proxy.
-      }
+    const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
+    if (identityJwt) {
+      this.identityJwt = identityJwt;
     }
   }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { authMiddleware } from "./session";
+import { authMiddleware, getCailIdentityJwt } from "./session";
 
 const JWT_SECRET = "session-test-secret-at-least-32-bytes";
 
@@ -36,6 +36,34 @@ async function mintIdentityJwt(sub: string, secret = JWT_SECRET): Promise<string
   );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`${headerB64}.${payloadB64}`));
   return `${headerB64}.${payloadB64}.${base64url(new Uint8Array(sig))}`;
+}
+
+async function mintV2IdentityJwt(sub: string): Promise<{ token: string; jwks: string }> {
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"]
+  ) as CryptoKeyPair;
+  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  const now = Math.floor(Date.now() / 1000);
+  const enc = new TextEncoder();
+  const header = base64url(enc.encode(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "session-v2" })));
+  const payload = base64url(enc.encode(JSON.stringify({
+    iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
+    aud: "cail:site-studio",
+    sub,
+    exp: now + 300,
+    iat: now
+  })));
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    pair.privateKey,
+    enc.encode(`${header}.${payload}`)
+  );
+  return {
+    token: `${header}.${payload}.${base64url(new Uint8Array(signature))}`,
+    jwks: JSON.stringify({ keys: [{ ...publicJwk, kid: "session-v2", alg: "RS256", use: "sig" }] })
+  };
 }
 
 /**
@@ -184,6 +212,54 @@ describe("authMiddleware", () => {
     expect(response.status).toBe(401);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.error).toBe("authentication_required");
+  });
+
+  it("fails closed when identity is required with only V2 configured but no token", async () => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const response = await app.request("http://site-studio.test/api/test", {}, createEnv({
+      CAIL_IDENTITY_JWKS: '{"keys":[]}',
+      CAIL_REQUIRE_IDENTITY: "true"
+    }));
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects a present invalid V2 token even when identity is optional", async () => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT-V2": "not-a-jwt" } },
+      createEnv({ CAIL_IDENTITY_JWT_SECRET: JWT_SECRET })
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("stores the selected V2 token instead of the stale V1 token", async () => {
+    const app = new Hono<{
+      Bindings: Env;
+      Variables: { user: { id: string; createdAt: string }; cailIdentityJwt?: string };
+    }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user"), forwardedToken: getCailIdentityJwt(c) }));
+
+    const v1 = await mintIdentityJwt("cail-v1-subject");
+    const v2 = await mintV2IdentityJwt("cail-v2-subject");
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": v1, "X-CAIL-Identity-JWT-V2": v2.token } },
+      createEnv({ CAIL_IDENTITY_JWT_SECRET: JWT_SECRET, CAIL_IDENTITY_JWKS: v2.jwks })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      user: { id: "cail-v2-subject" },
+      forwardedToken: v2.token
+    });
   });
 
   it("ignores a bare X-CAIL-Subject header and falls back to anonymous", async () => {

@@ -21,8 +21,11 @@ export interface Env {
   // @cf/google/gemma-4-26b-a4b-it; fallback @cf/meta/llama-3.2-11b-vision-instruct.
   CAIL_IMAGE_CLASSIFIER?: string;
   // Shared HS256 secret used to verify X-CAIL-Identity-JWT. Wrangler secret;
-  // ops-managed. Unset => identity disabled (every request anonymous).
+  // ops-managed. V1 is disabled when unset; V2 may still be configured.
   CAIL_IDENTITY_JWT_SECRET?: string;
+  // Static public JWKS used to verify authoritative RS256
+  // X-CAIL-Identity-JWT-V2 tokens. Stored as a JSON Wrangler secret.
+  CAIL_IDENTITY_JWKS?: string;
   // "true" makes protected routes reject anonymous requests (401). Flip in
   // lockstep with the gateway's CAIL_SSO_MODE=enforce.
   CAIL_REQUIRE_IDENTITY?: string;

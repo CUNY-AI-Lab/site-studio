@@ -68,6 +68,8 @@
   // ---- Secrets (never real values here) ----
   // Set via `wrangler secret put` (ops-managed; cail-gateway push-secrets.sh):
   //   CAIL_IDENTITY_JWT_SECRET  shared HS256 secret to verify X-CAIL-Identity-JWT
+  //   CAIL_IDENTITY_JWKS        JSON public JWKS to verify authoritative RS256
+  //                             X-CAIL-Identity-JWT-V2 tokens (aud cail:site-studio)
   // Site Studio holds NO provider API keys — the CAIL model proxy attaches them.
   // (OPENROUTER_API_KEY was removed on 2026-07-03.)
   "worker_loaders": [

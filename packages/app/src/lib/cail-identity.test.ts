@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   cailAuthRequiredResponse,
+  cailIdentityConfigured,
   cailIdentityRequired,
   getRequestIdentity,
+  resolveRequestIdentity,
 } from "./cail-identity";
 
 const SECRET = "test-shared-secret-at-least-32-bytes";
@@ -63,6 +65,53 @@ function requestWithToken(token: string): Request {
   return new Request("https://x/", {
     headers: { "X-CAIL-Identity-JWT": token },
   });
+}
+
+type V2PublicJwk = JsonWebKey & { kid: string; alg: "RS256"; use: "sig" };
+type V2Key = { privateKey: CryptoKey; jwk: V2PublicJwk };
+
+async function generateV2Key(kid: string): Promise<V2Key> {
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
+    true,
+    ["sign", "verify"]
+  ) as CryptoKeyPair;
+  const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  return {
+    privateKey: pair.privateKey,
+    jwk: { ...jwk, kid, alg: "RS256", use: "sig" } as V2PublicJwk,
+  };
+}
+
+async function mintV2Jwt(
+  key: V2Key,
+  claims: Record<string, unknown> = {},
+  kid = key.jwk.kid
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64urlJson({ alg: "RS256", typ: "JWT", kid });
+  const payload = base64urlJson({
+    iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
+    aud: "cail:site-studio",
+    sub: "cail-v2-subject",
+    entitlements: ["site-studio"],
+    iat: now,
+    exp: now + 300,
+    ...claims,
+  });
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key.privateKey,
+    new TextEncoder().encode(`${header}.${payload}`)
+  );
+  return `${header}.${payload}.${base64url(new Uint8Array(signature))}`;
+}
+
+function requestWithIdentityHeaders(v1: string | null, v2: string | null): Request {
+  const headers = new Headers();
+  if (v1 !== null) headers.set("X-CAIL-Identity-JWT", v1);
+  if (v2 !== null) headers.set("X-CAIL-Identity-JWT-V2", v2);
+  return new Request("https://x/", { headers });
 }
 
 /**
@@ -160,6 +209,97 @@ describe("getRequestIdentity — request wiring", () => {
   it("ignores bare X-CAIL-Subject headers (never trusted)", async () => {
     const req = new Request("https://x/", { headers: { "X-CAIL-Subject": "cail-forged" } });
     expect(await getRequestIdentity(req, ENV)).toBeNull();
+  });
+});
+
+describe("resolveRequestIdentity — additive V2", () => {
+  it("requires the Site Studio audience", async () => {
+    const key = await generateV2Key("current");
+    const env = { CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [key.jwk] }) };
+
+    const accepted = await resolveRequestIdentity(
+      requestWithIdentityHeaders(null, await mintV2Jwt(key)),
+      env
+    );
+    expect(accepted).toMatchObject({ status: "verified", version: "v2" });
+
+    const rejected = await resolveRequestIdentity(
+      requestWithIdentityHeaders(null, await mintV2Jwt(key, { aud: "cail-internal" })),
+      env
+    );
+    expect(rejected).toEqual({ status: "invalid" });
+  });
+
+  it("accepts old and new keys during JWKS rotation", async () => {
+    const oldKey = await generateV2Key("old");
+    const newKey = await generateV2Key("new");
+    const env = { CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [oldKey.jwk, newKey.jwk] }) };
+
+    await expect(resolveRequestIdentity(
+      requestWithIdentityHeaders(null, await mintV2Jwt(oldKey)),
+      env
+    )).resolves.toMatchObject({ status: "verified", version: "v2" });
+    await expect(resolveRequestIdentity(
+      requestWithIdentityHeaders(null, await mintV2Jwt(newKey)),
+      env
+    )).resolves.toMatchObject({ status: "verified", version: "v2" });
+  });
+
+  it("selects valid V2 over V1 and returns the selected raw token", async () => {
+    const key = await generateV2Key("current");
+    const v1 = await mintJwt(validClaims({ sub: "cail-v1-subject" }));
+    const v2 = await mintV2Jwt(key);
+    const result = await resolveRequestIdentity(
+      requestWithIdentityHeaders(v1, v2),
+      { ...ENV, CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [key.jwk] }) }
+    );
+
+    expect(result).toMatchObject({
+      status: "verified",
+      version: "v2",
+      token: v2,
+      identity: { subject: "cail-v2-subject" },
+    });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["malformed", "{not-json"],
+  ])("rejects present V2 with %s JWKS and never falls back to valid V1", async (_name, jwks) => {
+    const v1 = await mintJwt(validClaims({ sub: "cail-v1-subject" }));
+    const env = { CAIL_IDENTITY_JWT_SECRET: SECRET, CAIL_IDENTITY_JWKS: jwks };
+    expect(await resolveRequestIdentity(requestWithIdentityHeaders(v1, "not-a-jwt"), env))
+      .toEqual({ status: "invalid" });
+  });
+
+  it("rejects invalid V2 without falling back to valid V1", async () => {
+    const key = await generateV2Key("current");
+    const v1 = await mintJwt(validClaims({ sub: "cail-v1-subject" }));
+    const invalidV2 = await mintV2Jwt(key, { aud: "cail:another-app" });
+    const result = await resolveRequestIdentity(
+      requestWithIdentityHeaders(v1, invalidV2),
+      { ...ENV, CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [key.jwk] }) }
+    );
+    expect(result).toEqual({ status: "invalid" });
+  });
+
+  it("preserves V1 when the V2 header is absent", async () => {
+    const v1 = await mintJwt(validClaims({ sub: "cail-v1-subject" }));
+    const result = await resolveRequestIdentity(requestWithIdentityHeaders(v1, null), ENV);
+    expect(result).toMatchObject({
+      status: "verified",
+      version: "v1",
+      token: v1,
+      identity: { subject: "cail-v1-subject" },
+    });
+  });
+});
+
+describe("cailIdentityConfigured", () => {
+  it("is true when either V1 or V2 verification material is configured", () => {
+    expect(cailIdentityConfigured({ CAIL_IDENTITY_JWT_SECRET: SECRET })).toBe(true);
+    expect(cailIdentityConfigured({ CAIL_IDENTITY_JWKS: '{"keys":[]}' })).toBe(true);
+    expect(cailIdentityConfigured({})).toBe(false);
   });
 });
 

@@ -19,6 +19,7 @@ vi.mock("agents", () => ({
 }));
 
 import { createAgentRouter } from "./agents";
+import { getAgentByName } from "agents";
 
 const USER_ID = "cail-me";
 const PROJECT_ID = "proj-1";
@@ -48,7 +49,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
   let kv: ReturnType<typeof createMockKV>;
   let bucket: R2Bucket;
   let csrf: CsrfSession;
-  let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
+  let app: Hono<{ Bindings: Env; Variables: { user: { id: string }; cailIdentityJwt?: string } }>;
 
   const env = () =>
     ({
@@ -62,9 +63,11 @@ describe("agent route WebSocket gate (rule 4)", () => {
     kv = createMockKV();
     bucket = createMockBucket();
     csrf = await mintCsrfSession(bucket, USER_ID);
-    app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+    vi.mocked(getAgentByName).mockClear();
+    app = new Hono<{ Bindings: Env; Variables: { user: { id: string }; cailIdentityJwt?: string } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: USER_ID });
+      c.set("cailIdentityJwt", "selected-v2-token");
       await next();
     });
     app.route("/", createAgentRouter());
@@ -137,5 +140,19 @@ describe("agent route WebSocket gate (rule 4)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { forwardedUrl: string };
     expect(body.forwardedUrl).toContain("/get-messages");
+  });
+
+  it("forwards the middleware-selected identity token in agent props", async () => {
+    const res = await app.request(
+      `${OWN_ORIGIN}/api/agents/site-builder/${PROJECT_ID}/get-messages`,
+      { headers: { "X-CAIL-Identity-JWT": "stale-v1-token" } },
+      env()
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(getAgentByName)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      `${USER_ID}:${PROJECT_ID}`,
+      { props: { userId: USER_ID, projectId: PROJECT_ID, identityJwt: "selected-v2-token" } }
+    );
   });
 });

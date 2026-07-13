@@ -58,11 +58,20 @@ Local Worker secrets live in:
 
 - [`packages/app/.dev.vars`](/Users/stephenzweibel/Apps/site-studio/packages/app/.dev.vars)
 
-Required local secret (ops-managed; see cail-gateway docs/INTEGRATION.md):
+Local identity verification secrets are ops-managed (see cail-gateway
+docs/INTEGRATION.md). Configure either or both during the additive V2 rollout:
 
 ```bash
 CAIL_IDENTITY_JWT_SECRET=...
+CAIL_IDENTITY_JWKS={"keys":[...]}
 ```
+
+`X-CAIL-Identity-JWT-V2` is authoritative when present. Site Studio verifies
+it as RS256 with audience `cail:site-studio` and the canonical/staging issuer
+allowlist. Missing or malformed JWKS and invalid V2 tokens reject without V1
+fallback. With no V2 header, the existing HS256 `X-CAIL-Identity-JWT` path is
+unchanged. `CAIL_REQUIRE_IDENTITY=true` fails closed whether V1, V2, or both are
+configured.
 
 Site Studio holds no provider API keys — model calls go through the CAIL
 model proxy, which attaches credentials itself.

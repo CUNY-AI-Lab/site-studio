@@ -6,7 +6,7 @@ import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 import {
   cailAuthRequiredResponse,
   cailIdentityRequired,
-  getRequestIdentity,
+  resolveRequestIdentity,
   type CailIdentity,
 } from "./cail-identity";
 import {
@@ -20,10 +20,8 @@ type SessionVariables = {
   sessionId: string;
   user: User;
   /**
-   * Raw, already-verified `X-CAIL-Identity-JWT` from the current request, when
-   * present. Downstream handlers (routes/agents.ts) forward it to the CAIL model
-   * proxy. Never a substitute for verification — it is only set after
-   * `getRequestIdentity()` accepts the token.
+   * Raw, already-verified selected identity JWT from the current request.
+   * Downstream handlers forward this exact token to the CAIL model proxy.
    */
   cailIdentityJwt?: string;
 };
@@ -331,15 +329,17 @@ async function migrateAnonymousSessionIfPresent(
  * Auth middleware for protected routes.
  *
  * Identity precedence (docs/INTEGRATION.md §3):
- *   1. A verified `X-CAIL-Identity-JWT` (from the SSO gate) wins. The durable
+ *   1. A present `X-CAIL-Identity-JWT-V2` is authoritative and must verify;
+ *      failure rejects with no V1 fallback. Otherwise a verified legacy
+ *      `X-CAIL-Identity-JWT` wins. The durable
  *      owner key becomes the CAIL subject; the KV session is bound to that
  *      subject so the browser cookie remains a convenience affordance but never
  *      the source of ownership. Bare X-CAIL-* headers are ignored — this worker
  *      is reachable on workers.dev, where anyone can set them.
- *   2. No/invalid identity + CAIL_REQUIRE_IDENTITY="true" → 401
+ *   2. No legacy identity + CAIL_REQUIRE_IDENTITY="true" → 401
  *      `authentication_required` envelope (this is a protected kind=api route;
  *      browsers redirect to /login?rt=…).
- *   3. No/invalid identity + not required → anonymous KV session
+ *   3. No/invalid V1 identity + not required → anonymous KV session
  *      (pre-SSO-rollout behavior, unchanged).
  */
 export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: SessionVariables }>(async (c, next) => {
@@ -351,14 +351,18 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     return;
   }
 
-  const identity = await getRequestIdentity(c.req.raw, c.env);
+  const identityResolution = await resolveRequestIdentity(c.req.raw, c.env);
 
-  if (identity) {
+  // A present V2 header is authoritative. Invalid V2, malformed JWKS, or
+  // missing JWKS rejects even while anonymous/V1 compatibility remains on.
+  if (identityResolution.status === "invalid") {
+    return cailAuthRequiredResponse();
+  }
+
+  if (identityResolution.status === "verified") {
     // Verified CAIL identity: own everything by the subject.
-    const rawJwt = c.req.raw.headers.get("X-CAIL-Identity-JWT");
-    if (rawJwt) {
-      c.set("cailIdentityJwt", rawJwt);
-    }
+    const { identity, token } = identityResolution;
+    c.set("cailIdentityJwt", token);
 
     const subject = identity.subject;
 
