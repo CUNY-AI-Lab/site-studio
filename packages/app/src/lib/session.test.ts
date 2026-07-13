@@ -103,11 +103,14 @@ function createCoordinatorNamespace(): MockCoordinator {
 }
 
 function createEnv(overrides?: Partial<Env>): Env {
+  const now = Date.now();
   return {
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
     CAIL_MODEL: "test-model",
+    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     SESSION_KV: {
       get: vi.fn(async () => null),
       put: vi.fn(async () => undefined)
@@ -204,6 +207,35 @@ describe("authMiddleware", () => {
     expect(response.status).toBe(401);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.error).toBe("authentication_required");
+  });
+
+  it.each([
+    {
+      name: "missing",
+      config: { CAIL_SSO_SWITCHED_AT: undefined },
+    },
+    {
+      name: "longer than 30 days",
+      config: {
+        CAIL_SSO_SWITCHED_AT: "2026-07-01T00:00:00.000Z",
+        CAIL_ACCOUNT_IMPORT_UNTIL: "2026-08-01T00:00:00.001Z",
+      },
+    },
+  ])("fails loudly when enforced identity has $name import-window configuration", async ({ config }) => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      {},
+      createEnv({ CAIL_REQUIRE_IDENTITY: "true", ...config })
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_account_import_configuration",
+    });
   });
 
   it("rejects a presented invalid identity token even when identity is optional", async () => {
@@ -363,6 +395,43 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(kv.store.has("session:anon-cookie-1")).toBe(false);
   });
 
+  it("emits completion telemetry without legacy account identifiers", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    kv.store.set(
+      "session:anon-cookie-telemetry",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+    );
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const token = await mintIdentityJwt(SUBJECT);
+      const response = await buildApp().request(
+        "http://site-studio.test/api/test",
+        {
+          headers: {
+            "X-CAIL-Identity-JWT": token,
+            Cookie: "site-studio-session=anon-cookie-telemetry",
+          },
+        },
+        createEnv({
+          CAIL_IDENTITY_JWKS: identityJwks,
+          SESSION_KV: kv,
+          SITE_STUDIO_BUCKET: bucket,
+        })
+      );
+
+      expect(response.status).toBe(200);
+      const events = info.mock.calls.map(([event]) => event as Record<string, unknown>);
+      const completed = events.find((event) => event.event === "account_import.completed");
+      expect(completed).toMatchObject({ subject: SUBJECT, outcome: "ok" });
+      expect(JSON.stringify(completed)).not.toContain(ANON);
+      expect(JSON.stringify(completed)).not.toContain("anon-cookie-telemetry");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("resumes an interrupted migration from the pending marker without the anon cookie", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
@@ -393,6 +462,56 @@ describe("authMiddleware anonymous-data migration", () => {
     const claim = JSON.parse(kv.store.get(`migration:${ANON}`)!);
     expect(claim.status).toBe("complete");
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+  });
+
+  it("refuses an expired import without reading legacy session material and clears resume state", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const now = Date.now();
+    kv.store.set(
+      "session:anon-cookie-1",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+    );
+    kv.store.set(`migration-pending:${SUBJECT}`, ANON);
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+    const coordinator = createCoordinatorNamespace();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const env = createEnv({
+        CAIL_IDENTITY_JWKS: identityJwks,
+        CAIL_REQUIRE_IDENTITY: "true",
+        CAIL_SSO_SWITCHED_AT: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+        SESSION_KV: kv,
+        SITE_STUDIO_BUCKET: bucket,
+        MIGRATION_COORDINATOR: coordinator.namespace,
+      });
+      const token = await mintIdentityJwt(SUBJECT);
+      const response = await buildApp().request(
+        "http://site-studio.test/api/test",
+        { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-1" } },
+        env
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("set-cookie")).toContain(`site-studio-session=${SUBJECT}`);
+      expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+      expect(kv.store.has("session:anon-cookie-1")).toBe(true);
+      expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+      expect(coordinator.records.size).toBe(0);
+      expect(kv.get).not.toHaveBeenCalledWith("session:anon-cookie-1", "text");
+
+      const events = warn.mock.calls.map(([event]) => event as { event?: string; error_code?: string });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event: "account_import.refused",
+          error_code: "account_import_expired",
+        })
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   // SS-3 / SS-19: the anon namespace to absorb is picked from the

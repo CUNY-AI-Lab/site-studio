@@ -59,6 +59,11 @@
     // CAIL_REQUIRE_IDENTITY: "false" during pre-SSO rollout (anonymous sessions
     // still allowed). Flip to "true" in lockstep with the gateway's
     // CAIL_SSO_MODE=enforce so the workers.dev URL is not an anonymous bypass.
+    // Before that flip, operators MUST also set CAIL_SSO_SWITCHED_AT and
+    // CAIL_ACCOUNT_IMPORT_UNTIL to ISO instants defining a window no longer than
+    // 30 days. They are deliberately omitted here: launch timing is an operator
+    // decision, and enforced identity fails with 500 if either value is absent
+    // or invalid rather than silently allowing an unbounded legacy import.
     "CAIL_REQUIRE_IDENTITY": "false",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted /sites/ content, so runtime

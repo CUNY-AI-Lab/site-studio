@@ -109,12 +109,15 @@ let kv: MockKV;
 let bucket: R2Bucket;
 
 function createEnv(extra?: Partial<Env>): Env {
+  const now = Date.now();
   return {
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
+    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     ASSETS: undefined,
     ...extra
   };

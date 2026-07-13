@@ -94,14 +94,16 @@ PUBLISHED_BASE_URL=https://tools.cuny.qzz.io
 CAIL_API_BASE=...              # CAIL model proxy base URL (set at launch)
 CAIL_MODEL=@cf/zai-org/glm-5.2 # Workers AI id only (CAIL policy, 2026-07-04)
 CAIL_REQUIRE_IDENTITY=false    # flip to true with gateway SSO enforce
+CAIL_SSO_SWITCHED_AT=...       # required ISO instant when identity is enforced
+CAIL_ACCOUNT_IMPORT_UNTIL=... # required ISO instant; 0-30 days after switch
 ```
 
 ## Compatibility Requirements
 
 This is a rewrite, not a migration, but two compatibility layers matter:
 
-- Canonical published URLs are `/u/:handle/:slug/*` (user-chosen handle; the owner/subject id never appears in a public URL). Old published sites must still resolve from the same R2 content and the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves directly.
-- Returning anonymous users should still see prior projects when their legacy `site-studio-session` cookie can be resolved from R2 session records
+- Canonical published URLs are `/u/:handle/:slug/*` (user-chosen handle; the owner/subject id never appears in a public URL). Old published sites must still resolve permanently from the same R2 content and the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves directly. This is a permanent compatibility exception, not part of temporary account-import cleanup; retain `/sites` routes and `.migrated.json` forwarding-pointer behavior.
+- During the configured account-import window only, returning anonymous users should see prior projects when their legacy `site-studio-session` cookie can be resolved from R2 session records. Remove this import path by `CAIL_ACCOUNT_IMPORT_UNTIL`, no later than 30 days after the switch.
 
 ## Development
 

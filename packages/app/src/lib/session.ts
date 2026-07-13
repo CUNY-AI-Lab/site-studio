@@ -15,6 +15,11 @@ import {
 } from "./migration";
 import { createAgentHistoryPorter } from "./agent-porter";
 import { errorCodeFrom, log } from "./logging";
+import {
+  AccountImportConfigurationError,
+  resolveAccountImportWindow,
+  type AccountImportWindow,
+} from "./account-import-window";
 
 type SessionVariables = {
   sessionId: string;
@@ -88,6 +93,19 @@ function sessionStoreUnavailableResponse(): Response {
         "Content-Type": "application/json",
         "Retry-After": "5",
       },
+    }
+  );
+}
+
+function accountImportConfigurationResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: "invalid_account_import_configuration",
+      message: "Site Studio's account import window is not configured correctly.",
+    }),
+    {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
     }
   );
 }
@@ -195,7 +213,7 @@ function createAnonymousUser(): User {
 async function migrateAnonymousSessionIfPresent(
   c: Context<{ Bindings: Env; Variables: SessionVariables }>,
   subject: string
-): Promise<void> {
+): Promise<boolean> {
   const porter = createAgentHistoryPorter(c.env);
   const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
 
@@ -235,7 +253,7 @@ async function migrateAnonymousSessionIfPresent(
 
       if (!decision.granted) {
         // Another subject already owns this anon namespace. Do not absorb.
-        return;
+        return false;
       }
 
       try {
@@ -274,7 +292,7 @@ async function migrateAnonymousSessionIfPresent(
       } catch (error) {
         log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
       }
-      return;
+      return true;
     }
   }
 
@@ -300,10 +318,10 @@ async function migrateAnonymousSessionIfPresent(
         outcome: "error",
         error_code: errorCodeFrom(error)
       });
-      return;
+      return false;
     }
     if (!decision.granted) {
-      return;
+      return false;
     }
 
     await migrateAnonymousData({
@@ -322,6 +340,41 @@ async function migrateAnonymousSessionIfPresent(
     } catch (error) {
       log.warn("migration.mark_complete_failed", { subject, error_code: errorCodeFrom(error) });
     }
+    return true;
+  }
+
+  return false;
+}
+
+async function discardClosedImportState(env: Env, subject: string): Promise<void> {
+  // TODO(account-import-removal): remove this temporary path by the configured
+  // CAIL_ACCOUNT_IMPORT_UNTIL deadline. The permanent /sites serving
+  // compatibility and migration pointers are outside that cleanup.
+  try {
+    await env.SESSION_KV.delete(migrationPendingKey(subject));
+  } catch (error) {
+    log.warn("account_import.pending_cleanup_failed", {
+      subject,
+      outcome: "error",
+      error_code: errorCodeFrom(error),
+    });
+  }
+}
+
+function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
+  try {
+    return resolveAccountImportWindow(env);
+  } catch (error) {
+    const errorCode =
+      error instanceof AccountImportConfigurationError
+        ? error.code
+        : "account_import_config_invalid";
+    log.error("account_import.config_invalid", {
+      status: 500,
+      outcome: "error",
+      error_code: errorCode,
+    });
+    return accountImportConfigurationResponse();
   }
 }
 
@@ -349,6 +402,21 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     return;
   }
 
+  const identityRequired = cailIdentityRequired(c.env);
+  let importWindow: AccountImportWindow | undefined;
+
+  // The deadline is a required part of the enforced-identity configuration,
+  // not an optional migration hint. Reject bad production configuration before
+  // making an authentication decision so rollout cannot silently become an
+  // unbounded import window.
+  if (identityRequired) {
+    const resolved = resolveEnforcedImportWindow(c.env);
+    if (resolved instanceof Response) {
+      return resolved;
+    }
+    importWindow = resolved;
+  }
+
   const identityResolution = await resolveRequestIdentity(c.req.raw, c.env);
 
   // A presented credential must verify. Invalid tokens and missing or malformed
@@ -364,12 +432,51 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
 
     const subject = identity.subject;
 
+    if (!importWindow) {
+      try {
+        importWindow = resolveAccountImportWindow(c.env);
+      } catch (error) {
+        const errorCode =
+          error instanceof AccountImportConfigurationError
+            ? error.code
+            : "account_import_config_invalid";
+        log.warn("account_import.config_invalid", {
+          subject,
+          outcome: "client_error",
+          error_code: errorCode,
+        });
+      }
+    }
+
     // First-login migration: if this authenticated request still carries the
     // pre-SSO anonymous session cookie, claim that anonymous namespace for
     // this subject and re-home its data (lib/migration.ts). Also resume a
     // previously interrupted migration recorded under the subject.
     try {
-      await migrateAnonymousSessionIfPresent(c, subject);
+      if (importWindow?.state === "open") {
+        const imported = await migrateAnonymousSessionIfPresent(c, subject);
+        if (imported) {
+          log.info("account_import.completed", { subject, outcome: "ok" });
+        }
+      } else {
+        const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
+        if (cookieValue && cookieValue !== subject) {
+          log.warn("account_import.refused", {
+            subject,
+            outcome: "denied",
+            error_code:
+              importWindow?.state === "not_started"
+                ? "account_import_not_started"
+                : importWindow?.state === "expired"
+                  ? "account_import_expired"
+                  : "account_import_config_invalid",
+          });
+        }
+        // Do not resolve, claim, or copy from the old cookie outside the window.
+        // The subject cookie written below replaces it in the browser; this
+        // removes any subject-keyed resume marker so later sessions cannot retry.
+        await discardClosedImportState(c.env, subject);
+      }
     } catch (error) {
       if (error instanceof SessionStoreUnavailableError) {
         // SS-46: a storage outage before migration resumability was established
@@ -434,7 +541,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
   }
 
   // No verified identity. Fail closed when enforcement is on.
-  if (cailIdentityRequired(c.env)) {
+  if (identityRequired) {
     return cailAuthRequiredResponse();
   }
 

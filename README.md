@@ -71,6 +71,20 @@ canonical/staging issuer allowlist. A presented token rejects when the JWKS is
 missing or malformed or verification fails. `CAIL_REQUIRE_IDENTITY=true`
 rejects requests that do not carry a verified identity.
 
+Identity enforcement also requires a bounded legacy-account import window:
+
+```bash
+CAIL_SSO_SWITCHED_AT=2026-07-13T14:00:00Z
+CAIL_ACCOUNT_IMPORT_UNTIL=2026-07-27T14:00:00Z
+```
+
+Both values must be ISO 8601 instants with an explicit UTC offset. The import
+window is half-open (`CAIL_SSO_SWITCHED_AT <= now < CAIL_ACCOUNT_IMPORT_UNTIL`),
+the end must not precede the start, and the duration cannot exceed 30 days.
+When `CAIL_REQUIRE_IDENTITY=true`, missing or invalid values fail protected
+requests with `500 invalid_account_import_configuration`. While identity is
+optional, bad or absent window configuration disables legacy import.
+
 Site Studio holds no provider API keys — model calls go through the CAIL
 model proxy, which attaches credentials itself.
 
@@ -81,6 +95,8 @@ The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/ste
 - `CAIL_API_BASE`
 - `CAIL_MODEL` (Workers AI `@cf/...` id only — CAIL policy is Cloudflare models only)
 - `CAIL_REQUIRE_IDENTITY`
+- `CAIL_SSO_SWITCHED_AT`
+- `CAIL_ACCOUNT_IMPORT_UNTIL`
 
 For production, configure secrets with Wrangler / Cloudflare, not by committing env files.
 
@@ -112,7 +128,10 @@ bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --ex
 - The new app is a static-file site builder. Runtime build tools are out of scope.
 - The normal chat path is execute-first, not approve-first.
 - The built-in gallery includes blank, CV, course, portfolio, publication, event, photo, resource, timeline, and data-visualization templates.
-- Canonical published URLs are `/u/:handle/:slug/`, keyed by a user-chosen handle so the owner id never appears in a public URL. Old published sites remain readable from the same R2 bucket via the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves content directly.
+- Canonical published URLs are `/u/:handle/:slug/`, keyed by a user-chosen handle so the owner id never appears in a public URL. Old published sites remain readable permanently from the same R2 bucket via the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves content directly. This is a permanent compatibility exception: temporary account-import cleanup must retain `/sites` routing, direct serving, redirects, and `.migrated.json` forwarding-pointer resolution.
+
+See [`docs/legacy-account-import-removal.md`](docs/legacy-account-import-removal.md)
+for the temporary import telemetry and deletion follow-up.
 
 ## License
 

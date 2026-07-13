@@ -54,12 +54,15 @@ function createMockBucket() {
 }
 
 function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides: Partial<Env> = {}): Env {
+  const now = Date.now();
   return {
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
+    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     ASSETS: undefined,
     ...overrides
   };

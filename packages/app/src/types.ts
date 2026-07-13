@@ -26,6 +26,11 @@ export interface Env {
   // "true" makes protected routes reject anonymous requests (401). Flip in
   // lockstep with the gateway's CAIL_SSO_MODE=enforce.
   CAIL_REQUIRE_IDENTITY?: string;
+  // Required when identity enforcement is enabled. These ISO instants bound
+  // the temporary legacy-account import window; runtime validation also
+  // requires end >= start and a duration no longer than 30 days.
+  CAIL_SSO_SWITCHED_AT?: string;
+  CAIL_ACCOUNT_IMPORT_UNTIL?: string;
   // Path scope for the anti-CSRF delivery cookie (cail_csrf_sitestudio).
   // Production is mounted at /site-studio on a shared origin alongside
   // sibling tools and untrusted /sites/ content. Runtime validation rejects a
