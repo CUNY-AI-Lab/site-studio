@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "site-studio-app",
-  "account_id": "452c33847cf5cb1e46f391fca32fd1b5",
+  "account_id": "0c7ef775c8a1aa3f6b5bc0d2ae56167b",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
