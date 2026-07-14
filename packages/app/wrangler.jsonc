@@ -42,6 +42,7 @@
     }
   ],
   "vars": {
+    "CAIL_LOG_ENV": "production",
     "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
     "PUBLISHED_BASE_URL": "https://tools.cuny.qzz.io",
     // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----

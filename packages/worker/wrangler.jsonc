@@ -31,6 +31,7 @@
     }
   ],
   "vars": {
+    "CAIL_LOG_ENV": "production",
     "PUBLIC_DOMAIN": "https://tools.cuny.qzz.io"
   },
   "r2_buckets": [

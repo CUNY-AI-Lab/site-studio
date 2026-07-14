@@ -13,11 +13,18 @@ import { createPublishRouter } from "./publish";
 import { createProjectRouter } from "./projects";
 import { requireProject } from "../lib/require-project";
 
+const actionAttemptRpc = vi.hoisted(() => ({
+  admission: vi.fn(async () => undefined),
+  terminal: vi.fn(async () => undefined),
+}));
+
 vi.mock("agents", () => ({
   getAgentByName: vi.fn(async () => ({
     exportChatHistoryForMigration: async () => [],
     importChatHistoryForMigration: async () => true,
-    clearChatHistory: async () => undefined
+    clearChatHistory: async () => undefined,
+    recordActionAdmission: actionAttemptRpc.admission,
+    recordActionTerminal: actionAttemptRpc.terminal,
   }))
 }));
 
@@ -161,10 +168,17 @@ function createTestApp() {
 }
 
 function createEnv(bucket: R2Bucket): Env {
+  const actionAgent = {
+    recordActionAdmission: actionAttemptRpc.admission,
+    recordActionTerminal: actionAttemptRpc.terminal,
+  };
   return {
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
-    SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+    SITE_BUILDER_AGENT: {
+      idFromName: () => ({}) as DurableObjectId,
+      get: () => actionAgent,
+    } as unknown as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
@@ -190,6 +204,8 @@ describe("route regressions", () => {
   let app: ReturnType<typeof createTestApp>;
 
   beforeEach(async () => {
+    actionAttemptRpc.admission.mockClear();
+    actionAttemptRpc.terminal.mockClear();
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
@@ -414,6 +430,14 @@ describe("route regressions", () => {
     // "<h1>Beta</h1>" fragment has no <html>/<head>, so nothing to report.
     expect(Array.isArray(publishBody.a11yFindings)).toBe(true);
     expect(publishBody.a11yFindings).toEqual([]);
+    expect(actionAttemptRpc.admission).toHaveBeenCalledWith(expect.objectContaining({
+      action: "publish",
+      route: "/api/projects/{id}/publish",
+    }));
+    expect(actionAttemptRpc.terminal).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: "ok",
+      reason: "completed",
+    }));
 
     const publishedSiteResponse = await app.request(
       "http://site-studio.test/u/janedoe/foo-2/",

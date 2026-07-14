@@ -21,9 +21,26 @@ import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
-import { correlationFromHeaders, type CailCorrelation } from "@cuny-ai-lab/cail-log";
+import {
+  REQUEST_ID_RE,
+  correlationFromHeaders,
+  type CailCorrelation,
+  type CailOutcome,
+  type CailTerminalReason,
+} from "@cuny-ai-lab/cail-log";
+import {
+  ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+  ACTION_ATTEMPT_RETENTION_HOURS,
+  ACTION_ATTEMPT_SCHEMA_VERSION,
+  type ActionAttemptAdmission,
+  type ActionAttemptAdminRead,
+  type ActionAttemptTerminal,
+  type DurableActionAttempt,
+} from "../../../observability-core/src/action-attempt";
+import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
+  createSiteStudioBoundaryLogger,
   emitDiagnostic,
   errorCodeFrom,
   mintCorrelation,
@@ -87,8 +104,21 @@ type SiteBuilderObservabilityEvent = {
 
 type SiteBuilderObservabilitySnapshot = {
   generatedAt: string;
+  actionAttempts: ActionAttemptAdminRead;
   requests: SiteBuilderObservabilityRequest[];
   events: SiteBuilderObservabilityEvent[];
+};
+
+type ActionAttemptRow = {
+  action_id: string;
+  action_kind: "build" | "publish";
+  route: string;
+  admitted_at: string;
+  terminal_at: string | null;
+  outcome: CailOutcome | null;
+  reason: CailTerminalReason | null;
+  duration_ms: number | null;
+  error_type: string | null;
 };
 
 const MAX_FILE_CONTENT_CHARS = 60_000;
@@ -1148,6 +1178,85 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     return this.snapshotObservability();
   }
 
+  /** Durable, owner/project-scoped denominator written before product mutation. */
+  recordActionAdmission(admission: ActionAttemptAdmission): void {
+    const expectedRoute = OBSERVABILITY_CONTRACT.actions[admission.action]?.route;
+    if (
+      !REQUEST_ID_RE.test(admission.actionId)
+      || admission.route !== expectedRoute
+      || !Number.isFinite(Date.parse(admission.admittedAt))
+    ) {
+      throw new TypeError("invalid Site Studio action admission");
+    }
+    this.ensureActionAttemptTable();
+    const cutoff = new Date(
+      Date.parse(admission.admittedAt) - ACTION_ATTEMPT_RETENTION_HOURS * 3_600_000,
+    ).toISOString();
+    this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
+    this.sql`
+      INSERT INTO site_studio_action_attempts (
+        action_id, action_kind, route, admitted_at
+      ) VALUES (
+        ${admission.actionId}, ${admission.action}, ${admission.route}, ${admission.admittedAt}
+      )
+    `;
+  }
+
+  /** A terminal updates an existing admission; it can never fabricate one. */
+  recordActionTerminal(terminal: ActionAttemptTerminal): void {
+    if (
+      !REQUEST_ID_RE.test(terminal.actionId)
+      || !Number.isFinite(Date.parse(terminal.terminalAt))
+      || !Number.isFinite(terminal.durationMs)
+      || terminal.durationMs < 0
+      || (terminal.errorType !== undefined
+        && !/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(terminal.errorType))
+    ) {
+      throw new TypeError("invalid Site Studio action terminal");
+    }
+    this.ensureActionAttemptTable();
+    const existing = [...this.sql<ActionAttemptRow>`
+      SELECT * FROM site_studio_action_attempts WHERE action_id = ${terminal.actionId}
+    `][0];
+    if (!existing) throw new TypeError("action terminal requires a durable admission");
+    const expectedDuration = Date.parse(terminal.terminalAt) - Date.parse(existing.admitted_at);
+    const compatibleReason: Readonly<Record<CailOutcome, readonly CailTerminalReason[]>> = {
+      ok: ["completed"],
+      client_error: ["client_error"],
+      error: ["application_failure", "upstream_failure"],
+      denied: ["denied", "quota_blocked", "rate_limited"],
+      cancelled: ["cancelled"],
+      timeout: ["timeout"],
+      outcome_unknown: ["unknown"],
+    };
+    if (
+      expectedDuration < 0
+      || terminal.durationMs !== expectedDuration
+      || !compatibleReason[terminal.outcome].includes(terminal.reason)
+      || (terminal.outcome === "ok" && terminal.errorType !== undefined)
+    ) {
+      throw new TypeError("action terminal contradicts its durable admission");
+    }
+    if (existing.terminal_at !== null) {
+      const same = existing.terminal_at === terminal.terminalAt
+        && existing.outcome === terminal.outcome
+        && existing.reason === terminal.reason
+        && existing.duration_ms === terminal.durationMs
+        && existing.error_type === (terminal.errorType ?? null);
+      if (same) return;
+      throw new TypeError("action attempt already has a different terminal");
+    }
+    this.sql`
+      UPDATE site_studio_action_attempts
+      SET terminal_at = ${terminal.terminalAt},
+          outcome = ${terminal.outcome},
+          reason = ${terminal.reason},
+          duration_ms = ${terminal.durationMs},
+          error_type = ${terminal.errorType ?? null}
+      WHERE action_id = ${terminal.actionId}
+    `;
+  }
+
   /**
    * Export the persisted chat history for the anonymous-data migration
    * (lib/migration.ts). Called over DO RPC by the main worker only.
@@ -1241,6 +1350,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       action: "build",
       principal: principalForOwnerId(scope.userId),
       correlation,
+    }, createSiteStudioBoundaryLogger(this.env), Date.now, {
+      admit: (admission) => this.recordActionAdmission(admission),
+      terminal: (terminal) => this.recordActionTerminal(terminal),
     });
 
     try {
@@ -1391,8 +1503,51 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     return {
       generatedAt: new Date(now).toISOString(),
+      actionAttempts: this.readActionAttempts(now),
       requests,
       events: [...this.observabilityEvents]
+    };
+  }
+
+  private ensureActionAttemptTable(): void {
+    this.sql`
+      CREATE TABLE IF NOT EXISTS site_studio_action_attempts (
+        action_id TEXT PRIMARY KEY,
+        action_kind TEXT NOT NULL CHECK (action_kind IN ('build', 'publish')),
+        route TEXT NOT NULL,
+        admitted_at TEXT NOT NULL,
+        terminal_at TEXT,
+        outcome TEXT,
+        reason TEXT,
+        duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
+        error_type TEXT
+      )
+    `;
+  }
+
+  private readActionAttempts(now: number): ActionAttemptAdminRead {
+    this.ensureActionAttemptTable();
+    const cutoff = new Date(now - ACTION_ATTEMPT_RETENTION_HOURS * 3_600_000).toISOString();
+    this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
+    const attempts: DurableActionAttempt[] = [...this.sql<ActionAttemptRow>`
+      SELECT * FROM site_studio_action_attempts ORDER BY admitted_at DESC
+    `].map((row) => ({
+      schemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
+      actionId: row.action_id,
+      action: row.action_kind,
+      route: row.route,
+      admittedAt: row.admitted_at,
+      ...(row.terminal_at !== null ? { terminalAt: row.terminal_at } : {}),
+      ...(row.outcome !== null ? { outcome: row.outcome } : {}),
+      ...(row.reason !== null ? { reason: row.reason } : {}),
+      ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
+      ...(row.error_type !== null ? { errorType: row.error_type } : {}),
+    }));
+    return {
+      schemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+      authoritative: true,
+      retentionHours: ACTION_ATTEMPT_RETENTION_HOURS,
+      attempts,
     };
   }
 
@@ -1604,3 +1759,5 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 // Register the RPC method without decorator syntax so the same source can be
 // loaded by both workerd and Node-based unit-test transforms.
 callable()(SiteBuilderAgent.prototype.getObservability, {} as ClassMethodDecoratorContext);
+callable()(SiteBuilderAgent.prototype.recordActionAdmission, {} as ClassMethodDecoratorContext);
+callable()(SiteBuilderAgent.prototype.recordActionTerminal, {} as ClassMethodDecoratorContext);

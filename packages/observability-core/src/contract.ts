@@ -1,4 +1,18 @@
-export const OBSERVABILITY_CONTRACT_VERSION = 2;
+import {
+  CAIL_ANALYTICS_ENGINE_BLOBS,
+  CAIL_ANALYTICS_ENGINE_DATASET,
+  CAIL_ANALYTICS_ENGINE_DOUBLES,
+  CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION,
+} from "@cuny-ai-lab/cail-log";
+import {
+  ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+  ACTION_ATTEMPT_RETENTION_HOURS,
+  ACTION_ATTEMPT_SCHEMA_VERSION,
+  SITE_STUDIO_ACTION_ROUTES,
+} from "./action-attempt";
+import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./fleet-projection";
+
+export const OBSERVABILITY_CONTRACT_VERSION = 3;
 export const PRODUCT_ID = "site-studio";
 export const SERVICE_VERSION = "0.1.0";
 
@@ -21,11 +35,11 @@ export const OBSERVABILITY_CONTRACT = {
   },
   actions: {
     build: {
-      route: "/api/agents/site-builder/{project_id}",
+      route: SITE_STUDIO_ACTION_ROUTES.build,
       method: "POST",
     },
     publish: {
-      route: "/api/projects/{id}/publish",
+      route: SITE_STUDIO_ACTION_ROUTES.publish,
       method: "POST",
     },
   },
@@ -38,6 +52,38 @@ export const OBSERVABILITY_CONTRACT = {
     },
     invocationLogs: false,
     externalExporter: null,
+  },
+  fleetProjection: {
+    libraryCommit: "4d747988966e657ef44081e68bc95bc758713604",
+    provider: "cloudflare-analytics-engine",
+    dataset: CAIL_ANALYTICS_ENGINE_DATASET,
+    binding: "CAIL_FLEET_EVENTS",
+    schemaVersion: CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION,
+    columns: {
+      blobs: CAIL_ANALYTICS_ENGINE_BLOBS,
+      doubles: CAIL_ANALYTICS_ENGINE_DOUBLES,
+    },
+    samplingIndex: ["deployment.environment.name", "cail.product.id"],
+    weightField: "_sample_interval",
+    cohortOnly: true,
+    exact: false,
+    maxPointsPerInvocation: SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION,
+    authority: {
+      actionSuccessAndCoverage: {
+        source: "site-studio-durable-admin-read",
+        route: "/api/projects/{id}/observability",
+        schemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+      },
+      modelCostAndLimit: {
+        source: "cail-gateway-key-service-accounting",
+        nativeLimitUsd: 10,
+        applicationLogsAreLedger: false,
+      },
+      sandboxSettlementAndCost: {
+        source: "cail-sandbox-accounting",
+        applicationLogsAreLedger: false,
+      },
+    },
   },
   access: {
     role: "kale-admin",
@@ -104,33 +150,32 @@ export const OBSERVABILITY_CONTRACT = {
     actionReliability: {
       contractVersion: 1,
       windowAssignment: "admission_time",
+      authoritativeSource: "site-studio-durable-admin-read",
+      adminReadRoute: "/api/projects/{id}/observability",
+      adminReadSchemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+      attemptSchemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
+      retentionHours: ACTION_ATTEMPT_RETENTION_HOURS,
       terminalGraceMinutes: 15,
-      separateBy: ["service.name", "url.template"],
+      separateBy: ["action", "route"],
       denominator: {
-        eventName: "cail.action.admitted",
-        uniqueBy: ["service.name", "cail.action.id"],
+        record: ACTION_ATTEMPT_SCHEMA_VERSION,
+        uniqueBy: ["actionId"],
         includeAllAdmittedOutcomes: true,
         eligibleBeforeWindowEndMinutes: 15,
       },
       terminalMatch: {
-        eventName: "cail.action.terminal",
+        record: ACTION_ATTEMPT_SCHEMA_VERSION,
         cardinality: "exactly_one",
-        fields: [
-          "service.name",
-          "url.template",
-          "cail.action.id",
-          "cail.principal.type",
-          "cail.principal.subject",
-        ],
-        requestId: "equal_when_present",
+        fields: ["actionId", "action", "route"],
+        ownerAndProjectScope: "durable-object-instance",
       },
       successNumerator: {
-        terminalOutcome: "ok",
+        outcome: "ok",
         requiresAcknowledgedDurableMutation: true,
       },
       coverageNumerator: {
-        terminalCardinality: "exactly_one",
-        terminalOutcome: "any",
+        terminalAt: "present",
+        outcome: "any",
       },
       success: {
         unit: "basis_points",
@@ -179,9 +224,9 @@ export const OBSERVABILITY_CONTRACT = {
       filter: { "cail.product.id": PRODUCT_ID },
       measures: [
         { operation: "count" },
-        { operation: "p50", field: "duration_ms" },
-        { operation: "p95", field: "duration_ms" },
-        { operation: "p99", field: "duration_ms" },
+        { operation: "p50", field: "cail.operation.duration_ms" },
+        { operation: "p95", field: "cail.operation.duration_ms" },
+        { operation: "p99", field: "cail.operation.duration_ms" },
       ],
       groupBy: [
         "service.name",
@@ -191,15 +236,18 @@ export const OBSERVABILITY_CONTRACT = {
       ],
     },
     actionReliability: {
+      source: "workers-logs",
       eventName: "cail.action.terminal",
       filter: { "cail.product.id": PRODUCT_ID },
       measures: [
         { operation: "count" },
-        { operation: "p50", field: "duration_ms" },
-        { operation: "p95", field: "duration_ms" },
-        { operation: "p99", field: "duration_ms" },
+        { operation: "p50", field: "cail.operation.duration_ms" },
+        { operation: "p95", field: "cail.operation.duration_ms" },
+        { operation: "p99", field: "cail.operation.duration_ms" },
       ],
       groupBy: ["service.name", "url.template", "cail.outcome"],
+      aggregateSemantics: "diagnostic_only",
+      exact: false,
       drilldown: [
         "cail.request.id",
         "cail.action.id",
@@ -209,10 +257,13 @@ export const OBSERVABILITY_CONTRACT = {
       ],
     },
     actionAdmissions: {
+      source: "workers-logs",
       eventName: "cail.action.admitted",
       filter: { "cail.product.id": PRODUCT_ID },
       measures: [{ operation: "count" }],
       groupBy: ["service.name", "url.template"],
+      aggregateSemantics: "diagnostic_only",
+      exact: false,
       drilldown: [
         "cail.request.id",
         "cail.action.id",
@@ -220,6 +271,34 @@ export const OBSERVABILITY_CONTRACT = {
         "cail.principal.subject",
         "trace_id",
       ],
+    },
+    fleetActionReliability: {
+      source: "cloudflare-analytics-engine",
+      dataset: CAIL_ANALYTICS_ENGINE_DATASET,
+      eventNames: ["cail.action.admitted", "cail.action.terminal"],
+      filter: { blob5: PRODUCT_ID },
+      dimensions: {
+        eventName: "blob1",
+        serviceName: "blob2",
+        environment: "blob4",
+        productId: "blob5",
+        cohort: "blob7",
+        route: "blob8",
+        outcome: "blob9",
+      },
+      measures: [
+        { operation: "sum", field: "_sample_interval", name: "weighted_events" },
+        {
+          operation: "quantileExactWeighted",
+          quantile: 0.95,
+          field: "double5",
+          weight: "_sample_interval",
+          exclude: -1,
+          name: "weighted_p95_duration_ms",
+        },
+      ],
+      aggregateSemantics: "weighted_cohort_diagnostic_only",
+      exact: false,
     },
     healthReliability: {
       eventName: "cail.request.completed",
@@ -229,7 +308,7 @@ export const OBSERVABILITY_CONTRACT = {
       },
       measures: [
         { operation: "count" },
-        { operation: "p95", field: "duration_ms" },
+        { operation: "p95", field: "cail.operation.duration_ms" },
       ],
       groupBy: [
         "service.name",
@@ -426,7 +505,7 @@ export function auditTelemetryLifecyclePairs(
         });
       }
       for (const terminal of group.terminals) {
-        const duration = terminal.duration_ms;
+        const duration = terminal["cail.operation.duration_ms"];
         if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0) {
           issues.push({
             code: "terminal_duration_invalid",

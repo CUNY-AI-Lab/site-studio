@@ -15,7 +15,10 @@ import {
   extendCailEventCatalog,
   workersStructuredSink,
   type CailCorrelation,
+  type CailAnalyticsEngineDataset,
   type CailHttpMethod,
+  type CailLogEnvironment,
+  type CailLogger,
   type CailTerminalFields,
 } from "@cuny-ai-lab/cail-log";
 import {
@@ -23,6 +26,7 @@ import {
   PRODUCT_ID,
   healthResponse,
 } from "../../observability-core/src/contract";
+import { createSiteStudioBoundarySink } from "../../observability-core/src/fleet-projection";
 
 const PUBLISHER_DIAGNOSTIC = "site_studio_publisher.diagnostic.warning";
 const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
@@ -34,14 +38,18 @@ const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
     optional: ["request_id", "trace", "status", "http_method", "route"],
   },
 });
-const log = createCailLogger({
-  service: OBSERVABILITY_CONTRACT.services.publisher.name,
-  release: OBSERVABILITY_CONTRACT.services.publisher.version,
-  env: "production",
-  sourceClass: "platform",
-  catalog: PUBLISHER_EVENT_CATALOG,
-  sink: workersStructuredSink,
-});
+type PublisherLogger = CailLogger<typeof PUBLISHER_EVENT_CATALOG, "platform">;
+
+function createPublisherLogger(env: Env): PublisherLogger {
+  return createCailLogger({
+    service: OBSERVABILITY_CONTRACT.services.publisher.name,
+    release: OBSERVABILITY_CONTRACT.services.publisher.version,
+    env: env.CAIL_LOG_ENV ?? "production",
+    sourceClass: "platform",
+    catalog: PUBLISHER_EVENT_CATALOG,
+    sink: createSiteStudioBoundarySink(env),
+  });
+}
 
 function traceFromCorrelation(correlation: CailCorrelation) {
   return {
@@ -84,8 +92,15 @@ function httpMethod(method: string): CailHttpMethod {
   }
 }
 
-function warnDiagnostic(errorType: string): void {
-  log.emit(PUBLISHER_DIAGNOSTIC, {
+function warnDiagnostic(errorType: string, logger?: PublisherLogger): void {
+  (logger ?? createCailLogger({
+    service: OBSERVABILITY_CONTRACT.services.publisher.name,
+    release: OBSERVABILITY_CONTRACT.services.publisher.version,
+    env: "production",
+    sourceClass: "platform",
+    catalog: PUBLISHER_EVENT_CATALOG,
+    sink: workersStructuredSink,
+  })).emit(PUBLISHER_DIAGNOSTIC, {
     product_id: PRODUCT_ID,
     error_type: errorType,
   });
@@ -102,6 +117,8 @@ function errorTypeFrom(error: unknown): string {
 
 export type Env = {
   PUBLIC_DOMAIN?: string;
+  CAIL_FLEET_EVENTS?: CailAnalyticsEngineDataset;
+  CAIL_LOG_ENV?: CailLogEnvironment;
   SITE_STUDIO_BUCKET: R2Bucket;
 };
 
@@ -168,7 +185,8 @@ type MigrationPointer = {
 
 export async function loadMigrationPointer(
   bucket: R2Bucket,
-  userId: string
+  userId: string,
+  logger?: PublisherLogger,
 ): Promise<MigrationPointer | null> {
   const object = await bucket.get(`projects/${userId}/.migrated.json`);
   if (!object) {
@@ -182,7 +200,7 @@ export async function loadMigrationPointer(
     }
     return pointer;
   } catch {
-    warnDiagnostic("invalid_migration_pointer");
+    warnDiagnostic("invalid_migration_pointer", logger);
     return null;
   }
 }
@@ -295,7 +313,8 @@ export async function listProjects(bucket: R2Bucket, userId: string): Promise<st
 export async function getProjectMetadata(
   bucket: R2Bucket,
   userId: string,
-  projectId: string
+  projectId: string,
+  logger?: PublisherLogger,
 ): Promise<ProjectMetadata | null> {
   const object = await bucket.get(metadataKey(userId, projectId));
   if (!object) {
@@ -305,7 +324,7 @@ export async function getProjectMetadata(
   try {
     return JSON.parse(await object.text()) as ProjectMetadata;
   } catch {
-    warnDiagnostic("invalid_project_metadata");
+    warnDiagnostic("invalid_project_metadata", logger);
     return null;
   }
 }
@@ -313,13 +332,14 @@ export async function getProjectMetadata(
 export async function findPublishedProject(
   bucket: R2Bucket,
   userId: string,
-  requestedSlug: string
+  requestedSlug: string,
+  logger?: PublisherLogger,
 ): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {
   const projectIds = await listProjects(bucket, userId);
   const matches: Array<{ projectId: string; metadata: ProjectMetadata }> = [];
 
   for (const projectId of projectIds) {
-    const metadata = await getProjectMetadata(bucket, userId, projectId);
+    const metadata = await getProjectMetadata(bucket, userId, projectId, logger);
     if (!metadata?.published) {
       continue;
     }
@@ -465,7 +485,11 @@ export async function notFoundResponse(
   return fallbackNotFoundResponse(request, filePath, rootPath);
 }
 
-async function handlePublishedRequest(request: Request, env: Env): Promise<Response> {
+async function handlePublishedRequest(
+  request: Request,
+  env: Env,
+  logger?: PublisherLogger,
+): Promise<Response> {
   const url = new URL(request.url);
   if (
     url.pathname === OBSERVABILITY_CONTRACT.services.publisher.healthPath
@@ -499,16 +523,16 @@ async function handlePublishedRequest(request: Request, env: Env): Promise<Respo
     rootPath = siteRootPath(parsed.userId, parsed.slug);
   }
 
-  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug);
+  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug, logger);
 
   if (!resolved) {
     // The owner id in the URL may be an anonymous namespace re-homed to a
     // CAIL subject; follow the forwarding pointer so old links keep working.
-    const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId);
+    const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId, logger);
     if (pointer) {
       ownerId = pointer.subject;
       const mappedSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
-      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug);
+      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug, logger);
     }
   }
 
@@ -580,6 +604,7 @@ async function handlePublishedRequest(request: Request, env: Env): Promise<Respo
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const log = createPublisherLogger(env);
     const correlation = correlationFromHeaders(request);
     const startedAt = Date.now();
     const url = new URL(request.url);
@@ -594,7 +619,7 @@ export default {
     });
 
     try {
-      const response = await handlePublishedRequest(request, env);
+      const response = await handlePublishedRequest(request, env, log);
       const terminal = terminalForStatus(response.status);
       const completedBase = {
         request_id: correlation.request_id,

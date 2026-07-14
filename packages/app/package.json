@@ -21,7 +21,7 @@
     "@cloudflare/codemode": "0.4.3",
     "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#c42d0fa353e06574e7021e4c12a91a74e00904a4",
     "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#3a76084a87ee3e004454c599fdd5f0565f82f32f",
-    "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#862067d3ac83d0cde456eb38d3a6bad6df0476e5",
+    "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#4d747988966e657ef44081e68bc95bc758713604",
     "agents": "0.17.4",
     "ai": "6.0.225",
     "fflate": "0.8.3",

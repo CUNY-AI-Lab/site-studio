@@ -1,8 +1,8 @@
 # CAIL logging alignment
 
 This source alignment uses `@cuny-ai-lab/cail-log` at the reviewed immutable commit
-`862067d3ac83d0cde456eb38d3a6bad6df0476e5`. Both Bun workspace dependencies pin
-that full SHA.
+`4d747988966e657ef44081e68bc95bc758713604`. The app, publisher, and shared
+observability workspace package all pin that full SHA.
 
 ## Identity and ownership
 
@@ -29,6 +29,13 @@ An HTTP completion means that the Worker produced a response, not that the clien
 received it. Build and publish action success is narrower: it requires the durable
 state acknowledgement that makes the result user-visible on a later request.
 Logging failures do not replace R2 or Durable Object state as the source of truth.
+
+The project-scoped Durable Object now stores a bounded 48-hour action-attempt
+record before an admitted build or publish mutation proceeds. A terminal can
+only update an existing admission, and the existing authenticated
+`/api/projects/{id}/observability` read returns the versioned authoritative
+records. Build and publish remain separate action/route pairs. Exact success and
+terminal coverage are calculated from these records rather than either log sink.
 
 Routes are fixed templates such as `/api/projects/{id}/publish`,
 `/api/agents/site-builder/{project_id}`, and `/u/{handle}/{slug}/{path}`. Events do
@@ -67,6 +74,21 @@ bands. Its action SLI sub-contract versions admission-window assignment, a
 semantics, and separate build/publish denominators. See
 `docs/observability-design-gate.md` for the complete values and rationale.
 
+Contract version 3 adds the fleet projection without changing that privacy
+posture. At each trusted Worker boundary, the logger uses
+`fanoutSinks(workersStructuredSink, createAnalyticsEngineSink(...))`. The
+library owns the ordered Analytics Engine columns and the
+`environment:product_id` sampling index. Site Studio adds only an invocation-
+local 32-point guard, safely below Cloudflare's 250-point limit. The projection
+keeps cohort but omits stable subjects, request/action IDs, trace IDs, usage
+facts, and Kale project identity.
+
+Analytics Engine counts, rates, and percentiles are weighted cohort diagnostics
+using `_sample_interval`; they are never exact lifecycle or accounting facts.
+Model spend and the native $10 model limit come from CAIL gateway/key-service
+accounting. Sandbox settlement and cost come from Sandbox accounting. Site
+Studio does not reproduce either ledger.
+
 ## Decisive sources
 
 - The local CAIL gateway `docs/INTEGRATION.md` defines the stable
@@ -82,6 +104,26 @@ semantics, and separate build/publish denominators. See
   (updated April 23, 2026) supports counts, grouping, and duration percentiles
   over structured fields. The source contract records those dashboard-ready
   measures without creating or mutating a live saved query.
+- [Workers Analytics Engine write guidance](https://developers.cloudflare.com/workers/examples/analytics-engine/)
+  (updated April 2026) documents non-blocking binding writes and the single
+  index used as the sampling key. The source adapter uses the reviewed
+  cail-log projection instead of defining local column positions.
+- [Workers Analytics Engine sampling](https://developers.cloudflare.com/analytics/analytics-engine/sampling/)
+  and [SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/)
+  (updated April 23, 2026) require `_sample_interval` weighting for counts,
+  sums, averages, and quantiles. This rules out exact action coverage and
+  identifiable-user conclusions from the fleet dataset.
+- [Workers Analytics Engine limits](https://developers.cloudflare.com/analytics/analytics-engine/limits/)
+  (updated April 23, 2026) allows 250 points per Worker invocation, one index,
+  20 blobs, and 20 doubles, with three-month provider retention. Site Studio's
+  source guard caps its projection at 32 points and leaves institutional
+  retention approval separate.
+- [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
+  (updated May 27, 2026) is transactional, strongly consistent, and private to
+  one object instance. [Durable Object RPC](https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/)
+  (updated April 21, 2026) provides ordered calls to public object methods. The
+  existing owner/project agent object therefore owns the action denominator and
+  terminal store without a new binding or route.
 - [Cloudflare Load Balancing monitors](https://developers.cloudflare.com/load-balancing/monitors/create-monitor/)
   (updated April 16, 2026) evaluate expected status and a relatively static body
   substring within the first 10 KB and document interval, timeout, retry, and
@@ -134,11 +176,11 @@ semantics, and separate build/publish denominators. See
 
 ## Source-ready boundary
 
-No bindings, secrets, ingress, spend rules, live Cloudflare settings, saved
-queries, monitors, exporters, or production state are changed here. There is no
-reviewed-commit dependency blocker: the exact cail-log commit is available and
-pinned. Source privacy, health, action seams, dashboards, alert thresholds,
-monitor profile, access posture, sampling, and the no-exporter v1 decision are
-settled. Remaining external inputs are production hostnames/ingress,
-notification recipients, institution-approved retention, the approved monthly
-product budget, secrets, and deployment authorization.
+No dataset, binding, secret, ingress, spend rule, live Cloudflare setting, saved
+query, monitor, exporter, or production state is created here. There is no
+reviewed-commit dependency blocker. Fleet projection source is inert unless an
+operator provisions or confirms the `cail_fleet_events_v1` Analytics Engine
+dataset and binds it to both Workers as `CAIL_FLEET_EVENTS`. Production
+hostnames/ingress, notification recipients, institution-approved retention,
+the approved monthly product budget, secrets, and deployment authorization also
+remain external.

@@ -232,6 +232,54 @@ describe("canonical build/publish action mappings", () => {
       "error.type": "mutation_unacknowledged",
     });
   });
+
+  it("records the durable denominator and terminal before projecting either log event", () => {
+    const order: string[] = [];
+    const events: CailLogEvent[] = [];
+    const times = [1_000, 1_045];
+    const logger = createSiteStudioLogger({
+      sink: (event) => {
+        order.push(`log:${event.event_name}`);
+        events.push(event);
+      },
+      env: "test",
+      clock: () => 1_000,
+    });
+    const lifecycle = new SiteStudioActionLifecycle({
+      action: "build",
+      principal: { type: "anonymous" },
+      correlation: mintCorrelation(),
+    }, logger, () => times.shift() ?? 1_045, {
+      admit: (admission) => {
+        order.push("durable:admitted");
+        expect(admission).toMatchObject({
+          action: "build",
+          route: "/api/agents/site-builder/{project_id}",
+          admittedAt: "1970-01-01T00:00:01.000Z",
+        });
+      },
+      terminal: (terminal) => {
+        order.push("durable:terminal");
+        expect(terminal).toMatchObject({
+          outcome: "ok",
+          reason: "completed",
+          terminalAt: "1970-01-01T00:00:01.045Z",
+          durationMs: 45,
+        });
+      },
+    });
+    lifecycle.admit();
+    lifecycle.acknowledgeMutation();
+    lifecycle.completeSuccess();
+
+    expect(order).toEqual([
+      "durable:admitted",
+      "log:cail.action.admitted",
+      "durable:terminal",
+      "log:cail.action.terminal",
+    ]);
+    expect(events).toHaveLength(2);
+  });
 });
 
 describe("service-local diagnostics and helpers", () => {

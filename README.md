@@ -136,6 +136,14 @@ one-minute Eastern North America synthetic profile, rolling 24-hour SLO and
 alert thresholds, month-to-date gateway-ledger spend bands, Kale-admin-only
 access, full custom-log sampling, and no v1 external exporter.
 
+When an operator supplies the optional `CAIL_FLEET_EVENTS` binding, each trusted
+Worker boundary also projects accepted events through cail-log's versioned
+`cail_fleet_events_v1` Analytics Engine schema. Those weighted cohort aggregates
+are diagnostic only. Exact build/publish success and coverage come from the
+project-scoped durable action-attempt records exposed by the existing
+authenticated observability read; model and Sandbox costs remain in their
+respective accounting systems.
+
 `GET /api/health` and the publisher's `GET /healthz` return static
 `cail.health.v1` liveness markers with `Cache-Control: no-store`. They prove that
 the relevant Worker loaded and dispatched the request; they deliberately do not

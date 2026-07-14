@@ -1,17 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CailAnalyticsEngineDataPoint } from "@cuny-ai-lab/cail-log";
 import { OBSERVABILITY_CONTRACT } from "../../observability-core/src/contract";
 import worker, { type Env } from "./index";
 
 describe("publisher observability contract", () => {
   it("serves the versioned publisher liveness response without touching R2", async () => {
     const bucket = { get: vi.fn() } as unknown as R2Bucket;
+    const points: CailAnalyticsEngineDataPoint[] = [];
+    const env = {
+      SITE_STUDIO_BUCKET: bucket,
+      CAIL_LOG_ENV: "test",
+      CAIL_FLEET_EVENTS: { writeDataPoint: (point: CailAnalyticsEngineDataPoint) => points.push(point) },
+    } satisfies Env;
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     let response!: Response;
     try {
       response = await worker.fetch(
         new Request("https://publisher.example/healthz?private=value"),
-        { SITE_STUDIO_BUCKET: bucket } satisfies Env,
+        env,
       );
 
       const events = [...info.mock.calls, ...log.mock.calls].map(([event]) =>
@@ -29,7 +36,7 @@ describe("publisher observability contract", () => {
 
       const head = await worker.fetch(
         new Request("https://publisher.example/healthz", { method: "HEAD" }),
-        { SITE_STUDIO_BUCKET: bucket } satisfies Env,
+        env,
       );
       expect(head.status).toBe(200);
       expect(await head.text()).toBe("");
@@ -53,6 +60,9 @@ describe("publisher observability contract", () => {
       },
     });
     expect(bucket.get).not.toHaveBeenCalled();
+    expect(points).toHaveLength(4);
+    expect(points.every((point) => point.indexes[0] === "test:site-studio")).toBe(true);
+    expect(JSON.stringify(points)).not.toContain("private=value");
   });
 
   it("classifies health as a safe dashboard route", () => {

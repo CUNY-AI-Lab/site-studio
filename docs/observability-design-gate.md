@@ -3,18 +3,19 @@
 ## Boundary
 
 This change settles the source contract for Site Studio Worker logs, liveness
-responses, build/publish action telemetry, monitor payloads, SLOs, alerts, and
-dashboard inputs. It covers the app Worker and published-site Worker. It does
-not create a live monitor, saved dashboard, exporter, retention policy, or
-deployment.
+responses, build/publish action state and diagnostic telemetry, monitor
+payloads, SLOs, alerts, and dashboard inputs. It covers the app Worker and
+published-site Worker. It does not create a live dataset or binding, monitor,
+saved dashboard, exporter, retention policy, or deployment.
 
 ## Contract and invariants
 
 - Cloudflare custom logs remain enabled and explicitly persisted using the
   structured `cail-log` records. Invocation logs are disabled in source because
   their fetch message contains the raw request URL.
-- Custom logs use full source sampling. Lifecycle completeness and per-user
-  action reliability cannot be calculated from independently sampled events.
+- Workers Logs keeps custom events at full source sampling. Analytics Engine
+  may adaptively sample its separate fleet projection, so exact lifecycle and
+  per-user action reliability use the durable action-attempt records.
 - Observability resources default-deny unless the viewer has the `kale-admin`
   role. The initial telemetry version uses Cloudflare-native logs and metrics
   only; it has no external exporter.
@@ -28,10 +29,17 @@ deployment.
   success requires an acknowledged durable mutation.
 - Dashboard views consume stable structured fields only: `event.name`,
   `service.name`, `cail.product.id`, `url.template`, `cail.outcome`,
-  `http.response.status_code`, `duration_ms`, and bounded `error.type`.
+  `http.response.status_code`, `cail.operation.duration_ms`, and bounded
+  `error.type`.
 - Logs contain no prompts, generated content, raw URLs, filenames, headers,
   session identifiers, exception messages, or model cost. Gateway model-call
   accounting remains authoritative.
+- The native fleet projection is cohort-only, adaptively sampled diagnostic
+  evidence. Every aggregate uses `_sample_interval`; it never answers whether
+  one action worked or whether every admission has a terminal.
+- The existing authenticated project observability read returns exact build and
+  publish action records from project-scoped Durable Object SQLite. An
+  admission is stored before mutation. A terminal cannot exist without it.
 
 ## Initial operating profile
 
@@ -73,19 +81,20 @@ institutional monthly load open.
 ## Versioned action denominator
 
 Build and publish are always separate series. Version 1 assigns an action to the
-window containing its `cail.action.admitted` event. An admission is eligible only
-when it is at least 15 minutes before the window end, allowing its terminal grace
-period to expire. Every unique eligible admission is in the denominator,
+window containing its durable action-attempt admission. An admission is
+eligible only when it is at least 15 minutes before the window end, allowing its
+terminal grace period to expire. Every unique eligible admission is in the
+denominator,
 including failed and cancelled actions; read-only chat never admitted as an
 action is not.
 
-Success requires exactly one matching `cail.action.terminal` with outcome `ok`.
-Coverage requires exactly one matching terminal with any outcome. A terminal
-matches on service, fixed route template, action ID, principal type and subject,
-plus request ID when present. Success continues to mean an acknowledged durable
-mutation. Duplicate admissions or terminals, route drift, and unknown action
-routes are immediate telemetry-quality criticals rather than successes. These
-rules live in the versioned TypeScript contract and have compile/runtime tests.
+Success requires the attempt's durable outcome `ok`; coverage requires its
+terminal timestamp and outcome. The owner/project scope comes from the Durable
+Object instance, so no stable subject is repeated in the record. Success still
+requires the product mutation acknowledgement. The action ID primary key,
+recognized action/route pair, compatible outcome/reason, monotonic timestamps,
+and derived duration are enforced before update. Logs mirror these transitions
+for diagnosis but do not supply the denominator.
 
 ## Evidence and decisions
 
@@ -94,6 +103,14 @@ rules live in the versioned TypeScript contract and have compile/runtime tests.
   JSON custom logs are indexed for field queries.
 - Cloudflare Query Builder supports counts, grouped fields, and duration
   percentiles, so no application-owned metrics backend is needed.
+- Cloudflare Analytics Engine uses index-based adaptive sampling. Its SQL API
+  requires `_sample_interval`-weighted counts and quantiles, and its published
+  limit is 250 writes per invocation. Site Studio uses cail-log's exported
+  projection contract and sampling index with a 32-point source guard.
+- Cloudflare's SQLite Durable Object storage is transactional, strongly
+  consistent, and private to one object instance. Public Durable Object methods
+  are RPC calls, delivered in order for a stub. That fits the existing
+  owner/project-scoped agent object and avoids a new route or database binding.
 - Cloudflare health monitors evaluate an expected status and a relatively
   static body substring within the first 10 KB. The source contract supplies
   both and an API-ready standalone Health Check payload, without configuring a
@@ -131,6 +148,7 @@ new explicit privacy decision.
 No live state is read or written. No credentials are required. Remaining inputs
 are the actual production hostnames/ingress, notification recipients, the
 institution-approved retention duration, the approved product-wide monthly
-budget in micro-dollars, secrets, and deployment authorization. Thresholds,
-cadence, region, access posture, sampling, and the no-exporter v1 decision are no
-longer open.
+budget in micro-dollars, the live `cail_fleet_events_v1` dataset and
+`CAIL_FLEET_EVENTS` bindings, secrets, and deployment authorization. Thresholds,
+cadence, region, access posture, projection schema/sampling index, and the no-
+external-exporter v1 decision are no longer open.

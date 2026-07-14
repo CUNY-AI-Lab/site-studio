@@ -17,8 +17,10 @@ import { ProjectNotFoundError, R2ProjectStorage, SlugReservationLostError } from
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
 import type { ProjectMetadata } from "../types";
+import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
+  getBoundaryLogger,
   errorCodeFrom,
   getCorrelation,
   mintCorrelation,
@@ -196,8 +198,19 @@ export function createPublishRouter() {
       action: "publish",
       principal: principalForOwnerId(user.id),
       correlation: getCorrelation(c) ?? mintCorrelation(),
+    }, getBoundaryLogger(c));
+    const actionAgent = c.env.SITE_BUILDER_AGENT.get(
+      c.env.SITE_BUILDER_AGENT.idFromName(`${user.id}:${projectId}`),
+    );
+    const durableAdmittedAt = Date.now();
+    await actionAgent.recordActionAdmission({
+      actionId: publishAction.actionId,
+      action: "publish",
+      route: OBSERVABILITY_CONTRACT.actions.publish.route,
+      admittedAt: new Date(durableAdmittedAt).toISOString(),
     });
     publishAction.admit();
+    let actionTerminalRecorded = false;
 
     try {
       // The reservation ETag is the publish generation. A stale request that was
@@ -228,8 +241,17 @@ export function createPublishRouter() {
         }
       }
 
-      const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
+      const terminalAt = Date.now();
+      await actionAgent.recordActionTerminal({
+        actionId: publishAction.actionId,
+        outcome: "ok",
+        reason: "completed",
+        terminalAt: new Date(terminalAt).toISOString(),
+        durationMs: Math.max(0, terminalAt - durableAdmittedAt),
+      });
+      actionTerminalRecorded = true;
       publishAction.completeSuccess();
+      const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
 
       return c.json({
         success: true,
@@ -238,12 +260,21 @@ export function createPublishRouter() {
         a11yFindings
       });
     } catch (error) {
-      publishAction.completeFailure(
-        error instanceof HTTPException && error.status < 500
-          ? { outcome: "client_error", reason: "client_error" }
-          : { outcome: "error", reason: "application_failure" },
-        errorCodeFrom(error),
-      );
+      if (!actionTerminalRecorded) {
+        const terminal = error instanceof HTTPException && error.status < 500
+          ? { outcome: "client_error", reason: "client_error" } as const
+          : { outcome: "error", reason: "application_failure" } as const;
+        const terminalAt = Date.now();
+        const errorType = errorCodeFrom(error);
+        await actionAgent.recordActionTerminal({
+          actionId: publishAction.actionId,
+          ...terminal,
+          terminalAt: new Date(terminalAt).toISOString(),
+          durationMs: Math.max(0, terminalAt - durableAdmittedAt),
+          errorType,
+        });
+        publishAction.completeFailure(terminal, errorType);
+      }
       throw error;
     }
   });

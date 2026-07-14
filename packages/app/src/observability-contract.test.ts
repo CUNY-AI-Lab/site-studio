@@ -18,10 +18,22 @@ describe("observability source contract", () => {
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"persist"\s*:\s*true/);
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"head_sampling_rate"\s*:\s*1/);
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"invocation_logs"\s*:\s*false/);
+    expect(source).toMatch(/"CAIL_LOG_ENV"\s*:\s*"production"/);
+    expect(source).not.toContain("analytics_engine_datasets");
+  });
+
+  it.each([
+    new URL("../package.json", import.meta.url),
+    new URL("../../worker/package.json", import.meta.url),
+    new URL("../../observability-core/package.json", import.meta.url),
+  ])("pins the reviewed fleet projection dependency in %s", (url) => {
+    expect(readFileSync(url, "utf8")).toContain(
+      "github:CUNY-AI-Lab/cail-log#4d747988966e657ef44081e68bc95bc758713604",
+    );
   });
 
   it("defines queryable build and publish action seams", () => {
-    expect(OBSERVABILITY_CONTRACT_VERSION).toBe(2);
+    expect(OBSERVABILITY_CONTRACT_VERSION).toBe(3);
     expect(OBSERVABILITY_CONTRACT.actions).toEqual({
       build: {
         route: "/api/agents/site-builder/{project_id}",
@@ -37,10 +49,50 @@ describe("observability source contract", () => {
       "url.template",
       "cail.outcome",
     ]);
+    expect(OBSERVABILITY_CONTRACT.dashboardViews.actionReliability.measures).toContainEqual({
+      operation: "p95",
+      field: "cail.operation.duration_ms",
+    });
+    expect(OBSERVABILITY_CONTRACT.dashboardViews.actionReliability).toMatchObject({
+      source: "workers-logs",
+      aggregateSemantics: "diagnostic_only",
+      exact: false,
+    });
     expect(OBSERVABILITY_CONTRACT.dashboardViews.actionAdmissions).toMatchObject({
+      source: "workers-logs",
       eventName: "cail.action.admitted",
       measures: [{ operation: "count" }],
       groupBy: ["service.name", "url.template"],
+      aggregateSemantics: "diagnostic_only",
+      exact: false,
+    });
+    expect(OBSERVABILITY_CONTRACT.dashboardViews.fleetActionReliability).toEqual({
+      source: "cloudflare-analytics-engine",
+      dataset: "cail_fleet_events_v1",
+      eventNames: ["cail.action.admitted", "cail.action.terminal"],
+      filter: { blob5: "site-studio" },
+      dimensions: {
+        eventName: "blob1",
+        serviceName: "blob2",
+        environment: "blob4",
+        productId: "blob5",
+        cohort: "blob7",
+        route: "blob8",
+        outcome: "blob9",
+      },
+      measures: [
+        { operation: "sum", field: "_sample_interval", name: "weighted_events" },
+        {
+          operation: "quantileExactWeighted",
+          quantile: 0.95,
+          field: "double5",
+          weight: "_sample_interval",
+          exclude: -1,
+          name: "weighted_p95_duration_ms",
+        },
+      ],
+      aggregateSemantics: "weighted_cohort_diagnostic_only",
+      exact: false,
     });
     expect(OBSERVABILITY_CONTRACT.telemetryQuality.actionPair.joinKey).toBe("cail.action.id");
     expect(OBSERVABILITY_CONTRACT.dashboardViews.healthReliability.filter["url.template"])
@@ -57,6 +109,34 @@ describe("observability source contract", () => {
       },
       invocationLogs: false,
       externalExporter: null,
+    });
+    expect(OBSERVABILITY_CONTRACT.fleetProjection).toMatchObject({
+      libraryCommit: "4d747988966e657ef44081e68bc95bc758713604",
+      provider: "cloudflare-analytics-engine",
+      dataset: "cail_fleet_events_v1",
+      binding: "CAIL_FLEET_EVENTS",
+      schemaVersion: 1,
+      samplingIndex: ["deployment.environment.name", "cail.product.id"],
+      weightField: "_sample_interval",
+      cohortOnly: true,
+      exact: false,
+      maxPointsPerInvocation: 32,
+      authority: {
+        actionSuccessAndCoverage: {
+          source: "site-studio-durable-admin-read",
+          route: "/api/projects/{id}/observability",
+          schemaVersion: "site-studio.action-attempt-admin.v1",
+        },
+        modelCostAndLimit: {
+          source: "cail-gateway-key-service-accounting",
+          nativeLimitUsd: 10,
+          applicationLogsAreLedger: false,
+        },
+        sandboxSettlementAndCost: {
+          source: "cail-sandbox-accounting",
+          applicationLogsAreLedger: false,
+        },
+      },
     });
     expect(OBSERVABILITY_CONTRACT.access).toEqual({
       role: "kale-admin",
@@ -147,33 +227,32 @@ describe("observability source contract", () => {
     expect(levels.actionReliability).toMatchObject({
       contractVersion: 1,
       windowAssignment: "admission_time",
+      authoritativeSource: "site-studio-durable-admin-read",
+      adminReadRoute: "/api/projects/{id}/observability",
+      adminReadSchemaVersion: "site-studio.action-attempt-admin.v1",
+      attemptSchemaVersion: "site-studio.action-attempt.v1",
+      retentionHours: 48,
       terminalGraceMinutes: 15,
-      separateBy: ["service.name", "url.template"],
+      separateBy: ["action", "route"],
       denominator: {
-        eventName: "cail.action.admitted",
-        uniqueBy: ["service.name", "cail.action.id"],
+        record: "site-studio.action-attempt.v1",
+        uniqueBy: ["actionId"],
         includeAllAdmittedOutcomes: true,
         eligibleBeforeWindowEndMinutes: 15,
       },
       terminalMatch: {
-        eventName: "cail.action.terminal",
+        record: "site-studio.action-attempt.v1",
         cardinality: "exactly_one",
-        fields: [
-          "service.name",
-          "url.template",
-          "cail.action.id",
-          "cail.principal.type",
-          "cail.principal.subject",
-        ],
-        requestId: "equal_when_present",
+        fields: ["actionId", "action", "route"],
+        ownerAndProjectScope: "durable-object-instance",
       },
       successNumerator: {
-        terminalOutcome: "ok",
+        outcome: "ok",
         requiresAcknowledgedDurableMutation: true,
       },
       coverageNumerator: {
-        terminalCardinality: "exactly_one",
-        terminalOutcome: "any",
+        terminalAt: "present",
+        outcome: "any",
       },
     });
     expect(levels.actionReliability.success).toEqual({
@@ -247,7 +326,7 @@ describe("observability source contract", () => {
         ...base,
         "event.name": "cail.action.terminal",
         "cail.action.id": "action-ok",
-        duration_ms: 42,
+        "cail.operation.duration_ms": 42,
         "cail.outcome": "ok",
       },
     ];
@@ -265,7 +344,7 @@ describe("observability source contract", () => {
         "event.name": "cail.action.terminal",
         "cail.action.id": "orphan-terminal",
         "url.template": "/unexpected/{id}",
-        duration_ms: -1,
+        "cail.operation.duration_ms": -1,
       },
     ];
     expect(auditTelemetryLifecyclePairs(broken).map((issue) => issue.code)).toEqual([
@@ -296,7 +375,7 @@ describe("observability source contract", () => {
         "event.name": "cail.request.completed",
         "cail.request.id": "request-duplicate",
         "url.template": "/wrong-route",
-        duration_ms: 1,
+        "cail.operation.duration_ms": 1,
       },
       {
         "service.name": "site-studio-app",
@@ -304,7 +383,7 @@ describe("observability source contract", () => {
         "event.name": "cail.request.completed",
         "cail.request.id": "request-duplicate",
         "url.template": "/wrong-route",
-        duration_ms: 2,
+        "cail.operation.duration_ms": 2,
       },
     ];
     expect(auditTelemetryLifecyclePairs(requestDuplicate).map((issue) => issue.code)).toEqual([

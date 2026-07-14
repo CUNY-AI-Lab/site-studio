@@ -1,7 +1,15 @@
 import type { SiteBuilderAgent } from "./agents/site-builder";
 import type { MigrationCoordinator } from "./agents/migration-coordinator";
+import type {
+  CailAnalyticsEngineDataset,
+  CailLogEnvironment,
+} from "@cuny-ai-lab/cail-log";
 
 export interface Env {
+  // Source-ready fleet projection. The live Analytics Engine dataset/binding
+  // is provisioned separately; without it Workers structured logs continue.
+  CAIL_FLEET_EVENTS?: CailAnalyticsEngineDataset;
+  CAIL_LOG_ENV?: CailLogEnvironment;
   APP_PUBLIC_DOMAIN?: string;
   PUBLISHED_BASE_URL?: string;
   LOADER: WorkerLoader;

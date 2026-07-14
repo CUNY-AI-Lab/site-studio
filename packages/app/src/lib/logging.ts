@@ -20,6 +20,9 @@ import {
   OBSERVABILITY_CONTRACT,
   PRODUCT_ID,
 } from "../../../observability-core/src/contract";
+import { createSiteStudioBoundarySink } from "../../../observability-core/src/fleet-projection";
+import type { ActionAttemptRecorder } from "../../../observability-core/src/action-attempt";
+import type { Env } from "../types";
 
 export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;
 export const LOG_RELEASE = OBSERVABILITY_CONTRACT.services.app.version;
@@ -74,11 +77,21 @@ export function createSiteStudioLogger(options: {
   });
 }
 
+export function createSiteStudioBoundaryLogger(
+  env: Pick<Env, "CAIL_FLEET_EVENTS" | "CAIL_LOG_ENV">,
+): SiteStudioLogger {
+  return createSiteStudioLogger({
+    sink: createSiteStudioBoundarySink(env),
+    env: env.CAIL_LOG_ENV ?? "production",
+  });
+}
+
 /** The Worker sink is explicit; release/environment are constructor-owned. */
 export const log = createSiteStudioLogger({ sink: workersStructuredSink });
 
 export type LoggingVariables = {
   correlation?: CailCorrelation;
+  logger?: SiteStudioLogger;
 };
 
 export function mintCorrelation(): CailCorrelation {
@@ -205,7 +218,7 @@ type FailureTerminal = Exclude<CailTerminalFields, { outcome: "ok" }>;
  */
 export class SiteStudioActionLifecycle {
   readonly actionId = crypto.randomUUID();
-  private readonly startedAt: number;
+  private admittedAt: number | undefined;
   private admitted = false;
   private mutationAcknowledged = false;
   private terminal = false;
@@ -218,14 +231,22 @@ export class SiteStudioActionLifecycle {
     },
     private readonly logger: SiteStudioLogger = log,
     private readonly clock: () => number = Date.now,
+    private readonly recorder?: ActionAttemptRecorder,
   ) {
-    this.startedAt = this.clock();
   }
 
   admit(): void {
     if (this.admitted) return;
-    this.admitted = true;
+    const admittedAt = this.clock();
     const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
+    this.recorder?.admit({
+      actionId: this.actionId,
+      action: this.fields.action,
+      route: action.route,
+      admittedAt: new Date(admittedAt).toISOString(),
+    });
+    this.admittedAt = admittedAt;
+    this.admitted = true;
     this.logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
@@ -250,8 +271,16 @@ export class SiteStudioActionLifecycle {
       );
       return;
     }
-    this.terminal = true;
+    const terminalAt = this.clock();
     const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
+    this.recorder?.terminal({
+      actionId: this.actionId,
+      outcome: "ok",
+      reason: "completed",
+      terminalAt: new Date(terminalAt).toISOString(),
+      durationMs: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
+    });
+    this.terminal = true;
     this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
@@ -261,14 +290,23 @@ export class SiteStudioActionLifecycle {
       http_method: action.method,
       route: action.route,
       terminal: { outcome: "ok", reason: "completed" },
-      duration_ms: Math.max(0, this.clock() - this.startedAt),
+      duration_ms: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
     });
   }
 
   completeFailure(terminal: FailureTerminal, errorType?: string): void {
     if (!this.admitted || this.terminal) return;
-    this.terminal = true;
+    const terminalAt = this.clock();
     const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
+    this.recorder?.terminal({
+      actionId: this.actionId,
+      outcome: terminal.outcome,
+      reason: terminal.reason,
+      terminalAt: new Date(terminalAt).toISOString(),
+      durationMs: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
+      ...(errorType ? { errorType } : {}),
+    });
+    this.terminal = true;
     this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: this.actionId,
       product_id: PRODUCT_ID,
@@ -278,7 +316,7 @@ export class SiteStudioActionLifecycle {
       http_method: action.method,
       route: action.route,
       terminal,
-      duration_ms: Math.max(0, this.clock() - this.startedAt),
+      duration_ms: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
       ...(errorType ? { error_type: errorType } : {}),
     });
   }
@@ -288,17 +326,20 @@ export class SiteStudioActionLifecycle {
   }
 }
 
-export function requestLogging(logger: SiteStudioLogger = log) {
+export function requestLogging(logger?: SiteStudioLogger) {
   return createMiddleware<{
+    Bindings: Env;
     Variables: LoggingVariables & { user?: { id: string } };
   }>(async (c, next) => {
+    const boundaryLogger = logger ?? createSiteStudioBoundaryLogger(c.env);
+    c.set("logger", boundaryLogger);
     const correlation = correlationFromHeaders(c.req.raw);
     c.set("correlation", correlation);
     const started = Date.now();
     const method = httpMethod(c.req.method);
     const route = classifiedRoute(c);
 
-    logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+    boundaryLogger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
       request_id: correlation.request_id,
       product_id: PRODUCT_ID,
       http_method: method,
@@ -325,12 +366,12 @@ export function requestLogging(logger: SiteStudioLogger = log) {
       ...(principal ? { principal } : {}),
     };
     if (terminal.outcome === "ok") {
-      logger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+      boundaryLogger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
         ...completedBase,
         terminal,
       });
     } else {
-      logger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
+      boundaryLogger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
         ...completedBase,
         terminal,
         ...(errorType ? { error_type: errorType } : {}),
@@ -338,7 +379,7 @@ export function requestLogging(logger: SiteStudioLogger = log) {
     }
 
     if (status === 401 || status === 403) {
-      logger.emit(CAIL_EVENTS.AUTH_DENIED, {
+      boundaryLogger.emit(CAIL_EVENTS.AUTH_DENIED, {
         request_id: correlation.request_id,
         product_id: PRODUCT_ID,
         principal: principal ?? { type: "anonymous" },
@@ -357,4 +398,10 @@ export function getCorrelation(c: {
   get: (key: "correlation") => CailCorrelation | undefined;
 }): CailCorrelation | undefined {
   return c.get("correlation");
+}
+
+export function getBoundaryLogger(c: {
+  get: (key: "logger") => SiteStudioLogger | undefined;
+}): SiteStudioLogger | undefined {
+  return c.get("logger");
 }
