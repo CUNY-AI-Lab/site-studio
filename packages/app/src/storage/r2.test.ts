@@ -3,6 +3,7 @@ import { FileExistsError, ProjectExistsError, ProjectNotFoundError, R2ProjectSto
 import { isSnapshotSkipped } from "../types";
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
+import { OwnerMutationService, type MutationJournalStore } from "../lib/owner-mutations";
 
 // Mock R2 bucket
 function createMockBucket() {
@@ -1164,5 +1165,209 @@ describe("R2ProjectStorage", () => {
       expect(result).toBeTruthy();
       expect(result!.projectId).toBe(projectId);
     });
+  });
+});
+
+describe("OwnerMutationService recovery journal", () => {
+  function journalStore() {
+    const values = new Map<string, unknown>();
+    const store: MutationJournalStore & { values: Map<string, unknown> } = {
+      values,
+      async get<T>(key: string) { return values.get(key) as T | undefined; },
+      async put<T>(key: string, value: T) { values.set(key, value); },
+      async delete(key: string) { return values.delete(key); }
+    };
+    return store;
+  }
+
+  it("compensates a partially scaffolded project when a template write fails", async () => {
+    const bucket = createMockBucket();
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    const originalPut = bucket.put;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key.endsWith("/styles.css")) throw new Error("injected R2 failure");
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await expect(service.execute("user-a", {
+      type: "create-project",
+      projectId: "new-site",
+      name: "New Site",
+      files: { "index.html": "home", "styles.css": "body{}" }
+    })).rejects.toThrow("injected R2 failure");
+
+    expect([...bucket.store.keys()].filter((key) => key.startsWith("projects/user-a/new-site/"))).toEqual([]);
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("finishes the committed half of an interrupted file rename before the next mutation", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "old.txt", "content");
+    await storage.writeFile("user-a", "site", "new.txt", "content");
+    journal.values.set("owner-mutation", {
+      type: "rename-file",
+      projectId: "site",
+      oldPath: "old.txt",
+      newPath: "new.txt",
+      stage: "committing"
+    });
+
+    const service = new OwnerMutationService(bucket, journal);
+    await service.execute("user-a", { type: "delete-file", projectId: "site", path: "unrelated.txt" });
+
+    expect(await storage.fileExists("user-a", "site", "old.txt")).toBe(false);
+    expect(await storage.readFile("user-a", "site", "new.txt")).toBe("content");
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("admits upload spend once and then enforces the configured rolling rate", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    await storage.createProject("user-a", "site", "Site");
+    const admission = {
+      type: "upload-if-absent" as const,
+      projectId: "site",
+      path: "images/one.png",
+      content: new Uint8Array(10),
+      maxProjectBytes: 1_000_000,
+      maxOwnerBytes: 1_000_000,
+      uploadsPerMinute: 1,
+      now: 100_000
+    };
+
+    await expect(service.execute("user-a", admission)).resolves.toEqual({ written: true });
+    await expect(service.execute("user-a", {
+      ...admission,
+      path: "images/two.png",
+      now: 100_001
+    })).rejects.toThrow("rate limit");
+  });
+
+  it("checks quota and performs the upload in one serialized operation", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    await storage.createProject("user-a", "site", "Site");
+    const existingBytes = (await bucket.list({ prefix: "projects/user-a/site/" })).objects
+      .reduce((sum, object) => sum + object.size, 0);
+    const policy = {
+      maxProjectBytes: existingBytes + 15,
+      maxOwnerBytes: 1_000_000,
+      uploadsPerMinute: 10,
+      now: 100_000
+    };
+
+    await expect(service.execute("user-a", {
+      type: "upload-if-absent",
+      projectId: "site",
+      path: "images/one.png",
+      content: new Uint8Array(10),
+      ...policy
+    })).resolves.toEqual({ written: true });
+    await expect(service.execute("user-a", {
+      type: "upload-if-absent",
+      projectId: "site",
+      path: "images/two.png",
+      content: new Uint8Array(10),
+      ...policy,
+      now: 100_001
+    })).rejects.toThrow("Project storage quota exceeded");
+    expect(await storage.fileExists("user-a", "site", "images/two.png")).toBe(false);
+  });
+
+  it("does not write orphan files after a serialized project deletion", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const service = new OwnerMutationService(bucket, journalStore());
+    await storage.createProject("user-a", "site", "Site");
+    await service.execute("user-a", { type: "delete-project", projectId: "site" });
+
+    await expect(service.execute("user-a", {
+      type: "write-file",
+      projectId: "site",
+      path: "index.html",
+      content: "orphan"
+    })).rejects.toBeInstanceOf(ProjectNotFoundError);
+    expect(await storage.fileExists("user-a", "site", "index.html")).toBe(false);
+  });
+
+  it("keeps a published slug reserved to a project across rename", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const service = new OwnerMutationService(bucket, journalStore());
+    await storage.createProject("user-a", "old-site", "Blog");
+
+    await expect(service.execute("user-a", {
+      type: "publish-project",
+      projectId: "old-site",
+      desiredSlug: "blog",
+      publishedBaseUrl: "https://published.example",
+      handle: "jane"
+    })).resolves.toMatchObject({ published: { slug: "blog" } });
+    await service.execute("user-a", {
+      type: "rename-project",
+      projectId: "old-site",
+      nextProjectId: "new-site",
+      name: "Blog"
+    });
+    await expect(service.execute("user-a", {
+      type: "publish-project",
+      projectId: "new-site",
+      desiredSlug: "blog",
+      publishedBaseUrl: "https://published.example",
+      handle: "jane"
+    })).resolves.toMatchObject({ published: { slug: "blog" } });
+  });
+
+  it("never compensates an existing project when create loses its metadata claim", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "existing", "Existing");
+    await storage.writeFile("user-a", "existing", "index.html", "keep me");
+    const service = new OwnerMutationService(bucket, journal);
+    const journalPut = vi.spyOn(journal, "put");
+
+    await expect(service.execute("user-a", {
+      type: "create-project",
+      projectId: "existing",
+      name: "Collision",
+      files: { "index.html": "overwrite" }
+    })).rejects.toBeInstanceOf(ProjectExistsError);
+
+    expect(await storage.readFile("user-a", "existing", "index.html")).toBe("keep me");
+    expect(journalPut).not.toHaveBeenCalled();
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("never deletes a pre-existing rename destination after losing the claim", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "old.txt", "source");
+    await storage.writeFile("user-a", "site", "new.txt", "existing destination");
+    const service = new OwnerMutationService(bucket, journal);
+    const journalPut = vi.spyOn(journal, "put");
+
+    await expect(service.execute("user-a", {
+      type: "rename-file",
+      projectId: "site",
+      oldPath: "old.txt",
+      newPath: "new.txt"
+    })).rejects.toBeInstanceOf(FileExistsError);
+    await service.execute("user-a", { type: "delete-file", projectId: "site", path: "unrelated.txt" });
+
+    expect(await storage.readFile("user-a", "site", "old.txt")).toBe("source");
+    expect(await storage.readFile("user-a", "site", "new.txt")).toBe("existing destination");
+    expect(journalPut).not.toHaveBeenCalled();
+    expect(journal.values.size).toBe(0);
   });
 });

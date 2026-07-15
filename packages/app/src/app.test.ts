@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME } from "./lib/csrf";
-import { createMockKV, type MockKV } from "./lib/test-utils";
+import { createMockKV, createMockMutationCoordinator, type MockKV } from "./lib/test-utils";
 
 // app.ts mounts the agent router, whose `agents` dependency imports
 // `cloudflare:`-scheme modules; stub it so the full app is importable here.
@@ -46,6 +46,7 @@ function createEnv(): Env {
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
+    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
     LOADER: {} as WorkerLoader,
     CSRF_COOKIE_PATH: "/site-studio",
     ASSETS: undefined

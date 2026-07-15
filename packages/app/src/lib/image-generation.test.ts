@@ -21,6 +21,10 @@ const env: CailImageEnv = { CAIL_API_BASE: BASE };
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 const PNG_BASE64 = btoa(String.fromCharCode(...PNG_BYTES));
 
+function expiredJwt(): string {
+  return `header.${btoa(JSON.stringify({ exp: 1 })).replaceAll("=", "")}.signature`;
+}
+
 type Captured = { url: string; init: RequestInit; headers: Headers };
 
 /** Fetch stub that records the outbound request and returns a canned response. */
@@ -125,6 +129,12 @@ describe("generateImage wire contract", () => {
     expect(captured().url).toBe("");
   });
 
+  it("stops before generation when the captured WebSocket identity has expired", async () => {
+    const { fetch: stub, calls } = captureFetch(() => json({ image: PNG_BASE64 }));
+    await expect(generateImage(env, expiredJwt(), { prompt: "x" }, stub)).rejects.toThrow("identity expired");
+    expect(calls()).toBe(0);
+  });
+
   it("clamps requested dimensions in the request input", async () => {
     const { fetch: stub, captured } = captureFetch(() => json({ image: PNG_BASE64 }));
     await generateImage(env, "jwt", { prompt: "x", width: 700, height: 99999 }, stub);
@@ -195,6 +205,12 @@ describe("generateImage wire contract", () => {
 });
 
 describe("screenImage moderation gate (fail closed)", () => {
+
+  it("stops before moderation when the captured WebSocket identity has expired", async () => {
+    const { fetch: stub, calls } = captureFetch(() => json({ choices: [] }));
+    await expect(screenImage(env, expiredJwt(), PNG_BYTES, stub)).rejects.toThrow("identity expired");
+    expect(calls()).toBe(0);
+  });
   it("hits /v1/chat/completions with the image-moderation purpose and one credential", async () => {
     const { fetch: stub, captured } = captureFetch(() =>
       json({ choices: [{ message: { content: '{"allowed": true, "reason": "ok"}' } }] })

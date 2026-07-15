@@ -55,8 +55,8 @@ export function createAgentRouter() {
     }
 
     // Forward the verified caller JWT into the Durable Object so the model call
-    // can present it to the CAIL model proxy. Captured at connection time; on a
-    // long-lived WebSocket it can outlive the JWT's ~5-min TTL (see PR flag).
+    // can present it to the CAIL model proxy. The browser refreshes old sockets,
+    // and the model adapter checks expiry again before each outbound POST.
     const props: SiteBuilderAgentProps = {
       userId: user.id,
       projectId,

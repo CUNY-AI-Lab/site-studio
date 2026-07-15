@@ -19,7 +19,8 @@ import { createMockKV, mintCsrfSession, type CsrfSession } from "./test-utils";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts / migration.test.ts).
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any }>();
+  let revision = 0;
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag?: string }>();
   return {
     store,
     head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
@@ -29,6 +30,7 @@ function createMockBucket() {
       const data = entry.data;
       return {
         key,
+        etag: entry.etag,
         text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer))
       };
     }),
@@ -38,8 +40,12 @@ function createMockBucket() {
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      store.set(key, { data: typeof data === "string" ? data : String(data), httpMetadata: options?.httpMetadata });
-      return { key };
+      if (options?.onlyIf?.etagMatches && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+        return null;
+      }
+      const etag = `etag-${++revision}`;
+      store.set(key, { data: typeof data === "string" ? data : String(data), httpMetadata: options?.httpMetadata, etag });
+      return { key, etag };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -187,7 +193,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
   it("reaps an orphaned reverse slot (forward MISSING) and lets the SAME handle claim proceed", async () => {
     // Reverse slot written, forward `handles/…` never written (crash between puts).
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "jane-rivera", claimedAt: "t0" }));
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "jane-rivera", claimedAt: "2020-01-01T00:00:00.000Z" }));
     expect(bucket.store.has(handleRecordKey("jane-rivera"))).toBe(false);
 
     const res = await claimHandle(bucket, "cail-a", "jane-rivera");
@@ -199,7 +205,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
   it("reaps an orphaned reverse slot and lets a DIFFERENT handle claim proceed (no false 409)", async () => {
     // Orphan points at a handle the owner never truly claimed (forward missing).
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "orphaned-one", claimedAt: "t0" }));
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
 
     // Owner now claims a DIFFERENT, free handle. The orphan must not 409 them.
     const res = await claimHandle(bucket, "cail-a", "brand-new");
@@ -211,7 +217,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
   it("reaps a reverse slot whose forward record points at a STRANGER, then resolves against real state", async () => {
     // Crash left reverse {cail-a -> shared}, then cail-b legitimately won `shared`.
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "shared", claimedAt: "t0" }));
+    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "shared", claimedAt: "2020-01-01T00:00:00.000Z" }));
     await claimHandle(bucket, "cail-b", "shared"); // cail-b owns the forward record
 
     // cail-a re-claims the very handle it's orphaned against: it does NOT own it,
@@ -237,7 +243,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
   it("SS-32: restarts when a concurrent healthy claim replaces the orphan before reap", async () => {
     const ownerId = "cail-a";
-    await bucket.put(userHandleRecordKey(ownerId), JSON.stringify({ handle: "orphaned-one", claimedAt: "t0" }));
+    await bucket.put(userHandleRecordKey(ownerId), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
 
     const originalGet = bucket.get;
     let reverseReads = 0;
@@ -270,6 +276,36 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
         record: { ownerId, claimedAt: "t1" }
       }
     ]);
+    expect(await getUserHandle(bucket, ownerId)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(ownerId);
+    expect(await resolveHandleOwner(bucket, "beta")).toBeNull();
+  });
+
+  it("does not reap a fresh reverse record while its forward claim is still in flight", async () => {
+    const ownerId = "cail-a";
+    let releaseForward!: () => void;
+    let forwardStarted!: () => void;
+    const release = new Promise<void>((resolve) => (releaseForward = resolve));
+    const started = new Promise<void>((resolve) => (forwardStarted = resolve));
+    const originalPut = bucket.put;
+    let paused = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === handleRecordKey("alpha") && !paused) {
+        paused = true;
+        forwardStarted();
+        await release;
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const first = claimHandle(bucket, ownerId, "alpha", () => "2026-07-14T12:00:00.000Z");
+    await started;
+    const second = await claimHandle(bucket, ownerId, "beta", () => "2026-07-14T12:00:01.000Z");
+    releaseForward();
+    const firstResult = await first;
+
+    expect(firstResult).toEqual({ ok: true, handle: "alpha", alreadyOwned: false });
+    expect(second).toEqual({ ok: false, status: 409, reason: expect.stringContaining("in progress") });
     expect(await getUserHandle(bucket, ownerId)).toBe("alpha");
     expect(await resolveHandleOwner(bucket, "alpha")).toBe(ownerId);
     expect(await resolveHandleOwner(bucket, "beta")).toBeNull();
@@ -467,6 +503,24 @@ describe("migrateHandle", () => {
 
   it("is a no-op when the anon user has no handle", async () => {
     await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
+    expect(await getUserHandle(bucket, SUBJECT)).toBeNull();
+  });
+
+  it("refuses to re-home an orphaned reverse record over another owner's forward claim", async () => {
+    await bucket.put(
+      userHandleRecordKey(ANON),
+      JSON.stringify({ handle: "shared-handle", claimedAt: "2026-07-14T12:00:00.000Z" })
+    );
+    await bucket.put(
+      handleRecordKey("shared-handle"),
+      JSON.stringify({ ownerId: "cail-victim", claimedAt: "2026-07-14T12:00:01.000Z" })
+    );
+
+    await expect(migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT })).rejects.toThrow(
+      "ownership changed"
+    );
+    expect(await resolveHandleOwner(bucket, "shared-handle")).toBe("cail-victim");
+    expect(await getUserHandle(bucket, ANON)).toBe("shared-handle");
     expect(await getUserHandle(bucket, SUBJECT)).toBeNull();
   });
 

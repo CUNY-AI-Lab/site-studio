@@ -225,7 +225,8 @@ export class R2ProjectStorage {
 
   async deleteProject(userId: string, projectId: string): Promise<void> {
     const keys = await this.listProjectKeys(userId, projectId);
-    for (const key of keys) {
+    const projectMetadataKey = metadataKey(userId, projectId);
+    for (const key of keys.filter((key) => key !== projectMetadataKey)) {
       await this.bucket.delete(key);
     }
 
@@ -233,9 +234,21 @@ export class R2ProjectStorage {
     for (const key of snapshotKeys) {
       await this.bucket.delete(key);
     }
+
+    // The metadata object is the project-existence authority. Delete it last so
+    // an interrupted delete remains discoverable and safely retryable.
+    await this.bucket.delete(projectMetadataKey);
   }
 
-  async renameProject(userId: string, oldProjectId: string, newProjectId: string): Promise<void> {
+  async renameProject(
+    userId: string,
+    oldProjectId: string,
+    newProjectId: string,
+    options?: {
+      afterTargetClaim?: () => Promise<void>;
+      beforeSourceDelete?: () => Promise<void>;
+    }
+  ): Promise<void> {
     const files = await this.listFiles(userId, oldProjectId);
     const metadata = await this.getProjectMetadata(userId, oldProjectId);
 
@@ -273,6 +286,8 @@ export class R2ProjectStorage {
     // copy fails, roll back the claimed target namespace and leave the complete
     // source (including snapshots) intact so the rename can be retried safely.
     try {
+      await options?.afterTargetClaim?.();
+
       for (const file of files) {
         const content = await this.readFileBuffer(userId, oldProjectId, file.path);
         await this.writeFile(userId, newProjectId, file.path, content);
@@ -309,6 +324,7 @@ export class R2ProjectStorage {
       throw error;
     }
 
+    await options?.beforeSourceDelete?.();
     await this.deleteProject(userId, oldProjectId);
   }
 
@@ -511,7 +527,13 @@ export class R2ProjectStorage {
     await this.bucket.delete(fileKey(userId, projectId, filePath));
   }
 
-  async renameFile(userId: string, projectId: string, oldPath: string, newPath: string): Promise<void> {
+  async renameFile(
+    userId: string,
+    projectId: string,
+    oldPath: string,
+    newPath: string,
+    options?: { beforeSourceDelete?: () => Promise<void> }
+  ): Promise<void> {
     const content = await this.readFileBuffer(userId, projectId, oldPath);
     // SS-50: the copy half of copy+delete must CLAIM the destination atomically
     // (put-if-absent), not trust the callers' advisory fileExists preflights.
@@ -525,6 +547,7 @@ export class R2ProjectStorage {
     if (!claimed) {
       throw new FileExistsError(newPath);
     }
+    await options?.beforeSourceDelete?.();
     await this.deleteFile(userId, projectId, oldPath);
   }
 
@@ -910,6 +933,33 @@ export class R2ProjectStorage {
     }
 
     return this.updateProjectMetadata(userId, projectId, updates);
+  }
+
+  async transferPublishedSlugReservation(
+    userId: string,
+    slug: string,
+    fromProjectId: string,
+    toProjectId: string
+  ): Promise<void> {
+    const key = slugReservationKey(userId, slug);
+    const existing = await this.bucket.get(key);
+    if (!existing) return;
+    const parsed = safeParseJson<{ projectId?: string | null }>(
+      await existing.text(),
+      "slug reservation",
+      key
+    );
+    if (parsed?.projectId === toProjectId) return;
+    if (parsed?.projectId !== fromProjectId) return;
+    const moved = await this.bucket.put(
+      key,
+      JSON.stringify({ projectId: toProjectId, reservedAt: new Date().toISOString() }),
+      {
+        onlyIf: { etagMatches: existing.etag },
+        httpMetadata: { contentType: "application/json" }
+      }
+    );
+    if (!moved) throw new Error("Published slug reservation changed during project rename");
   }
 
   async findPublishedProjectBySlug(userId: string, slug: string): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {

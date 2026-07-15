@@ -1,7 +1,7 @@
 # CAIL logging alignment
 
-This source alignment uses `@cuny-ai-lab/cail-log` at the reviewed immutable commit
-`4d747988966e657ef44081e68bc95bc758713604`. The app, publisher, and shared
+This source alignment uses `@cuny-ai-lab/cail-log` at the immutable commit
+`75e0dda3068794ae1543e1e2bb98c9c920bb848f`. The app, publisher, and shared
 observability workspace package all pin that full SHA.
 
 ## Identity and ownership
@@ -9,8 +9,11 @@ observability workspace package all pin that full SHA.
 - Fleet product: `site-studio`
 - Worker services: `site-studio-app` and `site-studio-publisher`
 - Kale project identity: none; Site Studio is not deployed through Kale
-- Authenticated principal: only a verified `cail-` subject with 32 lowercase hex
-  characters. Legacy and anonymous owner identifiers remain anonymous.
+- Authenticated principal: a verified durable owner key of
+  `cail-<32 lowercase hex>` projects to the schema-2 logging subject
+  `cail-v1-<32 lowercase hex>`. This is a log representation only; storage,
+  Durable Object, handle, and publisher keys remain the exact identity `sub`.
+  Legacy and anonymous owner identifiers remain anonymous.
 - The CAIL model gateway remains the owner of model-call success, token, quota,
   latency, and spend records. Site Studio does not duplicate those events or use
   application logs as a spend ledger.
@@ -22,8 +25,8 @@ observability workspace package all pin that full SHA.
 | App HTTP request | `cail.request.received` on entry | `cail.request.completed` after Hono produces a response; `cail.auth.denied` additionally for 401/403 |
 | Published-site request | `cail.request.received` on publisher entry | `cail.request.completed` after the publisher produces a response |
 | Agent build | `cail.action.admitted` immediately before the first mutating tool operation | success only after an awaited R2 mutation and the assistant message's Durable Object SQLite persistence/broadcast; failure/cancellation after an admitted mutation gets one terminal event |
-| Publish | `cail.action.admitted` after project and handle validation, before slug reservation | success only after the conditional R2 metadata update acknowledges the published generation; failure gets one terminal event |
-| Service conditions | none | fixed-body `site_studio.diagnostic.*` or `site_studio_publisher.diagnostic.warning`, with a bounded machine `error.type` |
+| Publish | `cail.action.admitted` after project and handle validation, before slug reservation | success only after the conditional R2 metadata update acknowledges the live published-state change; failure gets one terminal event |
+| Service conditions | none | `site_studio.diagnostic.*` or `site_studio_publisher.diagnostic.warning`, with cail-log's fixed `Service event recorded.` body and a bounded machine `error.type` |
 
 An HTTP completion means that the Worker produced a response, not that the client
 received it. Build and publish action success is narrower: it requires the durable
@@ -36,19 +39,31 @@ only update an existing admission, and the existing authenticated
 `/api/projects/{id}/observability` read returns the versioned authoritative
 records. Build and publish remain separate action/route pairs. Exact success and
 terminal coverage are calculated from these records rather than either log sink.
+This owner-scoped application read is not the external `kale-admin` fleet-data
+surface described below.
 
 Routes are fixed templates such as `/api/projects/{id}/publish`,
 `/api/agents/site-builder/{project_id}`, and `/u/{handle}/{slug}/{path}`. Events do
 not contain prompts, generated content, raw URLs, filenames, request headers,
 session identifiers, exception messages, model outputs, or free-form log bodies.
 W3C `traceparent` input is parsed into atomic trace fields and outbound model-proxy
-requests receive correlation headers.
+requests receive correlation headers. The sampling bit is preserved in
+`trace_flags`; adopted or minted request IDs are lowercase UUID v4 values.
+Workers Logs and Analytics Engine adapters accept only schema-2 events carrying
+same-package-instance provenance from `createCailLogger`.
 
 ## Workflow and health inventory
 
-Project mutations await R2 `put`, conditional metadata writes, deletes, or copy
-operations. Publishing becomes visible when the slug claim and project metadata
-generation are committed. Agent messages use the installed `@cloudflare/ai-chat`
+Project and file mutations execute through the owner-scoped
+`MutationCoordinator`. Single-object writes retain conditional R2 guards;
+multi-object create, rename, delete, restore, and replacement flows use a
+Durable Object recovery journal. This is an application recovery boundary for
+adopted writes, not a native R2 transaction or protection from out-of-band
+bucket changes. Account import remains under its separate anonymous-owner
+coordinator and conditional copy contract.
+Publishing becomes visible when the slug claim and project metadata update are
+acknowledged; it is a live flag over mutable project objects, not an immutable
+release generation. Agent messages use the installed `@cloudflare/ai-chat`
 `0.9.3` persistence path. Its documented `onChatResponse` hook runs after the
 assistant message is persisted, so the implementation completes an admitted build
 there without overriding the framework's persistence method.
@@ -65,14 +80,31 @@ an offline lifecycle-pair auditor. The auditor detects missing or duplicate
 request/action events, route drift, and invalid terminal duration in a closed
 export window. It evaluates the diagnostic projection, never product state.
 
-Contract version 2 also fixes the initial operating posture: full-sampled
+Contract version 2 defines the initial operating posture: full-sampled
 bounded custom events, invocation logs off, no v1 external exporter, default-
 deny `kale-admin` access, a one-minute `ENAM` synthetic profile, rolling 24-hour
 SLOs, latency and reliability thresholds, and month-to-date gateway-ledger spend
 bands. Its action SLI sub-contract versions admission-window assignment, a
 15-minute terminal grace period, exact terminal matching, durable-success
-semantics, and separate build/publish denominators. See
-`docs/observability-design-gate.md` for the complete values and rationale.
+semantics, and separate build/publish denominators.
+
+The initial profile uses one 60-second `ENAM` synthetic check per Worker, a
+five-second timeout, two retries, and two consecutive intervals for a state
+transition. Reliability uses a rolling 24-hour window evaluated every 15
+minutes. Build/publish admissions get a 15-minute terminal grace period.
+
+| Signal | Warning / target | Critical | Minimum sample |
+| --- | ---: | ---: | ---: |
+| Synthetic availability | below 99.5% | below 99.0% | 100 probes |
+| Non-health request reliability | below 99.5% | below 98.0% | 100 requests |
+| Build/publish success | below 95.0% | below 80.0% | 10 actions |
+| Build/publish terminal coverage | below 99.5% | below 98.0% | 10 actions |
+
+Request p95 latency warns above five seconds for the app and one second for the
+publisher. Action p95 warns above ten minutes for build and 30 seconds for
+publish; critical latency is twice the warning threshold. Spend is
+calendar-month-to-date UTC from the gateway ledger, with bands at 80%, 95%, and
+100% of the externally approved product budget.
 
 Contract version 3 adds the fleet projection without changing that privacy
 posture. At each trusted Worker boundary, the logger uses
@@ -98,7 +130,7 @@ Studio does not reproduce either ledger.
 - [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
   (updated June 9, 2026) recommends structured JSON but documents that default
   invocation logs include request metadata and the request URL. Both Wrangler
-  sources now explicitly retain structured custom logs at full sampling and set
+  sources explicitly retain structured custom logs at full sampling and set
   `observability.logs.invocation_logs=false`.
 - [Cloudflare Query Builder](https://developers.cloudflare.com/workers/observability/query-builder/)
   (updated April 23, 2026) supports counts, grouping, and duration percentiles
@@ -106,7 +138,7 @@ Studio does not reproduce either ledger.
   measures without creating or mutating a live saved query.
 - [Workers Analytics Engine write guidance](https://developers.cloudflare.com/workers/examples/analytics-engine/)
   (updated April 2026) documents non-blocking binding writes and the single
-  index used as the sampling key. The source adapter uses the reviewed
+  index used as the sampling key. The source adapter uses the pinned
   cail-log projection instead of defining local column positions.
 - [Workers Analytics Engine sampling](https://developers.cloudflare.com/analytics/analytics-engine/sampling/)
   and [SQL API](https://developers.cloudflare.com/analytics/analytics-engine/sql-api/)
@@ -153,8 +185,8 @@ Studio does not reproduce either ledger.
 - [Cloudflare Agents chat persistence](https://developers.cloudflare.com/agents/communication-channels/chat/chat-agents/)
   and [autonomous responses](https://developers.cloudflare.com/agents/communication-channels/chat/autonomous-responses/)
   (updated June 26, 2026) informed the durable-message acknowledgement. Their
-  hook guidance now matches the upgraded `@cloudflare/ai-chat` version and replaced
-  the earlier persistence override.
+  hook guidance matches the installed `@cloudflare/ai-chat` version; Site Studio
+  uses the hook without overriding framework persistence.
 - [SvelteKit observability](https://svelte.dev/docs/kit/observability) documents
   experimental server tracing with nontrivial overhead. Site Studio uses
   `adapter-static`, so no Svelte server or browser telemetry was added; the
@@ -165,7 +197,7 @@ Studio does not reproduce either ledger.
   supports event names as schema identifiers and top-level trace correlation.
   [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/)
   are versioned; the [HTTP conventions](https://opentelemetry.io/docs/specs/semconv/http/)
-  retain migration/unstable guidance, so the reviewed CAIL catalog remains the
+  retain migration/unstable guidance, so the canonical CAIL catalog remains the
   application contract instead of copying provider fields ad hoc.
 - The [W3C Trace Context Recommendation](https://www.w3.org/TR/trace-context/)
   (November 23, 2021) requires interoperable trace propagation and cautions
@@ -177,10 +209,16 @@ Studio does not reproduce either ledger.
 ## Source-ready boundary
 
 No dataset, binding, secret, ingress, spend rule, live Cloudflare setting, saved
-query, monitor, exporter, or production state is created here. There is no
-reviewed-commit dependency blocker. Fleet projection source is inert unless an
+query, monitor, exporter, or production state is created here. The source pins
+its immutable dependency. Fleet projection remains inert unless an
 operator provisions or confirms the `cail_fleet_events_v1` Analytics Engine
 dataset and binds it to both Workers as `CAIL_FLEET_EVENTS`. Production
 hostnames/ingress, notification recipients, institution-approved retention,
 the approved monthly product budget, secrets, and deployment authorization also
 remain external.
+
+Site Studio surfaces terminal `quota_exceeded` failures and proxies the typed
+gateway `GET /quota` snapshot to the authenticated UI without the subject. The
+gateway ignores caller-supplied `X-CAIL-Metadata`, so local
+purpose/project/course labels must not be described as authoritative cost
+attribution.

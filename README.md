@@ -31,12 +31,19 @@ site-studio/
 ## What Works
 
 - Project CRUD against existing R2 data
-- Legacy anonymous-session recovery for returning users
+- Anonymous-session continuity while identity is optional
+- Bounded anonymous-to-CAIL account import when the import window is configured
 - Live preview at `/preview/:projectId/*`
 - Public published sites at `/u/:handle/:slug/*` (legacy `/sites/:userId/:slug/*` serves or 301s)
 - Cloudflare Agents chat transport with persisted messages
 - Dynamic Worker sandbox execution for multi-step project edits
 - Clarification questions when a request is materially ambiguous
+
+This checkout is a source candidate, not evidence of the active deployment.
+`wrangler.jsonc` records intended bindings and routes; it does not prove the
+dashboard-managed app route, R2 lifecycle rules, Analytics Engine binding,
+gateway/SSO cutover, or currently deployed Worker versions. No deployment is
+authorized by this repository documentation.
 
 ## Local Development
 
@@ -52,23 +59,35 @@ This starts:
 
 All packages share one Bun workspace and lockfile. To use different local ports, run the package commands directly and pass Vite/Wrangler `--port` flags.
 
+The repository also includes owner-session debugging utilities:
+
+```bash
+bun run chat:debug -- --prompt "Create a landing page"
+bun run trace -- --project <project-id>
+```
+
+Both default to `http://127.0.0.1:8792`, accept `--help`, and persist their local
+debug session cookie in the gitignored `.site-studio-debug-session.json` file.
+
 ## Environment
 
-Local Worker secrets live in:
-
-- [`packages/app/.dev.vars`](/Users/stephenzweibel/Apps/site-studio/packages/app/.dev.vars)
+Local Worker secrets live in the gitignored `packages/app/.dev.vars` file.
 
 Local identity verification material is ops-managed (see cail-gateway
 docs/INTEGRATION.md):
 
 ```bash
 CAIL_IDENTITY_JWKS={"keys":[...]}
+CAIL_IDENTITY_ISSUER=https://tools.ailab.gc.cuny.edu/cail-sso
 ```
 
 Site Studio accepts identity only in `X-CAIL-Identity-JWT` and verifies it as
-RS256 against `CAIL_IDENTITY_JWKS`, with audience `cail:site-studio` and the
-canonical/staging issuer allowlist. A presented token rejects when the JWKS is
-missing or malformed or verification fails. `CAIL_REQUIRE_IDENTITY=true`
+RS256 against `CAIL_IDENTITY_JWKS`, with the scalar audience
+`cail:site-studio` and exactly one case-sensitive `CAIL_IDENTITY_ISSUER` for
+the deployment. Production and staging issuers cannot share a verifier
+configuration. A presented token rejects when either setting is missing or
+malformed or verification fails. The signed `sub` is preserved byte-for-byte
+as the durable owner key. `CAIL_REQUIRE_IDENTITY=true`
 rejects requests that do not carry a verified identity.
 
 Identity enforcement also requires a bounded legacy-account import window:
@@ -94,9 +113,22 @@ The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/ste
 - `PUBLISHED_BASE_URL`
 - `CAIL_API_BASE`
 - `CAIL_MODEL` (Workers AI `@cf/...` id only — CAIL policy is Cloudflare models only)
+- `CAIL_IMAGE_MODEL`
+- `CAIL_IMAGE_CLASSIFIER`
 - `CAIL_REQUIRE_IDENTITY`
+- `CAIL_IDENTITY_ISSUER` (exactly one deployment issuer)
 - `CAIL_SSO_SWITCHED_AT`
 - `CAIL_ACCOUNT_IMPORT_UNTIL`
+- `CSRF_COOKIE_PATH` (must be `/site-studio` on the shared production origin)
+- `SITE_STUDIO_MAX_PROJECT_BYTES` (required positive integer for uploads)
+- `SITE_STUDIO_MAX_OWNER_BYTES` (required positive integer for uploads)
+- `SITE_STUDIO_UPLOADS_PER_MINUTE` (required positive integer)
+- `CAIL_LOG_ENV`
+
+The three upload-policy values have no source default. Uploads fail with 503
+until operators choose and configure them. The application also requires the
+`MUTATION_COORDINATOR` Durable Object binding and Wrangler SQLite migration
+`v3`; deploy the migration before routing traffic to source that calls it.
 
 For production, configure secrets with Wrangler / Cloudflare, not by committing env files.
 
@@ -112,6 +144,7 @@ bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --ex
 - `GET /api/health`
 - `GET /healthz` on the published-site Worker
 - `GET /api/projects`
+- `GET /api/quota` (authenticated CAIL quota snapshot; subject removed)
 - `POST /api/projects`
 - `GET /api/projects/:id/files`
 - `POST /api/projects/:id/file`
@@ -136,6 +169,13 @@ one-minute Eastern North America synthetic profile, rolling 24-hour SLO and
 alert thresholds, month-to-date gateway-ledger spend bands, Kale-admin-only
 access, full custom-log sampling, and no v1 external exporter.
 
+The portable log envelope is cail-log schema 2. Platform loggers use subject
+version `v1`; the durable unversioned CAIL owner key is not rewritten in
+storage, while its logging projection is `cail-v1-<32 lowercase hex>`. Custom
+diagnostic catalogs use the library-owned `Service event recorded.` body, and
+all Workers/Analytics Engine adapters accept only same-instance events produced
+by `createCailLogger`.
+
 When an operator supplies the optional `CAIL_FLEET_EVENTS` binding, each trusted
 Worker boundary also projects accepted events through cail-log's versioned
 `cail_fleet_events_v1` Analytics Engine schema. Those weighted cohort aggregates
@@ -149,16 +189,58 @@ respective accounting systems.
 the relevant Worker loaded and dispatched the request; they deliberately do not
 claim readiness for R2, KV, Durable Objects, or the model gateway.
 
-See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map
-and [`docs/observability-design-gate.md`](docs/observability-design-gate.md) for
-the exact denominator rules, operating defaults, and remaining external inputs.
+See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map,
+denominator rules, operating defaults, and remaining external inputs.
+
+The Bun workspace pins the reviewed shared primitives to immutable revisions:
+`cail-identity` `00419a9409680716a04e514068ba2b128ce7afa7`, `cail-log`
+`75e0dda3068794ae1543e1e2bb98c9c920bb848f`, and `cail-client`
+`16da40171381b8bf38543730b45dba484ba01940`. Site Studio does not directly
+depend on `cail-sandbox-client`; Sandbox accounting remains an external
+authority rather than an application transport boundary.
+
+## Security, ownership, and recovery boundaries
+
+- Verified requests are owned by the stable CAIL subject from the RS256 JWT;
+  anonymous requests use a random `user_...` namespace only while identity is
+  optional. Email and display names are never storage keys.
+- A `SiteBuilderAgent` Durable Object is keyed by `ownerId:projectId`. There is
+  no sharing, membership, role, invitation, or cross-user collaborative-editing
+  model. An owner-scoped `MutationCoordinator` serializes adopted project/file
+  mutations and publish-state changes from concurrent tabs and agent connections.
+- Editor and agent text writes use ETag compare-and-set when they have a base
+  version. Upload and rename destinations use put-if-absent. Multi-object
+  create, rename, delete, restore, and template replacement record recoverable
+  coordinator journals; project metadata is deleted last.
+- Publishing is a live metadata visibility flag over the current project files,
+  not an immutable release artifact. Editing or restoring a published project
+  changes the public bytes without another publish action. Published URLs use
+  `public, max-age=0, must-revalidate` with validators. Unpublish cannot revoke
+  bytes already downloaded by a client.
+- Agent snapshots keep the newest 50 restore points and skip projects above 50
+  MiB. A destructive restore or whole-template replacement requires a safety
+  snapshot; ordinary agent text edits may proceed when their optional snapshot
+  is skipped.
+- Autosave retains conflicts as pending local drafts. Drafts are AES-GCM
+  encrypted under the path-scoped, per-owner CSRF token before they enter
+  origin-wide browser storage, carry their base ETag, and clear only the exact
+  content acknowledged by R2. The unload keepalive remains best effort.
+- WebSocket upgrades require the per-owner CSRF token and an accepted origin.
+  The frontend reconnects before a new turn when a socket is older than four
+  minutes. Every gateway POST checks the captured JWT expiry; an expired
+  long-running turn stops and reconnects before retry.
+- The chat displays the typed gateway quota percentage. Uploads require explicit
+  project/owner byte limits and a rolling per-owner rate configured by operators.
+
+See [`docs/security-and-recovery.md`](docs/security-and-recovery.md) for the
+trust-boundary inventory, admission rules, journals, and rollback limitations.
 
 ## Notes
 
 - The new app is a static-file site builder. Runtime build tools are out of scope.
 - The normal chat path is execute-first, not approve-first.
 - The built-in gallery includes blank, CV, course, portfolio, publication, event, photo, resource, timeline, and data-visualization templates.
-- Canonical published URLs are `/u/:handle/:slug/`, keyed by a user-chosen handle so the owner id never appears in a public URL. Old published sites remain readable permanently from the same R2 bucket via the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves content directly. This is a permanent compatibility exception: temporary account-import cleanup must retain `/sites` routing, direct serving, redirects, and `.migrated.json` forwarding-pointer resolution.
+- Canonical published URLs are `/u/:handle/:slug/`, keyed by a user-chosen handle so new URLs do not expose the owner id. `/sites/:userId/:slug/*`, direct serving, mapped-slug redirects, and `.migrated.json` forwarding-pointer resolution are a permanent compatibility contract and must survive temporary account-import cleanup.
 
 See [`docs/legacy-account-import-removal.md`](docs/legacy-account-import-removal.md)
 for the temporary import telemetry and deletion follow-up.

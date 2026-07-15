@@ -99,6 +99,16 @@
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
 	let csrfRefreshedThisCycle = false;
+	let quota = $state<{ limit: number; remaining: number; reset: number } | null>(null);
+
+	async function refreshQuota() {
+		try {
+			const response = await apiResponseFetch(resolvePath('/api/quota'), { credentials: 'include' });
+			quota = response.ok ? await response.json() : null;
+		} catch {
+			quota = null;
+		}
+	}
 
 	const MAX_DISPLAYED_MESSAGES = 10;
 	const MUTATING_TOOLS = new Set([
@@ -784,6 +794,9 @@
 		if (chunk.type === 'error') {
 			activeStream.parts.push({ type: 'text', text: chunk.errorText, state: 'done' });
 			flushActiveStreamToMessages(activeStream);
+			if (chunk.errorText.includes('identity expired')) {
+				closeSocket();
+			}
 			return;
 		}
 
@@ -943,6 +956,7 @@
 						flushActiveStreamToMessages(activeStream);
 					}
 					resetRequestState();
+					void refreshQuota();
 				}
 				break;
 			}
@@ -994,6 +1008,7 @@
 		closeSocket();
 
 		void (async () => {
+			await refreshQuota();
 			await loadChatHistory(targetProjectId);
 			try {
 				await ensureSocket(targetProjectId);
@@ -1115,13 +1130,17 @@
 			await sendChatRequest(getCurrentMessagesForRequest(nextUserMessage));
 		} catch (error: any) {
 			console.error('Error sending message:', error);
+			const message = getErrorMessage(error);
+			if (message.includes('identity expired')) {
+				closeSocket();
+			}
 			resetRequestState();
 			uiMessages = [
 				...uiMessages,
 				{
 					id: generateId(),
 					role: 'assistant',
-					parts: [{ type: 'text', text: getErrorMessage(error) }]
+					parts: [{ type: 'text', text: message }]
 				}
 			];
 		}
@@ -1412,6 +1431,11 @@
 		{/if}
 
 		<div class="action-buttons">
+			{#if quota && quota.limit > 0}
+				<span class="quota-meter" title={`Budget resets ${new Date(quota.reset * 1000).toLocaleString()}`}>
+					{Math.max(0, Math.round((quota.remaining / quota.limit) * 100))}% AI budget left
+				</span>
+			{/if}
 			<input
 				type="file"
 				bind:this={fileInput}
@@ -1803,6 +1827,12 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
+	}
+
+	.quota-meter {
+		font-size: 0.72rem;
+		color: var(--color-text-muted);
+		white-space: nowrap;
 	}
 
 	.icon-btn {

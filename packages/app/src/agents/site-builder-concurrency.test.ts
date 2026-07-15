@@ -41,8 +41,37 @@ import {
 } from "./site-builder";
 
 function projectTool(name: "edit_file" | "write_file" | "rename_file") {
+  const mutationStub = {
+    execute: async (_ownerId: string, operation: any) => {
+      switch (operation.type) {
+        case "create-snapshot": return { snapshot: await storage.createSnapshot("user-1", "project-1", operation) };
+        case "write-file-if-absent": return {
+          etag: await storage.writeFileIfAbsent("user-1", "project-1", operation.path, operation.content)
+        };
+        case "write-file": return {
+          etag: await storage.writeFileIfMatch(
+            "user-1",
+            "project-1",
+            operation.path,
+            operation.content,
+            operation.baseEtag
+          )
+        };
+        case "rename-file":
+          await storage.renameFile("user-1", "project-1", operation.oldPath, operation.newPath);
+          return { ok: true };
+        default: throw new Error(`Unexpected mutation ${operation.type}`);
+      }
+    }
+  };
   const tools = createProjectTools(
-    {} as any,
+    {
+      SITE_STUDIO_BUCKET: {} as R2Bucket,
+      MUTATION_COORDINATOR: {
+        idFromName: () => ({}) as DurableObjectId,
+        get: () => mutationStub
+      }
+    } as any,
     { userId: "user-1", projectId: "project-1" },
     null
   );

@@ -6,6 +6,9 @@ import {
   resolveRequestIdentity,
 } from "./cail-identity";
 
+const PRODUCTION_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
+const STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
+
 function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -74,11 +77,14 @@ function requestWithToken(token: string): Request {
 }
 
 let currentKey: TestKey;
-let currentEnv: { CAIL_IDENTITY_JWKS: string };
+let currentEnv: { CAIL_IDENTITY_JWKS: string; CAIL_IDENTITY_ISSUER: string };
 
 beforeAll(async () => {
   currentKey = await generateKey("current");
-  currentEnv = { CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [currentKey.jwk] }) };
+  currentEnv = {
+    CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [currentKey.jwk] }),
+    CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+  };
 });
 
 describe("getRequestIdentity", () => {
@@ -93,12 +99,16 @@ describe("getRequestIdentity", () => {
     });
   });
 
-  it("accepts the staging issuer", async () => {
+  it("accepts the staging issuer only in an explicitly staging-scoped deployment", async () => {
     const token = await mintJwt(currentKey, {
-      iss: "https://tools.cuny.qzz.io/cail-sso",
+      iss: STAGING_ISSUER,
     });
-    await expect(getRequestIdentity(requestWithToken(token), currentEnv))
+    await expect(getRequestIdentity(requestWithToken(token), {
+      ...currentEnv,
+      CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
+    }))
       .resolves.toMatchObject({ subject: "cail-abc123" });
+    await expect(getRequestIdentity(requestWithToken(token), currentEnv)).resolves.toBeNull();
   });
 
   it("rejects a token signed by a key outside the configured JWKS", async () => {
@@ -124,6 +134,18 @@ describe("getRequestIdentity", () => {
   it("rejects the wrong audience", async () => {
     const token = await mintJwt(currentKey, { aud: "cail:another-service" });
     expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+  });
+
+  it("rejects array-valued audiences, including a one-element array", async () => {
+    const token = await mintJwt(currentKey, { aud: ["cail:site-studio"] });
+    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+  });
+
+  it("preserves the verified subject byte-for-byte as the durable owner key", async () => {
+    const subject = "  Opaque-CAIL-Subject  ";
+    const token = await mintJwt(currentKey, { sub: subject });
+    await expect(getRequestIdentity(requestWithToken(token), currentEnv))
+      .resolves.toMatchObject({ subject });
   });
 
   it("rejects non-allowlisted and look-alike issuers", async () => {
@@ -162,6 +184,7 @@ describe("resolveRequestIdentity", () => {
     const newKey = await generateKey("new");
     const env = {
       CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [oldKey.jwk, newKey.jwk] }),
+      CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
     };
 
     await expect(resolveRequestIdentity(requestWithToken(await mintJwt(oldKey)), env))
@@ -182,9 +205,23 @@ describe("resolveRequestIdentity", () => {
     ["malformed", "{not-json"],
   ])("rejects a presented token when the JWKS is %s", async (_name, jwks) => {
     const token = await mintJwt(currentKey);
-    await expect(resolveRequestIdentity(requestWithToken(token), { CAIL_IDENTITY_JWKS: jwks }))
+    await expect(resolveRequestIdentity(requestWithToken(token), {
+      CAIL_IDENTITY_JWKS: jwks,
+      CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+    }))
       .resolves.toEqual({ status: "invalid" });
   });
+
+  it.each([undefined, "", ` ${PRODUCTION_ISSUER}`])(
+    "fails closed when the deployment issuer is missing or malformed (%s)",
+    async (issuer) => {
+      const token = await mintJwt(currentKey);
+      await expect(resolveRequestIdentity(requestWithToken(token), {
+        CAIL_IDENTITY_JWKS: currentEnv.CAIL_IDENTITY_JWKS,
+        CAIL_IDENTITY_ISSUER: issuer,
+      })).resolves.toEqual({ status: "invalid" });
+    },
+  );
 
   it("ignores bare identity attribute headers", async () => {
     const request = new Request("https://site-studio.example/", {

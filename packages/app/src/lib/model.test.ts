@@ -4,9 +4,22 @@ import { CailError } from "@cuny-ai-lab/cail-client";
 import {
   CAIL_APP_SLUG,
   DEFAULT_CAIL_MODEL,
+  assertCailJwtFresh,
   createCailModel,
   resolveModelId,
 } from "./model";
+
+describe("model-call JWT expiry guard", () => {
+  const token = (exp: number) => `header.${btoa(JSON.stringify({ exp })).replace(/=/g, "")}.signature`;
+
+  it("fails before an outbound model call when the connection JWT is expiring", () => {
+    expect(() => assertCailJwtFresh(token(100), 90_000, 15)).toThrow("identity expired");
+  });
+
+  it("accepts a token with enough lifetime for the next gateway call", () => {
+    expect(() => assertCailJwtFresh(token(120), 90_000, 15)).not.toThrow();
+  });
+});
 
 describe("CAIL_APP_SLUG", () => {
   it("is the stable spend-attribution slug for this tool", () => {
@@ -53,14 +66,7 @@ describe("createCailModel", () => {
   });
 });
 
-/**
- * Quota errors are handled INSIDE the cail-client adapter as of 2d51745:
- * `chatFetch` throws the parsed CailError on a 429 quota_exceeded envelope
- * (before any wrapper composed over it could see the Response). Pin that
- * boundary here: the thrown CailError propagates through the AI SDK on the
- * FIRST attempt (no retries — a budget-window 429 is not a rate blip),
- * message verbatim, extras intact.
- */
+/** The adapter throws gateway-declared non-retryable errors before SDK retry logic. */
 describe("gateway quota errors at the adapter boundary", () => {
   it("propagates the thrown CailError verbatim without retrying", async () => {
     const verbatim = "You have used your hourly AI quota. It resets on the hour.";
@@ -109,7 +115,7 @@ describe("gateway quota errors at the adapter boundary", () => {
     expect(calls).toBe(1);
   });
 
-  it("preserves a nested authentication error without retrying", async () => {
+  it("throws a gateway-declared non-retryable authentication error without retrying", async () => {
     let calls = 0;
     const upstream = (async () => {
       calls += 1;
@@ -138,15 +144,23 @@ describe("gateway quota errors at the adapter boundary", () => {
     const thrown = await generateText({ model, prompt: "hi" }).catch((error: unknown) => error);
 
     expect(thrown).toMatchObject({
-      name: "AI_APICallError",
+      name: "CailError",
       message: "Sign in to use CAIL models.",
-      statusCode: 401,
-      responseHeaders: expect.objectContaining({
-        "x-request-id": "req-site-auth-1",
-        "x-should-retry": "false",
+      status: 401,
+      code: "authentication_required",
+      extras: expect.objectContaining({
+        request_id: "req-site-auth-1",
+        should_retry: false,
       }),
     });
     expect(calls).toBe(1);
+  });
+
+  it("permits plaintext only for an explicit loopback development gateway", () => {
+    expect(() => createCailModel({ CAIL_API_BASE: "http://localhost:8787" }, "jwt"))
+      .not.toThrow();
+    expect(() => createCailModel({ CAIL_API_BASE: "http://gateway.example" }, "jwt"))
+      .toThrow(/HTTPS|loopback/i);
   });
 });
 

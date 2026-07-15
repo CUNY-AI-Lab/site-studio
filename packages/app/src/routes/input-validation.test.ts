@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
+import { createMockMutationCoordinator } from "../lib/test-utils";
 import { csrfProtect } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import { R2ProjectStorage } from "../storage/r2";
@@ -130,6 +131,7 @@ function createEnv(bucket: R2Bucket): Env {
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
+    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
     LOADER: {} as WorkerLoader,
     ASSETS: undefined
   };

@@ -41,6 +41,24 @@ export interface CailModelEnv {
   CAIL_MODEL?: string;
 }
 
+export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtlSeconds = 15): void {
+  const payload = token.split(".")[1];
+  if (!payload) return;
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(
+      atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
+    ) as { exp?: unknown };
+    if (typeof decoded.exp === "number" && decoded.exp * 1000 <= nowMs + minimumTtlSeconds * 1000) {
+      throw new Error("CAIL identity expired during this turn. Reconnect and retry.");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("identity expired")) throw error;
+    // The request boundary owns JWT verification. This check only enforces the
+    // expiry on that already-verified token before each outbound model POST.
+  }
+}
+
 /**
  * Resolve the configured model id.
  */
@@ -58,18 +76,14 @@ export function resolveModelId(env: CailModelEnv): string {
  * gateway is JWT-first/strict. The cail-client `chatFetch` adapter enforces
  * this: the `apiKey` handed to the SDK below is a dummy the adapter strips
  * before the request reaches the wire (pinned by the wire test in
- * model.test.ts). Non-2xx responses keep raw fetch semantics, so gateway
- * error envelopes (authentication_required / upstream errors / …) surface to
- * the AI SDK unmodified — with ONE library-owned carve-out: a 429
- * `quota_exceeded` envelope makes `chatFetch` THROW the parsed `CailError`
- * (verbatim message, `extras.retry_after_seconds`) instead of returning the
- * Response, so the AI SDK never retries a budget-window 429 and the quota
- * envelope reaches error surfacing intact (pinned in model.test.ts;
- * surfaced to the user by lib/model-stream-error.ts).
+ * model.test.ts). Ordinary provider errors keep raw fetch semantics. Gateway
+ * responses marked `X-Should-Retry: false`, quota exhaustion, and ambiguous
+ * network failures throw `CailError` by default so the SDK cannot replay them.
+ * Site Studio keeps AI SDK retries disabled as a second guard.
  *
- * Throws when `CAIL_API_BASE` is unset — the placeholder is filled in at
- * launch (cail-gateway docs/LAUNCH_CHECKLIST.md); there is no local fallback
- * because there are no provider keys to fall back to. Throws when the caller
+ * Throws when `CAIL_API_BASE` is unset. The checked-in value is not a live
+ * deployment attestation, and there is no local fallback because there are no
+ * provider keys to fall back to. Throws when the caller
  * has no identity JWT: the client library requires a credential, and a
  * JWT-less request could only ever earn the gateway's
  * `authentication_required` envelope.
@@ -89,7 +103,14 @@ export function createCailModel(
   }
 
   const baseUrl = env.CAIL_API_BASE.replace(/\/+$/, "");
-  const client = createCailClient({ baseUrl, app: CAIL_APP_SLUG, fetchImpl });
+  const client = createCailClient({
+    baseUrl,
+    app: CAIL_APP_SLUG,
+    fetchImpl,
+    // The primitive still restricts this opt-in to exact loopback hosts.
+    allowInsecureLoopback: true,
+  });
+  const gatewayFetch = client.chatFetch({ kind: "jwt", token: identityJwt }) as typeof fetch;
 
   const provider = createOpenAICompatible({
     name: "cail",
@@ -97,7 +118,10 @@ export function createCailModel(
     // Dummy — the chatFetch adapter strips it and sends X-CAIL-Identity-JWT
     // instead (one-credential contract).
     apiKey: "cail-proxy",
-    fetch: client.chatFetch({ kind: "jwt", token: identityJwt }) as typeof fetch,
+    fetch: ((input: string | URL | Request, init?: RequestInit) => {
+      assertCailJwtFresh(identityJwt);
+      return gatewayFetch(input, init);
+    }) as typeof fetch,
   });
 
   return provider(resolveModelId(env));

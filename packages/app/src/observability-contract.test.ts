@@ -28,8 +28,19 @@ describe("observability source contract", () => {
     new URL("../../observability-core/package.json", import.meta.url),
   ])("pins the reviewed fleet projection dependency in %s", (url) => {
     expect(readFileSync(url, "utf8")).toContain(
-      "github:CUNY-AI-Lab/cail-log#4d747988966e657ef44081e68bc95bc758713604",
+      "github:CUNY-AI-Lab/cail-log#75e0dda3068794ae1543e1e2bb98c9c920bb848f",
     );
+  });
+
+  it("pins the reviewed identity and transport primitives in the app", () => {
+    const source = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    expect(source).toContain(
+      "github:CUNY-AI-Lab/cail-identity#00419a9409680716a04e514068ba2b128ce7afa7",
+    );
+    expect(source).toContain(
+      "github:CUNY-AI-Lab/cail-client#16da40171381b8bf38543730b45dba484ba01940",
+    );
+    expect(source).not.toContain("cail-sandbox-client");
   });
 
   it("defines queryable build and publish action seams", () => {
@@ -111,7 +122,8 @@ describe("observability source contract", () => {
       externalExporter: null,
     });
     expect(OBSERVABILITY_CONTRACT.fleetProjection).toMatchObject({
-      libraryCommit: "4d747988966e657ef44081e68bc95bc758713604",
+      libraryCommit: "75e0dda3068794ae1543e1e2bb98c9c920bb848f",
+      logSchemaVersion: 2,
       provider: "cloudflare-analytics-engine",
       dataset: "cail_fleet_events_v1",
       binding: "CAIL_FLEET_EVENTS",

@@ -251,6 +251,29 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBeTruthy();
   });
 
+  it("preserves both namespaces when a subject write wins the copy-if-absent race", async () => {
+    seedAnonProject(bucket, "portfolio", {}, "<h1>anonymous source</h1>");
+    const destination = `projects/${SUBJECT}/portfolio/index.html`;
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === destination && !injected) {
+        injected = true;
+        await originalPut(destination, "<h1>subject concurrent edit</h1>");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await expect(run()).rejects.toThrow("destination changed");
+    expect(textOf(bucket.store.get(destination))).toBe("<h1>subject concurrent edit</h1>");
+    expect(textOf(bucket.store.get(`projects/${ANON}/portfolio/index.html`))).toBe(
+      "<h1>anonymous source</h1>"
+    );
+    const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
+    expect(claim.status).toBe("pending");
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
+  });
+
   it("claims once: a second subject is refused and receives nothing", async () => {
     seedAnonProject(bucket, "portfolio");
     await run(); // SUBJECT claims and completes

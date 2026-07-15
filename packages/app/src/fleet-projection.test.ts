@@ -36,7 +36,7 @@ describe("CAIL fleet projection boundary", () => {
         product_id: "site-studio",
         principal: {
           type: "user",
-          subject: "cail-0123456789abcdef0123456789abcdef",
+          subject: "cail-v1-0123456789abcdef0123456789abcdef",
         },
         cohort: "faculty",
         http_method: "POST",
@@ -59,7 +59,7 @@ describe("CAIL fleet projection boundary", () => {
       const serialized = JSON.stringify(point);
       expect(serialized).not.toContain(REQUEST_ID);
       expect(serialized).not.toContain(ACTION_ID);
-      expect(serialized).not.toContain("cail-0123456789abcdef0123456789abcdef");
+      expect(serialized).not.toContain("cail-v1-0123456789abcdef0123456789abcdef");
     } finally {
       consoleLog.mockRestore();
     }

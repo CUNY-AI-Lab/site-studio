@@ -9,11 +9,7 @@ import {
   resolveRequestIdentity,
   type CailIdentity,
 } from "./cail-identity";
-import {
-  migrateAnonymousData,
-  migrationPendingKey
-} from "./migration";
-import { createAgentHistoryPorter } from "./agent-porter";
+import { migrationPendingKey } from "./migration";
 import { emitDiagnostic } from "./logging";
 import {
   AccountImportConfigurationError,
@@ -214,8 +210,14 @@ async function migrateAnonymousSessionIfPresent(
   c: Context<{ Bindings: Env; Variables: SessionVariables }>,
   subject: string
 ): Promise<boolean> {
-  const porter = createAgentHistoryPorter(c.env);
   const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
+
+  const runMigration = async (anonUserId: string, anonSessionId?: string) => {
+    const namespace = c.env.MUTATION_COORDINATOR;
+    if (!namespace) throw new Error("MUTATION_COORDINATOR is not configured");
+    return namespace.get(namespace.idFromName(`owner:${anonUserId}`))
+      .migrateAnonymous(anonUserId, subject, anonSessionId);
+  };
 
   if (cookieValue && cookieValue !== subject) {
     const anonUser = await readCurrentSession(c.env, cookieValue);
@@ -257,14 +259,7 @@ async function migrateAnonymousSessionIfPresent(
       }
 
       try {
-        await migrateAnonymousData({
-          bucket: c.env.SITE_STUDIO_BUCKET,
-          kv: c.env.SESSION_KV,
-          anonUserId: anonId,
-          subject,
-          anonSessionId: cookieValue,
-          porter,
-        });
+        await runMigration(anonId, cookieValue);
       } catch (error) {
         // SS-46: a failure is only safe to absorb upstream once resumability is
         // established — the subject-keyed pending marker written at claim time.
@@ -322,13 +317,7 @@ async function migrateAnonymousSessionIfPresent(
       return false;
     }
 
-    await migrateAnonymousData({
-      bucket: c.env.SITE_STUDIO_BUCKET,
-      kv: c.env.SESSION_KV,
-      anonUserId: pendingAnonId,
-      subject,
-      porter,
-    });
+    await runMigration(pendingAnonId);
 
     try {
       const stub = c.env.MIGRATION_COORDINATOR.get(
@@ -377,7 +366,8 @@ function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
  *
  * Identity contract (docs/INTEGRATION.md §3):
  *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
- *      `CAIL_IDENTITY_JWKS` for audience `cail:site-studio`. The durable owner
+ *      `CAIL_IDENTITY_JWKS` and one `CAIL_IDENTITY_ISSUER` for audience
+ *      `cail:site-studio`. The durable owner
  *      key becomes the CAIL subject; the KV session is bound to that subject so
  *      the browser cookie remains a convenience affordance but never the source
  *      of ownership. Other bare X-CAIL-* headers are ignored — this worker is

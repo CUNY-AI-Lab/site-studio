@@ -28,6 +28,10 @@
         // serialize in one DO instance. See agents/migration-coordinator.ts.
         "name": "MIGRATION_COORDINATOR",
         "class_name": "MigrationCoordinator"
+      },
+      {
+        "name": "MUTATION_COORDINATOR",
+        "class_name": "MutationCoordinator"
       }
     ]
   },
@@ -39,6 +43,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["MigrationCoordinator"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["MutationCoordinator"]
     }
   ],
   "vars": {
@@ -74,6 +82,9 @@
     // decision, and enforced identity fails with 500 if either value is absent
     // or invalid rather than silently allowing an unbounded legacy import.
     "CAIL_REQUIRE_IDENTITY": "false",
+    // Identity 3.0 accepts exactly one issuer per deployment. Staging must
+    // override this value rather than widening production's trust boundary.
+    "CAIL_IDENTITY_ISSUER": "https://tools.ailab.gc.cuny.edu/cail-sso",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted /sites/ content, so runtime
     // validation requires this exact path and rejects a root-scoped cookie.
@@ -84,7 +95,6 @@
   //   CAIL_IDENTITY_JWKS  JSON public JWKS to verify RS256
   //                       X-CAIL-Identity-JWT tokens (aud cail:site-studio)
   // Site Studio holds NO provider API keys — the CAIL model proxy attaches them.
-  // (OPENROUTER_API_KEY was removed on 2026-07-03.)
   "worker_loaders": [
     {
       "binding": "LOADER"
@@ -98,9 +108,9 @@
   },
   "r2_buckets": [
     {
-      // NOTE: the "site-studio" R2 bucket is shared with agent-studio's branch
-      // (flagged upstream). Do not rename or repoint it here without coordinating
-      // that migration; ownership is keyed by CAIL subject prefixes within it.
+      // The repository does not attest which live services consume this bucket.
+      // Inventory deployed bindings and preserve existing subject-keyed content
+      // before any rename or repointing operation.
       "binding": "SITE_STUDIO_BUCKET",
       "bucket_name": "site-studio"
     }

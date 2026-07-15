@@ -48,6 +48,7 @@ import {
   withCorrelationFetch,
 } from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
+import { executeOwnerMutation } from "../lib/owner-mutations";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -347,6 +348,29 @@ export function createProjectTools(
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
   let snapshotPromise: Promise<SnapshotResult> | null = null;
 
+  async function writeIfAbsent(path: string, content: string): Promise<string | null> {
+    const result = await executeOwnerMutation(env, scope.userId, {
+      type: "write-file-if-absent",
+      projectId: scope.projectId,
+      path,
+      content
+    });
+    if (!("etag" in result)) throw new Error("Unexpected mutation result");
+    return result.etag;
+  }
+
+  async function writeIfMatch(path: string, content: string, baseEtag: string): Promise<string | null> {
+    const result = await executeOwnerMutation(env, scope.userId, {
+      type: "write-file",
+      projectId: scope.projectId,
+      path,
+      content,
+      baseEtag
+    });
+    if (!("etag" in result)) throw new Error("Unexpected mutation result");
+    return result.etag;
+  }
+
   // SS-28: creating the pre-mutation snapshot is non-fatal. If the project is
   // too large to snapshot (createSnapshot returns a skip signal), the mutation
   // still proceeds — the user just has no restore point for this turn. Make the
@@ -354,9 +378,14 @@ export function createProjectTools(
   // swallowing it.
   async function ensureSnapshot() {
     if (!snapshotPromise) {
-      snapshotPromise = storage.createSnapshot(scope.userId, scope.projectId, {
+      snapshotPromise = executeOwnerMutation(env, scope.userId, {
+        type: "create-snapshot",
+        projectId: scope.projectId,
         trigger: snapshotOptions?.trigger || "agent",
         label: snapshotOptions?.label
+      }).then((result) => {
+        if (!("snapshot" in result)) throw new Error("Unexpected mutation result");
+        return result.snapshot;
       });
     }
 
@@ -547,12 +576,7 @@ export function createProjectTools(
         // concurrent writer therefore forces a fresh read and recomputation
         // instead of being silently clobbered by this turn's stale content.
         if (current === null) {
-          const createdEtag = await storage.writeFileIfAbsent(
-            scope.userId,
-            scope.projectId,
-            filePath,
-            nextContent
-          );
+          const createdEtag = await writeIfAbsent(filePath, nextContent);
           if (createdEtag !== null) {
             mutationLifecycle?.acknowledgeMutation();
             return {
@@ -567,12 +591,7 @@ export function createProjectTools(
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
           if (current === null) {
-            const createdEtag = await storage.writeFileIfAbsent(
-              scope.userId,
-              scope.projectId,
-              filePath,
-              content
-            );
+            const createdEtag = await writeIfAbsent(filePath, content);
             if (createdEtag !== null) {
               mutationLifecycle?.acknowledgeMutation();
               return {
@@ -598,13 +617,7 @@ export function createProjectTools(
             };
           }
 
-          const writtenEtag = await storage.writeFileIfMatch(
-            scope.userId,
-            scope.projectId,
-            filePath,
-            recomputed,
-            current.etag
-          );
+          const writtenEtag = await writeIfMatch(filePath, recomputed, current.etag);
           if (writtenEtag !== null) {
             mutationLifecycle?.acknowledgeMutation();
             return {
@@ -693,13 +706,7 @@ export function createProjectTools(
         await ensureSnapshot();
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
-          const writtenEtag = await storage.writeFileIfMatch(
-            scope.userId,
-            scope.projectId,
-            filePath,
-            updated,
-            current.etag
-          );
+          const writtenEtag = await writeIfMatch(filePath, updated, current.etag);
           if (writtenEtag !== null) {
             mutationLifecycle?.acknowledgeMutation();
             return {
@@ -785,9 +792,14 @@ export function createProjectTools(
         // claims the destination atomically; losing that claim means a
         // concurrent write or rename took the destination after the preflight.
         try {
-          await storage.renameFile(scope.userId, scope.projectId, currentPath, nextPath);
+          await executeOwnerMutation(env, scope.userId, {
+            type: "rename-file",
+            projectId: scope.projectId,
+            oldPath: currentPath,
+            newPath: nextPath
+          });
         } catch (error) {
-          if (error instanceof FileExistsError) {
+          if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
             return {
               ok: false,
               path: nextPath,
@@ -843,7 +855,11 @@ export function createProjectTools(
 
         mutationLifecycle?.admit();
         await ensureSnapshot();
-        await storage.deleteFile(scope.userId, scope.projectId, filePath);
+        await executeOwnerMutation(env, scope.userId, {
+          type: "delete-file",
+          projectId: scope.projectId,
+          path: filePath
+        });
         mutationLifecycle?.acknowledgeMutation();
 
         return {
@@ -880,29 +896,18 @@ export function createProjectTools(
         }
 
         mutationLifecycle?.admit();
-        await ensureSnapshot();
-
-        if (replaceExisting) {
-          for (const file of files) {
-            await storage.deleteFile(scope.userId, scope.projectId, file.path);
-          }
-        }
-
         const templateFiles = getTemplateFiles(templateId);
-        if (templateFiles) {
-          let count = 0;
-          for (const [filePath, content] of Object.entries(templateFiles)) {
-            await storage.writeFile(scope.userId, scope.projectId, filePath, content);
-            count++;
-          }
-          mutationLifecycle?.acknowledgeMutation();
-          return { ok: true as const, templateId, filesWritten: count };
-        }
-
-        // Fallback for blank if not in bundled templates
-        await storage.writeFile(scope.userId, scope.projectId, "index.html", createBlankIndexHtml(scope.projectId));
+        const replacementFiles = templateFiles ?? {
+          "index.html": createBlankIndexHtml(scope.projectId)
+        };
+        await executeOwnerMutation(env, scope.userId, {
+          type: "replace-files",
+          projectId: scope.projectId,
+          files: replacementFiles,
+          label: `Before applying ${templateId} template`
+        });
         mutationLifecycle?.acknowledgeMutation();
-        return { ok: true as const, templateId, filesWritten: 1 };
+        return { ok: true as const, templateId, filesWritten: Object.keys(replacementFiles).length };
       }
     }),
     add_page: tool({
@@ -936,7 +941,10 @@ export function createProjectTools(
 
         mutationLifecycle?.admit();
         await ensureSnapshot();
-        await storage.writeFile(scope.userId, scope.projectId, filePath, createPageHtml(title));
+        const created = await writeIfAbsent(filePath, createPageHtml(title));
+        if (created === null) {
+          return { ok: false as const, path: filePath, message: "A file already exists at that path." };
+        }
         mutationLifecycle?.acknowledgeMutation();
 
         return {
@@ -1013,8 +1021,28 @@ export function createProjectTools(
         const result = await runGenerateImageFlow(filename, {
           generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
           screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
-          saveIfAbsent: (path, bytes) =>
-            storage.uploadToProjectIfAbsent(scope.userId, scope.projectId, path, bytes)
+          saveIfAbsent: async (path, bytes) => {
+            const saved = await executeOwnerMutation(env, scope.userId, {
+              type: "upload-if-absent",
+              projectId: scope.projectId,
+              path,
+              content: bytes,
+              maxProjectBytes: requiredPositiveInteger(
+                env.SITE_STUDIO_MAX_PROJECT_BYTES,
+                "SITE_STUDIO_MAX_PROJECT_BYTES"
+              ),
+              maxOwnerBytes: requiredPositiveInteger(
+                env.SITE_STUDIO_MAX_OWNER_BYTES,
+                "SITE_STUDIO_MAX_OWNER_BYTES"
+              ),
+              uploadsPerMinute: requiredPositiveInteger(
+                env.SITE_STUDIO_UPLOADS_PER_MINUTE,
+                "SITE_STUDIO_UPLOADS_PER_MINUTE"
+              )
+            });
+            if (!("written" in saved)) throw new Error("Unexpected mutation result");
+            return saved.written;
+          }
         });
         if (result.ok) {
           mutationLifecycle?.acknowledgeMutation();
@@ -1135,9 +1163,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private buildActionAwaitingPersistence: SiteStudioActionLifecycle | null = null;
   /**
    * The verified caller JWT, captured from connection props (routes/agents.ts).
-   * Forwarded to the CAIL model proxy on each model call. The browser opens the
-   * agent over a long-lived WebSocket, so this is set once at connection time
-   * and can outlive the JWT's ~5-min TTL — see the PR flag on JWT freshness.
+   * Forwarded to the CAIL model proxy on each model call. It refreshes on every
+   * connection, and the adapter rejects an expired token before an outbound
+   * gateway POST.
    */
   private identityJwt: string | null = null;
 
@@ -1761,3 +1789,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 callable()(SiteBuilderAgent.prototype.getObservability, {} as ClassMethodDecoratorContext);
 callable()(SiteBuilderAgent.prototype.recordActionAdmission, {} as ClassMethodDecoratorContext);
 callable()(SiteBuilderAgent.prototype.recordActionTerminal, {} as ClassMethodDecoratorContext);
+function requiredPositiveInteger(value: string | undefined, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} is not configured`);
+  }
+  return parsed;
+}

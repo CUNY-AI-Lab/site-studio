@@ -10,22 +10,22 @@
  * "key workspaces by X-CAIL-Subject"), rather than keeping a permanent
  * anonymous-id alias in every owner-key derivation.
  *
- * Guarantees:
+ * Properties and limits:
  * - **One-time / idempotent**: a durable KV claim record (`migration:<anonId>`)
- *   marks pending/complete. Every step is individually idempotent
- *   (copy-if-absent, deterministic renames), so concurrent or resumed runs
- *   converge on the same end state.
+ *   marks pending/complete. Renames are deterministic and destination objects
+ *   are claimed conditionally.
  * - **Claim-once**: the first verified subject to claim an anonymous
  *   namespace wins, recorded durably; other subjects are refused.
- * - **Non-destructive merge**: nothing the subject already owns is
- *   overwritten. On project-id collision the incoming project is renamed
+ * - **Non-destructive merge**: on project-id collision the incoming project is renamed
  *   deterministically (`<id>-imported`, `<id>-imported-2`, …); migrated
  *   metadata is stamped `importedFrom`/`importedOriginalId` so retries and
- *   concurrent runs recognize our own copies instead of re-suffixing.
- * - **Mid-run writes survive**: the copy phase runs twice — a second
- *   idempotent sweep immediately before the delete pass catches anonymous
- *   direct file-API writes that landed during the first sweep (SS-54; only
- *   a sub-second residual window remains).
+ *   concurrent runs recognize our own copies instead of re-suffixing. A lost
+ *   destination claim is accepted only for byte-identical content; differing
+ *   bytes stop the run before source deletion.
+ * - **Mid-run writes are fenced**: session handling executes the whole import
+ *   in the anonymous owner's MutationCoordinator, the same object used by file
+ *   writes. A second idempotent copy sweep remains as defense for data written
+ *   by an older deployment or out-of-band bucket actor.
  * - **Published-site continuity**: published sites serve live from
  *   `projects/{userId}/…` and the public URL embeds the anonymous id. After
  *   copying, a permanent forwarding pointer (`projects/<anonId>/.migrated.json`)
@@ -140,14 +140,50 @@ async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
   return keys;
 }
 
-/** Copy a single object without ever overwriting an existing destination. */
+function bytesEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  const a = new Uint8Array(left);
+  const b = new Uint8Array(right);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+/**
+ * Copy with an atomic destination claim. A lost claim is accepted only when
+ * the destination is byte-identical (the idempotent retry/second-sweep case).
+ * Different bytes stop the migration before its delete phase, preserving both
+ * namespaces for reconciliation.
+ */
 async function copyIfAbsent(bucket: R2Bucket, fromKey: string, toKey: string): Promise<void> {
-  if (await bucket.head(toKey)) return; // non-destructive: never overwrite
   const object = await bucket.get(fromKey);
   if (!object) return; // source vanished (concurrent run finished it) — fine
-  await bucket.put(toKey, await object.arrayBuffer(), {
-    httpMetadata: object.httpMetadata
+  const sourceBytes = await object.arrayBuffer();
+  const wrote = await bucket.put(toKey, sourceBytes, {
+    httpMetadata: object.httpMetadata,
+    onlyIf: { etagDoesNotMatch: "*" }
   });
+  if (wrote) return;
+
+  const destination = await bucket.get(toKey);
+  if (!destination || !bytesEqual(sourceBytes, await destination.arrayBuffer())) {
+    throw new Error("Anonymous-data migration stopped because the destination changed concurrently.");
+  }
+}
+
+async function putJsonIfAbsentOrEqual(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
+  const serialized = JSON.stringify(value);
+  const wrote = await bucket.put(key, serialized, {
+    httpMetadata: { contentType: "application/json" },
+    onlyIf: { etagDoesNotMatch: "*" }
+  });
+  if (wrote) return;
+
+  const existing = await bucket.get(key);
+  if (!existing || (await existing.text()) !== serialized) {
+    throw new Error("Anonymous-data migration stopped because the destination changed concurrently.");
+  }
 }
 
 /** Distinct project ids under a user namespace (dotfiles like the pointer excluded). */
@@ -245,11 +281,12 @@ function suffixSlug(base: string, used: Set<string>): string {
 /**
  * One idempotent copy sweep: list the anonymous namespace and copy every
  * project (metadata rewritten), snapshot, and upload into the subject
- * namespace — copy-if-absent throughout, so re-running only does work for
- * objects that appeared since the previous sweep. Mappings from an earlier
- * sweep are passed back in so the SAME anonymous project resolves to the SAME
- * subject id and slug on every sweep (and a project whose metadata never
- * existed cannot be re-suffixed into a duplicate on a later sweep).
+ * namespace using conditional copy-or-equal writes, so re-running only does
+ * work for objects that appeared since the previous sweep. Mappings
+ * from an earlier sweep are passed back in so the SAME anonymous project
+ * resolves to the SAME subject id and slug on every sweep. A project whose
+ * metadata never existed cannot be re-suffixed into a duplicate on a later
+ * sweep.
  */
 async function copyAnonymousNamespace(options: {
   bucket: R2Bucket;
@@ -334,9 +371,7 @@ async function copyAnonymousNamespace(options: {
             }
           : {})
       };
-      if (!(await bucket.head(`${toPrefix}.metadata.json`))) {
-        await putR2Json(bucket, `${toPrefix}.metadata.json`, rewritten);
-      }
+      await putJsonIfAbsentOrEqual(bucket, `${toPrefix}.metadata.json`, rewritten);
     }
 
     for (const key of await listKeys(bucket, fromPrefix)) {
@@ -352,11 +387,9 @@ async function copyAnonymousNamespace(options: {
       const relative = key.slice(fromSnapshots.length);
       const toKey = `${toSnapshots}${relative}`;
       if (key.endsWith(".json")) {
-        if (!(await bucket.head(toKey))) {
-          const record = await readR2Json<ProjectSnapshot>(bucket, key);
-          if (record) {
-            await putR2Json(bucket, toKey, { ...record, projectId: plan.newId });
-          }
+        const record = await readR2Json<ProjectSnapshot>(bucket, key);
+        if (record) {
+          await putJsonIfAbsentOrEqual(bucket, toKey, { ...record, projectId: plan.newId });
         }
       } else {
         await copyIfAbsent(bucket, key, toKey);
@@ -479,18 +512,10 @@ export async function migrateAnonymousData(options: {
   });
 
   // ---- Second copy sweep, immediately before delete ----
-  // SS-54: an anonymous direct file-API write (PUT/DELETE/rename straight to
-  // R2, no fence) can land DURING the first sweep — after its listing, before
-  // the delete pass below — and would be deleted without ever being copied:
-  // silent loss of that edit. The copy sweep is fully idempotent (copy-if-
-  // absent + metadata head-checks), so re-running it here re-lists the anon
-  // namespace and catches both new files in already-copied projects and a
-  // brand-new project created mid-run, at no-op cost for everything already
-  // copied. Residual: a write landing between THIS sweep's final list and the
-  // delete below (sub-second) is still lost — acknowledged; this shrinks the
-  // window from the whole run to that gap. A hot-path write fence was
-  // deliberately rejected (KV/architecture cost, and it would reintroduce
-  // eventual-consistency races on every file write).
+  // The owner-scoped MutationCoordinator prevents adopted anonymous writes
+  // during this run. Re-list anyway so an older deployment or out-of-band
+  // bucket writer cannot be deleted merely because it appeared after the first
+  // inventory. Conditional copy-or-equal keeps this sweep idempotent.
   const { projectMap, slugMap } = await copyAnonymousNamespace({
     bucket,
     anonUserId,

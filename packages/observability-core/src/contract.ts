@@ -3,6 +3,7 @@ import {
   CAIL_ANALYTICS_ENGINE_DATASET,
   CAIL_ANALYTICS_ENGINE_DOUBLES,
   CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION,
+  CAIL_LOG_SCHEMA_VERSION,
 } from "@cuny-ai-lab/cail-log";
 import {
   ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
@@ -54,7 +55,8 @@ export const OBSERVABILITY_CONTRACT = {
     externalExporter: null,
   },
   fleetProjection: {
-    libraryCommit: "4d747988966e657ef44081e68bc95bc758713604",
+    libraryCommit: "75e0dda3068794ae1543e1e2bb98c9c920bb848f",
+    logSchemaVersion: CAIL_LOG_SCHEMA_VERSION,
     provider: "cloudflare-analytics-engine",
     dataset: CAIL_ANALYTICS_ENGINE_DATASET,
     binding: "CAIL_FLEET_EVENTS",

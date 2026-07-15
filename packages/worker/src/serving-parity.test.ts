@@ -168,7 +168,7 @@ describe("SS-14 extensionless resolution parity", () => {
 });
 
 /**
- * SS-15 — caching + §3¾ CSP composition parity. HTML gets max-age=300 +
+ * Caching + §3¾ CSP composition parity. Mutable URLs always revalidate and
  * ETag/Last-Modified; other assets get a short revalidatable cache; BOTH also
  * carry the opaque-origin sandbox CSP + nosniff (they compose, neither clobbers).
  */
@@ -178,13 +178,13 @@ describe("SS-15 caching composes with the CSP (publisher)", () => {
     bucket = createMockBucket();
   });
 
-  it("HTML: max-age=300 + validators + CSP together", async () => {
+  it("HTML: mandatory revalidation + validators + CSP together", async () => {
     publishProject(bucket, "u", "blog", { "index.html": "<h1>Home</h1>" });
     const res = await worker.fetch(
       new Request("https://x.test/sites/u/blog/", { headers: { Accept: "text/html" } }),
       createEnv(bucket)
     );
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expect(res.headers.get("ETag")).toBeTruthy();
     expect(res.headers.get("Last-Modified")).toBeTruthy();
     expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
@@ -192,14 +192,14 @@ describe("SS-15 caching composes with the CSP (publisher)", () => {
     expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
   });
 
-  it("asset: max-age=3600 + validators + CSP together", async () => {
+  it("asset: mandatory revalidation + validators + CSP together", async () => {
     publishProject(bucket, "u", "blog", { "index.html": "x", "app.mjs": "export const a=1;" });
     const res = await worker.fetch(
       new Request("https://x.test/sites/u/blog/app.mjs", { headers: { Accept: "*/*" } }),
       createEnv(bucket)
     );
     expect(res.headers.get("Content-Type")).toBe("application/javascript; charset=utf-8");
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=3600");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });
 });

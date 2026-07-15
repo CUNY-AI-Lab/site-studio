@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CailLogEvent } from "@cuny-ai-lab/cail-log";
+import { toWorkersLogEvent, type CailLogEvent } from "@cuny-ai-lab/cail-log";
 import type { Env } from "./types";
 import { createMockKV, type MockKV } from "./lib/test-utils";
 
@@ -117,6 +117,7 @@ describe("canonical request mappings", () => {
       expect(completed[0]).toMatchObject({
         "service.name": "site-studio-app",
         "service.version": "0.1.0",
+        "cail.schema.version": 2,
         "cail.product.id": PRODUCT_ID,
         "cail.request.id": REQUEST_ID,
         "http.request.method": "GET",
@@ -187,7 +188,7 @@ describe("canonical build/publish action mappings", () => {
     });
     return new SiteStudioActionLifecycle({
       action: "publish",
-      principal: { type: "user", subject: "cail-0123456789abcdef0123456789abcdef" },
+      principal: { type: "user", subject: "cail-v1-0123456789abcdef0123456789abcdef" },
       correlation: {
         request_id: REQUEST_ID,
         trace_id: TRACE_ID,
@@ -295,7 +296,8 @@ describe("service-local diagnostics and helpers", () => {
       SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR,
     ]);
     expect(events.every((event) => event.attributes["cail.product.id"] === PRODUCT_ID)).toBe(true);
-    expect(events.every((event) => event.body === "Site Studio diagnostic condition observed.")).toBe(true);
+    expect(events.every((event) => event.body === "Service event recorded.")).toBe(true);
+    expect(events.every((event) => event.schema_version === 2)).toBe(true);
   });
 
   it("maps terminal outcomes and principals without treating legacy ids as subjects", () => {
@@ -306,8 +308,21 @@ describe("service-local diagnostics and helpers", () => {
     expect(principalForOwnerId("user_abc")).toEqual({ type: "anonymous" });
     expect(principalForOwnerId("cail-0123456789abcdef0123456789abcdef")).toEqual({
       type: "user",
-      subject: "cail-0123456789abcdef0123456789abcdef",
+      subject: "cail-v1-0123456789abcdef0123456789abcdef",
     });
+    expect(principalForOwnerId("cail-v1-0123456789abcdef0123456789abcdef")).toEqual({
+      type: "user",
+      subject: "cail-v1-0123456789abcdef0123456789abcdef",
+    });
+  });
+
+  it("preserves same-instance event provenance at every configured sink", () => {
+    const events: CailLogEvent[] = [];
+    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    emitDiagnostic("info", "provenance_probe", {}, logger);
+
+    expect(() => toWorkersLogEvent(events[0]!)).not.toThrow();
+    expect(() => toWorkersLogEvent({ ...events[0]! })).toThrow(/produced by createCailLogger/);
   });
 
   it("derives only an exception class and preserves unsampled W3C propagation", async () => {

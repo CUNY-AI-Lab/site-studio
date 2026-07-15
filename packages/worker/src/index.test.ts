@@ -377,6 +377,25 @@ describe("worker.fetch (integration)", () => {
     expect(await res.text()).toContain("<h1>Migrated</h1>");
   });
 
+  it("redirects a remapped legacy slug to the effective canonical slug", async () => {
+    publishProject(bucket, "subj", "blog", { "index.html": "<h1>Migrated</h1>" }, { slug: "newslug" });
+    seedHandle(bucket, "subj", "jane");
+    bucket.store.set("projects/user_anon/.migrated.json", {
+      data: JSON.stringify({ version: 1, subject: "subj", slugs: { oldslug: "newslug" } })
+    });
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/user_anon/oldslug/posts/a.html?ref=x", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://x.test/u/jane/newslug/posts/a.html?ref=x");
+  });
+
   it("serves a canonical /u/{handle}/{slug}/ URL by resolving the handle", async () => {
     publishProject(bucket, "cail-subj", "blog", { "index.html": "<h1>By Handle</h1>" });
     seedHandle(bucket, "cail-subj", "jane");
@@ -521,11 +540,11 @@ describe("worker.fetch (integration)", () => {
     expect(await res.text()).toContain("<h1>Slugless</h1>");
   });
 
-  it("SS-15: HTML carries ETag/Last-Modified + max-age=300, composed with the CSP", async () => {
+  it("HTML carries validators and mandatory revalidation, composed with the CSP", async () => {
     publishProject(bucket, "u", "blog", { "index.html": "<h1>Home</h1>" });
     const res = await worker.fetch(navRequest("https://x.test/sites/u/blog/"), createEnv(bucket));
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expect(res.headers.get("ETag")).toBeTruthy();
     expect(res.headers.get("Last-Modified")).toBeTruthy();
     // Caching validators and the §3¾ containment coexist on the same response.
@@ -543,7 +562,7 @@ describe("worker.fetch (integration)", () => {
       createEnv(bucket)
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("public, max-age=3600");
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expect(res.headers.get("ETag")).toBeTruthy();
     expect(res.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });

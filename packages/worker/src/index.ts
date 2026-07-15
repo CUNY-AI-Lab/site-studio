@@ -29,9 +29,9 @@ import {
 import { createSiteStudioBoundarySink } from "../../observability-core/src/fleet-projection";
 
 const PUBLISHER_DIAGNOSTIC = "site_studio_publisher.diagnostic.warning";
+const CAIL_LOG_SUBJECT_VERSION = "v1";
 const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
   [PUBLISHER_DIAGNOSTIC]: {
-    body: "Site Studio publisher diagnostic condition observed.",
     source: "platform",
     severity: "warn",
     required: ["product_id", "error_type"],
@@ -46,6 +46,7 @@ function createPublisherLogger(env: Env): PublisherLogger {
     release: OBSERVABILITY_CONTRACT.services.publisher.version,
     env: env.CAIL_LOG_ENV ?? "production",
     sourceClass: "platform",
+    subjectVersion: CAIL_LOG_SUBJECT_VERSION,
     catalog: PUBLISHER_EVENT_CATALOG,
     sink: createSiteStudioBoundarySink(env),
   });
@@ -98,6 +99,7 @@ function warnDiagnostic(errorType: string, logger?: PublisherLogger): void {
     release: OBSERVABILITY_CONTRACT.services.publisher.version,
     env: "production",
     sourceClass: "platform",
+    subjectVersion: CAIL_LOG_SUBJECT_VERSION,
     catalog: PUBLISHER_EVENT_CATALOG,
     sink: workersStructuredSink,
   })).emit(PUBLISHER_DIAGNOSTIC, {
@@ -387,11 +389,7 @@ export function responseHeaders(filePath: string, object: R2ObjectBody): Headers
     headers.set("Last-Modified", object.uploaded.toUTCString());
   }
 
-  if (contentType.startsWith("text/html")) {
-    headers.set("Cache-Control", "public, max-age=300");
-  } else {
-    headers.set("Cache-Control", "public, max-age=3600");
-  }
+  headers.set("Cache-Control", "public, max-age=0, must-revalidate");
 
   // §3¾: every project-supplied byte served here (200 responses AND a custom
   // 404.html, both of which build headers through this helper) is
@@ -523,7 +521,8 @@ async function handlePublishedRequest(
     rootPath = siteRootPath(parsed.userId, parsed.slug);
   }
 
-  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, parsed.slug, logger);
+  let effectiveSlug = parsed.slug;
+  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logger);
 
   if (!resolved) {
     // The owner id in the URL may be an anonymous namespace re-homed to a
@@ -531,8 +530,8 @@ async function handlePublishedRequest(
     const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId, logger);
     if (pointer) {
       ownerId = pointer.subject;
-      const mappedSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
-      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, mappedSlug, logger);
+      effectiveSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
+      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logger);
     }
   }
 
@@ -551,7 +550,7 @@ async function handlePublishedRequest(
       // Preserve the exact sub-path from the request (not the defaulted
       // filePath) and the query string, so deep links redirect faithfully.
       const subPath = legacySubPath(url);
-      const location = `/u/${handle}/${parsed.slug}/${subPath}${url.search}`;
+      const location = `/u/${handle}/${effectiveSlug}/${subPath}${url.search}`;
       return Response.redirect(new URL(location, url).toString(), 301);
     }
   }

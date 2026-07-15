@@ -1,5 +1,6 @@
 import type { SiteBuilderAgent } from "./agents/site-builder";
 import type { MigrationCoordinator } from "./agents/migration-coordinator";
+import type { MutationCoordinator } from "./agents/mutation-coordinator";
 import type {
   CailAnalyticsEngineDataset,
   CailLogEnvironment,
@@ -14,11 +15,12 @@ export interface Env {
   PUBLISHED_BASE_URL?: string;
   LOADER: WorkerLoader;
   // ---- CAIL backbone (docs/INTEGRATION.md) ----
-  // Model calls + key management: the one public base URL of the CAIL model
-  // proxy. Placeholder until launch (cail-gateway docs/LAUNCH_CHECKLIST.md).
+  // The public base URL of the CAIL model proxy. The checked-in value is source
+  // configuration, not proof of the live deployment; verify operations state
+  // against the gateway integration contract.
   CAIL_API_BASE?: string;
-  // Model id, expressed for AI Gateway's OpenAI-compatible path. See the
-  // model-availability flag: confirm the gateway-supported id at launch.
+  // Workers AI model id for the gateway's OpenAI-compatible path (`@cf/...`
+  // only under current CAIL policy).
   CAIL_MODEL?: string;
   // Text-to-image model id (Workers AI native path). CAIL policy: `@cf/...`
   // only. Default @cf/black-forest-labs/flux-2-klein-4b; budget alternative
@@ -31,6 +33,9 @@ export interface Env {
   // Static public JWKS used to verify RS256 X-CAIL-Identity-JWT tokens for the
   // cail:site-studio audience. Stored as a JSON Wrangler secret.
   CAIL_IDENTITY_JWKS?: string;
+  // Exactly one case-sensitive CAIL issuer for this deployment. Production
+  // and staging must never be combined into one trust namespace.
+  CAIL_IDENTITY_ISSUER?: string;
   // "true" makes protected routes reject anonymous requests (401). Flip in
   // lockstep with the gateway's CAIL_SSO_MODE=enforce.
   CAIL_REQUIRE_IDENTITY?: string;
@@ -39,6 +44,9 @@ export interface Env {
   // requires end >= start and a duration no longer than 30 days.
   CAIL_SSO_SWITCHED_AT?: string;
   CAIL_ACCOUNT_IMPORT_UNTIL?: string;
+  SITE_STUDIO_MAX_PROJECT_BYTES?: string;
+  SITE_STUDIO_MAX_OWNER_BYTES?: string;
+  SITE_STUDIO_UPLOADS_PER_MINUTE?: string;
   // Path scope for the anti-CSRF delivery cookie (cail_csrf_sitestudio).
   // Production is mounted at /site-studio on a shared origin alongside
   // sibling tools and untrusted /sites/ content. Runtime validation rejects a
@@ -50,6 +58,9 @@ export interface Env {
   // SS-3: atomic first-gate for anonymous→subject migration claims, keyed by
   // idFromName(anonId). See agents/migration-coordinator.ts and lib/session.ts.
   MIGRATION_COORDINATOR: DurableObjectNamespace<MigrationCoordinator>;
+  // Optional in the type so isolated tests can construct partial bindings;
+  // every runtime mutation path checks it and fails closed when absent.
+  MUTATION_COORDINATOR?: DurableObjectNamespace<MutationCoordinator>;
   ASSETS?: Fetcher;
 }
 
@@ -74,9 +85,8 @@ export interface User {
  * Props passed to the SiteBuilderAgent Durable Object at connection time
  * (see routes/agents.ts). `identityJwt` is the verified caller JWT captured on
  * the request that established the connection; the agent forwards it to the CAIL
- * model proxy. Note: the browser opens the agent over a long-lived WebSocket, so
- * this JWT is captured once at upgrade and can go stale — see the
- * websocket/JWT-TTL flag in the PR.
+ * model proxy. The browser refreshes old sockets and the model adapter checks
+ * token expiry before every gateway POST.
  */
 export interface SiteBuilderAgentProps {
   userId: string;

@@ -15,13 +15,13 @@
  *     `POST {CAIL_API_BASE}/v1/chat/completions`, so we can send a multimodal
  *     (image_url) message to a vision model.
  *
- * Per-purpose spend is stamped via the client's `options.metadata`
- * (`X-CAIL-Metadata` on the wire) so image spend is distinguishable from chat
- * spend in CAIL analytics.
+ * The client still sends `options.metadata` (`X-CAIL-Metadata` on the wire),
+ * but the current canonical gateway ignores caller metadata. It must not be
+ * treated as authoritative per-purpose spend attribution.
  */
 
 import { CailError, createCailClient, type CailClient } from "@cuny-ai-lab/cail-client";
-import { CAIL_APP_SLUG, type CailModelEnv } from "./model";
+import { assertCailJwtFresh, CAIL_APP_SLUG, type CailModelEnv } from "./model";
 import { sniffImageType, type ImageType } from "./image-validation";
 
 /**
@@ -94,7 +94,13 @@ export function clampDimension(value: number | undefined): number {
 function cailClient(apiBase: string, fetchImpl: typeof fetch): CailClient {
   // Image generation and moderation are billed POSTs. Disable automatic
   // retries until the gateway can deduplicate execution, not only ledger rows.
-  return createCailClient({ baseUrl: apiBase, app: CAIL_APP_SLUG, fetchImpl, maxRetries: 0 });
+  return createCailClient({
+    baseUrl: apiBase,
+    app: CAIL_APP_SLUG,
+    fetchImpl,
+    maxRetries: 0,
+    allowInsecureLoopback: true,
+  });
 }
 
 /**
@@ -147,7 +153,8 @@ export interface GenerateImageInput {
  * Generate an image via the gateway's native `/v1/run` endpoint.
  *
  * One-credential contract: `{kind: "jwt"}` only — the client guarantees no
- * `Authorization` header. Spend metadata carries purpose "image-generation".
+ * `Authorization` header. Purpose metadata is advisory at the client only; the
+ * current gateway ignores it.
  *
  * On a gateway/provider error the client throws a typed `CailError` whose
  * `message` is the CAIL error envelope's message verbatim; we pass it through
@@ -167,6 +174,7 @@ export async function generateImage(
     // could only ever earn its authentication_required envelope.
     return { ok: false, message: "Image generation requires an authenticated caller" };
   }
+  assertCailJwtFresh(jwt);
 
   const model = resolveImageModelId(env);
   const width = clampDimension(input.width);
@@ -295,6 +303,7 @@ export async function screenImage(
   if (!env.CAIL_API_BASE || !jwt) {
     return { allowed: false };
   }
+  assertCailJwtFresh(jwt);
 
   const model = resolveImageClassifierId(env);
   const dataUri = `data:image/png;base64,${encodeBase64(bytes)}`;

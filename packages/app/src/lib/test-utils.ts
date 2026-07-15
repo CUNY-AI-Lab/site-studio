@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { CSRF_HEADER_NAME, getOrMintCsrfToken } from "./csrf";
+import { OwnerMutationService, type MutationJournalStore } from "./owner-mutations";
 
 /**
  * Shared test helpers (vitest only picks up *.test.ts, so this file never runs
@@ -50,4 +51,19 @@ export async function mintCsrfSession(bucket: R2Bucket, userId: string): Promise
       "Sec-Fetch-Site": "same-origin"
     }
   };
+}
+
+/** In-memory RPC-shaped coordinator used by route tests. */
+export function createMockMutationCoordinator(bucket: R2Bucket): DurableObjectNamespace<any> {
+  const journals = new Map<string, unknown>();
+  const store: MutationJournalStore = {
+    async get<T>(key: string) { return journals.get(key) as T | undefined; },
+    async put<T>(key: string, value: T) { journals.set(key, value); },
+    async delete(key: string) { return journals.delete(key); }
+  };
+  const service = new OwnerMutationService(bucket, store);
+  return {
+    idFromName: (name: string) => name as unknown as DurableObjectId,
+    get: () => ({ execute: (ownerId: string, operation: any) => service.execute(ownerId, operation) })
+  } as unknown as DurableObjectNamespace<any>;
 }

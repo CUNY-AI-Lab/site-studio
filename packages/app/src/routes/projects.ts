@@ -10,6 +10,7 @@ import { sanitizeProjectId } from "../lib/path";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
 import { emitDiagnostic } from "../lib/logging";
+import { executeOwnerMutation } from "../lib/owner-mutations";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -66,22 +67,20 @@ export function createProjectRouter() {
       jsonError("Project already exists", 409);
     }
 
+    const templateFiles = template ? getTemplateFiles(template) : null;
+    const files = templateFiles ?? { "index.html": createBlankIndexHtml(name) };
     try {
-      await storage.createProjectIfAbsent(user.id, projectId, name);
+      await executeOwnerMutation(c.env, user.id, {
+        type: "create-project",
+        projectId,
+        name,
+        files
+      });
     } catch (error) {
-      if (error instanceof ProjectExistsError) {
+      if (error instanceof ProjectExistsError || (error instanceof Error && error.message.includes("already exists"))) {
         jsonError("Project already exists", 409);
       }
       throw error;
-    }
-
-    const templateFiles = template ? getTemplateFiles(template) : null;
-    if (templateFiles) {
-      for (const [filePath, content] of Object.entries(templateFiles)) {
-        await storage.writeFile(user.id, projectId, filePath, content);
-      }
-    } else {
-      await storage.writeFile(user.id, projectId, "index.html", createBlankIndexHtml(name));
     }
 
     return c.json({
@@ -108,9 +107,14 @@ export function createProjectRouter() {
 
     if (currentId !== nextId) {
       try {
-        await storage.renameProject(user.id, currentId, nextId);
+        await executeOwnerMutation(c.env, user.id, {
+          type: "rename-project",
+          projectId: currentId,
+          nextProjectId: nextId,
+          name
+        });
       } catch (error) {
-        if (error instanceof ProjectExistsError) {
+        if (error instanceof ProjectExistsError || (error instanceof Error && error.message.includes("already exists"))) {
           jsonError("Project already exists", 409);
         }
         throw error;
@@ -134,9 +138,16 @@ export function createProjectRouter() {
     // 404 the preflight would have given.
     let updated;
     try {
-      updated = await storage.updateProjectMetadata(user.id, nextId, { name });
+      if (currentId === nextId) {
+        await executeOwnerMutation(c.env, user.id, {
+          type: "rename-project-display",
+          projectId: nextId,
+          name
+        });
+      }
+      updated = await storage.getProjectMetadata(user.id, nextId);
     } catch (error) {
-      if (error instanceof ProjectNotFoundError) {
+      if (error instanceof ProjectNotFoundError || (error instanceof Error && error.message.includes("Project not found"))) {
         jsonError("Project not found", 404);
       }
       throw error;
@@ -149,7 +160,7 @@ export function createProjectRouter() {
     const user = getUser(c);
     const projectId = c.get("projectId");
 
-    await storage.deleteProject(user.id, projectId);
+    await executeOwnerMutation(c.env, user.id, { type: "delete-project", projectId });
 
     // SS-41: R2 deletion does not remove the project-named agent Durable
     // Object. Clear its persisted messages best-effort so recreating the same
@@ -198,10 +209,14 @@ export function createProjectRouter() {
       jsonError("Invalid snapshot payload", 400);
     }
 
-    const snapshot = await storage.createSnapshot(user.id, projectId, {
+    const result = await executeOwnerMutation(c.env, user.id, {
+      type: "create-snapshot",
+      projectId,
       trigger: "manual",
       label: parsed.data.label
     });
+    if (!("snapshot" in result)) throw new Error("Unexpected mutation result");
+    const snapshot = result.snapshot;
 
     // SS-28: a manual snapshot is one the user EXPLICITLY asked for, so an
     // over-cap project should be told the snapshot was too large (413) rather
@@ -230,25 +245,18 @@ export function createProjectRouter() {
       jsonError("Snapshot not found", 404);
     }
 
-    // SS-28: the "before restore" safety snapshot may be skipped if the current
-    // project is over the snapshot cap. The restore itself IS the recovery the
-    // user asked for, so a skipped safety snapshot must not block it — proceed
-    // and report the skip in the response instead of returning a fake snapshot.
-    const restorePointResult = await storage.createSnapshot(user.id, projectId, {
-      trigger: "restore",
-      label: `Before restore to ${targetSnapshot.label || targetSnapshot.id}`,
-      restoredFromSnapshotId: snapshotId
+    const result = await executeOwnerMutation(c.env, user.id, {
+      type: "restore-snapshot",
+      projectId,
+      snapshotId
     });
-    const restorePoint = isSnapshotSkipped(restorePointResult) ? null : restorePointResult;
-    const restorePointSkipped = isSnapshotSkipped(restorePointResult);
-
-    const restoredSnapshot = await storage.restoreSnapshot(user.id, projectId, snapshotId);
+    if (!("restoredSnapshot" in result)) throw new Error("Unexpected mutation result");
 
     return c.json({
       success: true,
-      restoredSnapshot,
-      restorePoint,
-      restorePointSkipped
+      restoredSnapshot: result.restoredSnapshot,
+      restorePoint: result.restorePoint,
+      restorePointSkipped: false
     });
   });
 

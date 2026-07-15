@@ -19,6 +19,8 @@ import {
 } from "../lib/image-validation";
 import { lintProject } from "../lib/a11y-lint";
 import type { RequireProjectVariables } from "../lib/require-project";
+import { executeOwnerMutation } from "../lib/owner-mutations";
+import { readBoundedFormData } from "../lib/multipart";
 
 const saveFileSchema = z.object({
   path: z.string().min(1),
@@ -100,6 +102,14 @@ function validateUpload(file: File, fileName: string) {
   if (!allowed.has(ext)) {
     jsonError(`Unsupported file extension: ${ext || "unknown"}`, 400);
   }
+}
+
+function requiredPositiveInteger(value: string | undefined, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    jsonError(`${name} is not configured`, 503);
+  }
+  return parsed;
 }
 
 /**
@@ -223,7 +233,15 @@ export function createFileRouter() {
     // a conflict response instead of silently overwriting a newer agent/editor
     // write. Legacy clients without an ETag retain the original write behavior.
     if (baseEtag !== undefined) {
-      const etag = await storage.writeFileIfMatch(user.id, projectId, filePath, content, baseEtag);
+      const result = await executeOwnerMutation(c.env, user.id, {
+        type: "write-file",
+        projectId,
+        path: filePath,
+        content,
+        baseEtag
+      });
+      if (!("etag" in result)) throw new Error("Unexpected mutation result");
+      const etag = result.etag;
       if (etag === null) {
         const current = await storage.readFileWithEtag(user.id, projectId, filePath);
         return c.json({
@@ -241,7 +259,14 @@ export function createFileRouter() {
       });
     }
 
-    const etag = await storage.writeFile(user.id, projectId, filePath, content);
+    const result = await executeOwnerMutation(c.env, user.id, {
+      type: "write-file",
+      projectId,
+      path: filePath,
+      content
+    });
+    if (!("etag" in result) || result.etag === null) throw new Error("Unexpected mutation result");
+    const etag = result.etag;
     return c.json({
       success: true,
       path: filePath,
@@ -260,7 +285,7 @@ export function createFileRouter() {
       jsonError("Cannot delete protected files", 403);
     }
 
-    await storage.deleteFile(user.id, projectId, filePath);
+    await executeOwnerMutation(c.env, user.id, { type: "delete-file", projectId, path: filePath });
     return c.json({ success: true, message: "File deleted successfully" });
   });
 
@@ -292,9 +317,14 @@ export function createFileRouter() {
     // destination claim inside renameFile is authoritative — losing it means a
     // concurrent write or rename took the destination after the preflight.
     try {
-      await storage.renameFile(user.id, projectId, currentPath, nextPath);
+      await executeOwnerMutation(c.env, user.id, {
+        type: "rename-file",
+        projectId,
+        oldPath: currentPath,
+        newPath: nextPath
+      });
     } catch (error) {
-      if (error instanceof FileExistsError) {
+      if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
         jsonError("A file with that name already exists", 409);
       }
       throw error;
@@ -308,21 +338,17 @@ export function createFileRouter() {
     const projectId = c.get("projectId");
 
     // SS-29 pre-buffer guard (defense-in-depth layered on the per-file storage
-    // caps below). `c.req.formData()` buffers the ENTIRE multipart body into
-    // isolate memory before any `file.size` check runs, so the storage caps
-    // reject storage but not allocation. Reject over-ceiling bodies early using
+    // caps below). Plain `formData()` buffers the multipart body before any
+    // `file.size` check, so reject declared over-ceiling bodies early using
     // the declared Content-Length, BEFORE buffering. The ceiling is the largest
     // per-file cap plus a multipart-envelope margin so a valid 32MB file is not
     // false-rejected by framing overhead. A missing/unparseable Content-Length
-    // falls through to the existing post-parse checks (the Workers platform
-    // still bounds the request body), so this is a cleaner early rejection, not
-    // the only line of defense.
-    const contentLength = Number(c.req.header("content-length"));
-    if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BODY_BYTES) {
-      jsonError(`Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`, 413);
-    }
-
-    const form = await c.req.formData();
+    // uses boundedFormData, which streams into a capped buffer before parsing.
+    const form = await readBoundedFormData(
+      c.req.raw,
+      MAX_UPLOAD_BODY_BYTES,
+      `Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`
+    );
     const entry = form.get("file");
 
     if (!isFileUpload(entry)) {
@@ -351,6 +377,21 @@ export function createFileRouter() {
     const buffer = new Uint8Array(await entry.arrayBuffer());
     validateImageBytes(sanitized, buffer);
 
+    const uploadPolicy = {
+      maxProjectBytes: requiredPositiveInteger(
+        c.env.SITE_STUDIO_MAX_PROJECT_BYTES,
+        "SITE_STUDIO_MAX_PROJECT_BYTES"
+      ),
+      maxOwnerBytes: requiredPositiveInteger(
+        c.env.SITE_STUDIO_MAX_OWNER_BYTES,
+        "SITE_STUDIO_MAX_OWNER_BYTES"
+      ),
+      uploadsPerMinute: requiredPositiveInteger(
+        c.env.SITE_STUDIO_UPLOADS_PER_MINUTE,
+        "SITE_STUDIO_UPLOADS_PER_MINUTE"
+      )
+    };
+
     // Collision-suffix within the target prefix so images/photo.png and
     // photo.png at the root never clobber each other. The write itself is
     // atomic (put-if-absent): rather than probe with fileExists() and then
@@ -366,7 +407,23 @@ export function createFileRouter() {
     let written = false;
     for (let counter = 0; counter < MAX_UPLOAD_ATTEMPTS; counter += 1) {
       const candidate = counter === 0 ? `${prefix}${sanitized}` : `${prefix}${base}_${counter}${ext}`;
-      if (await storage.uploadToProjectIfAbsent(user.id, projectId, candidate, buffer)) {
+      let result;
+      try {
+        result = await executeOwnerMutation(c.env, user.id, {
+          type: "upload-if-absent",
+          projectId,
+          path: candidate,
+          content: buffer,
+          ...uploadPolicy
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Upload admission failed";
+        if (message.includes("rate limit")) jsonError(message, 429);
+        if (message.includes("storage quota")) jsonError(message, 413);
+        throw error;
+      }
+      if (!("written" in result)) throw new Error("Unexpected mutation result");
+      if (result.written) {
         filename = candidate;
         written = true;
         break;

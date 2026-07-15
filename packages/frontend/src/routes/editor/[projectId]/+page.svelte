@@ -7,6 +7,7 @@
 	import { createAutosave, type SaveSnapshot } from '$lib/editor/autosave';
 	import { canQueueFileSave, type FileOpenStatus } from '$lib/editor/file-open-state';
 	import { buildKeepaliveSave } from '$lib/editor/keepalive-save';
+	import { clearDraft, loadDraft, rebaseDraft, saveDraft, type StoredDraft } from '$lib/editor/draft-store';
 	import Preview from '$lib/components/Preview.svelte';
 	import AgentChat from '$lib/components/AgentChat.svelte';
 	import CodeView from '$lib/components/CodeView.svelte';
@@ -15,7 +16,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
-	import { csrfFetch, getCsrfTokenFromCookie } from '$lib/api/csrf';
+	import { csrfFetch, getCsrfToken, getCsrfTokenFromCookie } from '$lib/api/csrf';
 	import { apiFetch, apiResponseFetch } from '$lib/api/errors';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
 	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
@@ -53,6 +54,9 @@
 	let filesLoadError = $state<string | null>(null);
 	let allProjects = $state<Project[]>([]);
 	let currentProject = $state<Project | null>(null);
+	let draftSecret = '';
+	let draftWriteQueue: Promise<void> = Promise.resolve();
+	let draftStorageWarningShown = false;
 
 	// Reactive page title based on current project
 	let pageTitle = $derived(currentProject ? `${currentProject.name} - Site Studio` : 'Editor - Site Studio');
@@ -105,6 +109,13 @@
 	}
 
 	onMount(() => {
+		void getCsrfToken()
+			.then((token) => {
+				draftSecret = token;
+			})
+			.catch((error) => {
+				console.error('Could not initialize encrypted draft storage:', error);
+			});
 		// Auto-collapse chat on small screens so preview gets full width
 		if (!hasAutoCollapsed && window.innerWidth < 768 && chatPane) {
 			hasAutoCollapsed = true;
@@ -238,8 +249,22 @@
 			const data = await response.json();
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
 			currentFileIsText = data.isText ?? true;
-			fileContent = data.content;
-			currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
+			let draft: StoredDraft | null = null;
+			try {
+				draftSecret ||= await getCsrfToken();
+				draft = await loadDraft(localStorage, projectId, filePath, draftSecret);
+			} catch (error) {
+				console.error('Could not read encrypted local draft:', error);
+			}
+			if (requestId !== fileSelectCounter) return;
+			if (draft && draft.content !== data.content) {
+				fileContent = draft.content;
+				currentFileEtag = draft.baseEtag;
+				toast.error('Recovered an unsaved local draft. It will not overwrite a newer server version.');
+			} else {
+				fileContent = data.content;
+				currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
+			}
 			currentFileOpenStatus = 'loaded';
 		} catch (error) {
 			console.error('Error loading file:', error);
@@ -274,6 +299,7 @@
 
 	async function persistFile(snapshot: SaveSnapshot): Promise<boolean> {
 		const { projectId: targetProjectId, filePath, content } = snapshot;
+		const requestBaseEtag = currentFileEtag;
 
 		try {
 			const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
@@ -289,9 +315,8 @@
 			if (response.status === 409) {
 				const conflict = (await response.json()) as { error?: unknown };
 				if (conflict.error === 'file_conflict') {
-					toast.error('This file changed elsewhere. Loading the latest version now.');
-					await reloadFileAfterConflict(targetProjectId, filePath);
-					return true;
+					toast.error('This file changed elsewhere. Your local draft is preserved; copy it before reloading.');
+					return false;
 				}
 			}
 
@@ -304,6 +329,13 @@
 				typeof data.etag === 'string'
 			) {
 				currentFileEtag = data.etag;
+			}
+			await draftWriteQueue;
+			if (draftSecret) {
+				if (typeof data.etag === 'string') {
+					await rebaseDraft(localStorage, snapshot, requestBaseEtag, data.etag, draftSecret);
+				}
+				await clearDraft(localStorage, snapshot, draftSecret);
 			}
 
 			// Refresh preview after save
@@ -323,30 +355,6 @@
 		}
 	}
 
-	async function reloadFileAfterConflict(targetProjectId: string, filePath: string): Promise<void> {
-		try {
-			const response = await apiResponseFetch(
-				resolvePath(`/api/projects/${targetProjectId}/file?path=${encodeURIComponent(filePath)}`),
-				{ credentials: 'include' }
-			);
-			if (!response.ok) throw new Error('Failed to reload file after conflict');
-
-			const data = await response.json();
-			if (targetProjectId !== projectId || filePath !== currentFile) return;
-
-			currentFileContentType = data.contentType || '';
-			currentFileIsText = data.isText ?? true;
-			fileContent = data.content;
-			currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
-		} catch (error) {
-			console.error('Error reloading file after conflict:', error);
-			if (targetProjectId === projectId && filePath === currentFile) {
-				currentFileEtag = null;
-			}
-			toast.error('The latest file version could not be loaded. Reopen the file to try again.');
-		}
-	}
-
 	const autosave = createAutosave({
 		persist: persistFile,
 		onSavingChange: (saving) => {
@@ -363,6 +371,18 @@
 		const snapshot = getCurrentSaveSnapshot();
 		if (!snapshot) return;
 
+		if (draftSecret) {
+			const baseEtag = currentFileEtag;
+			draftWriteQueue = draftWriteQueue
+				.then(() => saveDraft(localStorage, snapshot, baseEtag, draftSecret))
+				.catch((error) => {
+					console.error('Could not persist encrypted local draft:', error);
+					if (!draftStorageWarningShown) {
+						draftStorageWarningShown = true;
+						toast.error('Local draft recovery is unavailable in this browser. Keep this tab open until saving finishes.');
+					}
+				});
+		}
 		autosave.queue(snapshot);
 	}
 

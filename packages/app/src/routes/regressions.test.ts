@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
-import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
+import { createMockKV, createMockMutationCoordinator, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import { R2ProjectStorage } from "../storage/r2";
 import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 import { createFileRouter } from "./files";
@@ -180,6 +180,10 @@ function createEnv(bucket: R2Bucket): Env {
       get: () => actionAgent,
     } as unknown as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
+    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
+    SITE_STUDIO_MAX_PROJECT_BYTES: String(512 * 1024 * 1024),
+    SITE_STUDIO_MAX_OWNER_BYTES: String(2 * 1024 * 1024 * 1024),
+    SITE_STUDIO_UPLOADS_PER_MINUTE: "100",
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
   };
@@ -667,6 +671,33 @@ describe("route regressions", () => {
     expect(response.headers.get("Location")).toBe("/u/janedoe/port/about/?ref=x");
   });
 
+  it("redirects a migrated legacy slug to the effective canonical slug", async () => {
+    await storage.createProject(userId, "imported", "Imported");
+    await storage.writeFile(userId, "imported", "index.html", "<h1>Imported</h1>");
+    await storage.updateProjectMetadata(userId, "imported", {
+      published: true,
+      slug: "portfolio-2"
+    });
+    bucket.store.set("projects/user_anon/.migrated.json", {
+      data: JSON.stringify({
+        version: 1,
+        subject: userId,
+        migratedAt: "2026-07-14T12:00:00.000Z",
+        projects: { portfolio: "imported" },
+        slugs: { portfolio: "portfolio-2" }
+      })
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_anon/portfolio/about/?ref=x",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("/u/janedoe/portfolio-2/about/?ref=x");
+  });
+
   it("serves a legacy /sites/{owner}/{slug} URL directly when the owner has no handle", async () => {
     // A different owner with published content but no handle: content serves,
     // no redirect (zero breakage for pre-handle sites).
@@ -732,7 +763,7 @@ describe("route regressions", () => {
     expect(await response.text()).toContain("<h1>Slugless</h1>");
   });
 
-  it("SS-15: published HTML carries max-age=300 + ETag, composed with the CSP", async () => {
+  it("published HTML revalidates mutable URLs and carries ETag with the CSP", async () => {
     await storage.createProject(userId, "cache", "Cache");
     await storage.writeFile(userId, "cache", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "cache", { published: true, slug: "cache" });
@@ -743,7 +774,7 @@ describe("route regressions", () => {
       createEnv(bucket)
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     // The §3¾ containment coexists with the caching validators.
     expect(response.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
     expect(response.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
@@ -822,7 +853,7 @@ describe("served-bytes security headers (§3¾)", () => {
       createEnv(bucket)
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=3600");
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
     expectSandboxed(response);
   });
 
@@ -920,6 +951,23 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(await storage.readThumbnail(userId, "thumbsniff")).toBeNull();
   });
 
+  it("rejects a PNG signature without a valid IHDR chunk", async () => {
+    await storage.createProject(userId, "thumbihdr", "Thumb IHDR");
+    const signatureOnly = new Uint8Array(32);
+    signatureOnly.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const form = new FormData();
+    form.append("image", new File([signatureOnly], "thumb.png", { type: "image/png" }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/thumbihdr/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    expect(await storage.readThumbnail(userId, "thumbihdr")).toBeNull();
+  });
+
   it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
     await storage.createProject(userId, "thumbok", "Thumb OK");
     const form = new FormData();
@@ -936,6 +984,38 @@ describe("served-bytes security headers (§3¾)", () => {
 
     expect(response.status).toBe(200);
     expect(await storage.readThumbnail(userId, "thumbok")).not.toBeNull();
+  });
+
+  it("rejects a thumbnail whose IHDR dimensions exceed the render ceiling", async () => {
+    await storage.createProject(userId, "thumbdimensions", "Thumb Dimensions");
+    const png = pngBytes();
+    new DataView(png.buffer).setUint32(16, 5000);
+    const form = new FormData();
+    form.append("image", new File([png.buffer as ArrayBuffer], "thumb.png", { type: "image/png" }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/thumbdimensions/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    expect(await storage.readThumbnail(userId, "thumbdimensions")).toBeNull();
+  });
+
+  it("rejects a thumbnail body above the thumbnail byte ceiling before buffering it again", async () => {
+    await storage.createProject(userId, "thumbbytes", "Thumb Bytes");
+    const form = new FormData();
+    form.append("image", new File([pngBytes(2 * 1024 * 1024 + 1).buffer as ArrayBuffer], "thumb.png", { type: "image/png" }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/thumbbytes/thumbnail",
+      { method: "POST", body: form, headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(413);
+    expect(await storage.readThumbnail(userId, "thumbbytes")).toBeNull();
   });
 
   it("SS-33: thumbnail POST to a missing project 404s without fabricating project keys", async () => {
@@ -1163,6 +1243,8 @@ describe("served-bytes security headers (§3¾)", () => {
 function pngBytes(len = 64): Uint8Array {
   const arr = new Uint8Array(len);
   arr.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  // Minimal IHDR layout for validation: length=13, type=IHDR, 1x1 dimensions.
+  arr.set([0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1], 8);
   return arr;
 }
 
@@ -1363,11 +1445,9 @@ describe("image upload hardening", () => {
     expect(await storage.fileExists(userId, "imgproj", "ok.png")).toBe(true);
   });
 
-  it("SS-29: missing Content-Length falls through to the existing post-parse checks", async () => {
-    // Build a real multipart body but strip Content-Length. The pre-buffer guard
-    // is skipped (unparseable length), and the request still succeeds via the
-    // existing parse + validation path — the guard is an addition, not the only
-    // line of defense.
+  it("SS-29: missing Content-Length uses the bounded streaming parser", async () => {
+    // Build a real multipart body but strip Content-Length. The request remains
+    // valid, but the server reads it through the same absolute body ceiling.
     const req = uploadRequest("nolen.png", pngBytes());
     const headers = new Headers(req.headers as HeadersInit);
     headers.delete("content-length");
@@ -1381,6 +1461,20 @@ describe("image upload hardening", () => {
 
     expect(response.status).toBe(200);
     expect(((await response.json()) as { path: string }).path).toBe("nolen.png");
+  });
+
+  it("fails closed when upload storage/rate policy is not configured", async () => {
+    const environment = createEnv(bucket);
+    delete environment.SITE_STUDIO_MAX_PROJECT_BYTES;
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("policy.png", pngBytes()),
+      environment
+    );
+
+    expect(response.status).toBe(503);
+    expect(await storage.fileExists(userId, "imgproj", "policy.png")).toBe(false);
   });
 });
 

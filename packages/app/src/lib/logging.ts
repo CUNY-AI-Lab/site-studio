@@ -26,6 +26,7 @@ import type { Env } from "../types";
 
 export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;
 export const LOG_RELEASE = OBSERVABILITY_CONTRACT.services.app.version;
+export const CAIL_LOG_SUBJECT_VERSION = "v1";
 export { PRODUCT_ID };
 
 export const SITE_STUDIO_EVENTS = Object.freeze({
@@ -36,21 +37,18 @@ export const SITE_STUDIO_EVENTS = Object.freeze({
 
 export const SITE_STUDIO_EVENT_CATALOG = extendCailEventCatalog({
   [SITE_STUDIO_EVENTS.DIAGNOSTIC_INFO]: {
-    body: "Site Studio diagnostic condition observed.",
     source: "platform",
     severity: "info",
     required: ["product_id", "error_type"],
     optional: ["request_id", "action_id", "trace", "principal", "http_method", "route", "status", "duration_ms", "retry_count", "req_bytes"],
   },
   [SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING]: {
-    body: "Site Studio diagnostic condition observed.",
     source: "platform",
     severity: "warn",
     required: ["product_id", "error_type"],
     optional: ["request_id", "action_id", "trace", "principal", "http_method", "route", "status", "duration_ms", "retry_count", "req_bytes"],
   },
   [SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR]: {
-    body: "Site Studio diagnostic condition observed.",
     source: "platform",
     severity: "error",
     required: ["product_id", "error_type"],
@@ -71,6 +69,7 @@ export function createSiteStudioLogger(options: {
     release: options.release ?? LOG_RELEASE,
     env: options.env ?? "production",
     sourceClass: "platform",
+    subjectVersion: CAIL_LOG_SUBJECT_VERSION,
     catalog: SITE_STUDIO_EVENT_CATALOG,
     sink: options.sink,
     clock: options.clock,
@@ -108,9 +107,14 @@ export function traceFromCorrelation(correlation: CailCorrelation) {
 
 /** Only verified CAIL subjects are linkable principals. Legacy owners stay anonymous. */
 export function principalForOwnerId(ownerId?: string): CailPrincipalFields {
-  return ownerId && /^cail-[0-9a-f]{32}$/.test(ownerId)
-    ? { type: "user", subject: ownerId }
-    : { type: "anonymous" };
+  const match = ownerId?.match(/^cail-([0-9a-f]{32})$/);
+  if (match) {
+    return { type: "user", subject: `cail-${CAIL_LOG_SUBJECT_VERSION}-${match[1]}` };
+  }
+  if (ownerId && new RegExp(`^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`).test(ownerId)) {
+    return { type: "user", subject: ownerId };
+  }
+  return { type: "anonymous" };
 }
 
 export function httpMethod(method: string): CailHttpMethod {

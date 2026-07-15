@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { authMiddleware, getCailIdentityJwt } from "./session";
+import { migrateAnonymousData } from "./migration";
 
 function base64url(bytes: Uint8Array): string {
   let binary = "";
@@ -104,10 +105,11 @@ function createCoordinatorNamespace(): MockCoordinator {
 
 function createEnv(overrides?: Partial<Env>): Env {
   const now = Date.now();
-  return {
+  const env: Env = {
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
+    CAIL_IDENTITY_ISSUER: "https://tools.ailab.gc.cuny.edu/cail-sso",
     CAIL_MODEL: "test-model",
     CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
     CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
@@ -124,6 +126,20 @@ function createEnv(overrides?: Partial<Env>): Env {
     ASSETS: undefined,
     ...overrides
   };
+  env.MUTATION_COORDINATOR ??= {
+    idFromName: (name: string) => name as unknown as DurableObjectId,
+    get: () => ({
+      migrateAnonymous: (anonUserId: string, subject: string, anonSessionId?: string) =>
+        migrateAnonymousData({
+          bucket: env.SITE_STUDIO_BUCKET,
+          kv: env.SESSION_KV,
+          anonUserId,
+          subject,
+          anonSessionId
+        })
+    })
+  } as unknown as Env["MUTATION_COORDINATOR"];
+  return env;
 }
 
 describe("authMiddleware", () => {
@@ -428,7 +444,7 @@ describe("authMiddleware anonymous-data migration", () => {
       );
       expect(completed).toMatchObject({
         "error.type": "account_import_completed",
-        "enduser.pseudo.id": SUBJECT,
+        "enduser.pseudo.id": "cail-v1-0123456789abcdef0123456789abcdef",
         "cail.product.id": "site-studio",
       });
       expect(JSON.stringify(completed)).not.toContain(ANON);
@@ -513,7 +529,7 @@ describe("authMiddleware anonymous-data migration", () => {
         expect.objectContaining({
           "event.name": "site_studio.diagnostic.warning",
           "error.type": "account_import_expired",
-          "enduser.pseudo.id": SUBJECT,
+          "enduser.pseudo.id": "cail-v1-0123456789abcdef0123456789abcdef",
         })
       );
     } finally {

@@ -11,15 +11,14 @@
  * JWT verification is delegated to the shared `@cuny-ai-lab/cail-identity`
  * primitive. Site Studio accepts one contract: RS256, a public key selected
  * from `CAIL_IDENTITY_JWKS`, and the service-specific `cail:site-studio`
- * audience. The issuer must exactly match the allowlist below. The stable
+ * audience. The issuer must exactly match the deployment's single configured
+ * `CAIL_IDENTITY_ISSUER`; production and staging trust are never combined. The stable
  * pseudonymous CAIL subject (`sub`) is the only durable key for workspace
  * ownership. Never key anything by email.
  */
 
 import {
   verifyIdentityJwt,
-  CAIL_CANONICAL_ISSUER,
-  CAIL_STAGING_ISSUER,
   type CailIdentity,
 } from "@cuny-ai-lab/cail-identity";
 
@@ -27,19 +26,13 @@ export type { CailIdentity };
 
 export interface IdentityVerificationEnv {
   CAIL_IDENTITY_JWKS?: string;
+  CAIL_IDENTITY_ISSUER?: string;
 }
 
 export type RequestIdentityResolution =
   | { status: "verified"; identity: CailIdentity; token: string }
   | { status: "absent" }
   | { status: "invalid" };
-
-/**
- * Issuers this worker accepts. EXACT-match allowlist (not a suffix check):
- * production `tools.ailab.gc.cuny.edu` and staging `tools.cuny.qzz.io`. Any
- * other `iss` is rejected. An empty allowlist would reject every token.
- */
-const ALLOWED_ISSUERS = [CAIL_CANONICAL_ISSUER, CAIL_STAGING_ISSUER];
 
 /** The header the SSO gate injects. Bare `X-CAIL-*` headers are never trusted. */
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
@@ -58,7 +51,7 @@ function parseJwks(raw: string | undefined): Parameters<typeof verifyIdentityJwt
 
 /**
  * Verify the canonical request identity. The raw token is returned with the
- * normalized identity so downstream model calls forward the verified value.
+ * verified identity so downstream model calls forward the exact value.
  */
 export async function resolveRequestIdentity(
   request: Request,
@@ -68,11 +61,14 @@ export async function resolveRequestIdentity(
 
   const token = request.headers.get(CAIL_IDENTITY_HEADER)?.trim() ?? "";
   const jwks = parseJwks(env.CAIL_IDENTITY_JWKS);
-  if (!token || !jwks) return { status: "invalid" };
+  const issuer = env.CAIL_IDENTITY_ISSUER;
+  if (!token || !jwks || typeof issuer !== "string" || issuer.length === 0 || issuer.trim() !== issuer) {
+    return { status: "invalid" };
+  }
 
   const identity = await verifyIdentityJwt(token, jwks, {
     expectedAudience: CAIL_IDENTITY_AUDIENCE,
-    allowedIssuers: ALLOWED_ISSUERS,
+    allowedIssuers: [issuer],
   });
   return identity
     ? { status: "verified", identity, token }

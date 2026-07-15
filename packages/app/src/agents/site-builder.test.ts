@@ -43,7 +43,7 @@ describe("describeModelStreamError", () => {
     expect(described.message).toContain("3600 seconds");
   });
 
-  it("surfaces a thrown CailError's verbatim quota message (cail-client 2d51745 contract)", () => {
+  it("surfaces a thrown CailError's verbatim quota message", () => {
     const verbatim = "You have used your hourly AI quota. It resets on the hour.";
     const cailError = new CailError("quota_exceeded", verbatim, 429, { retry_after_seconds: 1800 });
 

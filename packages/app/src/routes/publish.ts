@@ -1,7 +1,12 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
-import { getServedContentType } from "../lib/constants";
+import {
+  getServedContentType,
+  MAX_THUMBNAIL_BODY_BYTES,
+  MAX_THUMBNAIL_BYTES,
+  MAX_THUMBNAIL_DIMENSION
+} from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
@@ -13,10 +18,9 @@ import { isProtectedServedPath } from "../../../serving-core/src/protected-files
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
-import { ProjectNotFoundError, R2ProjectStorage, SlugReservationLostError } from "../storage/r2";
+import { R2ProjectStorage } from "../storage/r2";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
-import type { ProjectMetadata } from "../types";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
@@ -27,30 +31,15 @@ import {
   principalForOwnerId,
   type LoggingVariables,
 } from "../lib/logging";
+import { executeOwnerMutation } from "../lib/owner-mutations";
+import { readBoundedFormData } from "../lib/multipart";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
-/**
- * SS-51: the requireProject/metadata preflights on these routes are advisory —
- * a concurrent DELETE can remove the project between the preflight and the
- * metadata update. updateProjectMetadata now refuses to fabricate a record for
- * an absent project (it used to resurrect a deleted project as a published
- * ghost); surface that refusal as the same 404 the preflight would have given.
- */
-async function updateMetadataOr404(
-  storage: R2ProjectStorage,
-  userId: string,
-  projectId: string,
-  updates: Partial<ProjectMetadata>
-): Promise<ProjectMetadata> {
-  try {
-    return await storage.updateProjectMetadata(userId, projectId, updates);
-  } catch (error) {
-    if (error instanceof ProjectNotFoundError) {
-      jsonError("Project not found", 404);
-    }
-    throw error;
-  }
+function requiredPositiveInteger(value: string | undefined, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) jsonError(`${name} is not configured`, 503);
+  return parsed;
 }
 
 /**
@@ -213,33 +202,24 @@ export function createPublishRouter() {
     let actionTerminalRecorded = false;
 
     try {
-      // The reservation ETag is the publish generation. A stale request that was
-      // paused after resolving a slug must renew that exact generation before it
-      // can write metadata; if another project reclaimed it, resolve again and
-      // publish only under a reservation this request still owns.
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const claim = await storage.resolvePublishedSlug(user.id, desiredSlug, projectId);
-        slug = claim.slug;
-        url = `${getPublishedBaseUrl(c)}/u/${handle}/${slug}/`;
-
-        try {
-          await storage.updateProjectMetadataForSlugClaim(user.id, projectId, claim, {
-            published: true,
-            publishedUrl: url,
-            publishedAt: new Date().toISOString(),
-            slug
-          });
-          publishAction.acknowledgeMutation();
-          break;
-        } catch (error) {
-          if (error instanceof ProjectNotFoundError) {
-            jsonError("Project not found", 404);
-          }
-          if (!(error instanceof SlugReservationLostError) || attempt === 4) {
-            throw error;
-          }
+      let result;
+      try {
+        result = await executeOwnerMutation(c.env, user.id, {
+          type: "publish-project",
+          projectId,
+          desiredSlug,
+          publishedBaseUrl: getPublishedBaseUrl(c),
+          handle
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("Project not found")) {
+          jsonError("Project not found", 404);
         }
+        throw error;
       }
+      if (!("published" in result)) throw new Error("Unexpected mutation result");
+      ({ slug, url } = result.published);
+      publishAction.acknowledgeMutation();
 
       const terminalAt = Date.now();
       await actionAgent.recordActionTerminal({
@@ -289,11 +269,18 @@ export function createPublishRouter() {
       jsonError("Project is not currently published", 400);
     }
 
-    await updateMetadataOr404(storage, user.id, projectId, {
-      published: false,
-      publishedUrl: undefined,
-      unpublishedAt: new Date().toISOString()
-    });
+    try {
+      await executeOwnerMutation(c.env, user.id, {
+        type: "unpublish-project",
+        projectId,
+        unpublishedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Project not found")) {
+        jsonError("Project not found", 404);
+      }
+      throw error;
+    }
 
     return c.json({
       success: true,
@@ -302,10 +289,13 @@ export function createPublishRouter() {
   });
 
   app.post("/api/projects/:id/thumbnail", async (c) => {
-    const storage = c.get("storage");
     const user = getUser(c);
     const projectId = c.get("projectId");
-    const form = await c.req.formData();
+    const form = await readBoundedFormData(
+      c.req.raw,
+      MAX_THUMBNAIL_BODY_BYTES,
+      `Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`
+    );
     const entry = form.get("image");
 
     if (!entry || typeof entry === "string") {
@@ -318,6 +308,10 @@ export function createPublishRouter() {
       jsonError("Only image/png is supported", 400);
     }
 
+    if (image.size > MAX_THUMBNAIL_BYTES) {
+      jsonError(`Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`, 413);
+    }
+
     const content = new Uint8Array(await image.arrayBuffer());
 
     // SS-21: don't trust the client-declared type. Thumbnails are PNGs, so sniff
@@ -326,11 +320,43 @@ export function createPublishRouter() {
     if (sniffImageType(content) !== "png") {
       jsonError("Thumbnail must be a valid PNG image.", 400);
     }
+    if (
+      content.byteLength < 24 ||
+      new DataView(content.buffer, content.byteOffset, content.byteLength).getUint32(8) !== 13 ||
+      String.fromCharCode(...content.slice(12, 16)) !== "IHDR"
+    ) {
+      jsonError("Thumbnail PNG is missing its IHDR dimensions.", 400);
+    }
+    const view = new DataView(content.buffer, content.byteOffset, content.byteLength);
+    const width = view.getUint32(16);
+    const height = view.getUint32(20);
+    if (
+      width < 1 ||
+      height < 1 ||
+      width > MAX_THUMBNAIL_DIMENSION ||
+      height > MAX_THUMBNAIL_DIMENSION
+    ) {
+      jsonError(`Thumbnail dimensions must be between 1 and ${MAX_THUMBNAIL_DIMENSION}px.`, 400);
+    }
 
-    await storage.writeThumbnail(user.id, projectId, content);
-    await updateMetadataOr404(storage, user.id, projectId, {
-      thumbnailUrl: `/api/projects/${projectId}/thumbnail`
-    });
+    try {
+      await executeOwnerMutation(c.env, user.id, {
+        type: "write-thumbnail",
+        projectId,
+        content,
+        maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
+        maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
+        uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Thumbnail admission failed";
+      if (message.includes("rate limit")) jsonError(message, 429);
+      if (message.includes("storage quota")) jsonError(message, 413);
+      if (message.includes("Project not found") || message.includes("Project metadata not found")) {
+        jsonError("Project not found", 404);
+      }
+      throw error;
+    }
 
     return c.json({
       success: true,
@@ -402,19 +428,21 @@ async function resolvePublishedSite(
   bucket: R2Bucket,
   requestedUserId: string,
   slug: string
-): Promise<{ ownerId: string; resolved: { projectId: string } } | null> {
+): Promise<{ ownerId: string; effectiveSlug: string; resolved: { projectId: string } } | null> {
   let userId = requestedUserId;
+  let effectiveSlug = slug;
   let resolved = await storage.findPublishedProjectBySlug(userId, slug);
 
   if (!resolved) {
     const pointer = await loadMigrationPointer(bucket, userId);
     if (pointer) {
       userId = pointer.subject;
-      resolved = await storage.findPublishedProjectBySlug(userId, pointer.slugs[slug] ?? slug);
+      effectiveSlug = pointer.slugs[slug] ?? slug;
+      resolved = await storage.findPublishedProjectBySlug(userId, effectiveSlug);
     }
   }
 
-  return resolved ? { ownerId: userId, resolved } : null;
+  return resolved ? { ownerId: userId, effectiveSlug, resolved } : null;
 }
 
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
@@ -464,8 +492,9 @@ async function serveLegacySite(c: AppContext, rawPath: string) {
 
   // If the resolved owner has a handle, the canonical home is /u/{handle}/…;
   // redirect there so a single public address wins and the owner id stops
-  // appearing in the URL. `slug` is the legacy-URL slug; keep it as the /u/
-  // slug so shared deep links resolve unchanged (the /u/ handler re-resolves).
+  // appearing in the URL. A migration pointer may have remapped a colliding
+  // legacy slug, so the canonical URL must use the effective slug that actually
+  // resolved—not the old requested slug.
   const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, site.ownerId);
   if (handle) {
     const url = new URL(c.req.url);
@@ -473,7 +502,7 @@ async function serveLegacySite(c: AppContext, rawPath: string) {
     // default) and the query string, so deep links redirect faithfully.
     const base = `/sites/${requestedUserId}/${slug}/`;
     const subPath = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : "";
-    const location = `/u/${handle}/${slug}/${subPath}${url.search}`;
+    const location = `/u/${handle}/${site.effectiveSlug}/${subPath}${url.search}`;
     return c.redirect(location, 301);
   }
 
@@ -518,7 +547,7 @@ async function servePublishedFile(
  * a served published byte. Deliberately mirrors the publisher worker's
  * responseHeaders() (packages/worker/src/index.ts) so both origins emit the
  * SAME header set for the same file — SS-8 (content type), SS-15 (ETag /
- * Last-Modified / HTML max-age=300), and the CSP sandbox composed on top.
+ * Last-Modified / mandatory revalidation), and the CSP sandbox composed on top.
  */
 export function publishedResponseHeaders(filePath: string, object: R2ObjectBody): Headers {
   const contentType = getServedContentType(filePath);
@@ -531,13 +560,10 @@ export function publishedResponseHeaders(filePath: string, object: R2ObjectBody)
     headers.set("Last-Modified", object.uploaded.toUTCString());
   }
 
-  // SS-15: HTML is short-lived (edits should surface quickly); stable asset
-  // filenames get a short revalidatable cache. Same posture as the publisher.
-  if (contentType.startsWith("text/html")) {
-    headers.set("Cache-Control", "public, max-age=300");
-  } else {
-    headers.set("Cache-Control", "public, max-age=3600");
-  }
+  // Published keys are mutable: editing styles.css or hero.png changes the
+  // bytes at the same URL. Require revalidation on every use so validators can
+  // produce a cheap 304 without allowing an hour of stale public content.
+  headers.set("Cache-Control", "public, max-age=0, must-revalidate");
 
   // §3¾: agent/student-authored bytes on our origin get the opaque-origin
   // containment (sandbox allow-scripts + nosniff + no-referrer). These COMPOSE

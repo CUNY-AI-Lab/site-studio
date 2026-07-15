@@ -32,6 +32,9 @@ export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
  */
 export const MAX_UPLOAD_BODY_MARGIN_BYTES = 1 * 1024 * 1024;
 export const MAX_UPLOAD_BODY_BYTES = MAX_UPLOAD_BYTES + MAX_UPLOAD_BODY_MARGIN_BYTES;
+export const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
+export const MAX_THUMBNAIL_DIMENSION = 4096;
+export const MAX_THUMBNAIL_BODY_BYTES = MAX_THUMBNAIL_BYTES + MAX_UPLOAD_BODY_MARGIN_BYTES;
 /**
  * SS-28 snapshot cap: maximum total UNCOMPRESSED project size (summed from R2
  * listing metadata) that `createSnapshot` will read into memory and zip. Every

@@ -43,7 +43,7 @@
  * different-handle-409 contract. (Reverse-orphan reaper: SS-3 residual #2.)
  */
 
-import { readR2Json, putR2Json } from "./r2-json";
+import { readR2Json } from "./r2-json";
 
 export interface HandleRecord {
   /** Durable owner key (CAIL subject or anonymous `user_…` id). */
@@ -58,6 +58,13 @@ export interface UserHandleRecord {
 
 export const HANDLE_MIN_LENGTH = 3;
 export const HANDLE_MAX_LENGTH = 32;
+
+/**
+ * A missing forward record younger than this is treated as an in-flight claim,
+ * not a crashed orphan. R2 cannot atomically commit the two mapping objects, so
+ * immediate reaping would let a concurrent request erase a live reverse claim.
+ */
+export const HANDLE_CLAIM_SETTLE_MS = 2 * 60 * 1000;
 
 /** Shape: lowercase alphanumerics and hyphens, no leading/trailing hyphen. */
 const HANDLE_SHAPE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -228,15 +235,16 @@ export type ClaimHandleResult =
  *  - If the user already owns a *different* handle, refuse (409) — no rename.
  *  - If the handle is taken by someone else, refuse (409).
  *
- * Race-free via two compare-and-set writes. R2 has no transactions, so the two
- * mapping records are claimed with put-if-absent in an order chosen so that NO
- * interleaving can leave an orphaned or half-claimed record:
+ * The two mapping records use compare-and-set writes, but R2 has no transaction
+ * across them. A missing forward record is not reaped until the reverse claim
+ * is older than HANDLE_CLAIM_SETTLE_MS, so a live first claim keeps the per-user
+ * gate while its forward write is in flight.
  *
  *   1. Claim the per-user REVERSE slot `userhandles/{owner}` FIRST with
  *      put-if-absent. This slot is the single "one handle per user" gate: a user
  *      racing two different handles has both attempts contend on this one key, so
- *      exactly one wins and the loser has written NOTHING under `handles/…` yet —
- *      no orphan. A lost reverse claim means the user already has (or just took)
+ *      one wins and the loser has written nothing under `handles/…` yet.
+ *      A lost reverse claim means the user already has (or just took)
  *      a handle: if it's this same handle, succeed idempotently; otherwise 409.
  *   2. Claim the handle record `handles/{handle}` with put-if-absent. A lost
  *      claim means another user won this handle; roll back the reverse slot we
@@ -244,11 +252,10 @@ export type ClaimHandleResult =
  *      safe because we only ever delete the reverse record we ourselves wrote in
  *      step 1, and only on the path where the handle claim failed.
  *
- * Walk of the two adversarial interleavings:
- *  - Same user, two handles A and B, fully interleaved: both reach step 1 on the
- *    same `userhandles/{owner}` key; put-if-absent lets exactly one through. The
- *    winner claims its handle record; the loser returns the already-have 409 and
- *    never touched any `handles/…` key. No orphan, user owns exactly one handle.
+ * Expected interleavings:
+ *  - Same user, two handles A and B: both reach step 1 on the same
+ *    `userhandles/{owner}` key and put-if-absent lets one through. A second
+ *    request that observes the fresh half-claim returns a retryable 409.
  *  - Two users X and Y, same handle H, fully interleaved: each claims its own
  *    distinct reverse slot in step 1 (different keys, both succeed), then both
  *    contend on `handles/H` in step 2. One wins; the other rolls back only its
@@ -278,7 +285,9 @@ export async function claimHandle(
     // handle" on the reverse slot alone, which HID that orphan permanently.
     //
     // R2 has no conditional delete, so compare-before-delete cannot fully close
-    // the re-read→delete gap. It narrows the race: immediately before reaping,
+    // the re-read→delete gap. It also cannot distinguish a crashed claim from a
+    // live claim between its reverse and forward writes. It narrows the race:
+    // immediately before reaping,
     // re-read the reverse slot and only delete if it still matches the orphan we
     // observed. If it changed, restart once from the fast path so the common
     // interleaving resolves against the newly healthy claim; a second mismatch
@@ -315,6 +324,20 @@ export async function claimHandle(
           ok: false,
           status: 409,
           reason: "You already have a handle. Handles can't be changed."
+        };
+      }
+      const claimedAtMs = Date.parse(existingRecord!.claimedAt);
+      const nowMs = Date.parse(now());
+      if (
+        Number.isFinite(claimedAtMs) &&
+        Number.isFinite(nowMs) &&
+        nowMs - claimedAtMs >= 0 &&
+        nowMs - claimedAtMs < HANDLE_CLAIM_SETTLE_MS
+      ) {
+        return {
+          ok: false,
+          status: 409,
+          reason: "Your handle claim is still in progress. Try again shortly."
         };
       }
       // Cases A/B: the reverse slot is an orphan (forward missing or owned by
@@ -389,10 +412,10 @@ export async function claimHandle(
 
 /**
  * Re-home a handle from an anonymous namespace to a CAIL subject during
- * first-login migration (lib/migration.ts). Non-destructive and idempotent,
- * mirroring the module's copy-then-delete ordering:
- *  - Always rewrite `handles/{anonHandle}` ownerId -> subject so shared
- *    `/u/{anonHandle}/…` links keep resolving.
+ * first-login migration (lib/migration.ts):
+ *  - It conditionally rewrites `handles/{anonHandle}` ownerId -> subject only
+ *    while the forward record still belongs to the anonymous owner. Ownership
+ *    drift fails closed and leaves the import pending.
  *  - Move `userhandles/{anon}` -> `userhandles/{subject}` ONLY when the subject
  *    has no handle of its own; if the subject already has a primary handle it
  *    keeps it, and the anon handle survives as an alias (handle record only).
@@ -413,13 +436,39 @@ export async function migrateHandle(options: {
     return; // nothing to move
   }
 
-  // Point the handle record at the subject (idempotent — safe to repeat).
-  const record = await readR2Json<HandleRecord>(bucket, handleRecordKey(anonHandle));
-  const claimedAt = record?.claimedAt ?? now();
-  await putR2Json(bucket, handleRecordKey(anonHandle), {
-    ownerId: subject,
-    claimedAt
-  } satisfies HandleRecord);
+  // Re-home the forward record only when its current ETag still proves that it
+  // belongs to the anonymous owner. A stale/orphaned reverse record must never
+  // be able to overwrite a later legitimate claimant. Seeing `subject` is the
+  // idempotent crash-recovery case: the forward write committed previously but
+  // the reverse-slot cleanup did not.
+  const forwardKey = handleRecordKey(anonHandle);
+  const forwardObject = await bucket.get(forwardKey);
+  if (!forwardObject) {
+    throw new Error("Handle migration stopped because forward ownership changed.");
+  }
+  let record: HandleRecord;
+  try {
+    record = JSON.parse(await forwardObject.text()) as HandleRecord;
+  } catch {
+    throw new Error("Handle migration stopped because forward ownership changed.");
+  }
+  if (record.ownerId !== anonUserId && record.ownerId !== subject) {
+    throw new Error("Handle migration stopped because forward ownership changed.");
+  }
+  const claimedAt = record.claimedAt || now();
+  if (record.ownerId === anonUserId) {
+    const updated = await bucket.put(
+      forwardKey,
+      JSON.stringify({ ownerId: subject, claimedAt } satisfies HandleRecord),
+      {
+        httpMetadata: { contentType: "application/json" },
+        onlyIf: { etagMatches: forwardObject.etag }
+      }
+    );
+    if (!updated) {
+      throw new Error("Handle migration stopped because forward ownership changed.");
+    }
+  }
 
   // SS-52: promote the anon handle to the subject's primary ONLY by atomically
   // claiming the reverse slot with put-if-absent. The subject's own concurrent
