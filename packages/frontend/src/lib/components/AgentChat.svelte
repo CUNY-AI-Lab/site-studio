@@ -514,12 +514,17 @@
 	let reconnectAttempts = 0;
 	const MAX_RECONNECT_ATTEMPTS = 5;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	// Bumped by closeSocket() (project switch / unmount). A reconnect attempt
+	// that fails AFTER teardown compares its captured epoch and stops instead of
+	// scheduling a retry into the next project or a dead component.
+	let connectionEpoch = 0;
 	// SS-10: true while a silent reconnect is pending after a mid-request drop, so
 	// we show a transient "reconnecting" state instead of a permanent dead-end
 	// error bubble. Cleared on a successful reconnect or when attempts are exhausted.
 	let isReconnecting = $state(false);
 
 	function closeSocket() {
+		connectionEpoch += 1;
 		if (reconnectTimer) {
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
@@ -571,6 +576,23 @@
 			return;
 		}
 
+		scheduleReconnectOrGiveUp();
+	}
+
+	/**
+	 * Shared "connection is gone" tail: decide the SS-10 presentation and either
+	 * schedule the next backoff attempt or surface exhaustion.
+	 *
+	 * Called from handleSocketClose AND from a reconnect attempt whose
+	 * ensureSocket() promise rejected without a usable close event. The old code
+	 * swallowed that rejection with a comment claiming handleSocketClose would
+	 * retry — false in both real failure shapes: a rejected handshake fires
+	 * `error` first and the SS-12 cleanup removes the socket's close listener,
+	 * and a pre-socket failure (the CSRF fetch rejecting) has no socket at all.
+	 * One such failure silently killed the loop — no further attempts, no
+	 * surfaced error, isReconnecting stuck true forever.
+	 */
+	function scheduleReconnectOrGiveUp() {
 		const willReconnect = reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !!projectId;
 
 		if (isLoading) {
@@ -606,10 +628,18 @@
 			if (reconnectTimer) {
 				clearTimeout(reconnectTimer);
 			}
+			const epoch = connectionEpoch;
 			reconnectTimer = setTimeout(() => {
 				reconnectTimer = null;
 				ensureSocket().catch(() => {
-					// Reconnection failed, will retry via handleSocketClose
+					// The attempt failed without a close event this component will see
+					// (error-first handshake per SS-12, or a pre-socket CSRF failure).
+					// Keep the loop alive — unless closeSocket() tore this connection
+					// down in the meantime (project switch/unmount), in which case
+					// retrying would leak a socket into the next context.
+					if (epoch === connectionEpoch) {
+						scheduleReconnectOrGiveUp();
+					}
 				});
 			}, delay);
 		}

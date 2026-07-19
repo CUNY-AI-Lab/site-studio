@@ -515,6 +515,45 @@ describe('AgentChat', () => {
 		}
 	});
 
+	// A reconnect attempt can fail without any close event this component sees:
+	// real browsers fire `error` before `close` on a rejected handshake, and the
+	// SS-12 cleanup removes the failed socket's close listener as soon as the
+	// error fires. The old code swallowed that rejection with a comment claiming
+	// handleSocketClose would retry — so one error-first failure silently killed
+	// the whole reconnect loop. The rejection path must keep retrying with
+	// backoff.
+	it('keeps reconnecting when a reconnect attempt errors instead of closing', async () => {
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const first = FakeWebSocket.instances[0];
+		first.open();
+		await settle();
+
+		vi.useFakeTimers();
+		try {
+			// An unexpected close schedules reconnect attempt #1.
+			first.serverClose();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			expect(FakeWebSocket.instances.length).toBe(2);
+
+			// Attempt #1 fails with an error event only — no close ever reaches the
+			// component. The loop must schedule attempt #2, not die silently.
+			FakeWebSocket.last().serverError();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(20000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			expect(FakeWebSocket.instances.length).toBe(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// SS-12: a socket that errors on first connect must not, when it later closes,
 	// tear down a newer good socket or schedule a spurious reconnect.
 	it('an orphaned failed socket cannot tear down the current socket (SS-12)', async () => {
