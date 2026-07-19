@@ -17,7 +17,7 @@
         "@cloudflare/ai-chat": "0.9.3",
         "@cloudflare/codemode": "0.4.3",
         "@cuny-ai-lab/cail-client": "github:CUNY-AI-Lab/cail-client#16da40171381b8bf38543730b45dba484ba01940",
-        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#00419a9409680716a04e514068ba2b128ce7afa7",
+        "@cuny-ai-lab/cail-identity": "github:CUNY-AI-Lab/cail-identity#d13e1eb",
         "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#75e0dda3068794ae1543e1e2bb98c9c920bb848f",
         "agents": "0.17.4",
         "ai": "6.0.225",
@@ -233,7 +233,7 @@
 
     "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@github:CUNY-AI-Lab/cail-client#16da401", { "dependencies": { "@cuny-ai-lab/cail-log": "github:CUNY-AI-Lab/cail-log#75e0dda3068794ae1543e1e2bb98c9c920bb848f" } }, "CUNY-AI-Lab-cail-client-16da401"],
 
-    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#00419a9", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-00419a9"],
+    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@github:CUNY-AI-Lab/cail-identity#d13e1eb", { "dependencies": { "jose": "6.2.3" } }, "CUNY-AI-Lab-cail-identity-d13e1eb"],
 
     "@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#75e0dda", {}, "CUNY-AI-Lab-cail-log-75e0dda"],
 
@@ -1110,6 +1110,10 @@
     "@cspotcode/source-map-support/@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
 
     "@img/sharp-wasm32/@emnapi/runtime": ["@emnapi/runtime@1.11.2", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-kyOl3X0DuTiT1h2ft8r2fYO8JYtU9a9Xis/zBSiGArNaagCOWx90N1k2wxp18czFDH+OgcWGb5ZP/XMt3dcyPA=="],
+
+    "@site-studio/observability-core/@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#75e0dda", {}, "CUNY-AI-Lab-cail-log-75e0dda"],
+
+    "@site-studio/worker/@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@github:CUNY-AI-Lab/cail-log#75e0dda", {}, "CUNY-AI-Lab-cail-log-75e0dda"],
 
     "@tailwindcss/oxide-wasm32-wasi/@emnapi/core": ["@emnapi/core@1.11.2", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" }, "bundled": true }, "sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA=="],
 

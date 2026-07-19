@@ -8,8 +8,8 @@ import {
 const FIXED = () => "2026-07-04T00:00:00.000Z";
 
 describe("decideClaim (SS-3 pure decision)", () => {
-  const SUBJECT = "cail-abc";
-  const OTHER = "cail-xyz";
+  const SUBJECT = "cail-abc00000abc00000abc00000abc00000";
+  const OTHER = "cail-c1c2c3c4c1c2c3c4c1c2c3c4c1c2c3c4";
 
   it("no record → GRANT (fresh), stores a pending record for the subject", () => {
     const { decision, newRecord } = decideClaim(null, SUBJECT, FIXED);
@@ -64,7 +64,7 @@ describe("decideClaim (SS-3 pure decision)", () => {
 });
 
 describe("decideMarkComplete", () => {
-  const SUBJECT = "cail-abc";
+  const SUBJECT = "cail-abc00000abc00000abc00000abc00000";
 
   it("flips the owning subject's pending record to complete with a timestamp", () => {
     const record: ClaimRecord = {
@@ -87,7 +87,7 @@ describe("decideMarkComplete", () => {
 
   it("is a no-op (null) when a different subject tries to complete", () => {
     const record: ClaimRecord = {
-      subject: "cail-other",
+      subject: "cail-07e7000007e7000007e7000007e70000",
       status: "pending",
       startedAt: "2026-01-01T00:00:00.000Z"
     };

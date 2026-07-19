@@ -117,7 +117,7 @@ describe("checkHandle", () => {
   });
 
   it("reports taken when owned by someone else", async () => {
-    await claimHandle(bucket, "cail-owner", "jane-rivera");
+    await claimHandle(bucket, "cail-04e1000004e1000004e1000004e10000", "jane-rivera");
     const res = await checkHandle(bucket, "jane-rivera");
     expect(res).toMatchObject({ valid: true, available: false });
     expect(res.reason).toContain("taken");
@@ -131,32 +131,32 @@ describe("claimHandle", () => {
   });
 
   it("claims a free handle and writes both mapping records", async () => {
-    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
     expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: false });
-    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
-    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-aa000000aa000000aa000000aa000000");
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe("jane-rivera");
   });
 
   it("is idempotent when the user re-claims exactly their own handle", async () => {
-    await claimHandle(bucket, "cail-a", "jane-rivera");
-    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
     expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: true });
   });
 
   it("refuses (409) when the user already owns a different handle", async () => {
-    await claimHandle(bucket, "cail-a", "jane-rivera");
-    const res = await claimHandle(bucket, "cail-a", "someone-else");
+    await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "someone-else");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
   });
 
   it("refuses (409) when the handle is taken by another user", async () => {
-    await claimHandle(bucket, "cail-a", "jane-rivera");
-    const res = await claimHandle(bucket, "cail-b", "jane-rivera");
+    await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
+    const res = await claimHandle(bucket, "cail-bb000000bb000000bb000000bb000000", "jane-rivera");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("taken") });
   });
 
   it("refuses (400) an invalid handle", async () => {
-    const res = await claimHandle(bucket, "cail-a", "AB");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "AB");
     expect(res).toMatchObject({ ok: false, status: 400 });
   });
 
@@ -170,11 +170,11 @@ describe("claimHandle", () => {
     // Simulate a half-written prior claim: handle record exists (owned by us),
     // reverse record absent. Re-claiming must succeed idempotently and restore
     // the reverse record without clobbering the handle record.
-    await bucket.put(handleRecordKey("jane-rivera"), JSON.stringify({ ownerId: "cail-a", claimedAt: "t0" }));
-    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    await bucket.put(handleRecordKey("jane-rivera"), JSON.stringify({ ownerId: "cail-aa000000aa000000aa000000aa000000", claimedAt: "t0" }));
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
     expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: true });
-    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
-    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-aa000000aa000000aa000000aa000000");
   });
 });
 
@@ -193,56 +193,56 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
   it("reaps an orphaned reverse slot (forward MISSING) and lets the SAME handle claim proceed", async () => {
     // Reverse slot written, forward `handles/…` never written (crash between puts).
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "jane-rivera", claimedAt: "2020-01-01T00:00:00.000Z" }));
+    await bucket.put(userHandleRecordKey("cail-aa000000aa000000aa000000aa000000"), JSON.stringify({ handle: "jane-rivera", claimedAt: "2020-01-01T00:00:00.000Z" }));
     expect(bucket.store.has(handleRecordKey("jane-rivera"))).toBe(false);
 
-    const res = await claimHandle(bucket, "cail-a", "jane-rivera");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
     // Claim proceeds cleanly to a fresh, fully-formed claim (not a false "already have").
     expect(res).toEqual({ ok: true, handle: "jane-rivera", alreadyOwned: false });
-    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
-    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-aa000000aa000000aa000000aa000000");
   });
 
   it("reaps an orphaned reverse slot and lets a DIFFERENT handle claim proceed (no false 409)", async () => {
     // Orphan points at a handle the owner never truly claimed (forward missing).
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
+    await bucket.put(userHandleRecordKey("cail-aa000000aa000000aa000000aa000000"), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
 
     // Owner now claims a DIFFERENT, free handle. The orphan must not 409 them.
-    const res = await claimHandle(bucket, "cail-a", "brand-new");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "brand-new");
     expect(res).toEqual({ ok: true, handle: "brand-new", alreadyOwned: false });
-    expect(await getUserHandle(bucket, "cail-a")).toBe("brand-new");
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe("brand-new");
     // The orphan forward record still doesn't exist (never was written).
     expect(await resolveHandleOwner(bucket, "orphaned-one")).toBeNull();
   });
 
   it("reaps a reverse slot whose forward record points at a STRANGER, then resolves against real state", async () => {
-    // Crash left reverse {cail-a -> shared}, then cail-b legitimately won `shared`.
-    await bucket.put(userHandleRecordKey("cail-a"), JSON.stringify({ handle: "shared", claimedAt: "2020-01-01T00:00:00.000Z" }));
-    await claimHandle(bucket, "cail-b", "shared"); // cail-b owns the forward record
+    // Crash left reverse {cail-aa000000aa000000aa000000aa000000 -> shared}, then cail-bb000000bb000000bb000000bb000000 legitimately won `shared`.
+    await bucket.put(userHandleRecordKey("cail-aa000000aa000000aa000000aa000000"), JSON.stringify({ handle: "shared", claimedAt: "2020-01-01T00:00:00.000Z" }));
+    await claimHandle(bucket, "cail-bb000000bb000000bb000000bb000000", "shared"); // cail-bb000000bb000000bb000000bb000000 owns the forward record
 
-    // cail-a re-claims the very handle it's orphaned against: it does NOT own it,
+    // cail-aa000000aa000000aa000000aa000000 re-claims the very handle it's orphaned against: it does NOT own it,
     // so this must resolve to a taken-409 (not a false idempotent success).
-    const res = await claimHandle(bucket, "cail-a", "shared");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "shared");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("taken") });
-    // The orphan reverse slot was reaped; cail-a owns nothing.
-    expect(await getUserHandle(bucket, "cail-a")).toBeNull();
-    // cail-b's healthy ownership is intact.
-    expect(await resolveHandleOwner(bucket, "shared")).toBe("cail-b");
+    // The orphan reverse slot was reaped; cail-aa000000aa000000aa000000aa000000 owns nothing.
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBeNull();
+    // cail-bb000000bb000000bb000000bb000000's healthy ownership is intact.
+    expect(await resolveHandleOwner(bucket, "shared")).toBe("cail-bb000000bb000000bb000000bb000000");
   });
 
   it("does NOT reap a HEALTHY different-handle pair: still 409s", async () => {
     // Legitimate full claim of a different handle.
-    await claimHandle(bucket, "cail-a", "jane-rivera");
+    await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "jane-rivera");
     // Asking for a new handle must 409 (owner already has a valid handle).
-    const res = await claimHandle(bucket, "cail-a", "someone-else");
+    const res = await claimHandle(bucket, "cail-aa000000aa000000aa000000aa000000", "someone-else");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
     // The healthy pair is untouched.
-    expect(await getUserHandle(bucket, "cail-a")).toBe("jane-rivera");
-    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-a");
+    expect(await getUserHandle(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe("jane-rivera");
+    expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe("cail-aa000000aa000000aa000000aa000000");
   });
 
   it("SS-32: restarts when a concurrent healthy claim replaces the orphan before reap", async () => {
-    const ownerId = "cail-a";
+    const ownerId = "cail-aa000000aa000000aa000000aa000000";
     await bucket.put(userHandleRecordKey(ownerId), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
 
     const originalGet = bucket.get;
@@ -282,7 +282,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
   });
 
   it("does not reap a fresh reverse record while its forward claim is still in flight", async () => {
-    const ownerId = "cail-a";
+    const ownerId = "cail-aa000000aa000000aa000000aa000000";
     let releaseForward!: () => void;
     let forwardStarted!: () => void;
     const release = new Promise<void>((resolve) => (releaseForward = resolve));
@@ -323,8 +323,8 @@ describe("claimHandle races (SS-4)", () => {
 
   it("two users racing the SAME handle: exactly one wins, loser leaves no orphan", async () => {
     const [a, b] = await Promise.all([
-      claimHandle(bucket, "cail-x", "shared-one"),
-      claimHandle(bucket, "cail-y", "shared-one")
+      claimHandle(bucket, "cail-cc000000cc000000cc000000cc000000", "shared-one"),
+      claimHandle(bucket, "cail-dd000000dd000000dd000000dd000000", "shared-one")
     ]);
 
     const winners = [a, b].filter((r) => r.ok);
@@ -336,16 +336,16 @@ describe("claimHandle races (SS-4)", () => {
     // The handle record points at exactly one owner, and that owner's reverse
     // record agrees. The loser owns NO handle (its reverse slot was rolled back).
     const owner = await resolveHandleOwner(bucket, "shared-one");
-    expect(owner === "cail-x" || owner === "cail-y").toBe(true);
-    const loserId = owner === "cail-x" ? "cail-y" : "cail-x";
+    expect(owner === "cail-cc000000cc000000cc000000cc000000" || owner === "cail-dd000000dd000000dd000000dd000000").toBe(true);
+    const loserId = owner === "cail-cc000000cc000000cc000000cc000000" ? "cail-dd000000dd000000dd000000dd000000" : "cail-cc000000cc000000cc000000cc000000";
     expect(await getUserHandle(bucket, owner!)).toBe("shared-one");
     expect(await getUserHandle(bucket, loserId)).toBeNull();
   });
 
   it("one user racing TWO different handles: ends up owning exactly one, no orphan handle record", async () => {
     const [a, b] = await Promise.all([
-      claimHandle(bucket, "cail-solo", "handle-aaa"),
-      claimHandle(bucket, "cail-solo", "handle-bbb")
+      claimHandle(bucket, "cail-50100000501000005010000050100000", "handle-aaa"),
+      claimHandle(bucket, "cail-50100000501000005010000050100000", "handle-bbb")
     ]);
 
     const winners = [a, b].filter((r) => r.ok);
@@ -356,10 +356,10 @@ describe("claimHandle races (SS-4)", () => {
 
     // The user owns exactly one handle, and the OTHER handle record must not
     // exist as an orphan (the loser wrote nothing under handles/…).
-    const owned = await getUserHandle(bucket, "cail-solo");
+    const owned = await getUserHandle(bucket, "cail-50100000501000005010000050100000");
     expect(owned === "handle-aaa" || owned === "handle-bbb").toBe(true);
     const orphan = owned === "handle-aaa" ? "handle-bbb" : "handle-aaa";
-    expect(await resolveHandleOwner(bucket, owned!)).toBe("cail-solo");
+    expect(await resolveHandleOwner(bucket, owned!)).toBe("cail-50100000501000005010000050100000");
     expect(await resolveHandleOwner(bucket, orphan)).toBeNull();
   });
 });
@@ -377,10 +377,10 @@ describe("createHandleRouter", () => {
   beforeEach(async () => {
     bucket = createMockBucket();
     kv = createMockKV();
-    csrf = await mintCsrfSession(bucket, "cail-me");
+    csrf = await mintCsrfSession(bucket, "cail-3e0000003e0000003e0000003e000000");
     app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
     app.use("*", async (c, next) => {
-      c.set("user", { id: "cail-me" });
+      c.set("user", { id: "cail-3e0000003e0000003e0000003e000000" });
       await next();
     });
     app.use("*", csrfProtect);
@@ -391,7 +391,7 @@ describe("createHandleRouter", () => {
     const before = await app.request("/api/handle", {}, env(bucket));
     await expect(before.json()).resolves.toEqual({ handle: null });
 
-    await claimHandle(bucket, "cail-me", "jane-rivera");
+    await claimHandle(bucket, "cail-3e0000003e0000003e0000003e000000", "jane-rivera");
     const after = await app.request("/api/handle", {}, env(bucket));
     await expect(after.json()).resolves.toEqual({ handle: "jane-rivera" });
   });
@@ -430,7 +430,7 @@ describe("createHandleRouter", () => {
   });
 
   it("POST /api/handle 409s when the handle is taken by someone else", async () => {
-    await claimHandle(bucket, "cail-other", "jane-rivera");
+    await claimHandle(bucket, "cail-07e7000007e7000007e7000007e70000", "jane-rivera");
     const res = await app.request(
       "/api/handle",
       { method: "POST", body: JSON.stringify({ handle: "jane-rivera" }), headers: postHeaders() },
@@ -448,10 +448,10 @@ describe("createHandleRouter", () => {
       );
 
     // Seed a competing owner so the taken-conflict body is exercised too.
-    await claimHandle(bucket, "cail-other", "taken-one");
+    await claimHandle(bucket, "cail-07e7000007e7000007e7000007e70000", "taken-one");
 
-    const conflictTaken = await post("taken-one"); // 409: taken by cail-other
-    const claim = await post("jane-rivera"); // 200: fresh claim by cail-me
+    const conflictTaken = await post("taken-one"); // 409: taken by cail-07e7000007e7000007e7000007e70000
+    const claim = await post("jane-rivera"); // 200: fresh claim by cail-3e0000003e0000003e0000003e000000
     const idempotent = await post("jane-rivera"); // 200: alreadyOwned
     const conflictOwn = await post("another-one"); // 409: already has a different handle
     const get = await app.request("/api/handle", {}, env(bucket));
@@ -459,8 +459,8 @@ describe("createHandleRouter", () => {
 
     for (const res of [conflictTaken, claim, idempotent, conflictOwn, get, check]) {
       const body = await res.text();
-      expect(body).not.toContain("cail-me");
-      expect(body).not.toContain("cail-other");
+      expect(body).not.toContain("cail-3e0000003e0000003e0000003e000000");
+      expect(body).not.toContain("cail-07e7000007e7000007e7000007e70000");
     }
   });
 });
@@ -468,7 +468,7 @@ describe("createHandleRouter", () => {
 describe("migrateHandle", () => {
   let bucket: ReturnType<typeof createMockBucket>;
   const ANON = "user_anon123";
-  const SUBJECT = "cail-abc123";
+  const SUBJECT = "cail-abc12300abc12300abc12300abc12300";
 
   beforeEach(() => {
     bucket = createMockBucket();
@@ -513,13 +513,13 @@ describe("migrateHandle", () => {
     );
     await bucket.put(
       handleRecordKey("shared-handle"),
-      JSON.stringify({ ownerId: "cail-victim", claimedAt: "2026-07-14T12:00:01.000Z" })
+      JSON.stringify({ ownerId: "cail-e1c111f0e1c111f0e1c111f0e1c111f0", claimedAt: "2026-07-14T12:00:01.000Z" })
     );
 
     await expect(migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT })).rejects.toThrow(
       "ownership changed"
     );
-    expect(await resolveHandleOwner(bucket, "shared-handle")).toBe("cail-victim");
+    expect(await resolveHandleOwner(bucket, "shared-handle")).toBe("cail-e1c111f0e1c111f0e1c111f0e1c111f0");
     expect(await getUserHandle(bucket, ANON)).toBe("shared-handle");
     expect(await getUserHandle(bucket, SUBJECT)).toBeNull();
   });

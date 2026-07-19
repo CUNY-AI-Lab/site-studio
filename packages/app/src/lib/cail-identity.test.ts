@@ -45,7 +45,7 @@ function validClaims(overrides: Record<string, unknown> = {}) {
   return {
     iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
     aud: "cail:site-studio",
-    sub: "cail-abc123",
+    sub: "cail-abc12300abc12300abc12300abc12300",
     email: "someone@gc.cuny.edu",
     name: "Some One",
     entitlements: ["site-studio"],
@@ -92,7 +92,7 @@ describe("getRequestIdentity", () => {
     const identity = await getRequestIdentity(requestWithToken(await mintJwt(currentKey)), currentEnv);
 
     expect(identity).toEqual({
-      subject: "cail-abc123",
+      subject: "cail-abc12300abc12300abc12300abc12300",
       email: "someone@gc.cuny.edu",
       name: "Some One",
       entitlements: ["site-studio"],
@@ -107,7 +107,7 @@ describe("getRequestIdentity", () => {
       ...currentEnv,
       CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
     }))
-      .resolves.toMatchObject({ subject: "cail-abc123" });
+      .resolves.toMatchObject({ subject: "cail-abc12300abc12300abc12300abc12300" });
     await expect(getRequestIdentity(requestWithToken(token), currentEnv)).resolves.toBeNull();
   });
 
@@ -141,11 +141,23 @@ describe("getRequestIdentity", () => {
     expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
   });
 
-  it("preserves the verified subject byte-for-byte as the durable owner key", async () => {
-    const subject = "  Opaque-CAIL-Subject  ";
+  it("preserves the verified canonical subject byte-for-byte as the durable owner key", async () => {
+    const subject = "cail-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
     const token = await mintJwt(currentKey, { sub: subject });
     await expect(getRequestIdentity(requestWithToken(token), currentEnv))
       .resolves.toMatchObject({ subject });
+  });
+
+  it("rejects non-canonical subjects (v4 accepts only cail-<32 lowercase hex>)", async () => {
+    for (const subject of [
+      "  Opaque-CAIL-Subject  ",
+      "cail-ABC12300ABC12300ABC12300ABC12300",
+      "cail-abc123",
+      "someone@gc.cuny.edu",
+    ]) {
+      const token = await mintJwt(currentKey, { sub: subject });
+      expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    }
   });
 
   it("rejects non-allowlisted and look-alike issuers", async () => {
@@ -175,7 +187,7 @@ describe("resolveRequestIdentity", () => {
     expect(result).toMatchObject({
       status: "verified",
       token,
-      identity: { subject: "cail-abc123" },
+      identity: { subject: "cail-abc12300abc12300abc12300abc12300" },
     });
   });
 
@@ -225,7 +237,7 @@ describe("resolveRequestIdentity", () => {
 
   it("ignores bare identity attribute headers", async () => {
     const request = new Request("https://site-studio.example/", {
-      headers: { "X-CAIL-Subject": "cail-forged" },
+      headers: { "X-CAIL-Subject": "cail-f0e9edf0f0e9edf0f0e9edf0f0e9edf0" },
     });
     await expect(resolveRequestIdentity(request, currentEnv)).resolves.toEqual({ status: "absent" });
   });

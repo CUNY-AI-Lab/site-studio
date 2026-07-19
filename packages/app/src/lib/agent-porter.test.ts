@@ -79,10 +79,10 @@ describe("createAgentHistoryPorter", () => {
       .mockResolvedValueOnce({ importChatHistoryForMigration: importSpy });
 
     const porter = createAgentHistoryPorter(env);
-    await porter.port("user_anon42", "blog", "cail-abc", "blog-imported");
+    await porter.port("user_anon42", "blog", "cail-abc00000abc00000abc00000abc00000", "blog-imported");
 
     expect(getAgentByName).toHaveBeenNthCalledWith(1, namespace, "user_anon42:blog");
-    expect(getAgentByName).toHaveBeenNthCalledWith(2, namespace, "cail-abc:blog-imported");
+    expect(getAgentByName).toHaveBeenNthCalledWith(2, namespace, "cail-abc00000abc00000abc00000abc00000:blog-imported");
     expect(importSpy).toHaveBeenCalledWith(messages);
   });
 
@@ -90,7 +90,7 @@ describe("createAgentHistoryPorter", () => {
     getAgentByName.mockResolvedValueOnce({ exportChatHistoryForMigration: async () => [] });
 
     const porter = createAgentHistoryPorter(env);
-    await porter.port("user_anon42", "blog", "cail-abc", "blog");
+    await porter.port("user_anon42", "blog", "cail-abc00000abc00000abc00000abc00000", "blog");
 
     // Only the source instance was contacted; no destination DO was created.
     expect(getAgentByName).toHaveBeenCalledTimes(1);

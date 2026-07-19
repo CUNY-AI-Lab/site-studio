@@ -193,7 +193,7 @@ describe("authMiddleware", () => {
       } as unknown as KVNamespace
     });
 
-    const token = await mintIdentityJwt("cail-subject-xyz");
+    const token = await mintIdentityJwt("cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
     const response = await app.request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Identity-JWT": token } },
@@ -202,11 +202,11 @@ describe("authMiddleware", () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { user: { id: string; cail?: boolean; email?: string } };
-    expect(body.user.id).toBe("cail-subject-xyz");
+    expect(body.user.id).toBe("cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
     expect(body.user.cail).toBe(true);
     expect(body.user.email).toBe("u@gc.cuny.edu");
     // Session is bound to the subject, not a random cookie id.
-    expect(response.headers.get("set-cookie")).toContain("site-studio-session=cail-subject-xyz");
+    expect(response.headers.get("set-cookie")).toContain("site-studio-session=cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
   });
 
   it("returns the authentication_required envelope when identity is required but absent", async () => {
@@ -275,7 +275,7 @@ describe("authMiddleware", () => {
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user"), forwardedToken: getCailIdentityJwt(c) }));
 
-    const token = await mintIdentityJwt("cail-subject");
+    const token = await mintIdentityJwt("cail-5b1ec7005b1ec7005b1ec7005b1ec700");
     const response = await app.request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Identity-JWT": token } },
@@ -284,7 +284,7 @@ describe("authMiddleware", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      user: { id: "cail-subject" },
+      user: { id: "cail-5b1ec7005b1ec7005b1ec7005b1ec700" },
       forwardedToken: token
     });
   });
@@ -297,7 +297,7 @@ describe("authMiddleware", () => {
     const env = createEnv({ CAIL_IDENTITY_JWKS: identityJwks });
     const response = await app.request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Subject": "cail-forged" } },
+      { headers: { "X-CAIL-Subject": "cail-f0e9edf0f0e9edf0f0e9edf0f0e9edf0" } },
       env
     );
 
@@ -547,7 +547,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-3: refuses to absorb an anon namespace already claimed by another subject", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    const OTHER_SUBJECT = "cail-other-owner";
+    const OTHER_SUBJECT = "cail-07e70e0107e70e0107e70e0107e70e01";
 
     // A live anon session record still exists (attacker replays this cookie).
     kv.store.set(
@@ -593,8 +593,8 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-3: two different subjects racing the same anon cookie — first wins, second refused", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    const SUBJECT_A = "cail-first-winner";
-    const SUBJECT_B = "cail-second-loser";
+    const SUBJECT_A = "cail-f1257001f1257001f1257001f1257001";
+    const SUBJECT_B = "cail-5ec00d025ec00d025ec00d025ec00d02";
 
     kv.store.set(
       "session:anon-cookie-1",

@@ -14,7 +14,7 @@ describe("quota route", () => {
       expect(headers.has("Authorization")).toBe(false);
       return Response.json({
         object: "quota",
-        subject: "cail-secret-subject",
+        subject: "cail-5ec2e7015ec2e7015ec2e7015ec2e701",
         unit: "microdollar",
         currency: "USD",
         window_seconds: 2592000,

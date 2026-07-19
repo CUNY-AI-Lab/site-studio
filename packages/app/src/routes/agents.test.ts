@@ -21,7 +21,7 @@ vi.mock("agents", () => ({
 import { createAgentRouter } from "./agents";
 import { getAgentByName } from "agents";
 
-const USER_ID = "cail-me";
+const USER_ID = "cail-3e0000003e0000003e0000003e000000";
 const PROJECT_ID = "proj-1";
 const OWN_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
