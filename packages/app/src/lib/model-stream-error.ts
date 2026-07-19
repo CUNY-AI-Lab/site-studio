@@ -1,3 +1,5 @@
+import { extractCailError } from "@cuny-ai-lab/cail-client";
+
 function retryAfterValue(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -20,21 +22,6 @@ function retryAfterValue(value: unknown): string | undefined {
   return undefined;
 }
 
-// SDK wrappers (AI_APICallError.responseBody, provider `data` fields) carry the
-// CAIL envelope as a JSON *string*. Parse string layers so the typed envelope
-// inside — with its verbatim message and `cail.retry_after_seconds` — is
-// reachable, instead of only regex-flagging the raw text.
-function parseJson(value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
 function retryAfterSeconds(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -46,15 +33,44 @@ function retryAfterSeconds(value: unknown): string | undefined {
   return undefined;
 }
 
+function genericQuotaMessage(retryAfter: string | undefined): string {
+  return "You've reached your AI usage limit for now."
+    + (retryAfter
+      ? ` Try again in about ${retryAfter} seconds.`
+      : " Please try again shortly.");
+}
+
 export function describeModelStreamError(error: unknown): { message: string; quota: boolean } {
+  // The shared cail-client helper owns the extraction: it digs the typed CAIL
+  // envelope (or a thrown/wrapped CailError) out of AI-SDK wrappers —
+  // RetryError errors[]/lastError, APICallError.responseBody JSON strings,
+  // nested cause/error/data layers. Its `message` is the gateway envelope's
+  // message VERBATIM — safe to show the user as-is.
+  const cail = extractCailError(error);
+  if (cail?.code === "quota_exceeded") {
+    if (cail.message.trim().length > 0) {
+      return { quota: true, message: cail.message };
+    }
+    // Envelope present but empty message: fall back to the retry hint the
+    // envelope (or the live CailError's extras) carried.
+    return {
+      quota: true,
+      message: genericQuotaMessage(retryAfterSeconds(cail.extras))
+    };
+  }
+
+  // No typed envelope found. Site Studio's own defensive heuristic: a bare
+  // 429 (statusCode/status) or "quota_exceeded" text anywhere in the wrapper
+  // layers still reads as quota exhaustion, with Retry-After header wording
+  // when available. This deliberately stays local — the shared helper never
+  // sniffs statuses or message text.
   const layers: unknown[] = [error];
   const seen = new Set<object>();
   let quota = false;
   let retryAfter: string | undefined;
-  let verbatimQuotaMessage: string | undefined;
 
   while (layers.length > 0) {
-    const layer = parseJson(layers.shift());
+    const layer = layers.shift();
     if (typeof layer === "string") {
       quota ||= /quota_exceeded/i.test(layer);
       continue;
@@ -66,23 +82,6 @@ export function describeModelStreamError(error: unknown): { message: string; quo
 
     const record = layer as Record<string, unknown>;
     quota ||= record.statusCode === 429 || record.status === 429;
-
-    // cail-client's chatFetch throws the parsed CailError on a 429
-    // quota_exceeded envelope (before any wrapper sees the Response). Its
-    // `message` is the gateway envelope's message VERBATIM — safe to show
-    // the user as-is. Match on the envelope `code` shape (not `instanceof
-    // CailError`) so a wrapped or structured-cloned copy — e.g. inside an
-    // AI SDK RetryError's `errors` array — still counts.
-    if (record.code === "quota_exceeded") {
-      quota = true;
-      if (typeof record.message === "string" && record.message.trim().length > 0) {
-        verbatimQuotaMessage ||= record.message;
-      }
-      // A live CailError carries structured details in `extras`; the wire
-      // envelope (reached by parsing a wrapper's responseBody) nests them
-      // under `cail` per docs/ERROR_CONTRACT.md.
-      retryAfter ||= retryAfterSeconds(record.extras) || retryAfterSeconds(record.cail);
-    }
 
     for (const value of [record.responseBody, record.data, record.message]) {
       if (typeof value === "string" && /quota_exceeded/i.test(value)) {
@@ -104,14 +103,7 @@ export function describeModelStreamError(error: unknown): { message: string; quo
   }
 
   if (quota) {
-    return {
-      quota: true,
-      message: verbatimQuotaMessage
-        ?? ("You've reached your AI usage limit for now."
-          + (retryAfter
-            ? ` Try again in about ${retryAfter} seconds.`
-            : " Please try again shortly."))
-    };
+    return { quota: true, message: genericQuotaMessage(retryAfter) };
   }
 
   return {
