@@ -47,9 +47,10 @@ function requestWithToken(token: string): Request {
 }
 
 // ---------------------------------------------------------------------------
-// Hand-rolled negative-path fixtures the testing kit cannot express:
-// mintIdentityJwt only signs RS256 with a string `aud`, so the alg-tampering
-// and array-audience contract violations need a local signer.
+// Hand-rolled negative-path fixture for the one shape the testing kit cannot
+// express: mintIdentityJwt only signs RS256, so the alg-tampering contract
+// violation needs a local signer. (The array-audience negative moved onto the
+// kit in cail-identity 4.4.0.)
 // ---------------------------------------------------------------------------
 
 function base64url(bytes: Uint8Array): string {
@@ -174,8 +175,8 @@ describe("getRequestIdentity", () => {
   });
 
   it("rejects array-valued audiences, including a one-element array", async () => {
-    const token = await signLocalJwt(localKey, { aud: [AUDIENCE] });
-    expect(await getRequestIdentity(requestWithToken(token), localEnv)).toBeNull();
+    const token = await mintJwt({ audience: [AUDIENCE] });
+    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
   });
 
   it("preserves the verified canonical subject byte-for-byte as the durable owner key", async () => {
