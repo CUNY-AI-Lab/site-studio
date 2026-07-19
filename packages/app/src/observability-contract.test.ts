@@ -28,17 +28,17 @@ describe("observability source contract", () => {
     new URL("../../observability-core/package.json", import.meta.url),
   ])("pins the reviewed fleet projection dependency in %s", (url) => {
     expect(readFileSync(url, "utf8")).toContain(
-      "github:CUNY-AI-Lab/cail-log#75e0dda3068794ae1543e1e2bb98c9c920bb848f",
+      '"@cuny-ai-lab/cail-log": "^0.4.0"',
     );
   });
 
   it("pins the reviewed identity and transport primitives in the app", () => {
     const source = readFileSync(new URL("../package.json", import.meta.url), "utf8");
     expect(source).toContain(
-      "github:CUNY-AI-Lab/cail-identity#d13e1eb",
+      '"@cuny-ai-lab/cail-identity": "^4.0.0"',
     );
     expect(source).toContain(
-      "github:CUNY-AI-Lab/cail-client#16da40171381b8bf38543730b45dba484ba01940",
+      '"@cuny-ai-lab/cail-client": "^1.1.0"',
     );
     expect(source).not.toContain("cail-sandbox-client");
   });
