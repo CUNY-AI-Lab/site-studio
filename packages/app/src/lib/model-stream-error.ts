@@ -20,6 +20,32 @@ function retryAfterValue(value: unknown): string | undefined {
   return undefined;
 }
 
+// SDK wrappers (AI_APICallError.responseBody, provider `data` fields) carry the
+// CAIL envelope as a JSON *string*. Parse string layers so the typed envelope
+// inside — with its verbatim message and `cail.retry_after_seconds` — is
+// reachable, instead of only regex-flagging the raw text.
+function parseJson(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function retryAfterSeconds(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const seconds = (value as Record<string, unknown>).retry_after_seconds;
+  if (typeof seconds === "number" || typeof seconds === "string") {
+    return String(seconds);
+  }
+  return undefined;
+}
+
 export function describeModelStreamError(error: unknown): { message: string; quota: boolean } {
   const layers: unknown[] = [error];
   const seen = new Set<object>();
@@ -28,7 +54,7 @@ export function describeModelStreamError(error: unknown): { message: string; quo
   let verbatimQuotaMessage: string | undefined;
 
   while (layers.length > 0) {
-    const layer = layers.shift();
+    const layer = parseJson(layers.shift());
     if (typeof layer === "string") {
       quota ||= /quota_exceeded/i.test(layer);
       continue;
@@ -39,7 +65,7 @@ export function describeModelStreamError(error: unknown): { message: string; quo
     seen.add(layer);
 
     const record = layer as Record<string, unknown>;
-    quota ||= record.statusCode === 429;
+    quota ||= record.statusCode === 429 || record.status === 429;
 
     // cail-client's chatFetch throws the parsed CailError on a 429
     // quota_exceeded envelope (before any wrapper sees the Response). Its
@@ -52,13 +78,10 @@ export function describeModelStreamError(error: unknown): { message: string; quo
       if (typeof record.message === "string" && record.message.trim().length > 0) {
         verbatimQuotaMessage ||= record.message;
       }
-      const extras = record.extras;
-      if (extras && typeof extras === "object") {
-        const seconds = (extras as Record<string, unknown>).retry_after_seconds;
-        if (typeof seconds === "number" || typeof seconds === "string") {
-          retryAfter ||= String(seconds);
-        }
-      }
+      // A live CailError carries structured details in `extras`; the wire
+      // envelope (reached by parsing a wrapper's responseBody) nests them
+      // under `cail` per docs/ERROR_CONTRACT.md.
+      retryAfter ||= retryAfterSeconds(record.extras) || retryAfterSeconds(record.cail);
     }
 
     for (const value of [record.responseBody, record.data, record.message]) {
@@ -69,7 +92,7 @@ export function describeModelStreamError(error: unknown): { message: string; quo
 
     retryAfter ||= retryAfterValue(record.responseHeaders) || retryAfterValue(record.headers);
 
-    for (const nested of [record.cause, record.error, record.data, record.lastError]) {
+    for (const nested of [record.cause, record.error, record.data, record.lastError, record.responseBody]) {
       if (nested !== undefined) {
         layers.push(nested);
       }

@@ -40,7 +40,89 @@ describe("describeModelStreamError", () => {
     const described = describeModelStreamError(retryError);
 
     expect(described.quota).toBe(true);
+    // The CAIL envelope inside responseBody is JSON-parsed and traversed, so
+    // the gateway's verbatim message surfaces instead of the generic fallback.
+    expect(described.message).toBe("Hourly quota exhausted");
+  });
+
+  it("falls back to retry-after wording when the buried envelope has no message", () => {
+    const retryError = {
+      name: "AI_RetryError",
+      message: "Failed after 3 attempts. Last error: Too Many Requests",
+      errors: [{
+        name: "AI_APICallError",
+        message: "Too Many Requests",
+        statusCode: 429,
+        responseBody: JSON.stringify({
+          error: {
+            message: "",
+            type: "rate_limit_error",
+            param: null,
+            code: "quota_exceeded",
+            cail: { retry_after_seconds: 3600 },
+          },
+        }),
+      }],
+    };
+
+    const described = describeModelStreamError(retryError);
+
+    expect(described.quota).toBe(true);
     expect(described.message).toContain("3600 seconds");
+  });
+
+  it("unwraps a CAIL envelope handed over as a bare JSON string", () => {
+    const described = describeModelStreamError(JSON.stringify({
+      error: {
+        message: "You have reached your CAIL usage quota for this period.",
+        type: "rate_limit_error",
+        param: null,
+        code: "quota_exceeded",
+        cail: { retry_after_seconds: 900 },
+      },
+    }));
+
+    expect(described.quota).toBe(true);
+    expect(described.message).toBe("You have reached your CAIL usage quota for this period.");
+  });
+
+  it("descends nested errors arrays and string-JSON layers together", () => {
+    const wrapped = {
+      name: "AI_RetryError",
+      message: "Failed after 2 attempts.",
+      errors: [
+        { name: "AI_APICallError", message: "boom", statusCode: 500 },
+        {
+          name: "AI_APICallError",
+          message: "Too Many Requests",
+          status: 429,
+          data: JSON.stringify({
+            error: {
+              message: "Hourly quota exhausted. It resets on the hour.",
+              type: "rate_limit_error",
+              param: null,
+              code: "quota_exceeded",
+            },
+          }),
+        },
+      ],
+    };
+
+    expect(describeModelStreamError(wrapped)).toEqual({
+      quota: true,
+      message: "Hourly quota exhausted. It resets on the hour.",
+    });
+  });
+
+  it("keeps the generic message for non-quota stream errors", () => {
+    const described = describeModelStreamError({
+      name: "AI_RetryError",
+      message: "Failed after 1 attempt.",
+      errors: [{ name: "AI_APICallError", message: "upstream exploded", statusCode: 500 }],
+    });
+
+    expect(described.quota).toBe(false);
+    expect(described.message).toBe("Site Studio hit an internal error while streaming this response.");
   });
 
   it("surfaces a thrown CailError's verbatim quota message", () => {

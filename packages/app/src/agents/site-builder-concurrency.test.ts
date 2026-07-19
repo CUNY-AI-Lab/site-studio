@@ -234,8 +234,9 @@ describe("describeModelStreamError", () => {
     });
 
     expect(described.quota).toBe(true);
-    expect(described.message).toContain("usage limit");
-    expect(described.message).toContain("60");
+    // The envelope buried in responseBody is JSON-parsed, so the gateway's
+    // verbatim message wins over the generic usage-limit fallback.
+    expect(described.message).toBe("Daily quota exhausted");
   });
 
   it("SS-44: identifies a nested quota error", () => {
