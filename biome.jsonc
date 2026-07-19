@@ -1,0 +1,49 @@
+// Import-boundary lint: app code must not hand-roll what the CAIL shared
+// primitives own. Identity/JWT verification comes from
+// @cuny-ai-lab/cail-identity; direct JWT libraries are banned in app source.
+// Test files are exempt — tests legitimately mint tokens with jose.
+//
+// This is deliberately a minimal single-rule config (preset none, formatter
+// off): it enforces the primitive boundary, not a style regime.
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": false },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "files": {
+    "includes": [
+      "packages/app/src/**/*.ts",
+      "packages/app/src/**/*.js",
+      "packages/app/src/**/*.mjs",
+      "packages/worker/src/**/*.ts",
+      "packages/worker/src/**/*.js",
+      "packages/worker/src/**/*.mjs",
+      "packages/observability-core/src/**/*.ts",
+      "packages/observability-core/src/**/*.js",
+      "packages/serving-core/src/**/*.ts",
+      "packages/serving-core/src/**/*.js",
+      "packages/frontend/src/**/*.ts",
+      "packages/frontend/src/**/*.js",
+      "packages/frontend/src/**/*.mjs",
+      "!**/*.test.*"
+    ]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "none",
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "jose": "Identity/JWT verification is owned by the CAIL shared primitives. Use @cuny-ai-lab/cail-identity (verifyIdentityJwt) instead of hand-rolling JWT handling in app code. Tests are exempt.",
+              "jsonwebtoken": "Identity/JWT verification is owned by the CAIL shared primitives. Use @cuny-ai-lab/cail-identity (verifyIdentityJwt) instead of hand-rolling JWT handling in app code. Tests are exempt.",
+              "jwks-rsa": "JWKS fetching/verification is owned by the CAIL shared primitives. Use @cuny-ai-lab/cail-identity instead. Tests are exempt."
+            }
+          }
+        }
+      }
+    }
+  }
+}

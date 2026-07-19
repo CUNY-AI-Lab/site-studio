@@ -15,10 +15,12 @@
     "chat:debug": "node ./scripts/project-chat-debug.mjs",
     "trace": "node ./scripts/project-observability.mjs",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
-    "check": "bun run --cwd packages/app check && bun run --cwd packages/worker check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
+    "lint": "biome lint .",
+    "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/worker check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
   },
   "license": "MIT",
   "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
     "ws": "8.21.0"
   },
   "overrides": {

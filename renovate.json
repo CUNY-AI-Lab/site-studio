@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "Group CAIL primitive minor/patch bumps into one auto-tested PR.",
+      "matchPackageNames": ["/^@cuny-ai-lab//"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "cail-primitives",
+      "labels": ["cail-primitives"]
+    },
+    {
+      "description": "A breaking major of a CAIL primitive (e.g. cail-identity 4.x) gets its own reviewable PR — never grouped.",
+      "matchPackageNames": ["/^@cuny-ai-lab//"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["cail-primitives", "cail-primitives-major"]
+    }
+  ],
+  "hostRules": [
+    {
+      "description": "@cuny-ai-lab/* resolve from the private GitHub Packages npm registry. The hosted Renovate app needs a read:packages token supplied via encrypted hostRules (https://docs.renovatebot.com/getting-started/private-packages/) before it can resolve these packages; until the app is installed on the CUNY-AI-Lab org this config is inert.",
+      "matchHost": "npm.pkg.github.com",
+      "hostType": "npm"
+    }
+  ]
+}
