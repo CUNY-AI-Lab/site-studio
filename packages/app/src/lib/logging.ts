@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import { isCailSubject } from "@cuny-ai-lab/cail-identity";
 import { createMiddleware } from "hono/factory";
 import { matchedRoutes } from "hono/route";
 import {
@@ -107,9 +108,11 @@ export function traceFromCorrelation(correlation: CailCorrelation) {
 
 /** Only verified CAIL subjects are linkable principals. Legacy owners stay anonymous. */
 export function principalForOwnerId(ownerId?: string): CailPrincipalFields {
-  const match = ownerId?.match(/^cail-([0-9a-f]{32})$/);
-  if (match) {
-    return { type: "user", subject: `cail-${CAIL_LOG_SUBJECT_VERSION}-${match[1]}` };
+  if (isCailSubject(ownerId)) {
+    return {
+      type: "user",
+      subject: `cail-${CAIL_LOG_SUBJECT_VERSION}-${ownerId.slice("cail-".length)}`,
+    };
   }
   if (ownerId && new RegExp(`^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`).test(ownerId)) {
     return { type: "user", subject: ownerId };
