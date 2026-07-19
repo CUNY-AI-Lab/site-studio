@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { canonicalTestSubject } from "@cuny-ai-lab/cail-identity/testing";
 import { Hono } from "hono";
 import type { Env, ProjectMetadata } from "../types";
 import {
@@ -112,7 +113,7 @@ function createMockKV() {
 }
 
 const ANON = "user_anon123";
-const SUBJECT = "cail-abc12300abc12300abc12300abc12300";
+const SUBJECT = canonicalTestSubject("migration-owner");
 
 /** Copied objects are stored as ArrayBuffers by the mock; decode for asserts. */
 function textOf(entry: { data: ArrayBuffer | string } | undefined): string | undefined {
@@ -278,7 +279,7 @@ describe("migrateAnonymousData", () => {
     seedAnonProject(bucket, "portfolio");
     await run(); // SUBJECT claims and completes
 
-    const otherSubject = "cail-1274de121274de121274de121274de12";
+    const otherSubject = canonicalTestSubject("other-owner");
     const result = await run({ subject: otherSubject, anonSessionId: undefined });
 
     expect(result.status).toBe("refused");
@@ -307,7 +308,7 @@ describe("migrateAnonymousData", () => {
   });
 
   it("refuses non-anonymous ids (never migrates a subject namespace)", async () => {
-    const result = await run({ anonUserId: "cail-07e7000007e7000007e7000007e70000" });
+    const result = await run({ anonUserId: canonicalTestSubject("non-anonymous-id") });
     expect(result.status).toBe("refused");
     expect(kv.store.size).toBe(0);
   });

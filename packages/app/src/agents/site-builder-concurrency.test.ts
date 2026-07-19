@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 
 const storage = vi.hoisted(() => ({
   createSnapshot: vi.fn(),
@@ -217,15 +218,7 @@ describe("describeModelStreamError", () => {
   it("SS-44: identifies a quota response and includes Retry-After", () => {
     const described = describeModelStreamError({
       statusCode: 429,
-      responseBody: JSON.stringify({
-        error: {
-          message: "Daily quota exhausted",
-          type: "rate_limit_error",
-          param: null,
-          code: "quota_exceeded",
-          cail: { retry_after_seconds: 60 },
-        },
-      }),
+      responseBody: JSON.stringify(quotaExceededEnvelope({ message: "Daily quota exhausted", retryAfterSeconds: 60 })),
       responseHeaders: {
         "retry-after": "60",
         "x-request-id": "req-site-concurrency-quota-1",

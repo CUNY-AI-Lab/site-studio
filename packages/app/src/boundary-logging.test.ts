@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toWorkersLogEvent, type CailLogEvent } from "@cuny-ai-lab/cail-log";
+import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
 import { createMockKV, type MockKV } from "./lib/test-utils";
 
@@ -306,13 +307,14 @@ describe("service-local diagnostics and helpers", () => {
     expect(terminalForStatus(429)).toEqual({ outcome: "denied", reason: "rate_limited" });
     expect(terminalForStatus(503)).toEqual({ outcome: "error", reason: "application_failure" });
     expect(principalForOwnerId("user_abc")).toEqual({ type: "anonymous" });
-    expect(principalForOwnerId("cail-0123456789abcdef0123456789abcdef")).toEqual({
+    // TEST_SUBJECTS.alice = cail-2bd806c97f0e00af1a1fc3328fa763a9
+    expect(principalForOwnerId(TEST_SUBJECTS.alice)).toEqual({
       type: "user",
-      subject: "cail-v1-0123456789abcdef0123456789abcdef",
+      subject: "cail-v1-2bd806c97f0e00af1a1fc3328fa763a9",
     });
-    expect(principalForOwnerId("cail-v1-0123456789abcdef0123456789abcdef")).toEqual({
+    expect(principalForOwnerId("cail-v1-2bd806c97f0e00af1a1fc3328fa763a9")).toEqual({
       type: "user",
-      subject: "cail-v1-0123456789abcdef0123456789abcdef",
+      subject: "cail-v1-2bd806c97f0e00af1a1fc3328fa763a9",
     });
   });
 

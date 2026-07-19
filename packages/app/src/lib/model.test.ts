@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { generateText } from "ai";
 import { CailError } from "@cuny-ai-lab/cail-client";
+import { cailErrorEnvelope, cailErrorResponse, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import {
   CAIL_APP_SLUG,
   DEFAULT_CAIL_MODEL,
@@ -73,24 +74,13 @@ describe("gateway quota errors at the adapter boundary", () => {
     let calls = 0;
     const upstream = (async () => {
       calls += 1;
-      return new Response(
-        JSON.stringify({
-          error: {
-            message: verbatim,
-            type: "rate_limit_error",
-            param: null,
-            code: "quota_exceeded",
-            cail: { retry_after_seconds: 1800 },
-          },
-        }),
+      return cailErrorResponse(
+        429,
+        quotaExceededEnvelope({ message: verbatim, retryAfterSeconds: 1800 }),
         {
-          status: 429,
-          headers: {
-            "content-type": "application/json",
-            "retry-after": "1800",
-            "x-request-id": "req-site-quota-1",
-            "x-should-retry": "false",
-          },
+          "retry-after": "1800",
+          "x-request-id": "req-site-quota-1",
+          "x-should-retry": "false",
         }
       );
     }) as typeof fetch;
@@ -119,23 +109,17 @@ describe("gateway quota errors at the adapter boundary", () => {
     let calls = 0;
     const upstream = (async () => {
       calls += 1;
-      return new Response(
-        JSON.stringify({
-          error: {
-            message: "Sign in to use CAIL models.",
-            type: "authentication_error",
-            param: null,
-            code: "authentication_required",
-            cail: { login_url: "/login" },
-          },
+      return cailErrorResponse(
+        401,
+        cailErrorEnvelope({
+          message: "Sign in to use CAIL models.",
+          type: "authentication_error",
+          code: "authentication_required",
+          cail: { login_url: "/login" },
         }),
         {
-          status: 401,
-          headers: {
-            "content-type": "application/json",
-            "x-request-id": "req-site-auth-1",
-            "x-should-retry": "false",
-          },
+          "x-request-id": "req-site-auth-1",
+          "x-should-retry": "false",
         }
       );
     }) as typeof fetch;

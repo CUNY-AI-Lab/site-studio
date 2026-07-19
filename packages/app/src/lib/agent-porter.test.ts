@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
+
+const SUBJECT = TEST_SUBJECTS.alice;
 
 const getAgentByName = vi.fn();
 
@@ -79,10 +82,10 @@ describe("createAgentHistoryPorter", () => {
       .mockResolvedValueOnce({ importChatHistoryForMigration: importSpy });
 
     const porter = createAgentHistoryPorter(env);
-    await porter.port("user_anon42", "blog", "cail-abc00000abc00000abc00000abc00000", "blog-imported");
+    await porter.port("user_anon42", "blog", SUBJECT, "blog-imported");
 
     expect(getAgentByName).toHaveBeenNthCalledWith(1, namespace, "user_anon42:blog");
-    expect(getAgentByName).toHaveBeenNthCalledWith(2, namespace, "cail-abc00000abc00000abc00000abc00000:blog-imported");
+    expect(getAgentByName).toHaveBeenNthCalledWith(2, namespace, `${SUBJECT}:blog-imported`);
     expect(importSpy).toHaveBeenCalledWith(messages);
   });
 
@@ -90,7 +93,7 @@ describe("createAgentHistoryPorter", () => {
     getAgentByName.mockResolvedValueOnce({ exportChatHistoryForMigration: async () => [] });
 
     const porter = createAgentHistoryPorter(env);
-    await porter.port("user_anon42", "blog", "cail-abc00000abc00000abc00000abc00000", "blog");
+    await porter.port("user_anon42", "blog", SUBJECT, "blog");
 
     // Only the source instance was contacted; no destination DO was created.
     expect(getAgentByName).toHaveBeenCalledTimes(1);

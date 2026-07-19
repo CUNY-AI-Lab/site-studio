@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { CSRF_ERROR_BODY } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession } from "../lib/test-utils";
+import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 
 // The real `agents` package imports `cloudflare:`-scheme modules that only
 // exist in the Workers runtime; stub getAgentByName with a DO stub that echoes
@@ -21,7 +22,7 @@ vi.mock("agents", () => ({
 import { createAgentRouter } from "./agents";
 import { getAgentByName } from "agents";
 
-const USER_ID = "cail-3e0000003e0000003e0000003e000000";
+const USER_ID = TEST_SUBJECTS.alice;
 const PROJECT_ID = "proj-1";
 const OWN_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";

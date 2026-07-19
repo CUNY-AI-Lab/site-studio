@@ -3,6 +3,7 @@ import { generateTypes } from "@cloudflare/codemode/ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { CailError } from "@cuny-ai-lab/cail-client";
+import { cailErrorEnvelope, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -15,15 +16,7 @@ describe("describeModelStreamError", () => {
       name: "AI_APICallError",
       message: "Too Many Requests",
       statusCode: 429,
-      responseBody: JSON.stringify({
-        error: {
-          message: "Hourly quota exhausted",
-          type: "rate_limit_error",
-          param: null,
-          code: "quota_exceeded",
-          cail: { retry_after_seconds: 3600 },
-        },
-      }),
+      responseBody: JSON.stringify(quotaExceededEnvelope({ message: "Hourly quota exhausted" })),
       responseHeaders: {
         "retry-after": "3600",
         "x-request-id": "req-site-retry-wrapper-1",
@@ -53,15 +46,7 @@ describe("describeModelStreamError", () => {
         name: "AI_APICallError",
         message: "Too Many Requests",
         statusCode: 429,
-        responseBody: JSON.stringify({
-          error: {
-            message: "",
-            type: "rate_limit_error",
-            param: null,
-            code: "quota_exceeded",
-            cail: { retry_after_seconds: 3600 },
-          },
-        }),
+        responseBody: JSON.stringify(quotaExceededEnvelope({ message: "" })),
       }],
     };
 
@@ -72,15 +57,10 @@ describe("describeModelStreamError", () => {
   });
 
   it("unwraps a CAIL envelope handed over as a bare JSON string", () => {
-    const described = describeModelStreamError(JSON.stringify({
-      error: {
-        message: "You have reached your CAIL usage quota for this period.",
-        type: "rate_limit_error",
-        param: null,
-        code: "quota_exceeded",
-        cail: { retry_after_seconds: 900 },
-      },
-    }));
+    const described = describeModelStreamError(JSON.stringify(quotaExceededEnvelope({
+      message: "You have reached your CAIL usage quota for this period.",
+      retryAfterSeconds: 900,
+    })));
 
     expect(described.quota).toBe(true);
     expect(described.message).toBe("You have reached your CAIL usage quota for this period.");
@@ -96,14 +76,13 @@ describe("describeModelStreamError", () => {
           name: "AI_APICallError",
           message: "Too Many Requests",
           status: 429,
-          data: JSON.stringify({
-            error: {
-              message: "Hourly quota exhausted. It resets on the hour.",
-              type: "rate_limit_error",
-              param: null,
-              code: "quota_exceeded",
-            },
-          }),
+          // No `cail` extension block on purpose: the traversal must not
+          // require it to recognize a quota envelope.
+          data: JSON.stringify(cailErrorEnvelope({
+            message: "Hourly quota exhausted. It resets on the hour.",
+            type: "rate_limit_error",
+            code: "quota_exceeded",
+          })),
         },
       ],
     };

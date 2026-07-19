@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import { quotaSnapshotResponse } from "@cuny-ai-lab/cail-client/testing";
 import type { Env } from "../types";
 import { createQuotaRouter } from "./quota";
 
@@ -12,20 +13,7 @@ describe("quota route", () => {
       expect(headers.get("X-CAIL-Identity-JWT")).toBe("verified-jwt");
       expect(headers.get("X-CAIL-App")).toBe("site-studio");
       expect(headers.has("Authorization")).toBe(false);
-      return Response.json({
-        object: "quota",
-        subject: "cail-5ec2e7015ec2e7015ec2e7015ec2e701",
-        unit: "microdollar",
-        currency: "USD",
-        window_seconds: 2592000,
-        limit: 10000000,
-        used: 630000,
-        remaining: 9370000,
-        reset: 1723200000,
-        as_of: 1720600000,
-        state: "ok",
-        enforced: true
-      });
+      return quotaSnapshotResponse();
     });
     vi.stubGlobal("fetch", fetchMock);
 

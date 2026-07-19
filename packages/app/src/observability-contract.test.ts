@@ -35,10 +35,10 @@ describe("observability source contract", () => {
   it("pins the reviewed identity and transport primitives in the app", () => {
     const source = readFileSync(new URL("../package.json", import.meta.url), "utf8");
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-identity": "^4.0.0"',
+      '"@cuny-ai-lab/cail-identity": "^4.2.0"',
     );
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-client": "^1.2.0"',
+      '"@cuny-ai-lab/cail-client": "^1.3.0"',
     );
     expect(source).not.toContain("cail-sandbox-client");
   });

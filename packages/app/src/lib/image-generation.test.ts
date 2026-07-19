@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { cailErrorResponse, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import {
   DEFAULT_CAIL_IMAGE_MODEL,
   DEFAULT_CAIL_IMAGE_CLASSIFIER,
@@ -160,25 +161,16 @@ describe("generateImage wire contract", () => {
   });
 
   it("passes the CAIL envelope message through verbatim (429 quota_exceeded)", async () => {
-    const envelope = JSON.stringify({
-      error: {
-        message: "Monthly quota exceeded.",
-        type: "rate_limit_error",
-        param: null,
-        code: "quota_exceeded",
-        cail: { retry_after_seconds: 1800 },
-      },
-    });
     const { fetch: stub } = captureFetch(
-      () => new Response(envelope, {
-        status: 429,
-        headers: {
-          "content-type": "application/json",
+      () => cailErrorResponse(
+        429,
+        quotaExceededEnvelope({ message: "Monthly quota exceeded.", retryAfterSeconds: 1800 }),
+        {
           "retry-after": "1800",
           "x-request-id": "req-site-image-1",
           "x-should-retry": "false",
-        },
-      })
+        }
+      )
     );
     const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
     expect(result.ok).toBe(false);

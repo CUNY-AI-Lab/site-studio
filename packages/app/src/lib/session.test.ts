@@ -1,62 +1,31 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import {
+  TEST_SUBJECTS,
+  canonicalTestSubject,
+  createTestIdentityIssuer,
+  type TestIdentityIssuer,
+} from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "../types";
 import { authMiddleware, getCailIdentityJwt } from "./session";
 import { migrateAnonymousData } from "./migration";
 
-function base64url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-let identityPrivateKey: CryptoKey;
+let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
 
 beforeAll(async () => {
-  const pair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256"
-    },
-    true,
-    ["sign", "verify"]
-  ) as CryptoKeyPair;
-  const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
-  identityPrivateKey = pair.privateKey;
-  identityJwks = JSON.stringify({
-    keys: [{ ...publicJwk, kid: "session-test", alg: "RS256", use: "sig" }]
-  });
+  // Kit default issuer is the canonical production issuer this suite configures.
+  identityIssuer = await createTestIdentityIssuer({ kid: "session-test" });
+  identityJwks = identityIssuer.jwksJson;
 });
 
-async function mintIdentityJwt(sub: string): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const enc = new TextEncoder();
-  const header = base64url(enc.encode(JSON.stringify({
-    alg: "RS256",
-    typ: "JWT",
-    kid: "session-test"
-  })));
-  const payload = base64url(
-    enc.encode(
-      JSON.stringify({
-        iss: "https://tools.ailab.gc.cuny.edu/cail-sso",
-        aud: "cail:site-studio",
-        sub,
-        email: "u@gc.cuny.edu",
-        exp: now + 300,
-        iat: now
-      })
-    )
-  );
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    identityPrivateKey,
-    enc.encode(`${header}.${payload}`)
-  );
-  return `${header}.${payload}.${base64url(new Uint8Array(signature))}`;
+function mintIdentityJwt(sub: string): Promise<string> {
+  return identityIssuer.mintIdentityJwt({
+    audience: "cail:site-studio",
+    subject: sub,
+    email: "u@gc.cuny.edu",
+    expiresInSeconds: 300
+  });
 }
 
 /**
@@ -193,7 +162,8 @@ describe("authMiddleware", () => {
       } as unknown as KVNamespace
     });
 
-    const token = await mintIdentityJwt("cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
+    const subject = TEST_SUBJECTS.alice;
+    const token = await mintIdentityJwt(subject);
     const response = await app.request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Identity-JWT": token } },
@@ -202,11 +172,11 @@ describe("authMiddleware", () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as { user: { id: string; cail?: boolean; email?: string } };
-    expect(body.user.id).toBe("cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
+    expect(body.user.id).toBe(subject);
     expect(body.user.cail).toBe(true);
     expect(body.user.email).toBe("u@gc.cuny.edu");
     // Session is bound to the subject, not a random cookie id.
-    expect(response.headers.get("set-cookie")).toContain("site-studio-session=cail-5b1ec7a15b1ec7a15b1ec7a15b1ec7a1");
+    expect(response.headers.get("set-cookie")).toContain(`site-studio-session=${subject}`);
   });
 
   it("returns the authentication_required envelope when identity is required but absent", async () => {
@@ -275,7 +245,8 @@ describe("authMiddleware", () => {
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user"), forwardedToken: getCailIdentityJwt(c) }));
 
-    const token = await mintIdentityJwt("cail-5b1ec7005b1ec7005b1ec7005b1ec700");
+    const subject = TEST_SUBJECTS.bob;
+    const token = await mintIdentityJwt(subject);
     const response = await app.request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Identity-JWT": token } },
@@ -284,7 +255,7 @@ describe("authMiddleware", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      user: { id: "cail-5b1ec7005b1ec7005b1ec7005b1ec700" },
+      user: { id: subject },
       forwardedToken: token
     });
   });
@@ -297,7 +268,7 @@ describe("authMiddleware", () => {
     const env = createEnv({ CAIL_IDENTITY_JWKS: identityJwks });
     const response = await app.request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Subject": "cail-f0e9edf0f0e9edf0f0e9edf0f0e9edf0" } },
+      { headers: { "X-CAIL-Subject": canonicalTestSubject("forged-header") } },
       env
     );
 
@@ -362,7 +333,7 @@ function createLiveBucket() {
 }
 
 describe("authMiddleware anonymous-data migration", () => {
-  const SUBJECT = "cail-0123456789abcdef0123456789abcdef";
+  const SUBJECT = canonicalTestSubject("migration-owner"); // cail-f4729c5b5359d13d2cd445c3151109d3
   const ANON = "user_anon42";
 
   function buildApp() {
@@ -444,7 +415,8 @@ describe("authMiddleware anonymous-data migration", () => {
       );
       expect(completed).toMatchObject({
         "error.type": "account_import_completed",
-        "enduser.pseudo.id": "cail-v1-0123456789abcdef0123456789abcdef",
+        // cail-v1-<hex of SUBJECT = canonicalTestSubject("migration-owner")>
+        "enduser.pseudo.id": "cail-v1-f4729c5b5359d13d2cd445c3151109d3",
         "cail.product.id": "site-studio",
       });
       expect(JSON.stringify(completed)).not.toContain(ANON);
@@ -529,7 +501,8 @@ describe("authMiddleware anonymous-data migration", () => {
         expect.objectContaining({
           "event.name": "site_studio.diagnostic.warning",
           "error.type": "account_import_expired",
-          "enduser.pseudo.id": "cail-v1-0123456789abcdef0123456789abcdef",
+          // cail-v1-<hex of SUBJECT = canonicalTestSubject("migration-owner")>
+          "enduser.pseudo.id": "cail-v1-f4729c5b5359d13d2cd445c3151109d3",
         })
       );
     } finally {
@@ -547,7 +520,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-3: refuses to absorb an anon namespace already claimed by another subject", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    const OTHER_SUBJECT = "cail-07e70e0107e70e0107e70e0107e70e01";
+    const OTHER_SUBJECT = canonicalTestSubject("other-owner");
 
     // A live anon session record still exists (attacker replays this cookie).
     kv.store.set(
@@ -593,8 +566,8 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-3: two different subjects racing the same anon cookie — first wins, second refused", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    const SUBJECT_A = "cail-f1257001f1257001f1257001f1257001";
-    const SUBJECT_B = "cail-5ec00d025ec00d025ec00d025ec00d02";
+    const SUBJECT_A = canonicalTestSubject("race-subject-a");
+    const SUBJECT_B = canonicalTestSubject("race-subject-b");
 
     kv.store.set(
       "session:anon-cookie-1",

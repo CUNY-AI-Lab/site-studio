@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
 import type { Env } from "../types";
+import { TEST_SUBJECTS, canonicalTestSubject } from "@cuny-ai-lab/cail-identity/testing";
+
+// Canonical test subjects (cail-identity/testing kit).
+const OWNER = TEST_SUBJECTS.alice;
+const ROUTE_USER = canonicalTestSubject("route-user");
 import {
   CSRF_ERROR_BODY,
   CSRF_HEADER_NAME,
@@ -111,19 +116,19 @@ describe("csrfDecision (rules 2+3 matrix)", () => {
 describe("token mint/lookup", () => {
   it("mints a 64-char hex token lazily and keeps it stable per user", async () => {
     const bucket = createCsrfBucket();
-    expect(await getCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000")).toBeNull();
+    expect(await getCsrfToken(bucket, OWNER)).toBeNull();
 
-    const first = await getOrMintCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000");
+    const first = await getOrMintCsrfToken(bucket, OWNER);
     expect(first).toMatch(/^[0-9a-f]{64}$/);
 
-    const second = await getOrMintCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000");
+    const second = await getOrMintCsrfToken(bucket, OWNER);
     expect(second).toBe(first);
-    expect(await getCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000")).toBe(first);
+    expect(await getCsrfToken(bucket, OWNER)).toBe(first);
   });
 
   it("mints different tokens for different users", async () => {
     const bucket = createCsrfBucket();
-    const a = await getOrMintCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000");
+    const a = await getOrMintCsrfToken(bucket, OWNER);
     const b = await getOrMintCsrfToken(bucket, "user_anon");
     expect(a).not.toBe(b);
   });
@@ -136,13 +141,13 @@ describe("token mint/lookup", () => {
     const bucket = createCsrfBucket();
 
     const [a, b] = await Promise.all([
-      getOrMintCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000"),
-      getOrMintCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000")
+      getOrMintCsrfToken(bucket, OWNER),
+      getOrMintCsrfToken(bucket, OWNER)
     ]);
 
     expect(a).toBe(b);
     // What each racer handed the client is exactly what verification will read.
-    await expect(getCsrfToken(bucket, "cail-aa000000aa000000aa000000aa000000")).resolves.toBe(a);
+    await expect(getCsrfToken(bucket, OWNER)).resolves.toBe(a);
   });
 });
 
@@ -296,7 +301,7 @@ describe("csrfProtect middleware", () => {
 
   it("no-ops on GET and OPTIONS", async () => {
     const bucket = createCsrfBucket();
-    const app = buildApp("cail-3e0000003e0000003e0000003e000000");
+    const app = buildApp(ROUTE_USER);
 
     const get = await app.request(`${REQUEST_ORIGIN}/api/thing`, {}, env(bucket));
     expect(get.status).toBe(200);
@@ -307,7 +312,7 @@ describe("csrfProtect middleware", () => {
 
   it("rejects a tokenless POST with the exact 403 envelope", async () => {
     const bucket = createCsrfBucket();
-    const app = buildApp("cail-3e0000003e0000003e0000003e000000");
+    const app = buildApp(ROUTE_USER);
 
     const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST" }, env(bucket));
     expect(res.status).toBe(403);
@@ -316,8 +321,8 @@ describe("csrfProtect middleware", () => {
 
   it("accepts a POST with a valid token + same-origin posture", async () => {
     const bucket = createCsrfBucket();
-    const { headers } = await mintCsrfSession(bucket, "cail-3e0000003e0000003e0000003e000000");
-    const app = buildApp("cail-3e0000003e0000003e0000003e000000");
+    const { headers } = await mintCsrfSession(bucket, ROUTE_USER);
+    const app = buildApp(ROUTE_USER);
 
     const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(bucket));
     expect(res.status).toBe(200);
@@ -326,8 +331,8 @@ describe("csrfProtect middleware", () => {
 
   it("rejects a valid token when Sec-Fetch-Site says cross-site", async () => {
     const bucket = createCsrfBucket();
-    const { token } = await mintCsrfSession(bucket, "cail-3e0000003e0000003e0000003e000000");
-    const app = buildApp("cail-3e0000003e0000003e0000003e000000");
+    const { token } = await mintCsrfSession(bucket, ROUTE_USER);
+    const app = buildApp(ROUTE_USER);
 
     const res = await app.request(
       `${REQUEST_ORIGIN}/api/thing`,
@@ -340,7 +345,7 @@ describe("csrfProtect middleware", () => {
 
   it("fails closed when no session user is in scope", async () => {
     const bucket = createCsrfBucket();
-    const { headers } = await mintCsrfSession(bucket, "cail-3e0000003e0000003e0000003e000000");
+    const { headers } = await mintCsrfSession(bucket, ROUTE_USER);
     const app = buildApp(undefined);
 
     const res = await app.request(`${REQUEST_ORIGIN}/api/thing`, { method: "POST", headers }, env(bucket));
