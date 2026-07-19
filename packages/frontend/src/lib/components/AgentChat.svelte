@@ -102,10 +102,19 @@
 	let quota = $state<{ limit: number; remaining: number; reset: number } | null>(null);
 
 	async function refreshQuota() {
+		// Hiding the pill when the quota read fails is deliberate degradation,
+		// but it must be observable — otherwise a broken quota route is
+		// indistinguishable from "no quota configured".
 		try {
 			const response = await apiResponseFetch(resolvePath('/api/quota'), { credentials: 'include' });
-			quota = response.ok ? await response.json() : null;
-		} catch {
+			if (!response.ok) {
+				console.warn(`Quota refresh failed (HTTP ${response.status}); hiding the quota pill`);
+				quota = null;
+				return;
+			}
+			quota = await response.json();
+		} catch (error) {
+			console.warn('Quota refresh failed; hiding the quota pill', error);
 			quota = null;
 		}
 	}
@@ -900,6 +909,10 @@
 		try {
 			data = JSON.parse(event.data);
 		} catch {
+			// Malformed (non-JSON) frame on the agent socket: a transport issue.
+			// Still drop the frame, but say so — silent drops made transport
+			// corruption invisible.
+			console.warn('Dropping malformed (non-JSON) agent-socket frame');
 			return;
 		}
 

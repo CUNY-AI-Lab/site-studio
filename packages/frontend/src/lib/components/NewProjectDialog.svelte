@@ -126,7 +126,10 @@
 
 			return maxNumber + 1;
 		} catch (error) {
-			console.error('Error fetching projects for numbering:', error);
+			console.warn(
+				'Project list fetch failed; falling back to auto-number 1 (a duplicate name surfaces as a 409):',
+				error
+			);
 			return 1; // Default to 1 if we can't fetch
 		}
 	}

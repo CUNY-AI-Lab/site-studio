@@ -65,6 +65,10 @@ class FakeWebSocket {
 	serverMessage(payload: unknown) {
 		this.emit('message', { data: JSON.stringify(payload) } as MessageEvent);
 	}
+	/** Push a raw (possibly non-JSON) frame, bypassing serialization. */
+	serverRawMessage(data: string) {
+		this.emit('message', { data } as MessageEvent);
+	}
 	serverClose() {
 		this.readyState = FakeWebSocket.CLOSED;
 		this.emit('close', new CloseEvent('close'));
@@ -125,6 +129,39 @@ describe('AgentChat', () => {
 		expect(url).toContain('/api/agents/site-builder/proj1');
 		// The token is appended as a query param (parsed via URLSearchParams).
 		expect(new URL(url).searchParams.get('csrf')).toBe('test-csrf-token');
+	});
+
+	it('drops a malformed (non-JSON) socket frame with a console.warn, not silently', async () => {
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			mount();
+			await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+			const socket = FakeWebSocket.last();
+			socket.open();
+			await settle();
+
+			socket.serverRawMessage('not-json{{{');
+			await settle();
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining('malformed (non-JSON) agent-socket frame')
+			);
+
+			// The frame is still dropped: a subsequent valid frame is processed normally.
+			socket.serverMessage({
+				type: AgentMessageType.CF_AGENT_CHAT_MESSAGES,
+				messages: [
+					{
+						id: 'm1',
+						role: 'assistant',
+						parts: [{ type: 'text', text: 'hello after malformed frame' }]
+					}
+				]
+			});
+			await settle();
+			expect(screen.getByText('hello after malformed frame')).toBeTruthy();
+		} finally {
+			warnSpy.mockRestore();
+		}
 	});
 
 	it('routes authentication_required history responses through the login redirect path', async () => {
