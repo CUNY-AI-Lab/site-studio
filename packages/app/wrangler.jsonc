@@ -70,9 +70,10 @@
     "CAIL_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
     // CAIL_IMAGE_CLASSIFIER: vision model backing the REQUIRED image moderation
     // gate — Workers AI has no dedicated NSFW classifier, so we vision-screen
-    // every generated image before saving it. `@cf/...` only;
-    // `@cf/meta/llama-3.2-11b-vision-instruct` is the fallback vision model.
-    "CAIL_IMAGE_CLASSIFIER": "@cf/google/gemma-4-26b-a4b-it",
+    // every generated image before saving it. Must be a vision-capable model
+    // from the gateway's curated catalog;
+    // `@cf/meta/llama-4-scout-17b-16e-instruct` is the other vision model.
+    "CAIL_IMAGE_CLASSIFIER": "@cf/moonshotai/kimi-k2.6",
     // CAIL_REQUIRE_IDENTITY: "false" during pre-SSO rollout (anonymous sessions
     // still allowed). Flip to "true" in lockstep with the gateway's
     // CAIL_SSO_MODE=enforce so the workers.dev URL is not an anonymous bypass.

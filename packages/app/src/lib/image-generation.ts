@@ -38,11 +38,12 @@ export const DEFAULT_CAIL_IMAGE_MODEL = "@cf/black-forest-labs/flux-2-klein-4b";
 /**
  * Default classifier for the moderation gate. Workers AI has NO dedicated NSFW
  * classifier (verified against the live catalog), so the gate is a vision-model
- * screen. CAIL policy applies here too: must be a `@cf/...` id. Overridable via
- * `CAIL_IMAGE_CLASSIFIER`. `@cf/meta/llama-3.2-11b-vision-instruct` is the
- * fallback vision model if this id is unavailable at launch.
+ * screen. CAIL policy applies here too: must be a vision-capable id from the
+ * gateway's curated catalog (models-policy.json). Overridable via
+ * `CAIL_IMAGE_CLASSIFIER`. `@cf/meta/llama-4-scout-17b-16e-instruct` is the
+ * catalog's other vision model if this id is unavailable.
  */
-export const DEFAULT_CAIL_IMAGE_CLASSIFIER = "@cf/google/gemma-4-26b-a4b-it";
+export const DEFAULT_CAIL_IMAGE_CLASSIFIER = "@cf/moonshotai/kimi-k2.6";
 
 /**
  * The moderation gate's system instruction. Kept as an exported constant so the

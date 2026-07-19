@@ -27,8 +27,9 @@ export interface Env {
   // @cf/black-forest-labs/flux-1-schnell.
   CAIL_IMAGE_MODEL?: string;
   // Vision model used as the REQUIRED image moderation gate (no dedicated NSFW
-  // classifier exists in Workers AI). `@cf/...` only. Default
-  // @cf/google/gemma-4-26b-a4b-it; fallback @cf/meta/llama-3.2-11b-vision-instruct.
+  // classifier exists in Workers AI). Must be a vision-capable curated-catalog
+  // id. Default @cf/moonshotai/kimi-k2.6; the catalog's other vision model is
+  // @cf/meta/llama-4-scout-17b-16e-instruct.
   CAIL_IMAGE_CLASSIFIER?: string;
   // Static public JWKS used to verify RS256 X-CAIL-Identity-JWT tokens for the
   // cail:site-studio audience. Stored as a JSON Wrangler secret.
