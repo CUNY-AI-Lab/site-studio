@@ -131,6 +131,95 @@ describe('AgentChat', () => {
 		expect(new URL(url).searchParams.get('csrf')).toBe('test-csrf-token');
 	});
 
+	it('ignores a stale history response after switching projects', async () => {
+		let resolveProjectAHistory!: (response: Response) => void;
+		const projectAHistory = new Promise<Response>((resolve) => {
+			resolveProjectAHistory = resolve;
+		});
+		let projectAHistoryRequested = false;
+		const onUpdate = vi.fn();
+
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.includes('/proj-a/get-messages')) {
+				projectAHistoryRequested = true;
+				return projectAHistory;
+			}
+			if (url.includes('/proj-b/get-messages')) {
+				return new Response(
+					JSON.stringify([
+						{ id: 'b1', role: 'assistant', parts: [{ type: 'text', text: 'Project B history' }] }
+					]),
+					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const result = render(AgentChat, { props: { projectId: 'proj-a', onUpdate } });
+		await waitFor(() => expect(projectAHistoryRequested).toBe(true));
+
+		await result.rerender({ projectId: 'proj-b', onUpdate });
+		await waitFor(() => expect(screen.getByText('Project B history')).toBeInTheDocument());
+
+		resolveProjectAHistory(
+			new Response(
+				JSON.stringify([
+					{ id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Stale project A history' }] }
+				]),
+				{ status: 200, headers: { 'Content-Type': 'application/json' } }
+			)
+		);
+		await settle();
+
+		expect(screen.queryByText('Stale project A history')).not.toBeInTheDocument();
+		expect(screen.getByText('Project B history')).toBeInTheDocument();
+	});
+
+	it('never reuses an in-flight socket connection for a different project', async () => {
+		let resolveCsrf!: (response: Response) => void;
+		const csrfResponse = new Promise<Response>((resolve) => {
+			resolveCsrf = resolve;
+		});
+		let csrfRequested = false;
+		const onUpdate = vi.fn();
+
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				csrfRequested = true;
+				return csrfResponse;
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const result = render(AgentChat, { props: { projectId: 'proj-a', onUpdate } });
+		await waitFor(() => expect(csrfRequested).toBe(true));
+
+		await result.rerender({ projectId: 'proj-b', onUpdate });
+		document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+		resolveCsrf(new Response(null, { status: 204 }));
+
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const socket = FakeWebSocket.instances[0];
+		expect(socket.url).toContain('/api/agents/site-builder/proj-b');
+		expect(socket.url).not.toContain('/api/agents/site-builder/proj-a');
+
+		socket.open();
+		await settle();
+		await result.component.sendPrompt('Update project B');
+		await settle();
+
+		const request = socket.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+	});
+
 	it('drops a malformed (non-JSON) socket frame with a console.warn, not silently', async () => {
 		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		try {

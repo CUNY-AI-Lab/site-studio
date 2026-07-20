@@ -271,7 +271,10 @@ export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<
   if (!object) return null;
   try {
     const record = JSON.parse(await object.text()) as { handle?: unknown };
-    return typeof record.handle === "string" && record.handle ? record.handle : null;
+    if (typeof record.handle !== "string" || !record.handle) return null;
+    return (await resolveHandleOwner(bucket, record.handle)) === ownerId
+      ? record.handle
+      : null;
   } catch {
     return null;
   }
@@ -541,6 +544,12 @@ async function handlePublishedRequest(
     return fallbackNotFoundResponse(request, parsed.filePath);
   }
 
+  const isRootRequest = url.pathname.split("/").filter(Boolean).length === 3;
+
+  if (parsed.kind === "handle" && isRootRequest && !url.pathname.endsWith("/")) {
+    return Response.redirect(new URL(`${url.pathname}/${url.search}`, url).toString(), 301);
+  }
+
   // Legacy /sites/ URLs: if the resolved owner has a handle, the canonical
   // home is /u/{handle}/…; 301 there, preserving sub-path + query. Owners with
   // no handle keep serving legacy content directly.
@@ -553,6 +562,10 @@ async function handlePublishedRequest(
       const location = `/u/${handle}/${effectiveSlug}/${subPath}${url.search}`;
       return Response.redirect(new URL(location, url).toString(), 301);
     }
+  }
+
+  if (parsed.kind === "legacy" && isRootRequest && !url.pathname.endsWith("/")) {
+    return Response.redirect(new URL(`${url.pathname}/${url.search}`, url).toString(), 301);
   }
 
   if (isProtectedServedPath(parsed.filePath)) {

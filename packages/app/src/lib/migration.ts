@@ -150,6 +150,18 @@ function bytesEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
   return true;
 }
 
+function stringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0
+    )
+  );
+}
+
 /**
  * Copy with an atomic destination claim. A lost claim is accepted only when
  * the destination is byte-identical (the idempotent retry/second-sweep case).
@@ -486,6 +498,19 @@ export async function migrateAnonymousData(options: {
     return { status, projects } as MigrationResult;
   };
 
+  // A prior attempt may have written the complete forwarding pointer and then
+  // failed partway through deleting the anonymous source namespace. Seed every
+  // retry from that pointer before inventorying what remains. Otherwise already
+  // deleted projects disappear from the recomputed maps and the retry
+  // overwrites `.migrated.json` with a strict subset, breaking remapped legacy
+  // slugs permanently.
+  const existingPointer = await loadMigrationPointer(bucket, anonUserId);
+  if (existingPointer && existingPointer.subject !== subject) {
+    throw new Error("Anonymous-data migration stopped because forwarding ownership changed.");
+  }
+  const knownProjects = stringMap(existingPointer?.projects);
+  const knownSlugs = stringMap(existingPointer?.slugs);
+
   // ---- Handle re-homing (before inventory so published URLs can use it) ----
   // Move the anon user's public handle to the subject: the handle record is
   // always re-pointed (so shared /u/{handle}/ links keep resolving), and the
@@ -508,7 +533,9 @@ export async function migrateAnonymousData(options: {
     anonUserId,
     subject,
     subjectHandle,
-    porter
+    porter,
+    knownProjects,
+    knownSlugs
   });
 
   // ---- Second copy sweep, immediately before delete ----

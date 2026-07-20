@@ -41,6 +41,20 @@ export interface CailModelEnv {
   CAIL_MODEL?: string;
 }
 
+const WORKERS_AI_MODEL_ID_RE = /^@cf\/[a-z0-9][a-z0-9._/-]*$/i;
+
+export function resolveWorkersAiModelId(
+  configured: string | undefined,
+  fallback: string,
+  variableName: string
+): string {
+  const value = configured ?? fallback;
+  if (value.trim() !== value || !WORKERS_AI_MODEL_ID_RE.test(value)) {
+    throw new Error(`${variableName} must be a Cloudflare Workers AI model id beginning with @cf/`);
+  }
+  return value;
+}
+
 export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtlSeconds = 15): void {
   const payload = token.split(".")[1];
   if (!payload) return;
@@ -63,7 +77,7 @@ export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtl
  * Resolve the configured model id.
  */
 export function resolveModelId(env: CailModelEnv): string {
-  return env.CAIL_MODEL || DEFAULT_CAIL_MODEL;
+  return resolveWorkersAiModelId(env.CAIL_MODEL, DEFAULT_CAIL_MODEL, "CAIL_MODEL");
 }
 
 /**

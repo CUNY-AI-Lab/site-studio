@@ -30,7 +30,12 @@ describe("CAIL_APP_SLUG", () => {
 
 describe("resolveModelId", () => {
   it("uses CAIL_MODEL when set", () => {
-    expect(resolveModelId({ CAIL_MODEL: "some/model" })).toBe("some/model");
+    expect(resolveModelId({ CAIL_MODEL: "@cf/some/model" })).toBe("@cf/some/model");
+  });
+
+  it("rejects a non-Cloudflare model override", () => {
+    expect(() => resolveModelId({ CAIL_MODEL: "some/model" }))
+      .toThrow("CAIL_MODEL must be a Cloudflare Workers AI model id");
   });
 
   it("falls back to the default model", () => {

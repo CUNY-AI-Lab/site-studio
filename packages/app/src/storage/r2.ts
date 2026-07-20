@@ -135,9 +135,9 @@ export class R2ProjectStorage {
   constructor(private readonly bucket: R2Bucket) {}
 
   async projectExists(userId: string, projectId: string): Promise<boolean> {
-    const metadata = await this.bucket.head(metadataKey(userId, projectId));
+    const metadata = await this.getProjectMetadata(userId, projectId);
     if (metadata) {
-      return true;
+      return !metadata.creatingOperationId;
     }
 
     const listed = await this.bucket.list({
@@ -180,7 +180,11 @@ export class R2ProjectStorage {
       cursor = listed.truncated ? listed.cursor : undefined;
     } while (cursor);
 
-    return [...ids].sort();
+    const visible = await Promise.all([...ids].map(async (projectId) => {
+      const metadata = await this.getProjectMetadata(userId, projectId);
+      return metadata?.creatingOperationId ? null : projectId;
+    }));
+    return visible.filter((projectId): projectId is string => projectId !== null).sort();
   }
 
   async createProject(userId: string, projectId: string, name: string): Promise<ProjectMetadata> {
@@ -197,14 +201,20 @@ export class R2ProjectStorage {
     return metadata;
   }
 
-  async createProjectIfAbsent(userId: string, projectId: string, name: string): Promise<ProjectMetadata> {
+  async createProjectIfAbsent(
+    userId: string,
+    projectId: string,
+    name: string,
+    creatingOperationId?: string
+  ): Promise<ProjectMetadata> {
     const now = new Date().toISOString();
     const metadata: ProjectMetadata = {
       id: projectId,
       name,
       createdAt: now,
       updatedAt: now,
-      published: false
+      published: false,
+      ...(creatingOperationId ? { creatingOperationId } : {})
     };
 
     // SS-42: project creation claims the metadata key atomically. The route's
@@ -246,7 +256,7 @@ export class R2ProjectStorage {
     newProjectId: string,
     options?: {
       afterTargetClaim?: () => Promise<void>;
-      beforeSourceDelete?: () => Promise<void>;
+      beforeSourceDelete?: (activateTarget: () => Promise<void>) => Promise<void>;
     }
   ): Promise<void> {
     const files = await this.listFiles(userId, oldProjectId);
@@ -260,6 +270,10 @@ export class R2ProjectStorage {
       ...metadata,
       id: newProjectId,
       updatedAt: new Date().toISOString(),
+      // A published target must not become discoverable until every file,
+      // thumbnail, and snapshot has been copied. The owner coordinator activates
+      // it through a durable journal phase immediately before source deletion.
+      published: false,
       // SS-25: thumbnailUrl embeds the project id (/api/projects/{id}/thumbnail).
       // Re-point it at the new id so it doesn't 404 against the old (now deleted)
       // project; clear it when the old metadata had none so we never invent one.
@@ -324,7 +338,16 @@ export class R2ProjectStorage {
       throw error;
     }
 
-    await options?.beforeSourceDelete?.();
+    const activateTarget = async () => {
+      if (metadata.published) {
+        await this.updateProjectMetadata(userId, newProjectId, { published: true });
+      }
+    };
+    if (options?.beforeSourceDelete) {
+      await options.beforeSourceDelete(activateTarget);
+    } else {
+      await activateTarget();
+    }
     await this.deleteProject(userId, oldProjectId);
   }
 

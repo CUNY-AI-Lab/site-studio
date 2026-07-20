@@ -40,11 +40,20 @@ export const CSRF_ERROR_BODY = {
  * `/sites/*` content. Keep the script-readable delivery cookie inside Site
  * Studio's mount point; a root-scoped value would expose it to that content.
  */
-export function validateCsrfCookiePath(path: string | undefined): string {
+export function validateCsrfCookiePath(path: string | undefined, requestUrl?: string): string {
   if (path !== SITE_STUDIO_CSRF_COOKIE_PATH) {
     throw new Error(`CSRF_COOKIE_PATH must be ${SITE_STUDIO_CSRF_COOKIE_PATH}`);
   }
-  return path;
+
+  // Local development serves the SPA at `/` and proxies `/api` directly to the
+  // Worker. A `/site-studio` cookie is invisible there, so use root scope only
+  // for an actual loopback request. Non-loopback deployments remain locked to
+  // the shared-origin production prefix.
+  if (requestUrl && isLoopbackOrigin(new URL(requestUrl).origin)) {
+    return "/";
+  }
+
+  return SITE_STUDIO_CSRF_COOKIE_PATH;
 }
 
 /**
@@ -110,8 +119,10 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
  *
  * Attributes:
  *  - name `cail_csrf_sitestudio`, value = the R2 token.
- *  - Path = /site-studio. This is validated rather than defaulted so a missing
- *    or root-scoped production value cannot expose the token to sibling pages.
+ *  - Path = /site-studio outside loopback. The configuration is validated
+ *    rather than defaulted so a missing or root-scoped production value cannot
+ *    expose the token to sibling pages. Loopback development uses Path=/ because
+ *    the local SPA and Vite API proxy are mounted at the origin root.
  *  - Secure (dev-aware, matching lib/session.ts: only over https), SameSite=Lax
  *    (per contract — Lax here, not the session cookie's Strict, so a top-level
  *    navigation into the SPA still carries it), and NOT HttpOnly so page JS can
@@ -127,7 +138,7 @@ export function setCsrfCookie<E extends HonoEnv & { Bindings: Env }>(
   setCookie(c, CSRF_COOKIE_NAME, token, {
     httpOnly: false,
     maxAge: SESSION_TTL_SECONDS,
-    path: validateCsrfCookiePath(c.env.CSRF_COOKIE_PATH),
+    path: validateCsrfCookiePath(c.env.CSRF_COOKIE_PATH, c.req.url),
     sameSite: "Lax",
     secure: new URL(c.req.url).protocol === "https:"
   });

@@ -1,8 +1,8 @@
 # CAIL logging alignment
 
-This source alignment uses `@cuny-ai-lab/cail-log` at the immutable commit
-`75e0dda3068794ae1543e1e2bb98c9c920bb848f`. The app, publisher, and shared
-observability workspace package all pin that full SHA.
+This source alignment uses `@cuny-ai-lab/cail-log` `^0.4.0`; the committed Bun
+lockfile currently resolves `0.4.0` for the app, publisher, and shared
+observability workspace package.
 
 ## Identity and ownership
 
@@ -33,7 +33,7 @@ received it. Build and publish action success is narrower: it requires the durab
 state acknowledgement that makes the result user-visible on a later request.
 Logging failures do not replace R2 or Durable Object state as the source of truth.
 
-The project-scoped Durable Object now stores a bounded 48-hour action-attempt
+The project-scoped Durable Object stores a bounded 48-hour action-attempt
 record before an admitted build or publish mutation proceeds. A terminal can
 only update an existing admission, and the existing authenticated
 `/api/projects/{id}/observability` read returns the versioned authoritative
@@ -41,6 +41,12 @@ records. Build and publish remain separate action/route pairs. Exact success and
 terminal coverage are calculated from these records rather than either log sink.
 This owner-scoped application read is not the external `kale-admin` fleet-data
 surface described below.
+
+After an R2 publish commits, the route retries an identical terminal RPC once
+because the first rejection may have an ambiguous outcome. If both attempts
+remain unavailable, it returns the committed publish result instead of a false
+failure and emits `publish_terminal_record_failed`; the lifecycle auditor then
+surfaces the missing terminal. Product state remains authoritative.
 
 Routes are fixed templates such as `/api/projects/{id}/publish`,
 `/api/agents/site-builder/{project_id}`, and `/u/{handle}/{slug}/{path}`. Events do
@@ -209,8 +215,9 @@ Studio does not reproduce either ledger.
 ## Source-ready boundary
 
 No dataset, binding, secret, ingress, spend rule, live Cloudflare setting, saved
-query, monitor, exporter, or production state is created here. The source pins
-its immutable dependency. Fleet projection remains inert unless an
+query, monitor, exporter, or production state is created here. The source
+declares a compatible dependency range and the committed lockfile records the
+reviewed resolution. Fleet projection remains inert unless an
 operator provisions or confirms the `cail_fleet_events_v1` Analytics Engine
 dataset and binds it to both Workers as `CAIL_FLEET_EVENTS`. Production
 hostnames/ingress, notification recipients, institution-approved retention,

@@ -39,6 +39,9 @@
  * at a different owner, the reverse slot is a stale orphan and is REAPED
  * (deleted) so the claim proceeds cleanly, instead of the old behavior of
  * falsely reporting "you already have a handle" and hiding the orphan forever.
+ * The repair atomically replaces the exact stale R2 generation with the new
+ * claim rather than deleting it, so two concurrent repairers cannot erase one
+ * another's healthy replacement.
  * A healthy reverse+forward pair keeps the idempotent-success /
  * different-handle-409 contract. (Reverse-orphan reaper: SS-3 residual #2.)
  */
@@ -184,13 +187,27 @@ export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Prom
   return record.ownerId;
 }
 
-/** The handle a user owns, if any (owner -> handle lookup). */
-export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
+/** Read the reverse mapping without treating it as proof of ownership. */
+async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
   const record = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
   if (!record || typeof record.handle !== "string" || !record.handle) {
     return null;
   }
   return record.handle;
+}
+
+/**
+ * The primary handle a user owns, if any.
+ *
+ * The reverse record is only one half of the non-transactional mapping. Never
+ * expose or publish through it unless the forward record still points back to
+ * this owner; a crash between the two claim writes can leave a stale reverse
+ * record, and migration can deliberately leave forward-only aliases.
+ */
+export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
+  const handle = await getRecordedUserHandle(bucket, ownerId);
+  if (!handle) return null;
+  return (await resolveHandleOwner(bucket, handle)) === ownerId ? handle : null;
 }
 
 export type CheckHandleResult = {
@@ -284,14 +301,10 @@ export async function claimHandle(
     // won by someone else). The old fast path returned "you already have a
     // handle" on the reverse slot alone, which HID that orphan permanently.
     //
-    // R2 has no conditional delete, so compare-before-delete cannot fully close
-    // the re-read→delete gap. It also cannot distinguish a crashed claim from a
-    // live claim between its reverse and forward writes. It narrows the race:
-    // immediately before reaping,
-    // re-read the reverse slot and only delete if it still matches the orphan we
-    // observed. If it changed, restart once from the fast path so the common
-    // interleaving resolves against the newly healthy claim; a second mismatch
-    // returns the normal "already have a handle" 409 rather than looping forever.
+    // R2 has no conditional delete, so repair by atomically REPLACING the exact
+    // orphan generation with this request's new reverse claim. If another
+    // repairer or migration changed the slot first, the ETag condition loses and
+    // we restart once against the winner. No delete gap can erase that winner.
     //
     // Interleavings this reaper heals vs. leaves intact:
     //  A) Crash after reverse put, before forward put: reverse says {owner->H},
@@ -341,9 +354,10 @@ export async function claimHandle(
         };
       }
       // Cases A/B: the reverse slot is an orphan (forward missing or owned by
-      // someone else). Reap it and let the claim proceed against real state.
-      const latest = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
-      if (latest?.handle !== existingRecord?.handle || latest?.claimedAt !== existingRecord?.claimedAt) {
+      // someone else). Atomically promote this request into the reverse slot.
+      const reverseKey = userHandleRecordKey(ownerId);
+      const latestObject = await bucket.get(reverseKey);
+      if (!latestObject) {
         if (attempt === 0) {
           continue;
         }
@@ -353,7 +367,59 @@ export async function claimHandle(
           reason: "You already have a handle. Handles can't be changed."
         };
       }
-      await bucket.delete(userHandleRecordKey(ownerId));
+      let latest: UserHandleRecord | null = null;
+      try {
+        latest = JSON.parse(await latestObject.text()) as UserHandleRecord;
+      } catch {
+        // Malformed ownership state is not safe to replace automatically.
+      }
+      if (
+        latest?.handle !== existingRecord?.handle ||
+        latest?.claimedAt !== existingRecord?.claimedAt
+      ) {
+        if (attempt === 0) {
+          continue;
+        }
+        return {
+          ok: false,
+          status: 409,
+          reason: "You already have a handle. Handles can't be changed."
+        };
+      }
+
+      const claimedAt = now();
+      const replaced = await bucket.put(
+        reverseKey,
+        JSON.stringify({ handle, claimedAt } satisfies UserHandleRecord),
+        {
+          onlyIf: { etagMatches: latestObject.etag },
+          httpMetadata: { contentType: "application/json" }
+        }
+      );
+      if (!replaced) {
+        if (attempt === 0) continue;
+        return {
+          ok: false,
+          status: 409,
+          reason: "You already have a handle. Handles can't be changed."
+        };
+      }
+
+      // The exact orphan generation is now this request's fresh claim. Finish
+      // at the forward-key gate below without a second reverse put.
+      const handleWon = await putJsonIfAbsent(bucket, handleRecordKey(handle), {
+        ownerId,
+        claimedAt
+      } satisfies HandleRecord);
+      if (handleWon) {
+        return { ok: true, handle, alreadyOwned: false };
+      }
+      const currentOwner = await resolveHandleOwner(bucket, handle);
+      if (currentOwner === ownerId) {
+        return { ok: true, handle, alreadyOwned: true };
+      }
+      await bucket.delete(reverseKey);
+      return { ok: false, status: 409, reason: "That handle is taken." };
     }
 
     const claimedAt = now();
@@ -431,7 +497,9 @@ export async function migrateHandle(options: {
   const { bucket, anonUserId, subject } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
-  const anonHandle = await getUserHandle(bucket, anonUserId);
+  // Migration must inspect a stale reverse record so it can distinguish
+  // "nothing to move" from forward-ownership drift and fail the import closed.
+  const anonHandle = await getRecordedUserHandle(bucket, anonUserId);
   if (!anonHandle) {
     return; // nothing to move
   }

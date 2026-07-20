@@ -83,7 +83,9 @@
 	let attachedFile = $state<File | null>(null);
 	let isUploading = $state(false);
 	let socket = $state<WebSocket | null>(null);
+	let socketProjectId: string | null = null;
 	let socketPromise: Promise<WebSocket> | null = null;
+	let socketPromiseProjectId: string | null = null;
 	let socketOpenedAt: number | null = null;
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
@@ -527,6 +529,10 @@
 	// that fails AFTER teardown compares its captured epoch and stops instead of
 	// scheduling a retry into the next project or a dead component.
 	let connectionEpoch = 0;
+	// Bumped only when the project prop changes. Async history/CSRF/socket work
+	// captures this value so a slow operation from the previous project cannot
+	// write into, or connect on behalf of, the next project.
+	let projectContextEpoch = 0;
 	// SS-10: true while a silent reconnect is pending after a mid-request drop, so
 	// we show a transient "reconnecting" state instead of a permanent dead-end
 	// error bubble. Cleared on a successful reconnect or when attempts are exhausted.
@@ -551,7 +557,9 @@
 		}
 
 		socket = null;
+		socketProjectId = null;
 		socketPromise = null;
+		socketPromiseProjectId = null;
 		socketOpenedAt = null;
 	}
 
@@ -570,7 +578,9 @@
 		}
 
 		socket = null;
+		socketProjectId = null;
 		socketPromise = null;
+		socketPromiseProjectId = null;
 		socketOpenedAt = null;
 
 		// Clean up listeners on the closed socket
@@ -659,17 +669,38 @@
 		// The close handler will fire after error and handle reconnection
 	}
 
-	async function ensureSocket(targetProjectId = projectId): Promise<WebSocket> {
+	function isCurrentProjectContext(targetProjectId: string, targetEpoch: number): boolean {
+		return projectId === targetProjectId && projectContextEpoch === targetEpoch;
+	}
+
+	async function ensureSocket(
+		targetProjectId = projectId,
+		targetEpoch = projectContextEpoch
+	): Promise<WebSocket> {
 		if (!targetProjectId) {
 			throw new Error('Missing project id');
 		}
 
-		if (socket && socket.readyState === WebSocket.OPEN) {
+		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			throw new Error('Project changed while connecting to the agent');
+		}
+
+		if (socket && socketProjectId === targetProjectId && socket.readyState === WebSocket.OPEN) {
 			return socket;
 		}
 
-		if (socketPromise) {
+		if (socketPromise && socketPromiseProjectId === targetProjectId) {
 			return socketPromise;
+		}
+
+		// A current-project caller must never inherit a connection created for a
+		// different project. This is defensive in addition to the epoch checks:
+		// socket ownership remains explicit at every reuse point.
+		if (
+			(socket && socketProjectId !== targetProjectId) ||
+			(socketPromise && socketPromiseProjectId !== targetProjectId)
+		) {
+			closeSocket();
 		}
 
 		// SS-11: on a reconnect (reconnectAttempts > 0) a stale CSRF token is the
@@ -689,13 +720,17 @@
 			csrf = await getCsrfToken();
 		}
 
+		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			throw new Error('Project changed while connecting to the agent');
+		}
+
 		// Awaiting the token yields the event loop, so a concurrent ensureSocket()
 		// call may have already started or opened a socket. Re-check before creating
 		// a second one.
-		if (socket && socket.readyState === WebSocket.OPEN) {
+		if (socket && socketProjectId === targetProjectId && socket.readyState === WebSocket.OPEN) {
 			return socket;
 		}
-		if (socketPromise) {
+		if (socketPromise && socketPromiseProjectId === targetProjectId) {
 			return socketPromise;
 		}
 
@@ -703,14 +738,35 @@
 			resolveWebSocketPath(`/api/agents/site-builder/${targetProjectId}`, { csrf })
 		);
 		socket = nextSocket;
+		socketProjectId = targetProjectId;
 
 		nextSocket.addEventListener('message', handleSocketMessage);
 		nextSocket.addEventListener('close', handleSocketClose);
 		nextSocket.addEventListener('error', handleSocketError);
 
-		socketPromise = new Promise((resolve, reject) => {
+		const nextPromise = new Promise<WebSocket>((resolve, reject) => {
 			const onOpen = () => {
 				nextSocket.removeEventListener('error', onError);
+				if (
+					!isCurrentProjectContext(targetProjectId, targetEpoch) ||
+					socket !== nextSocket ||
+					socketProjectId !== targetProjectId
+				) {
+					nextSocket.removeEventListener('message', handleSocketMessage);
+					nextSocket.removeEventListener('close', handleSocketClose);
+					nextSocket.removeEventListener('error', handleSocketError);
+					if (socketPromise === nextPromise) {
+						socketPromise = null;
+						socketPromiseProjectId = null;
+					}
+					if (socket === nextSocket) {
+						socket = null;
+						socketProjectId = null;
+					}
+					nextSocket.close();
+					reject(new Error('Project changed while connecting to the agent'));
+					return;
+				}
 				socketOpenedAt = Date.now();
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
@@ -727,9 +783,13 @@
 				nextSocket.removeEventListener('message', handleSocketMessage);
 				nextSocket.removeEventListener('close', handleSocketClose);
 				nextSocket.removeEventListener('error', handleSocketError);
-				socketPromise = null;
+				if (socketPromise === nextPromise) {
+					socketPromise = null;
+					socketPromiseProjectId = null;
+				}
 				if (socket === nextSocket) {
 					socket = null;
+					socketProjectId = null;
 				}
 				reject(new Error('Unable to connect to the agent'));
 			};
@@ -738,15 +798,24 @@
 			nextSocket.addEventListener('error', onError, { once: true });
 		});
 
-		return socketPromise;
+		socketPromise = nextPromise;
+		socketPromiseProjectId = targetProjectId;
+		return nextPromise;
 	}
 
-	async function loadChatHistory(targetProjectId: string) {
+	async function loadChatHistory(targetProjectId: string, targetEpoch = projectContextEpoch) {
+		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			return;
+		}
 		historyLoadFailed = false;
 		try {
 			const response = await apiResponseFetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
 				credentials: 'include'
 			});
+
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
 
 			if (!response.ok) {
 				// SS-49: a non-ok response is a load FAILURE, not empty history — keep
@@ -758,10 +827,19 @@
 			}
 
 			const data = await response.json();
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
 			uiMessages = Array.isArray(data) ? (data as UIChatMessage[]) : [];
 			await tick();
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
 			scrollToBottom();
 		} catch (error) {
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
 			if (isApiError(error) && error.statusCode === 401 && error.code === 'authentication_required') {
 				return;
 			}
@@ -774,11 +852,11 @@
 
 	function retryLoadChatHistory() {
 		if (!projectId) return;
-		void loadChatHistory(projectId);
+		void loadChatHistory(projectId, projectContextEpoch);
 	}
 
 	function sendSocketMessage(payload: Record<string, unknown>) {
-		if (!socket || socket.readyState !== WebSocket.OPEN) {
+		if (!socket || socketProjectId !== projectId || socket.readyState !== WebSocket.OPEN) {
 			throw new Error('Agent connection is not open');
 		}
 
@@ -786,6 +864,8 @@
 	}
 
 	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
+		const targetProjectId = projectId;
+		const targetEpoch = projectContextEpoch;
 		// Gate-injected identity JWTs expire after about five minutes, so reconnect
 		// before a new turn while there is still time to capture a fresh token.
 		if (
@@ -795,7 +875,14 @@
 			closeSocket();
 		}
 
-		const ws = await ensureSocket();
+		const ws = await ensureSocket(targetProjectId, targetEpoch);
+		if (
+			!isCurrentProjectContext(targetProjectId, targetEpoch) ||
+			socket !== ws ||
+			socketProjectId !== targetProjectId
+		) {
+			throw new Error('Project changed before the agent request was sent');
+		}
 		const requestId = generateId();
 		const startedAt = Date.now();
 
@@ -903,6 +990,9 @@
 	}
 
 	function handleSocketMessage(event: MessageEvent<string>) {
+		if (event.currentTarget !== socket || socketProjectId !== projectId) {
+			return;
+		}
 		if (typeof event.data !== 'string') return;
 
 		let data: any;
@@ -1043,6 +1133,8 @@
 		}
 
 		const targetProjectId = projectId;
+		projectContextEpoch += 1;
+		const targetEpoch = projectContextEpoch;
 		previousProjectId = targetProjectId;
 		input = '';
 		attachedFile = null;
@@ -1052,11 +1144,19 @@
 
 		void (async () => {
 			await refreshQuota();
-			await loadChatHistory(targetProjectId);
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
+			await loadChatHistory(targetProjectId, targetEpoch);
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
 			try {
-				await ensureSocket(targetProjectId);
+				await ensureSocket(targetProjectId, targetEpoch);
 			} catch (error) {
-				console.error('Failed to connect agent socket:', error);
+				if (isCurrentProjectContext(targetProjectId, targetEpoch)) {
+					console.error('Failed to connect agent socket:', error);
+				}
 			}
 		})();
 	});

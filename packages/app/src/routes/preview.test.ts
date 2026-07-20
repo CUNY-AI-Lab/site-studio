@@ -170,6 +170,22 @@ describe("preview file resolution", () => {
     expect(html).toContain(`app.js?v=42&pt=${token}`);
     expect(html).toContain(`photo.png?v=42&pt=${token}`);
     expect(html).toContain(`about.html?v=42&pt=${token}`);
+    const stored = JSON.parse(kv.store.get(`preview-token:${token}`) || "{}");
+    expect(stored.allowedPaths).toEqual(["about.html", "app.js", "photo.png", "styles.css"]);
+  });
+
+  it("does not disclose a preview bearer to protocol-relative authored URLs", async () => {
+    await storage.writeFile(
+      userId,
+      "proj",
+      "index.html",
+      '<img src="//attacker.example/pixel.png"><script src="app.js"></script>'
+    );
+    const res = await get("index.html?v=42", "text/html");
+    const html = await res.text();
+    expect(html).toContain('src="//attacker.example/pixel.png"');
+    expect(html).not.toMatch(/attacker\.example[^"']*pt=/);
+    expect(html).toMatch(/app\.js\?v=42&pt=[0-9a-f]{64}/);
   });
 
   it("does not serve protected project bookkeeping files", async () => {
@@ -225,7 +241,7 @@ describe("preview token authentication", () => {
   });
 
   it("serves a project asset without a session cookie when its preview token is valid", async () => {
-    const token = await mintPreviewToken(kv, userId, "proj");
+    const token = await mintPreviewToken(kv, userId, "proj", ["styles.css"]);
     const res = await app.request(
       `http://site-studio.test/preview/proj/styles.css?pt=${token}`,
       {},
@@ -238,7 +254,7 @@ describe("preview token authentication", () => {
   });
 
   it("does not authorize a different project with a valid token", async () => {
-    const token = await mintPreviewToken(kv, userId, "proj");
+    const token = await mintPreviewToken(kv, userId, "proj", ["styles.css"]);
     const res = await app.request(
       `http://site-studio.test/preview/other/styles.css?pt=${token}`,
       {},
@@ -259,7 +275,7 @@ describe("preview token authentication", () => {
   });
 
   it("never authorizes an API route", async () => {
-    const token = await mintPreviewToken(kv, userId, "proj");
+    const token = await mintPreviewToken(kv, userId, "proj", ["styles.css"]);
     const res = await app.request(
       `http://site-studio.test/api/private?pt=${token}`,
       {},
@@ -267,6 +283,47 @@ describe("preview token authentication", () => {
     );
 
     expect(res.status).toBe(401);
+  });
+
+  it("does not authorize an unlinked file with a leaked resource token", async () => {
+    await storage.writeFile(userId, "proj", "private.txt", "not linked");
+    const token = await mintPreviewToken(kv, userId, "proj", ["styles.css"]);
+    const res = await app.request(
+      `http://site-studio.test/preview/proj/private.txt?pt=${token}`,
+      {},
+      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("caps child preview grants at the parent capability's absolute expiry", async () => {
+    await storage.writeFile(
+      userId,
+      "proj",
+      "about.html",
+      '<script src="app.js"></script>'
+    );
+    await storage.writeFile(userId, "proj", "app.js", "console.log('ok')");
+    const expiresAt = Date.now() + 90_000;
+    const parent = await mintPreviewToken(
+      kv,
+      userId,
+      "proj",
+      ["about.html"],
+      expiresAt
+    );
+    const res = await app.request(
+      `http://site-studio.test/preview/proj/about.html?pt=${parent}`,
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    const child = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(child).toMatch(/^[0-9a-f]{64}$/);
+    const stored = JSON.parse(kv.store.get(`preview-token:${child}`) || "{}");
+    expect(stored.expiresAt).toBe(expiresAt);
+    expect(stored.allowedPaths).toEqual(["app.js"]);
   });
 });
 

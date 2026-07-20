@@ -403,6 +403,7 @@ export function createFileRouter() {
     const ext = dotIndex >= 0 ? sanitized.slice(dotIndex) : "";
 
     const MAX_UPLOAD_ATTEMPTS = 50;
+    const uploadAdmissionId = crypto.randomUUID();
     let filename = "";
     let written = false;
     for (let counter = 0; counter < MAX_UPLOAD_ATTEMPTS; counter += 1) {
@@ -414,6 +415,7 @@ export function createFileRouter() {
           projectId,
           path: candidate,
           content: buffer,
+          admissionId: uploadAdmissionId,
           ...uploadPolicy
         });
       } catch (error) {

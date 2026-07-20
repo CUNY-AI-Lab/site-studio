@@ -21,8 +21,14 @@
  */
 
 import { CailError, createCailClient, type CailClient } from "@cuny-ai-lab/cail-client";
-import { assertCailJwtFresh, CAIL_APP_SLUG, type CailModelEnv } from "./model";
+import {
+  assertCailJwtFresh,
+  CAIL_APP_SLUG,
+  resolveWorkersAiModelId,
+  type CailModelEnv
+} from "./model";
 import { sniffImageType, type ImageType } from "./image-validation";
+import { IMAGE_MAX_UPLOAD_BYTES } from "./constants";
 
 /**
  * Default image-generation model. CAIL policy (docs/INTEGRATION.md §1):
@@ -65,12 +71,20 @@ export interface CailImageEnv extends CailModelEnv {
 
 /** Resolve the image-generation model id (configurable, must be `@cf/`). */
 export function resolveImageModelId(env: CailImageEnv): string {
-  return env.CAIL_IMAGE_MODEL || DEFAULT_CAIL_IMAGE_MODEL;
+  return resolveWorkersAiModelId(
+    env.CAIL_IMAGE_MODEL,
+    DEFAULT_CAIL_IMAGE_MODEL,
+    "CAIL_IMAGE_MODEL"
+  );
 }
 
 /** Resolve the moderation classifier id (configurable, must be `@cf/`). */
 export function resolveImageClassifierId(env: CailImageEnv): string {
-  return env.CAIL_IMAGE_CLASSIFIER || DEFAULT_CAIL_IMAGE_CLASSIFIER;
+  return resolveWorkersAiModelId(
+    env.CAIL_IMAGE_CLASSIFIER,
+    DEFAULT_CAIL_IMAGE_CLASSIFIER,
+    "CAIL_IMAGE_CLASSIFIER"
+  );
 }
 
 /** Flux 2 Klein dimensions: multiples of 64, clamped to [256, 1920]. */
@@ -110,13 +124,41 @@ function cailClient(apiBase: string, fetchImpl: typeof fetch): CailClient {
  * Throws on invalid base64 (caught by the caller).
  */
 function decodeBase64(data: string): Uint8Array {
-  const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
+  const normalized = data.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(normalized);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const combined = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(combined);
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /**
@@ -197,8 +239,18 @@ export async function generateImage(
   }
 
   let payload: unknown;
+  const maxEncodedBytes = Math.ceil(IMAGE_MAX_UPLOAD_BYTES / 3) * 4;
+  const maxResponseBytes = maxEncodedBytes + 64 * 1024;
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxResponseBytes) {
+    return { ok: false, message: "Image generation returned an image larger than 10MB" };
+  }
   try {
-    payload = await response.json();
+    const responseText = await readBoundedText(response, maxResponseBytes);
+    if (responseText === null) {
+      return { ok: false, message: "Image generation returned an image larger than 10MB" };
+    }
+    payload = JSON.parse(responseText);
   } catch {
     return { ok: false, message: "Image generation returned a non-JSON response" };
   }
@@ -206,6 +258,9 @@ export async function generateImage(
   const base64 = extractBase64Image(payload);
   if (!base64) {
     return { ok: false, message: "Image generation response did not contain an image" };
+  }
+  if (base64.replace(/\s/g, "").length > maxEncodedBytes + 4) {
+    return { ok: false, message: "Image generation returned an image larger than 10MB" };
   }
 
   let bytes: Uint8Array;
@@ -217,6 +272,9 @@ export async function generateImage(
 
   if (bytes.length === 0) {
     return { ok: false, message: "Image generation returned an empty image" };
+  }
+  if (bytes.byteLength > IMAGE_MAX_UPLOAD_BYTES) {
+    return { ok: false, message: "Image generation returned an image larger than 10MB" };
   }
 
   // Content type follows the actual bytes (flux returns png today, but don't
@@ -307,7 +365,12 @@ export async function screenImage(
   assertCailJwtFresh(jwt);
 
   const model = resolveImageClassifierId(env);
-  const dataUri = `data:image/png;base64,${encodeBase64(bytes)}`;
+  const imageType = sniffImageType(bytes);
+  if (!imageType || bytes.byteLength > IMAGE_MAX_UPLOAD_BYTES) {
+    return { allowed: false };
+  }
+  const mimeType = imageType === "jpeg" ? "image/jpeg" : `image/${imageType}`;
+  const dataUri = `data:${mimeType};base64,${encodeBase64(bytes)}`;
 
   let response: Response;
   try {

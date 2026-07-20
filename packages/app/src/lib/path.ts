@@ -54,25 +54,65 @@ export function addCacheBusterToHtml(
   extraParams: Record<string, string> = {}
 ): string {
   const value = version || Date.now().toString();
-  const query = new URLSearchParams({ v: value, ...extraParams }).toString();
+  const params = { v: value, ...extraParams };
 
-  return html
-    .replace(
-      /(<link[^>]*href=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?${query}$3`
-    )
-    .replace(
-      /(<script[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?${query}$3`
-    )
-    .replace(
-      /(<img[^>]*src=["'])(?!https?:\/\/)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?${query}$3`
-    )
-    .replace(
-      /(<a[^>]*href=["'])(?!https?:\/\/|#|mailto:|tel:|javascript:|data:)([^"'?]+)(["'][^>]*>)/gi,
-      `$1$2?${query}$3`
-    );
+  return rewriteLocalHtmlUrls(html, (url) => addQueryParams(url, params));
+}
+
+const LOCAL_HTML_URL_RE =
+  /(<(?:link|a)\b[^>]*\bhref=["']|<(?:script|img)\b[^>]*\bsrc=["'])([^"']+)(["'][^>]*>)/gi;
+const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+
+function isLocalPreviewUrl(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 &&
+    !trimmed.startsWith("#") &&
+    !trimmed.startsWith("/") &&
+    !trimmed.startsWith("//") &&
+    !URI_SCHEME_RE.test(trimmed)
+  );
+}
+
+function rewriteLocalHtmlUrls(html: string, rewrite: (url: string) => string): string {
+  return html.replace(LOCAL_HTML_URL_RE, (match, prefix: string, value: string, suffix: string) => {
+    if (!isLocalPreviewUrl(value)) return match;
+    return `${prefix}${rewrite(value)}${suffix}`;
+  });
+}
+
+function addQueryParams(value: string, params: Record<string, string>): string {
+  const hashIndex = value.indexOf("#");
+  const fragment = hashIndex >= 0 ? value.slice(hashIndex) : "";
+  const beforeFragment = hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+  const queryIndex = beforeFragment.indexOf("?");
+  const pathname = queryIndex >= 0 ? beforeFragment.slice(0, queryIndex) : beforeFragment;
+  const search = new URLSearchParams(queryIndex >= 0 ? beforeFragment.slice(queryIndex + 1) : "");
+  for (const [key, paramValue] of Object.entries(params)) {
+    search.set(key, paramValue);
+  }
+  return `${pathname}?${search.toString()}${fragment}`;
+}
+
+/**
+ * Resolve the authored relative URLs that a preview document may request.
+ * Preview bearer grants are scoped to this set so a token visible to authored
+ * JavaScript cannot read arbitrary, unlinked project files.
+ */
+export function collectPreviewResourcePaths(html: string, documentPath: string): string[] {
+  const paths = new Set<string>();
+  rewriteLocalHtmlUrls(html, (value) => {
+    try {
+      const resolved = new URL(value, `https://preview.invalid/${documentPath}`);
+      const path = resolved.pathname.replace(/^\/+/, "");
+      if (path) paths.add(path);
+    } catch {
+      // Preserve malformed authored markup. It will fail as a browser request,
+      // but it must not turn the containing preview document into a 500.
+    }
+    return value;
+  });
+  return [...paths].sort();
 }
 
 export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {

@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeProjectId, sanitizeFilePath, getContentType, isTextContentType, addCacheBusterToHtml, buildFileTree } from "./path";
+import {
+  sanitizeProjectId,
+  sanitizeFilePath,
+  getContentType,
+  isTextContentType,
+  addCacheBusterToHtml,
+  buildFileTree,
+  collectPreviewResourcePaths
+} from "./path";
 import { getServedContentType } from "./constants";
 import type { StorageFile } from "../types";
 
@@ -202,20 +210,48 @@ describe("addCacheBusterToHtml", () => {
     expect(result).toContain('href="about.html?v=123&pt=preview-token"');
   });
 
-  it("leaves excluded and already-query-bearing anchor URLs unchanged", () => {
+  it("leaves external and non-navigation URLs unchanged", () => {
     const values = [
       "https://example.com/page",
       "http://example.com/page",
+      "//example.com/page",
       "#section",
       "mailto:user@example.com",
       "tel:+12125550123",
       "javascript:void(0)",
-      "data:text/plain,hello",
-      "about.html?existing=1"
+      "data:text/plain,hello"
     ];
     const html = values.map((href) => `<a href="${href}">x</a>`).join("");
 
     expect(addCacheBusterToHtml(html, "123", { pt: "token" })).toBe(html);
+  });
+
+  it("preserves existing queries and puts preview params before fragments", () => {
+    expect(addCacheBusterToHtml(
+      '<a href="about.html?existing=1#section">About</a>',
+      "123",
+      { pt: "token" }
+    )).toBe('<a href="about.html?existing=1&v=123&pt=token#section">About</a>');
+  });
+
+  it("never appends a preview bearer to protocol-relative or root-relative destinations", () => {
+    const html = [
+      '<img src="//attacker.example/pixel.png">',
+      '<script src="/shared/app.js"></script>'
+    ].join("");
+    expect(addCacheBusterToHtml(html, "123", { pt: "secret" })).toBe(html);
+  });
+
+  it("collects only relative project paths for a scoped preview grant", () => {
+    const html = [
+      '<script src="app.js?x=1"></script>',
+      '<a href="../about.html#team">About</a>',
+      '<img src="//attacker.example/pixel.png">'
+    ].join("");
+    expect(collectPreviewResourcePaths(html, "docs/index.html")).toEqual([
+      "about.html",
+      "docs/app.js"
+    ]);
   });
 
   it("generates timestamp when no version provided", () => {

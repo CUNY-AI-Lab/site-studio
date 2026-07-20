@@ -186,15 +186,30 @@ describe("claimHandle", () => {
     expect(await getUserHandle(bucket, OWNER)).toBe("jane-rivera");
     expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe(OWNER);
   });
+
+  it("does not treat a reverse-only or mismatched mapping as an owned handle", async () => {
+    await bucket.put(
+      userHandleRecordKey(OWNER),
+      JSON.stringify({ handle: "stale-handle", claimedAt: "2020-01-01T00:00:00.000Z" })
+    );
+    expect(await getUserHandle(bucket, OWNER)).toBeNull();
+
+    await bucket.put(
+      handleRecordKey("stale-handle"),
+      JSON.stringify({ ownerId: RIVAL, claimedAt: "2020-01-01T00:00:01.000Z" })
+    );
+    expect(await getUserHandle(bucket, OWNER)).toBeNull();
+    expect(await getUserHandle(bucket, RIVAL)).toBeNull();
+  });
 });
 
 // SS-3 residual #2: a process death BETWEEN claimHandle's two put-if-absent
 // writes can leave a reverse slot `userhandles/{owner}` with no matching forward
 // `handles/{handle}` record (or a forward owned by someone else). The old fast
 // path returned "you already have a handle" on the reverse slot alone, HIDING
-// the orphan. The reaper deletes the stale reverse slot and lets the claim
-// proceed; a HEALTHY reverse+forward pair still yields the normal 409/idempotent
-// behavior.
+// the orphan. The repair CAS-replaces the stale reverse generation with the new
+// claim and lets it proceed; a HEALTHY reverse+forward pair still yields the
+// normal 409/idempotent behavior.
 describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
   let bucket: ReturnType<typeof createMockBucket>;
   beforeEach(() => {
@@ -251,23 +266,25 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
     expect(await resolveHandleOwner(bucket, "jane-rivera")).toBe(OWNER);
   });
 
-  it("SS-32: restarts when a concurrent healthy claim replaces the orphan before reap", async () => {
+  it("SS-32: a concurrent orphan repair cannot erase the healthy CAS winner", async () => {
     const ownerId = OWNER;
     await bucket.put(userHandleRecordKey(ownerId), JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" }));
 
-    const originalGet = bucket.get;
-    let reverseReads = 0;
+    const originalPut = bucket.put;
     let injected = false;
-    bucket.get = vi.fn(async (key: string) => {
-      if (key === userHandleRecordKey(ownerId)) {
-        reverseReads += 1;
-        if (reverseReads === 2 && !injected) {
-          injected = true;
-          await claimHandle(bucket, ownerId, "alpha", () => "t1");
-        }
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === userHandleRecordKey(ownerId) &&
+        options?.onlyIf?.etagMatches &&
+        String(data).includes('"beta"') &&
+        !injected
+      ) {
+        injected = true;
+        const winner = await claimHandle(bucket, ownerId, "alpha", () => "t1");
+        expect(winner).toEqual({ ok: true, handle: "alpha", alreadyOwned: false });
       }
-      return originalGet(key);
-    }) as typeof bucket.get;
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
 
     const res = await claimHandle(bucket, ownerId, "beta", () => "t2");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
@@ -530,7 +547,8 @@ describe("migrateHandle", () => {
       "ownership changed"
     );
     expect(await resolveHandleOwner(bucket, "shared-handle")).toBe(RIVAL);
-    expect(await getUserHandle(bucket, ANON)).toBe("shared-handle");
+    expect(await getUserHandle(bucket, ANON)).toBeNull();
+    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(true);
     expect(await getUserHandle(bucket, SUBJECT)).toBeNull();
   });
 

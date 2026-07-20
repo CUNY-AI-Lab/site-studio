@@ -173,6 +173,25 @@ describe("R2ProjectStorage", () => {
         name: "First"
       });
     });
+
+    it("keeps an owner-mutation create hidden until its operation marker clears", async () => {
+      await storage.createProjectIfAbsent(
+        userId,
+        projectId,
+        "Pending",
+        "operation-123"
+      );
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Partial</h1>");
+
+      await expect(storage.projectExists(userId, projectId)).resolves.toBe(false);
+      await expect(storage.listProjects(userId)).resolves.not.toContain(projectId);
+
+      await storage.updateProjectMetadata(userId, projectId, {
+        creatingOperationId: undefined
+      });
+      await expect(storage.projectExists(userId, projectId)).resolves.toBe(true);
+      await expect(storage.listProjects(userId)).resolves.toContain(projectId);
+    });
   });
 
   describe("projectExists", () => {
@@ -528,6 +547,43 @@ describe("R2ProjectStorage", () => {
       });
       await expect(storage.projectExists(userId, "old-complete")).resolves.toBe(false);
       expect([...bucket.store.keys()].some((key) => key.startsWith(`snapshots/${userId}/old-complete/`))).toBe(false);
+    });
+
+    it("keeps a published rename target hidden until every object is copied", async () => {
+      await storage.createProject(userId, "aaa-source", "Published");
+      await storage.writeFile(userId, "aaa-source", "index.html", "complete");
+      await storage.updateProjectMetadata(userId, "aaa-source", {
+        published: true,
+        slug: "published"
+      });
+
+      await storage.renameProject(userId, "aaa-source", "zzz-target", {
+        afterTargetClaim: async () => {
+          expect(await storage.getProjectMetadata(userId, "zzz-target")).toMatchObject({
+            published: false,
+            slug: "published"
+          });
+          expect(await storage.fileExists(userId, "zzz-target", "index.html")).toBe(false);
+          expect(await storage.findPublishedProjectBySlug(userId, "published")).toMatchObject({
+            projectId: "aaa-source"
+          });
+        },
+        beforeSourceDelete: async (activateTarget) => {
+          expect(await storage.readFile(userId, "zzz-target", "index.html")).toBe("complete");
+          expect(await storage.getProjectMetadata(userId, "zzz-target")).toMatchObject({
+            published: false
+          });
+          await activateTarget();
+          expect(await storage.getProjectMetadata(userId, "zzz-target")).toMatchObject({
+            published: true
+          });
+        }
+      });
+
+      expect(await storage.projectExists(userId, "aaa-source")).toBe(false);
+      expect(await storage.findPublishedProjectBySlug(userId, "published")).toMatchObject({
+        projectId: "zzz-target"
+      });
     });
 
     it("SS-43: rolls back a partial target and preserves the source when a snapshot copy fails", async () => {
@@ -1201,6 +1257,26 @@ describe("OwnerMutationService recovery journal", () => {
     expect(journal.values.size).toBe(0);
   });
 
+  it("preserves a destination that does not carry the interrupted create operation id", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "existing", "Existing");
+    await storage.writeFile("user-a", "existing", "index.html", "keep me");
+    journal.values.set("owner-mutation", {
+      type: "create",
+      projectId: "existing",
+      operationId: "different-operation"
+    });
+
+    const service = new OwnerMutationService(bucket, journal);
+    await service.recover("user-a");
+
+    expect(await storage.readFile("user-a", "existing", "index.html")).toBe("keep me");
+    expect(await storage.projectExists("user-a", "existing")).toBe(true);
+    expect(journal.values.size).toBe(0);
+  });
+
   it("finishes the committed half of an interrupted file rename before the next mutation", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
@@ -1246,6 +1322,66 @@ describe("OwnerMutationService recovery journal", () => {
       ...admission,
       path: "images/two.png",
       now: 100_001
+    })).rejects.toThrow("rate limit");
+  });
+
+  it("fails before an R2 upload when durable rate admission cannot be recorded", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "site", "Site");
+    const originalPut = journal.put.bind(journal);
+    journal.put = vi.fn(async (key, value) => {
+      if (key === "upload-admissions") throw new Error("injected DO storage failure");
+      await originalPut(key, value);
+    });
+    const service = new OwnerMutationService(bucket, journal);
+
+    await expect(service.execute("user-a", {
+      type: "upload-if-absent",
+      projectId: "site",
+      path: "images/new.png",
+      content: new Uint8Array(10),
+      maxProjectBytes: 1_000_000,
+      maxOwnerBytes: 1_000_000,
+      uploadsPerMinute: 10,
+      now: 100_000
+    })).rejects.toThrow("injected DO storage failure");
+
+    await expect(storage.fileExists("user-a", "site", "images/new.png")).resolves.toBe(false);
+  });
+
+  it("counts collision-suffix attempts with one admission id only once", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const service = new OwnerMutationService(bucket, journalStore());
+    await storage.createProject("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "images/photo.png", "existing");
+    const operation = {
+      type: "upload-if-absent" as const,
+      projectId: "site",
+      content: new Uint8Array(10),
+      admissionId: "upload-request-1",
+      maxProjectBytes: 1_000_000,
+      maxOwnerBytes: 1_000_000,
+      uploadsPerMinute: 1,
+      now: 100_000
+    };
+
+    await expect(service.execute("user-a", {
+      ...operation,
+      path: "images/photo.png"
+    })).resolves.toEqual({ written: false });
+    await expect(service.execute("user-a", {
+      ...operation,
+      path: "images/photo_1.png",
+      now: 100_001
+    })).resolves.toEqual({ written: true });
+    await expect(service.execute("user-a", {
+      ...operation,
+      admissionId: "upload-request-2",
+      path: "images/other.png",
+      now: 100_002
     })).rejects.toThrow("rate limit");
   });
 
@@ -1298,6 +1434,168 @@ describe("OwnerMutationService recovery journal", () => {
     expect(await storage.fileExists("user-a", "site", "index.html")).toBe(false);
   });
 
+  it("fences a published project before deleting any of its files", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    await storage.createProject("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "index.html", "public");
+    await storage.updateProjectMetadata("user-a", "site", {
+      published: true,
+      slug: "site"
+    });
+
+    const originalDelete = bucket.delete;
+    let failed = false;
+    bucket.delete = vi.fn(async (key: string) => {
+      if (!failed && key.endsWith("/index.html")) {
+        failed = true;
+        throw new Error("injected delete failure");
+      }
+      return originalDelete(key);
+    }) as typeof bucket.delete;
+
+    await expect(service.execute("user-a", {
+      type: "delete-project",
+      projectId: "site"
+    })).rejects.toThrow("injected delete failure");
+
+    expect(await storage.getProjectMetadata("user-a", "site")).toMatchObject({
+      published: false
+    });
+    expect(await storage.findPublishedProjectBySlug("user-a", "site")).toBeNull();
+    expect(await storage.fileExists("user-a", "site", "index.html")).toBe(true);
+    expect(journal.values.get("owner-mutation")).toEqual({
+      type: "delete",
+      projectId: "site"
+    });
+
+    bucket.delete = originalDelete;
+    await service.execute("user-a", {
+      type: "delete-project",
+      projectId: "site"
+    });
+    expect(await storage.projectExists("user-a", "site")).toBe(false);
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("journals published rename activation before switching visibility", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    await storage.createProject("user-a", "aaa-source", "Site");
+    await storage.writeFile("user-a", "aaa-source", "index.html", "complete");
+    await service.execute("user-a", {
+      type: "publish-project",
+      projectId: "aaa-source",
+      desiredSlug: "site",
+      publishedBaseUrl: "https://published.example",
+      handle: "jane"
+    });
+
+    const phases: Array<{
+      stage: string;
+      sourcePublished: boolean | undefined;
+      targetPublished: boolean | undefined;
+      targetHasFile: boolean;
+    }> = [];
+    const originalJournalPut = journal.put.bind(journal);
+    journal.put = vi.fn(async (key: string, value: unknown) => {
+      const record = value as { type?: string; stage?: string };
+      if (record.type === "rename-project" && record.stage) {
+        phases.push({
+          stage: record.stage,
+          sourcePublished: (await storage.getProjectMetadata("user-a", "aaa-source"))?.published,
+          targetPublished: (await storage.getProjectMetadata("user-a", "zzz-target"))?.published,
+          targetHasFile: await storage.fileExists("user-a", "zzz-target", "index.html")
+        });
+      }
+      await originalJournalPut(key, value);
+    }) as MutationJournalStore["put"];
+
+    await service.execute("user-a", {
+      type: "rename-project",
+      projectId: "aaa-source",
+      nextProjectId: "zzz-target",
+      name: "Site"
+    });
+
+    expect(phases).toEqual([
+      {
+        stage: "preparing",
+        sourcePublished: true,
+        targetPublished: false,
+        targetHasFile: false
+      },
+      {
+        stage: "activating",
+        sourcePublished: true,
+        targetPublished: false,
+        targetHasFile: true
+      },
+      {
+        stage: "committing",
+        sourcePublished: false,
+        targetPublished: true,
+        targetHasFile: true
+      }
+    ]);
+    expect(await storage.projectExists("user-a", "aaa-source")).toBe(false);
+    expect(await storage.findPublishedProjectBySlug("user-a", "site")).toMatchObject({
+      projectId: "zzz-target"
+    });
+  });
+
+  it("rolls an interrupted published rename activation forward", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    const service = new OwnerMutationService(bucket, journal);
+    await storage.createProject("user-a", "source", "Site");
+    await storage.writeFile("user-a", "source", "index.html", "complete");
+    await service.execute("user-a", {
+      type: "publish-project",
+      projectId: "source",
+      desiredSlug: "site",
+      publishedBaseUrl: "https://published.example",
+      handle: "jane"
+    });
+    await storage.createProject("user-a", "target", "Site");
+    await storage.writeFile("user-a", "target", "index.html", "complete");
+    await storage.updateProjectMetadata("user-a", "target", {
+      published: false,
+      slug: "site",
+      publishedUrl: "https://published.example/u/jane/site/"
+    });
+    journal.values.set("owner-mutation", {
+      type: "rename-project",
+      projectId: "source",
+      nextProjectId: "target",
+      name: "Site",
+      slug: "site",
+      published: true,
+      stage: "activating"
+    });
+
+    await service.execute("user-a", {
+      type: "delete-file",
+      projectId: "target",
+      path: "unrelated.txt"
+    });
+
+    expect(await storage.projectExists("user-a", "source")).toBe(false);
+    expect(await storage.getProjectMetadata("user-a", "target")).toMatchObject({
+      published: true,
+      slug: "site"
+    });
+    expect(await storage.findPublishedProjectBySlug("user-a", "site")).toMatchObject({
+      projectId: "target"
+    });
+    expect(journal.values.size).toBe(0);
+  });
+
   it("keeps a published slug reserved to a project across rename", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
@@ -1343,7 +1641,14 @@ describe("OwnerMutationService recovery journal", () => {
     })).rejects.toBeInstanceOf(ProjectExistsError);
 
     expect(await storage.readFile("user-a", "existing", "index.html")).toBe("keep me");
-    expect(journalPut).not.toHaveBeenCalled();
+    expect(journalPut).toHaveBeenCalledWith(
+      "owner-mutation",
+      expect.objectContaining({
+        type: "create",
+        projectId: "existing",
+        operationId: expect.any(String)
+      })
+    );
     expect(journal.values.size).toBe(0);
   });
 

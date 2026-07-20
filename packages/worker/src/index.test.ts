@@ -405,6 +405,24 @@ describe("worker.fetch (integration)", () => {
     expect(await res.text()).toContain("<h1>By Handle</h1>");
   });
 
+  it("301s a slashless canonical root to the trailing-slash URL with its query", async () => {
+    publishProject(bucket, "cail-subj", "blog", {
+      "index.html": '<link href="styles.css">'
+    });
+    seedHandle(bucket, "cail-subj", "jane");
+
+    const res = await worker.fetch(
+      new Request("https://x.test/u/jane/blog?ref=x", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://x.test/u/jane/blog/?ref=x");
+  });
+
   it("returns 404 for protected bookkeeping files on canonical URLs", async () => {
     publishProject(bucket, "cail-subj", "blog", {
       "index.html": "<h1>By Handle</h1>",
@@ -475,6 +493,50 @@ describe("worker.fetch (integration)", () => {
       }),
       createEnv(bucket)
     );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<h1>Legacy Home</h1>");
+  });
+
+  it("301s a slashless directly served legacy root to a trailing slash", async () => {
+    publishProject(bucket, "u", "blog", {
+      "index.html": '<link href="styles.css">'
+    });
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/u/blog?ref=x", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+
+    expect(res.status).toBe(301);
+    expect(res.headers.get("Location")).toBe("https://x.test/sites/u/blog/?ref=x");
+  });
+
+  it("does not redirect through a stale reverse handle record", async () => {
+    publishProject(bucket, "u", "blog", { "index.html": "<h1>Legacy Home</h1>" });
+    bucket.store.set("userhandles/u.json", {
+      data: JSON.stringify({
+        handle: "stale",
+        claimedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+    bucket.store.set("handles/stale.json", {
+      data: JSON.stringify({
+        ownerId: "someone-else",
+        claimedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+
+    const res = await worker.fetch(
+      new Request("https://x.test/sites/u/blog/", {
+        headers: { Accept: "text/html" },
+        redirect: "manual"
+      }),
+      createEnv(bucket)
+    );
+
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<h1>Legacy Home</h1>");
   });

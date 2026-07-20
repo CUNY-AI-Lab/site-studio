@@ -16,6 +16,7 @@
     "trace": "node ./scripts/project-observability.mjs",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
     "lint": "biome lint .",
+    "verify:repository": "node ./scripts/verify-repository.mjs",
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/worker check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
   },
   "license": "MIT",

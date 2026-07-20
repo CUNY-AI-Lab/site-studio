@@ -74,6 +74,13 @@ describe("model id policy (CAIL: Cloudflare models only)", () => {
     expect(resolveImageClassifierId({})).toBe(DEFAULT_CAIL_IMAGE_CLASSIFIER);
     expect(resolveImageClassifierId({ CAIL_IMAGE_CLASSIFIER: "@cf/other/vlm" })).toBe("@cf/other/vlm");
   });
+
+  it("rejects non-Cloudflare generator and classifier overrides", () => {
+    expect(() => resolveImageModelId({ CAIL_IMAGE_MODEL: "openai/image" }))
+      .toThrow("CAIL_IMAGE_MODEL must be a Cloudflare Workers AI model id");
+    expect(() => resolveImageClassifierId({ CAIL_IMAGE_CLASSIFIER: "openai/vision" }))
+      .toThrow("CAIL_IMAGE_CLASSIFIER must be a Cloudflare Workers AI model id");
+  });
 });
 
 describe("clampDimension", () => {
@@ -152,6 +159,18 @@ describe("generateImage wire contract", () => {
       expect(Array.from(result.bytes)).toEqual(Array.from(PNG_BYTES));
       expect(result.contentType).toBe("image/png");
     }
+  });
+
+  it("rejects a provider image larger than the interactive 10MB image cap", async () => {
+    const oversized = new Uint8Array(10 * 1024 * 1024 + 1);
+    oversized.set(PNG_BYTES);
+    const encoded = Buffer.from(oversized).toString("base64");
+    const { fetch: stub } = captureFetch(() => json({ image: encoded }));
+    const result = await generateImage(env, "jwt", { prompt: "x" }, stub);
+    expect(result).toEqual({
+      ok: false,
+      message: "Image generation returned an image larger than 10MB"
+    });
   });
 
   it("errors when the response still carries Cloudflare's wrapped envelope (contract: /v1/run is unwrapped)", async () => {

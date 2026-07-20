@@ -122,6 +122,12 @@ export interface ProjectMetadata {
    */
   importedFrom?: string;
   importedOriginalId?: string;
+  /**
+   * Internal owner-mutation claim. While present, the project is reserved but
+   * not visible to normal reads; recovery deletes it only when the journal
+   * carries the same operation id.
+   */
+  creatingOperationId?: string;
 }
 
 export type ProjectSnapshotTrigger = "agent" | "manual" | "restore";

@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import WebSocket from 'ws';
 
 const CHAT_MESSAGE_TYPE = {
@@ -46,21 +46,34 @@ export async function loadStoredCookie() {
 
 export async function persistSessionCookie(cookie) {
   if (!cookie) return;
-  await writeFile(DEBUG_SESSION_PATH, `${JSON.stringify({ cookie }, null, 2)}\n`, 'utf8');
+  await writeFile(
+    DEBUG_SESSION_PATH,
+    `${JSON.stringify({ cookie }, null, 2)}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  );
+  // writeFile's mode applies only on creation; repair older files too.
+  await chmod(DEBUG_SESSION_PATH, 0o600);
 }
 
 export class SessionClient {
   constructor(baseUrl, initialCookie) {
     this.baseUrl = new URL(baseUrl);
     this.cookie = initialCookie || '';
+    this.csrfToken = '';
   }
 
   updateCookie(response) {
     const setCookie = response.headers.get('set-cookie');
-    const parsed = parseSetCookie(setCookie);
-    if (parsed) {
-      this.cookie = parsed;
+    if (!setCookie) return;
+    const session = /(?:^|,\s*)site-studio-session=([^;,\s]+)/i.exec(setCookie)?.[1];
+    const csrf = /(?:^|,\s*)cail_csrf_sitestudio=([^;,\s]+)/i.exec(setCookie)?.[1];
+    if (session) {
+      this.cookie = `site-studio-session=${session}`;
+    } else if (!this.cookie) {
+      const parsed = parseSetCookie(setCookie);
+      if (parsed?.startsWith('site-studio-session=')) this.cookie = parsed;
     }
+    if (csrf) this.csrfToken = decodeURIComponent(csrf);
   }
 
   async fetch(path, init = {}) {
@@ -90,12 +103,27 @@ export class SessionClient {
     await this.json('/api/projects');
     return this.cookie;
   }
+
+  async ensureCsrfToken() {
+    const response = await this.fetch('/api/csrf');
+    if (!response.ok) {
+      throw new Error(`Failed to obtain CSRF token (${response.status})`);
+    }
+    if (!this.csrfToken) {
+      throw new Error('CSRF cookie missing after /api/csrf');
+    }
+    return this.csrfToken;
+  }
 }
 
 export async function createProject(session, name, template) {
+  const csrf = await session.ensureCsrfToken();
   return session.json('/api/projects', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CAIL-CSRF': csrf,
+    },
     body: JSON.stringify({
       name,
       ...(template ? { template } : {}),
@@ -166,6 +194,7 @@ export async function connectAgent(session, projectId) {
   const baseUrl = new URL(session.baseUrl);
   const wsUrl = new URL(`api/agents/site-builder/${projectId}`, baseUrl);
   wsUrl.protocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  wsUrl.searchParams.set('csrf', await session.ensureCsrfToken());
 
   return new Promise((resolve, reject) => {
     const client = new WebSocket(wsUrl.toString(), {

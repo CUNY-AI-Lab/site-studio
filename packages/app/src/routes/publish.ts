@@ -24,6 +24,7 @@ import { isLoopbackOrigin } from "../lib/csrf";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
+  emitDiagnostic,
   getBoundaryLogger,
   errorCodeFrom,
   getCorrelation,
@@ -222,15 +223,37 @@ export function createPublishRouter() {
       publishAction.acknowledgeMutation();
 
       const terminalAt = Date.now();
-      await actionAgent.recordActionTerminal({
+      const successTerminal = {
         actionId: publishAction.actionId,
         outcome: "ok",
         reason: "completed",
         terminalAt: new Date(terminalAt).toISOString(),
         durationMs: Math.max(0, terminalAt - durableAdmittedAt),
-      });
+      } as const;
+      let durableTerminalRecorded = false;
+      for (let attempt = 0; attempt < 2 && !durableTerminalRecorded; attempt += 1) {
+        try {
+          // The terminal RPC is idempotent for an identical payload. Retry once
+          // because an RPC rejection can be ambiguous about whether the first
+          // call committed in the project Durable Object.
+          await actionAgent.recordActionTerminal(successTerminal);
+          durableTerminalRecorded = true;
+        } catch {
+          // Handled after the bounded retry. The R2 publish is already committed
+          // and must not be reported to the user as a failed publish.
+        }
+      }
       actionTerminalRecorded = true;
-      publishAction.completeSuccess();
+      if (durableTerminalRecorded) {
+        publishAction.completeSuccess();
+      } else {
+        emitDiagnostic(
+          "error",
+          "publish_terminal_record_failed",
+          { subject: user.id },
+          getBoundaryLogger(c),
+        );
+      }
       const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
 
       return c.json({
@@ -344,6 +367,7 @@ export function createPublishRouter() {
         type: "write-thumbnail",
         projectId,
         content,
+        admissionId: crypto.randomUUID(),
         maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
         maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
         uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
@@ -466,6 +490,11 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return publishedNotFound(c, rawPath);
   }
 
+  const url = new URL(c.req.url);
+  if (url.pathname === `/u/${handle}/${slug}`) {
+    return c.redirect(`${url.pathname}/${url.search}`, 301);
+  }
+
   return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
 }
 
@@ -497,13 +526,18 @@ async function serveLegacySite(c: AppContext, rawPath: string) {
   // resolved—not the old requested slug.
   const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, site.ownerId);
   if (handle) {
-    const url = new URL(c.req.url);
     // Preserve the exact sub-path from the request (not the "index.html"
     // default) and the query string, so deep links redirect faithfully.
+    const url = new URL(c.req.url);
     const base = `/sites/${requestedUserId}/${slug}/`;
     const subPath = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : "";
     const location = `/u/${handle}/${site.effectiveSlug}/${subPath}${url.search}`;
     return c.redirect(location, 301);
+  }
+
+  const url = new URL(c.req.url);
+  if (url.pathname === `/sites/${requestedUserId}/${slug}`) {
+    return c.redirect(`${url.pathname}/${url.search}`, 301);
   }
 
   return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);

@@ -180,13 +180,23 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
     expect(() => validateCsrfCookiePath("/")).toThrow("CSRF_COOKIE_PATH must be /site-studio");
   });
 
-  it("drops Secure on plain http (local dev), matching the session cookie", async () => {
+  it("uses root scope and drops Secure on loopback http development", async () => {
     const setCookie = await setCookieHeader(
       "http://localhost:8792/site-studio/x",
       SITE_STUDIO_CSRF_COOKIE_PATH
     );
     expect(setCookie).toContain("cail_csrf_sitestudio=");
+    expect(setCookie).toContain("Path=/");
+    expect(setCookie).not.toContain("Path=/site-studio");
     expect(setCookie).not.toContain("Secure");
+  });
+
+  it("keeps /site-studio scope on non-loopback http origins", async () => {
+    const setCookie = await setCookieHeader(
+      "http://site-studio.test/site-studio/x",
+      SITE_STUDIO_CSRF_COOKIE_PATH
+    );
+    expect(setCookie).toContain("Path=/site-studio");
   });
 
   it("keeps the cookie out of a hostile /sites page's browser path scope", async () => {

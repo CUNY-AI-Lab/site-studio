@@ -34,9 +34,18 @@ export type OwnerMutationResult =
   | { ok: true };
 
 type Journal =
-  | { type: "create"; projectId: string }
+  | { type: "create"; projectId: string; operationId?: string }
   | { type: "delete"; projectId: string }
-  | { type: "rename-project"; projectId: string; nextProjectId: string; name: string; slug?: string; stage: "preparing" | "committing" }
+  | {
+      type: "rename-project";
+      projectId: string;
+      nextProjectId: string;
+      name: string;
+      slug?: string;
+      /** Optional for compatibility with journals written before this field. */
+      published?: boolean;
+      stage: "preparing" | "activating" | "committing";
+    }
   | { type: "rename-file"; projectId: string; oldPath: string; newPath: string; stage: "preparing" | "committing" }
   | { type: "restore" | "replace-files"; projectId: string; restorePointId: string };
 
@@ -53,7 +62,21 @@ type UploadPolicy = {
   maxProjectBytes: number;
   maxOwnerBytes: number;
   uploadsPerMinute: number;
+  /** Stable across collision-suffix attempts for one user-visible upload. */
+  admissionId?: string;
   now?: number;
+};
+
+type UploadAdmissionRecord = {
+  id: string;
+  timestamp: number;
+};
+
+type UploadAdmission = {
+  recent: UploadAdmissionRecord[];
+  now: number;
+  admissionId: string;
+  alreadyRecorded: boolean;
 };
 
 export class OwnerMutationService {
@@ -87,11 +110,31 @@ export class OwnerMutationService {
     projectId: string,
     additionalBytes: number,
     policy: UploadPolicy
-  ): Promise<{ recent: number[]; now: number }> {
+  ): Promise<UploadAdmission> {
     const now = policy.now ?? Date.now();
-    const prior = await this.journalStore.get<number[]>(UPLOAD_ADMISSIONS_KEY) ?? [];
-    const recent = prior.filter((timestamp) => timestamp > now - 60_000);
-    if (recent.length >= policy.uploadsPerMinute) {
+    const prior = await this.journalStore.get<Array<number | UploadAdmissionRecord>>(
+      UPLOAD_ADMISSIONS_KEY
+    ) ?? [];
+    const recent = prior
+      .map((entry, index): UploadAdmissionRecord | null => {
+        if (typeof entry === "number") {
+          return { id: `legacy:${index}:${entry}`, timestamp: entry };
+        }
+        return (
+          entry &&
+          typeof entry.id === "string" &&
+          typeof entry.timestamp === "number"
+        )
+          ? entry
+          : null;
+      })
+      .filter(
+        (entry): entry is UploadAdmissionRecord =>
+          entry !== null && entry.timestamp > now - 60_000
+      );
+    const admissionId = policy.admissionId ?? crypto.randomUUID();
+    const alreadyRecorded = recent.some((entry) => entry.id === admissionId);
+    if (!alreadyRecorded && recent.length >= policy.uploadsPerMinute) {
       throw new Error("Upload rate limit exceeded. Try again in a minute.");
     }
     const projectBytes = await this.prefixBytes(`projects/${ownerId}/${projectId}/`);
@@ -105,16 +148,27 @@ export class OwnerMutationService {
     if (ownerBytes + additionalBytes > policy.maxOwnerBytes) {
       throw new Error("Owner storage quota exceeded.");
     }
-    return { recent, now };
+    return { recent, now, admissionId, alreadyRecorded };
   }
 
-  private async recordUploadAdmission(recent: number[], now: number): Promise<void> {
-    await this.journalStore.put(UPLOAD_ADMISSIONS_KEY, [...recent, now]);
+  private async recordUploadAdmission(admission: UploadAdmission): Promise<void> {
+    if (admission.alreadyRecorded) return;
+    await this.journalStore.put(UPLOAD_ADMISSIONS_KEY, [
+      ...admission.recent,
+      { id: admission.admissionId, timestamp: admission.now }
+    ]);
   }
 
   private async requireProject(ownerId: string, projectId: string): Promise<void> {
     if (!(await this.storage.projectExists(ownerId, projectId))) {
       throw new ProjectNotFoundError(projectId);
+    }
+  }
+
+  private async hideProjectFromPublic(ownerId: string, projectId: string): Promise<void> {
+    const metadata = await this.storage.getProjectMetadata(ownerId, projectId);
+    if (metadata?.published) {
+      await this.storage.updateProjectMetadata(ownerId, projectId, { published: false });
     }
   }
 
@@ -124,7 +178,24 @@ export class OwnerMutationService {
 
     switch (journal.type) {
       case "create":
+        if (!journal.operationId) {
+          // Compatibility with journals written before create claims carried a
+          // generation marker.
+          await this.storage.deleteProject(ownerId, journal.projectId);
+          break;
+        }
+        {
+          const metadata = await this.storage.getProjectMetadata(ownerId, journal.projectId);
+          if (metadata?.creatingOperationId === journal.operationId) {
+            await this.storage.deleteProject(ownerId, journal.projectId);
+          }
+        }
+        break;
       case "delete":
+        // Public readers do not pass through this coordinator. Fence visibility
+        // before resuming file deletion so a failed delete cannot leave a
+        // progressively torn published site exposed.
+        await this.hideProjectFromPublic(ownerId, journal.projectId);
         await this.storage.deleteProject(ownerId, journal.projectId);
         break;
       case "rename-project":
@@ -138,7 +209,35 @@ export class OwnerMutationService {
             );
           }
           await this.storage.deleteProject(ownerId, journal.nextProjectId);
+        } else if (journal.stage === "activating") {
+          if (journal.published) {
+            await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
+              published: true
+            });
+          }
+          if (journal.slug) {
+            await this.storage.transferPublishedSlugReservation(
+              ownerId,
+              journal.slug,
+              journal.projectId,
+              journal.nextProjectId
+            );
+          }
+          if (journal.published) {
+            await this.hideProjectFromPublic(ownerId, journal.projectId);
+          }
+          await this.putJournal({ ...journal, stage: "committing" });
+          await this.storage.deleteProject(ownerId, journal.projectId);
+          await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
+            name: journal.name
+          });
         } else {
+          // New journals hide the source before entering `committing`. The slug
+          // check also safely fences published journals written by the previous
+          // schema, which did not persist the `published` boolean.
+          if (journal.published || journal.slug) {
+            await this.hideProjectFromPublic(ownerId, journal.projectId);
+          }
           await this.storage.deleteProject(ownerId, journal.projectId);
           await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, { name: journal.name });
         }
@@ -165,17 +264,32 @@ export class OwnerMutationService {
 
     switch (operation.type) {
       case "create-project": {
+        const operationId = crypto.randomUUID();
+        await this.putJournal({
+          type: "create",
+          projectId: operation.projectId,
+          operationId
+        });
         try {
-          await this.storage.createProjectIfAbsent(ownerId, operation.projectId, operation.name);
-          // Record compensation only after the conditional metadata claim proves
-          // this operation owns the new namespace. A crash before this write may
-          // leave an empty visible project, but recovery can never delete a
-          // destination created by another writer during the ambiguous window.
-          await this.putJournal({ type: "create", projectId: operation.projectId });
+          // The journal exists before the conditional claim, but recovery will
+          // compensate only metadata carrying this exact operation id. A crash
+          // on either side of the claim can therefore neither expose a partial
+          // project nor delete a destination another writer created.
+          await this.storage.createProjectIfAbsent(
+            ownerId,
+            operation.projectId,
+            operation.name,
+            operationId
+          );
           for (const [path, content] of Object.entries(operation.files)) {
             await this.storage.writeFile(ownerId, operation.projectId, path, content);
           }
-          await this.clearJournal();
+          await this.storage.updateProjectMetadata(ownerId, operation.projectId, {
+            creatingOperationId: undefined
+          });
+          // The project is complete and visible now. A failed journal cleanup is
+          // harmless: recovery sees the absent operation marker and preserves it.
+          await this.clearJournal().catch(() => undefined);
           return { ok: true };
         } catch (error) {
           if (error instanceof ProjectExistsError) {
@@ -194,13 +308,21 @@ export class OwnerMutationService {
           projectId: operation.projectId,
           nextProjectId: operation.nextProjectId,
           name: operation.name,
+          published: sourceMetadata.published,
           ...(sourceMetadata.published && sourceMetadata.slug ? { slug: sourceMetadata.slug } : {}),
           stage: "preparing"
         };
         try {
           await this.storage.renameProject(ownerId, operation.projectId, operation.nextProjectId, {
             afterTargetClaim: async () => this.putJournal(journal),
-            beforeSourceDelete: async () => {
+            beforeSourceDelete: async (activateTarget) => {
+              if (journal.published) {
+                // The target is complete but still hidden. Record the roll-
+                // forward phase before exposing it, then hide the source before
+                // its files begin disappearing.
+                await this.putJournal({ ...journal, stage: "activating" });
+                await activateTarget();
+              }
               if (journal.slug) {
                 await this.storage.transferPublishedSlugReservation(
                   ownerId,
@@ -208,6 +330,9 @@ export class OwnerMutationService {
                   operation.projectId,
                   operation.nextProjectId
                 );
+              }
+              if (journal.published) {
+                await this.hideProjectFromPublic(ownerId, operation.projectId);
               }
               await this.putJournal({ ...journal, stage: "committing" });
             }
@@ -226,6 +351,7 @@ export class OwnerMutationService {
       }
       case "delete-project":
         await this.putJournal({ type: "delete", projectId: operation.projectId });
+        await this.hideProjectFromPublic(ownerId, operation.projectId);
         await this.storage.deleteProject(ownerId, operation.projectId);
         await this.clearJournal();
         return { ok: true };
@@ -303,13 +429,17 @@ export class OwnerMutationService {
           operation.content.byteLength,
           operation
         );
+        // Persist admission before the external write. If Durable Object
+        // storage is unavailable, fail before R2 can commit an upload whose
+        // rate record would be missing. An external failure may conservatively
+        // consume an attempt, which is safer than a bypass after ambiguity.
+        await this.recordUploadAdmission(admission);
         const written = await this.storage.uploadToProjectIfAbsent(
           ownerId,
           operation.projectId,
           operation.path,
           operation.content
         );
-        if (written) await this.recordUploadAdmission(admission.recent, admission.now);
         return { written };
       }
       case "write-thumbnail": {
@@ -317,11 +447,11 @@ export class OwnerMutationService {
         const existing = await this.bucket.head(`projects/${ownerId}/${operation.projectId}/.thumbnail.png`);
         const additionalBytes = Math.max(0, operation.content.byteLength - (existing?.size ?? 0));
         const admission = await this.checkUploadAdmission(ownerId, operation.projectId, additionalBytes, operation);
+        await this.recordUploadAdmission(admission);
         await this.storage.writeThumbnail(ownerId, operation.projectId, operation.content);
         await this.storage.updateProjectMetadata(ownerId, operation.projectId, {
           thumbnailUrl: `/api/projects/${operation.projectId}/thumbnail`
         });
-        await this.recordUploadAdmission(admission.recent, admission.now);
         return { ok: true };
       }
       case "create-snapshot":

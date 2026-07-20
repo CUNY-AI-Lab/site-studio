@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import type { Env } from "../types";
-import { addCacheBusterToHtml } from "../lib/path";
+import { addCacheBusterToHtml, collectPreviewResourcePaths } from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../../../serving-core/src/not-found-page";
@@ -12,7 +12,10 @@ import { getUser } from "../lib/session";
 import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 
-type AppContext = Context<{ Bindings: Env; Variables: { user: { id: string } } }>;
+type AppContext = Context<{
+  Bindings: Env;
+  Variables: { user: { id: string }; previewTokenExpiresAt?: number };
+}>;
 
 function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
   if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
@@ -108,12 +111,20 @@ async function servePreviewFile(
     // The ownership check above ensures preview tokens are never minted for a
     // non-owner. Opaque-origin sandbox documents cannot send the session cookie,
     // so carry this short-lived, project-scoped token on rewritten requests.
-    const previewToken = await mintPreviewToken(c.env.SESSION_KV, user.id, projectId);
-    content = new TextEncoder().encode(addCacheBusterToHtml(
-      new TextDecoder().decode(content),
-      version,
-      { pt: previewToken }
-    ));
+    const html = new TextDecoder().decode(content);
+    const allowedPaths = collectPreviewResourcePaths(html, requestedPath);
+    const previewToken = allowedPaths.length > 0
+      ? await mintPreviewToken(
+          c.env.SESSION_KV,
+          user.id,
+          projectId,
+          allowedPaths,
+          c.get("previewTokenExpiresAt") ?? undefined
+        )
+      : null;
+    content = new TextEncoder().encode(
+      addCacheBusterToHtml(html, version, previewToken ? { pt: previewToken } : {})
+    );
   }
 
   // Known limitation: url(...) references inside CSS are not rewritten, so

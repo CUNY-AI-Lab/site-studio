@@ -208,8 +208,10 @@ describe("route regressions", () => {
   let app: ReturnType<typeof createTestApp>;
 
   beforeEach(async () => {
-    actionAttemptRpc.admission.mockClear();
-    actionAttemptRpc.terminal.mockClear();
+    actionAttemptRpc.admission.mockReset();
+    actionAttemptRpc.admission.mockResolvedValue(undefined);
+    actionAttemptRpc.terminal.mockReset();
+    actionAttemptRpc.terminal.mockResolvedValue(undefined);
     bucket = createMockBucket();
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
@@ -452,6 +454,29 @@ describe("route regressions", () => {
     expect(await publishedSiteResponse.text()).toContain("<h1>Beta</h1>");
   });
 
+  it("returns the committed publish when terminal-record RPC outcomes remain ambiguous", async () => {
+    await storage.createProject(userId, "terminal-rpc", "Terminal RPC");
+    await storage.writeFile(userId, "terminal-rpc", "index.html", "<h1>Committed</h1>");
+    actionAttemptRpc.terminal.mockRejectedValue(new Error("ambiguous Durable Object RPC"));
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/terminal-rpc/publish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      url: "http://site-studio.test/u/janedoe/terminal-rpc/"
+    });
+    expect(actionAttemptRpc.terminal).toHaveBeenCalledTimes(2);
+    expect(await storage.getProjectMetadata(userId, "terminal-rpc")).toMatchObject({
+      published: true,
+      slug: "terminal-rpc"
+    });
+  });
+
   it("fences a stale publisher after another project reclaims its slug", async () => {
     await storage.createProject(userId, "former-owner", "Shared");
     await storage.writeFile(userId, "former-owner", "index.html", "<h1>Former</h1>");
@@ -655,6 +680,46 @@ describe("route regressions", () => {
     await expect(response.json()).resolves.toMatchObject({ error: "handle_required" });
   });
 
+  it("returns handle_required when the reverse handle record has no matching forward owner", async () => {
+    bucket.store.set(`userhandles/${userId}.json`, {
+      data: JSON.stringify({
+        handle: "stale-handle",
+        claimedAt: "2026-01-01T00:00:00.000Z"
+      })
+    });
+    bucket.store.delete(`handles/${handle}.json`);
+
+    await storage.createProject(userId, "stalepair", "Stale Pair");
+    await storage.writeFile(userId, "stalepair", "index.html", "<h1>Hi</h1>");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/stalepair/publish",
+      { method: "POST", headers: csrf.headers },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: "handle_required" });
+  });
+
+  it("301s a slashless canonical root to the trailing-slash URL with its query", async () => {
+    await storage.createProject(userId, "slashroot", "Slash Root");
+    await storage.writeFile(userId, "slashroot", "index.html", '<link href="styles.css">');
+    await storage.updateProjectMetadata(userId, "slashroot", {
+      published: true,
+      slug: "slashroot"
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/slashroot?ref=x",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("/u/janedoe/slashroot/?ref=x");
+  });
+
   it("301s a legacy /sites/{owner}/{slug} URL to /u/{handle}/ preserving path and query", async () => {
     await storage.createProject(userId, "port", "Portfolio");
     await storage.writeFile(userId, "port", "index.html", "<h1>Home</h1>");
@@ -714,6 +779,24 @@ describe("route regressions", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("<h1>Legacy Home</h1>");
+  });
+
+  it("301s a slashless directly served legacy root to a trailing slash", async () => {
+    bucket.store.set(`projects/user_other/legacy/.metadata.json`, {
+      data: JSON.stringify({ id: "legacy", name: "legacy", published: true, slug: "legacy" })
+    });
+    bucket.store.set(`projects/user_other/legacy/index.html`, {
+      data: '<link href="styles.css">'
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/sites/user_other/legacy?ref=x",
+      { redirect: "manual" },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("/sites/user_other/legacy/?ref=x");
   });
 
   it("SS-14: resolves an extensionless path to {path}.html", async () => {

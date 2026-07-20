@@ -47,8 +47,9 @@
 	// <script>, on* handler, or javascript:/data: URI would be app-origin XSS.
 	//
 	// We run marked's HTML output through DOMPurify with an allowlist limited to the
-	// formatting tags markdown produces. Everything else (script/iframe/object/embed/
-	// form/style, event-handler attributes, dangerous URI schemes) is stripped.
+	// inert formatting tags markdown produces. Images are excluded entirely:
+	// assistant or file-derived markdown must not initiate attacker-controlled
+	// network requests from the authenticated app page.
 	const SANITIZE_CONFIG = {
 		ALLOWED_TAGS: [
 			'p', 'br', 'hr', 'span', 'div',
@@ -58,16 +59,15 @@
 			'blockquote',
 			'pre', 'code',
 			'a',
-			'img',
 			'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col'
 		],
-		ALLOWED_ATTR: ['href', 'title', 'src', 'alt', 'class', 'align', 'colspan', 'rowspan'],
+		ALLOWED_ATTR: ['href', 'title', 'alt', 'class', 'align', 'colspan', 'rowspan'],
 		// URI-scheme safety is left to DOMPurify's audited default ALLOWED_URI_REGEXP,
 		// which permits http(s), mailto, tel, relative links, and safe data:image/*
 		// while blocking javascript:, vbscript:, and data:text/html. A hand-rolled
 		// regexp here is easy to get wrong (an over-broad one let data:text/html
 		// through), so we intentionally do NOT override it.
-		FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'svg', 'math'],
+		FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'img', 'svg', 'math'],
 		FORBID_ATTR: ['style'],
 		ALLOW_DATA_ATTR: false
 	};
@@ -294,10 +294,4 @@
 		margin: 1rem 0;
 	}
 
-	.message-content :global(img) {
-		max-width: 100%;
-		height: auto;
-		border-radius: 8px;
-		margin: 0.75rem 0;
-	}
 </style>

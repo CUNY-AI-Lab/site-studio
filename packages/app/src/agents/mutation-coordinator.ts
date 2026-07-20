@@ -4,9 +4,31 @@ import { OwnerMutationService, type OwnerMutation, type OwnerMutationResult } fr
 import { migrateAnonymousData, type MigrationResult } from "../lib/migration";
 import { createAgentHistoryPorter } from "../lib/agent-porter";
 
+export class SerializedOperationQueue {
+  private tail: Promise<void> = Promise.resolve();
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(operation);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+}
+
 export class MutationCoordinator extends DurableObject<Env> {
+  /**
+   * Serialize owner mutations without holding `blockConcurrencyWhile()` across
+   * R2/KV/RPC work. Cloudflare resets a Durable Object when that callback runs
+   * for 30 seconds, which is shorter than a valid large rename, restore, or
+   * account import can take. A promise tail preserves per-instance ordering
+   * without imposing that initialization-only timeout.
+   */
+  private readonly mutations = new SerializedOperationQueue();
+
   async execute(ownerId: string, operation: OwnerMutation): Promise<OwnerMutationResult> {
-    return this.ctx.blockConcurrencyWhile(() =>
+    return this.mutations.run(() =>
       new OwnerMutationService(this.env.SITE_STUDIO_BUCKET, this.ctx.storage).execute(ownerId, operation)
     );
   }
@@ -16,15 +38,22 @@ export class MutationCoordinator extends DurableObject<Env> {
     subject: string,
     anonSessionId?: string
   ): Promise<MigrationResult> {
-    return this.ctx.blockConcurrencyWhile(() =>
-      migrateAnonymousData({
+    return this.mutations.run(async () => {
+      // Account import shares the anonymous owner's mutation queue. Recover a
+      // prior adopted mutation before inventorying the namespace so migration
+      // never copies a hidden partial create or races its compensation.
+      await new OwnerMutationService(
+        this.env.SITE_STUDIO_BUCKET,
+        this.ctx.storage
+      ).recover(anonUserId);
+      return migrateAnonymousData({
         bucket: this.env.SITE_STUDIO_BUCKET,
         kv: this.env.SESSION_KV,
         anonUserId,
         subject,
         anonSessionId,
         porter: createAgentHistoryPorter(this.env)
-      })
-    );
+      });
+    });
   }
 }

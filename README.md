@@ -67,7 +67,23 @@ bun run trace -- --project <project-id>
 ```
 
 Both default to `http://127.0.0.1:8792`, accept `--help`, and persist their local
-debug session cookie in the gitignored `.site-studio-debug-session.json` file.
+debug session cookie in the gitignored `.site-studio-debug-session.json` file
+with owner-only permissions. They obtain the same CSRF cookie used by the
+frontend before project writes or WebSocket upgrades.
+
+The checked-in CI workflow installs from the frozen Bun lockfile, runs the
+repository invariant/link/secret scan and the full check suite, then bundles
+both Workers with Wrangler in dry-run mode. Its third-party Actions are pinned
+to full commit SHAs and checkout does not persist credentials. The locked CAIL
+packages resolve from GitHub Packages and return 401 without authentication, so
+hosted CI supplies `CAIL_PACKAGES_TOKEN` as `NODE_AUTH_TOKEN` only on the
+dependency-install step; tests and builds do not inherit it. Run the same source
+gates locally:
+
+```bash
+bun run verify:repository
+bun run check
+```
 
 ## Environment
 
@@ -157,6 +173,9 @@ bunx wrangler r2 bucket lifecycle add site-studio delete-expired-csrf csrf/ --ex
 - `GET /u/:handle/:slug/*` (canonical published sites)
 - `GET /sites/:userId/:slug/*` (legacy: 301s to `/u/…` when the owner has a handle, else serves)
 
+Slashless published roots redirect permanently to the corresponding trailing-
+slash URL so authored relative assets resolve beneath the site root.
+
 ## Observability contract
 
 Both Workers persist structured custom events and explicitly disable Cloudflare
@@ -192,12 +211,13 @@ claim readiness for R2, KV, Durable Objects, or the model gateway.
 See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map,
 denominator rules, operating defaults, and remaining external inputs.
 
-The Bun workspace pins the reviewed shared primitives to immutable revisions:
-`cail-identity` `00419a9409680716a04e514068ba2b128ce7afa7`, `cail-log`
-`75e0dda3068794ae1543e1e2bb98c9c920bb848f`, and `cail-client`
-`16da40171381b8bf38543730b45dba484ba01940`. Site Studio does not directly
-depend on `cail-sandbox-client`; Sandbox accounting remains an external
-authority rather than an application transport boundary.
+The package manifests accept compatible releases of the reviewed CAIL
+primitives; the committed Bun lockfile currently resolves `cail-identity`
+`4.4.0`, `cail-log` `0.4.0`, and `cail-client` `1.3.0`. Review lockfile changes
+as dependency changes rather than treating the manifest ranges as immutable
+source pins. Site Studio does not directly depend on `cail-sandbox-client`;
+Sandbox accounting remains an external authority rather than an application
+transport boundary.
 
 ## Security, ownership, and recovery boundaries
 
@@ -207,11 +227,16 @@ authority rather than an application transport boundary.
 - A `SiteBuilderAgent` Durable Object is keyed by `ownerId:projectId`. There is
   no sharing, membership, role, invitation, or cross-user collaborative-editing
   model. An owner-scoped `MutationCoordinator` serializes adopted project/file
-  mutations and publish-state changes from concurrent tabs and agent connections.
+  mutations and publish-state changes from concurrent tabs and agent connections
+  through a rejection-safe operation queue.
 - Editor and agent text writes use ETag compare-and-set when they have a base
   version. Upload and rename destinations use put-if-absent. Multi-object
   create, rename, delete, restore, and template replacement record recoverable
-  coordinator journals; project metadata is deleted last.
+  coordinator journals. Project creation claims carry a journal operation id
+  and remain hidden until every template file lands. Published deletes hide
+  metadata before deleting files; published renames copy into a hidden target
+  and durably activate it only after every file, thumbnail, and snapshot has
+  copied.
 - Publishing is a live metadata visibility flag over the current project files,
   not an immutable release artifact. Editing or restoring a published project
   changes the public bytes without another publish action. Published URLs use
@@ -227,8 +252,13 @@ authority rather than an application transport boundary.
   content acknowledged by R2. The unload keepalive remains best effort.
 - WebSocket upgrades require the per-owner CSRF token and an accepted origin.
   The frontend reconnects before a new turn when a socket is older than four
-  minutes. Every gateway POST checks the captured JWT expiry; an expired
+  minutes and rejects stale history, socket initialization, and frames after a
+  project switch. Every gateway POST checks the captured JWT expiry; an expired
   long-running turn stops and reconnects before retry.
+- Preview bearer grants expire after ten minutes, inherit their parent grant's
+  absolute deadline, and authorize only the relative resources linked by the
+  rendered document. Chat Markdown cannot render images or initiate remote
+  image requests from the authenticated application origin.
 - The chat displays the typed gateway quota percentage. Uploads require explicit
   project/owner byte limits and a rolling per-owner rate configured by operators.
 

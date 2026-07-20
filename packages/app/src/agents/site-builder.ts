@@ -997,8 +997,8 @@ export function createProjectTools(
       inputSchema: z.object({
         prompt: z.string().min(1).describe("What to depict. Style guidance (medium, mood, composition) is welcome."),
         filename: z.string().optional().describe("Optional basename for the saved file; sanitized and given an extension matching the image format. Saved under images/."),
-        width: z.number().int().optional().describe("Optional width in pixels (default 1024; clamped to a multiple of 64 in [64, 2048])."),
-        height: z.number().int().optional().describe("Optional height in pixels (default 1024; clamped to a multiple of 64 in [64, 2048]).")
+        width: z.number().int().optional().describe("Optional width in pixels (default 1024; clamped to a multiple of 64 in [256, 1920])."),
+        height: z.number().int().optional().describe("Optional height in pixels (default 1024; clamped to a multiple of 64 in [256, 1920]).")
       }),
       outputSchema: z.discriminatedUnion("ok", [
         z.object({
@@ -1018,6 +1018,7 @@ export function createProjectTools(
 
         // Ordering (generate → sniff → gate → save) lives in the extracted,
         // integration-tested flow — keep this body a thin binding.
+        const uploadAdmissionId = crypto.randomUUID();
         const result = await runGenerateImageFlow(filename, {
           generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
           screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
@@ -1027,6 +1028,7 @@ export function createProjectTools(
               projectId: scope.projectId,
               path,
               content: bytes,
+              admissionId: uploadAdmissionId,
               maxProjectBytes: requiredPositiveInteger(
                 env.SITE_STUDIO_MAX_PROJECT_BYTES,
                 "SITE_STUDIO_MAX_PROJECT_BYTES"

@@ -418,6 +418,47 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`).data).toBe("<h1>subject original</h1>");
   });
 
+  it("preserves the complete forwarding map when a retry resumes after partial source deletion", async () => {
+    // Force a published-slug remap so dropping the first mapping would make the
+    // old anonymous URL resolve the subject's different `site` project.
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
+      data: metadataFor("site", { published: true, slug: "site" })
+    });
+    bucket.store.set(`projects/${SUBJECT}/site/index.html`, {
+      data: "<h1>subject site</h1>"
+    });
+    seedAnonProject(bucket, "site", { published: true, slug: "site" });
+    seedAnonProject(bucket, "notes", { published: true, slug: "notes" });
+
+    const originalDelete = bucket.delete.bind(bucket);
+    let interrupted = false;
+    bucket.delete = vi.fn(async (key: string) => {
+      if (!interrupted && key === `projects/${ANON}/notes/.metadata.json`) {
+        interrupted = true;
+        throw new Error("injected delete interruption");
+      }
+      return originalDelete(key);
+    }) as typeof bucket.delete;
+
+    await expect(run()).rejects.toThrow("injected delete interruption");
+    const completePointer = (await loadMigrationPointer(bucket, ANON))!;
+    expect(completePointer.projects).toEqual({
+      site: "site-imported",
+      notes: "notes"
+    });
+    expect(completePointer.slugs).toEqual({
+      site: "site-2",
+      notes: "notes"
+    });
+    expect(bucket.store.has(`projects/${ANON}/site/.metadata.json`)).toBe(false);
+    expect(bucket.store.has(`projects/${ANON}/notes/.metadata.json`)).toBe(true);
+
+    await expect(run()).resolves.toMatchObject({ status: "migrated" });
+    const resumedPointer = (await loadMigrationPointer(bucket, ANON))!;
+    expect(resumedPointer.projects).toEqual(completePointer.projects);
+    expect(resumedPointer.slugs).toEqual(completePointer.slugs);
+  });
+
   it("porter failures are non-fatal: files still migrate", async () => {
     seedAnonProject(bucket, "portfolio");
     const porter: ChatHistoryPorter = {
