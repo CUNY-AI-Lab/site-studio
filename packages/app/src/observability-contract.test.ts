@@ -34,8 +34,11 @@ describe("observability source contract", () => {
 
   it("pins the reviewed identity and transport primitives in the app", () => {
     const source = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    // Exact pin, not a range: cail-identity 5.0.0 carries the v2 subject
+    // derivation, whose ownership subjects differ from every 4.x value. A
+    // caret range here could silently move that contract.
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-identity": "^4.4.0"',
+      '"@cuny-ai-lab/cail-identity": "5.0.0"',
     );
     expect(source).toContain(
       '"@cuny-ai-lab/cail-client": "^1.3.0"',

@@ -18,8 +18,10 @@
  */
 
 import {
-  verifyIdentityJwt,
   type CailIdentity,
+  type IdentityVerifierConfig,
+  loadIdentityVerifierConfig,
+  verifyIdentityJwt,
 } from "@cuny-ai-lab/cail-identity";
 
 export type { CailIdentity };
@@ -38,15 +40,35 @@ export type RequestIdentityResolution =
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
 export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
 
-function parseJwks(raw: string | undefined): Parameters<typeof verifyIdentityJwt>[1] | null {
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    return parsed as Parameters<typeof verifyIdentityJwt>[1];
-  } catch {
+/**
+ * cail-identity 5.0.0 replaced per-call jwks + options with a loader that
+ * validates issuer, audience, and every JWKS key once and returns a frozen
+ * snapshot. The snapshot is cached per (jwks, issuer) so a request does not
+ * re-import keys; a configuration failure yields `null` here and an "invalid"
+ * resolution, never a silently anonymous request.
+ */
+const verifierCache = new Map<string, IdentityVerifierConfig>();
+
+async function loadVerifier(
+  env: IdentityVerificationEnv
+): Promise<IdentityVerifierConfig | null> {
+  const jwks = env.CAIL_IDENTITY_JWKS;
+  const issuer = env.CAIL_IDENTITY_ISSUER;
+  if (!jwks || typeof issuer !== "string" || issuer.length === 0 || issuer.trim() !== issuer) {
     return null;
   }
+  const key = `${issuer}\u0000${jwks}`;
+  const cached = verifierCache.get(key);
+  if (cached) return cached;
+  const loaded = await loadIdentityVerifierConfig({
+    jwks,
+    issuer,
+    expectedAudience: CAIL_IDENTITY_AUDIENCE,
+    supportedIssuers: [issuer],
+  });
+  if (!loaded.ok) return null;
+  verifierCache.set(key, loaded.config);
+  return loaded.config;
 }
 
 /**
@@ -60,16 +82,11 @@ export async function resolveRequestIdentity(
   if (!request.headers.has(CAIL_IDENTITY_HEADER)) return { status: "absent" };
 
   const token = request.headers.get(CAIL_IDENTITY_HEADER)?.trim() ?? "";
-  const jwks = parseJwks(env.CAIL_IDENTITY_JWKS);
-  const issuer = env.CAIL_IDENTITY_ISSUER;
-  if (!token || !jwks || typeof issuer !== "string" || issuer.length === 0 || issuer.trim() !== issuer) {
-    return { status: "invalid" };
-  }
+  if (!token) return { status: "invalid" };
+  const config = await loadVerifier(env);
+  if (!config) return { status: "invalid" };
 
-  const identity = await verifyIdentityJwt(token, jwks, {
-    expectedAudience: CAIL_IDENTITY_AUDIENCE,
-    allowedIssuers: [issuer],
-  });
+  const identity = await verifyIdentityJwt(token, config);
   return identity
     ? { status: "verified", identity, token }
     : { status: "invalid" };
