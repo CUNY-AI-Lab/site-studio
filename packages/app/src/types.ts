@@ -80,6 +80,8 @@ export interface User {
   /** Non-durable profile attributes from the identity JWT (display only). */
   email?: string;
   name?: string;
+  /** Verified `log_sub` from the identity boundary; separate salt, never derived from `id`. Logging only. */
+  operationalSubject?: string;
 }
 
 /**

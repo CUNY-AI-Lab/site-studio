@@ -29,7 +29,7 @@ import {
   errorCodeFrom,
   getCorrelation,
   mintCorrelation,
-  principalForOwnerId,
+  principalForOperationalSubject,
   type LoggingVariables,
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
@@ -186,7 +186,7 @@ export function createPublishRouter() {
     let url = "";
     const publishAction = new SiteStudioActionLifecycle({
       action: "publish",
-      principal: principalForOwnerId(user.id),
+      principal: principalForOperationalSubject(user.operationalSubject),
       correlation: getCorrelation(c) ?? mintCorrelation(),
     }, getBoundaryLogger(c));
     const actionAgent = c.env.SITE_BUILDER_AGENT.get(

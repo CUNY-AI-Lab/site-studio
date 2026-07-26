@@ -107,15 +107,26 @@ export function traceFromCorrelation(correlation: CailCorrelation) {
 }
 
 /** Only verified CAIL subjects are linkable principals. Legacy owners stay anonymous. */
-export function principalForOwnerId(ownerId?: string): CailPrincipalFields {
-  if (isCailSubject(ownerId)) {
-    return {
-      type: "user",
-      subject: `cail-${CAIL_LOG_SUBJECT_VERSION}-${ownerId.slice("cail-".length)}`,
-    };
-  }
-  if (ownerId && new RegExp(`^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`).test(ownerId)) {
-    return { type: "user", subject: ownerId };
+/**
+ * Build the log principal from the VERIFIED operational subject (`log_sub`).
+ *
+ * The operational subject is derived at the identity boundary under a separate
+ * salt and is deliberately NOT a reversible transform of the ownership
+ * subject. This function used to relabel an ownership subject `cail-<hex>` as
+ * `cail-v1-<same hex>`, which put the durable project-owner key into every log
+ * line in recoverable form and produced a principal that did not match the one
+ * other CAIL services log for the same person.
+ *
+ * An ownership subject passed here yields an anonymous principal by design.
+ */
+export function principalForOperationalSubject(
+  operationalSubject?: string,
+): CailPrincipalFields {
+  if (
+    operationalSubject
+    && new RegExp(`^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`).test(operationalSubject)
+  ) {
+    return { type: "user", subject: operationalSubject };
   }
   return { type: "anonymous" };
 }
@@ -199,7 +210,7 @@ type DiagnosticSeverity = "info" | "warning" | "error";
 export function emitDiagnostic(
   severity: DiagnosticSeverity,
   errorType: string,
-  fields: { subject?: string; status?: number; retry_count?: number; req_bytes?: number } = {},
+  fields: { subject?: string; operationalSubject?: string; status?: number; retry_count?: number; req_bytes?: number } = {},
   logger: SiteStudioLogger = log,
 ): void {
   const event = severity === "info"
@@ -210,7 +221,9 @@ export function emitDiagnostic(
   logger.emit(event, {
     product_id: PRODUCT_ID,
     error_type: errorType,
-    ...(fields.subject ? { principal: principalForOwnerId(fields.subject) } : {}),
+    ...(fields.operationalSubject
+      ? { principal: principalForOperationalSubject(fields.operationalSubject) }
+      : {}),
     ...(fields.status !== undefined ? { status: fields.status } : {}),
     ...(fields.retry_count !== undefined ? { retry_count: fields.retry_count } : {}),
     ...(fields.req_bytes !== undefined ? { req_bytes: fields.req_bytes } : {}),
@@ -358,8 +371,12 @@ export function requestLogging(logger?: SiteStudioLogger) {
 
     const status = c.res?.status ?? 500;
     const terminal = terminalForStatus(status);
-    const user = c.get("user") as { id?: string } | undefined;
-    const principal = user?.id ? principalForOwnerId(user.id) : undefined;
+    const user = c.get("user") as
+      | { id?: string; operationalSubject?: string }
+      | undefined;
+    const principal = user?.operationalSubject
+      ? principalForOperationalSubject(user.operationalSubject)
+      : undefined;
     const errorType = c.error ? errorCodeFrom(c.error) : undefined;
 
     const completedBase = {

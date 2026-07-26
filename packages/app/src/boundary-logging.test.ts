@@ -21,7 +21,7 @@ import {
   errorCodeFrom,
   mintCorrelation,
   outcomeForStatus,
-  principalForOwnerId,
+  principalForOperationalSubject,
   terminalForStatus,
   withCorrelationFetch,
 } from "./lib/logging";
@@ -306,13 +306,18 @@ describe("service-local diagnostics and helpers", () => {
     expect(terminalForStatus(401)).toEqual({ outcome: "denied", reason: "denied" });
     expect(terminalForStatus(429)).toEqual({ outcome: "denied", reason: "rate_limited" });
     expect(terminalForStatus(503)).toEqual({ outcome: "error", reason: "application_failure" });
-    expect(principalForOwnerId("user_abc")).toEqual({ type: "anonymous" });
+    expect(principalForOperationalSubject("user_abc")).toEqual({ type: "anonymous" });
+    // An OWNERSHIP subject must never become a log principal: relabelling it
+    // would put the durable project-owner key into logs in recoverable form.
     // TEST_SUBJECTS.alice = cail-2bd806c97f0e00af1a1fc3328fa763a9
-    expect(principalForOwnerId(TEST_SUBJECTS.alice)).toEqual({
-      type: "user",
-      subject: "cail-v1-2bd806c97f0e00af1a1fc3328fa763a9",
+    expect(principalForOperationalSubject(TEST_SUBJECTS.alice)).toEqual({
+      type: "anonymous",
     });
-    expect(principalForOwnerId("cail-v1-2bd806c97f0e00af1a1fc3328fa763a9")).toEqual({
+    expect(principalForOperationalSubject(undefined)).toEqual({ type: "anonymous" });
+    // Only a verified operational subject is logged, verbatim.
+    expect(
+      principalForOperationalSubject("cail-v1-2bd806c97f0e00af1a1fc3328fa763a9"),
+    ).toEqual({
       type: "user",
       subject: "cail-v1-2bd806c97f0e00af1a1fc3328fa763a9",
     });

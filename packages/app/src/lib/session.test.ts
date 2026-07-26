@@ -415,10 +415,14 @@ describe("authMiddleware anonymous-data migration", () => {
       );
       expect(completed).toMatchObject({
         "error.type": "account_import_completed",
-        // cail-v1-<hex of SUBJECT = canonicalTestSubject("migration-owner")>
-        "enduser.pseudo.id": "cail-v1-f4729c5b5359d13d2cd445c3151109d3",
         "cail.product.id": "site-studio",
       });
+      // The ownership subject must never appear in telemetry, and it must not
+      // be relabelled into a pseudo id either: the log principal comes only
+      // from a verified operational subject (log_sub), which this migration
+      // path does not carry, so the event is anonymous.
+      expect(completed).not.toHaveProperty("enduser.pseudo.id");
+      expect(JSON.stringify(completed)).not.toContain(SUBJECT.slice("cail-".length));
       expect(JSON.stringify(completed)).not.toContain(ANON);
       expect(JSON.stringify(completed)).not.toContain("anon-cookie-telemetry");
     } finally {
@@ -501,8 +505,6 @@ describe("authMiddleware anonymous-data migration", () => {
         expect.objectContaining({
           "event.name": "site_studio.diagnostic.warning",
           "error.type": "account_import_expired",
-          // cail-v1-<hex of SUBJECT = canonicalTestSubject("migration-owner")>
-          "enduser.pseudo.id": "cail-v1-f4729c5b5359d13d2cd445c3151109d3",
         })
       );
     } finally {

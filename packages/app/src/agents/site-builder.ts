@@ -44,7 +44,7 @@ import {
   emitDiagnostic,
   errorCodeFrom,
   mintCorrelation,
-  principalForOwnerId,
+  principalForOperationalSubject,
   withCorrelationFetch,
 } from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
@@ -55,6 +55,8 @@ export { describeModelStreamError } from "../lib/model-stream-error";
 type Scope = {
   userId: string;
   projectId: string;
+  /** Verified `log_sub`; logging only, never derived from userId. */
+  operationalSubject?: string;
 };
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
@@ -1378,7 +1380,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const buildAction = new SiteStudioActionLifecycle({
       action: "build",
-      principal: principalForOwnerId(scope.userId),
+      principal: principalForOperationalSubject(scope.operationalSubject),
       correlation,
     }, createSiteStudioBoundaryLogger(this.env), Date.now, {
       admit: (admission) => this.recordActionAdmission(admission),

@@ -39,6 +39,10 @@ function userFromIdentity(identity: CailIdentity, createdAt: string): User {
     cail: true,
     email: identity.email,
     name: identity.name,
+    // Separately keyed log subject; never derived from `id`.
+    ...(identity.operationalSubject === undefined
+      ? {}
+      : { operationalSubject: identity.operationalSubject }),
   };
 }
 
