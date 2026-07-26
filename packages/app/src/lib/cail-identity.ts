@@ -47,6 +47,11 @@ export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
  * re-import keys; a configuration failure yields `null` here and an "invalid"
  * resolution, never a silently anonymous request.
  */
+// Bounded: each entry strongly retains imported CryptoKeys for a whole JWKS,
+// and an isolate can survive repeated key rotations, so an unbounded map would
+// accumulate every historical key set. Two entries cover the rotation overlap
+// (old and new) that the identity contract's kid-overlap procedure requires.
+const VERIFIER_CACHE_MAX = 2;
 const verifierCache = new Map<string, IdentityVerifierConfig>();
 
 async function loadVerifier(
@@ -67,6 +72,10 @@ async function loadVerifier(
     supportedIssuers: [issuer],
   });
   if (!loaded.ok) return null;
+  if (verifierCache.size >= VERIFIER_CACHE_MAX) {
+    const oldest = verifierCache.keys().next().value;
+    if (oldest !== undefined) verifierCache.delete(oldest);
+  }
   verifierCache.set(key, loaded.config);
   return loaded.config;
 }
