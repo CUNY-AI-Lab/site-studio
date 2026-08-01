@@ -7,9 +7,11 @@ live routes, bindings, secrets, lifecycle rules, backups, or deployed versions.
 
 Protected requests accept identity only from a verified
 `X-CAIL-Identity-JWT`: RS256, required `kid`, configured public JWKS, exact
-single deployment issuer, and scalar audience `cail:site-studio`. Missing or
-malformed `CAIL_IDENTITY_JWKS` or `CAIL_IDENTITY_ISSUER` fails closed;
-production and staging issuers are never combined. An invalid presented token
+single deployment issuer, and scalar audience `cail:site-studio`. The
+source-owned `CAIL_IDENTITY_PROFILE` maps production and staging to their exact
+CAIL issuer constants; the issuer binding must equal that mapping and cannot
+authorize a new trust root. Missing or malformed JWKS, profile, or issuer fails
+closed; production and staging issuers are never combined. An invalid presented token
 is terminal. With `CAIL_REQUIRE_IDENTITY=true`, an absent token is also rejected.
 
 The durable owner key is the JWT subject preserved byte-for-byte. Email and

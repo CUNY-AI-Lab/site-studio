@@ -34,9 +34,12 @@ export interface Env {
   // Static public JWKS used to verify RS256 X-CAIL-Identity-JWT tokens for the
   // cail:site-studio audience. Stored as a JSON Wrangler secret.
   CAIL_IDENTITY_JWKS?: string;
-  // Exactly one case-sensitive CAIL issuer for this deployment. Production
-  // and staging must never be combined into one trust namespace.
+  // Exact compatibility assertion for the source-owned deployment profile.
+  // It cannot select a new trust root.
   CAIL_IDENTITY_ISSUER?: string;
+  // Source-owned issuer profile. The configured issuer must exactly match the
+  // canonical issuer assigned to this profile.
+  CAIL_IDENTITY_PROFILE?: string;
   // "true" makes protected routes reject anonymous requests (401). Flip in
   // lockstep with the gateway's CAIL_SSO_MODE=enforce.
   CAIL_REQUIRE_IDENTITY?: string;

@@ -83,8 +83,9 @@
     // decision, and enforced identity fails with 500 if either value is absent
     // or invalid rather than silently allowing an unbounded legacy import.
     "CAIL_REQUIRE_IDENTITY": "false",
-    // Identity 3.0 accepts exactly one issuer per deployment. Staging must
-    // override this value rather than widening production's trust boundary.
+    // The source-owned profile selects exactly one issuer. Staging must
+    // override both values rather than widening production's trust boundary.
+    "CAIL_IDENTITY_PROFILE": "production",
     "CAIL_IDENTITY_ISSUER": "https://tools.ailab.gc.cuny.edu/cail-sso",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted /sites/ content, so runtime

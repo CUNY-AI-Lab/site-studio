@@ -372,7 +372,8 @@ function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
  *
  * Identity contract (docs/INTEGRATION.md §3):
  *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
- *      `CAIL_IDENTITY_JWKS` and one `CAIL_IDENTITY_ISSUER` for audience
+ *      `CAIL_IDENTITY_JWKS`; `CAIL_IDENTITY_PROFILE` selects a source-owned
+ *      issuer and `CAIL_IDENTITY_ISSUER` must match it exactly for audience
  *      `cail:site-studio`. The durable owner
  *      key becomes the CAIL subject; the KV session is bound to that subject so
  *      the browser cookie remains a convenience affordance but never the source

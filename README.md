@@ -94,15 +94,18 @@ docs/INTEGRATION.md):
 
 ```bash
 CAIL_IDENTITY_JWKS={"keys":[...]}
+CAIL_IDENTITY_PROFILE=production
 CAIL_IDENTITY_ISSUER=https://tools.ailab.gc.cuny.edu/cail-sso
 ```
 
 Site Studio accepts identity only in `X-CAIL-Identity-JWT` and verifies it as
 RS256 against `CAIL_IDENTITY_JWKS`, with the scalar audience
-`cail:site-studio` and exactly one case-sensitive `CAIL_IDENTITY_ISSUER` for
-the deployment. Production and staging issuers cannot share a verifier
-configuration. A presented token rejects when either setting is missing or
-malformed or verification fails. The signed `sub` is preserved byte-for-byte
+`cail:site-studio` and exactly one source-owned identity profile. `production`
+requires the canonical production issuer; `staging` requires the canonical
+staging issuer. `CAIL_IDENTITY_ISSUER` is retained as an exact compatibility
+assertion and cannot select a new trust root. Production and staging issuers
+cannot share a verifier configuration. A presented token rejects when any
+setting is missing or mismatched or verification fails. The signed `sub` is preserved byte-for-byte
 as the durable owner key. `CAIL_REQUIRE_IDENTITY=true`
 rejects requests that do not carry a verified identity.
 
@@ -132,7 +135,8 @@ The Worker also reads these vars from [`packages/app/wrangler.jsonc`](/Users/ste
 - `CAIL_IMAGE_MODEL`
 - `CAIL_IMAGE_CLASSIFIER`
 - `CAIL_REQUIRE_IDENTITY`
-- `CAIL_IDENTITY_ISSUER` (exactly one deployment issuer)
+- `CAIL_IDENTITY_PROFILE` (`production` or `staging`; selects a source-owned issuer)
+- `CAIL_IDENTITY_ISSUER` (deployment assertion matching the selected profile)
 - `CAIL_SSO_SWITCHED_AT`
 - `CAIL_ACCOUNT_IMPORT_UNTIL`
 - `CSRF_COOKIE_PATH` (must be `/site-studio` on the shared production origin)
