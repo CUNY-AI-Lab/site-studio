@@ -17,9 +17,9 @@ describe("quota route", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const app = new Hono<{ Bindings: Env; Variables: { cailIdentityJwt: string } }>();
+    const app = new Hono<{ Bindings: Env; Variables: { cailGatewayJwt: string } }>();
     app.use("*", async (c, next) => {
-      c.set("cailIdentityJwt", "verified-jwt");
+      c.set("cailGatewayJwt", "verified-jwt");
       await next();
     });
     app.route("/", createQuotaRouter());
@@ -40,9 +40,9 @@ describe("quota route", () => {
       throw new TypeError("private transport detail");
     }));
 
-    const app = new Hono<{ Bindings: Env; Variables: { cailIdentityJwt: string } }>();
+    const app = new Hono<{ Bindings: Env; Variables: { cailGatewayJwt: string } }>();
     app.use("*", async (c, next) => {
-      c.set("cailIdentityJwt", "verified-jwt");
+      c.set("cailGatewayJwt", "verified-jwt");
       await next();
     });
     app.route("/", createQuotaRouter());

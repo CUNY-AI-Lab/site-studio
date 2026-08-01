@@ -3,7 +3,7 @@ import { Hono, type Context } from "hono";
 import type { Env, SiteBuilderAgentProps } from "../types";
 import { CSRF_ERROR_BODY, getCsrfToken, verifyWsUpgrade } from "../lib/csrf";
 import { jsonError } from "../lib/http";
-import { getCailIdentityJwt, getUser } from "../lib/session";
+import { getCailGatewayJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
 import { R2ProjectStorage } from "../storage/r2";
 import { getCorrelation, type LoggingVariables } from "../lib/logging";
@@ -60,7 +60,7 @@ export function createAgentRouter() {
     const props: SiteBuilderAgentProps = {
       userId: user.id,
       projectId,
-      identityJwt: getCailIdentityJwt(c) ?? undefined
+      identityJwt: getCailGatewayJwt(c) ?? undefined
     };
 
     return getAgentByName(

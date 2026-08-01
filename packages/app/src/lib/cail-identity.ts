@@ -18,6 +18,9 @@
  */
 
 import {
+  CAIL_GATEWAY_AUDIENCE,
+  readIdentityKeyring,
+  verifyKeyringGatewayJwt,
   type CailIdentity,
   type IdentityVerifierConfig,
   loadIdentityVerifierConfig,
@@ -55,20 +58,21 @@ const VERIFIER_CACHE_MAX = 2;
 const verifierCache = new Map<string, IdentityVerifierConfig>();
 
 async function loadVerifier(
-  env: IdentityVerificationEnv
+  env: IdentityVerificationEnv,
+  audience: string = CAIL_IDENTITY_AUDIENCE
 ): Promise<IdentityVerifierConfig | null> {
   const jwks = env.CAIL_IDENTITY_JWKS;
   const issuer = env.CAIL_IDENTITY_ISSUER;
   if (!jwks || typeof issuer !== "string" || issuer.length === 0 || issuer.trim() !== issuer) {
     return null;
   }
-  const key = `${issuer}\u0000${jwks}`;
+  const key = `${audience}\u0000${issuer}\u0000${jwks}`;
   const cached = verifierCache.get(key);
   if (cached) return cached;
   const loaded = await loadIdentityVerifierConfig({
     jwks,
     issuer,
-    expectedAudience: CAIL_IDENTITY_AUDIENCE,
+    expectedAudience: audience,
     supportedIssuers: [issuer],
   });
   if (!loaded.ok) return null;
@@ -146,4 +150,25 @@ export function cailAuthRequiredResponse(): Response {
       },
     }
   );
+}
+
+
+/**
+ * Resolve the keyring gateway leg (identity-keyring-v1) for a request whose
+ * app leg already verified: full verification against the cail:gateway
+ * audience plus subject agreement. Returns the token to forward, null when
+ * absent, or "invalid" (callers fail closed).
+ */
+export async function resolveKeyringGatewayJwt(
+  request: Request,
+  env: IdentityVerificationEnv,
+  verifiedSubject: string,
+): Promise<string | null | "invalid"> {
+  const keyring = readIdentityKeyring(request.headers);
+  if (keyring === null) return "invalid";
+  if (keyring.gatewayJwt === undefined) return null;
+  const loaded = await loadVerifier(env, CAIL_GATEWAY_AUDIENCE);
+  if (loaded === null) return "invalid";
+  const identity = await verifyKeyringGatewayJwt(keyring, loaded, verifiedSubject);
+  return identity === null ? "invalid" : keyring.gatewayJwt;
 }

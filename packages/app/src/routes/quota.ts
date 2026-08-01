@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { createCailClient, CailError } from "@cuny-ai-lab/cail-client";
 import type { Env } from "../types";
-import { getCailIdentityJwt } from "../lib/session";
+import { getCailGatewayJwt } from "../lib/session";
 import { CAIL_APP_SLUG } from "../lib/model";
 import { jsonError } from "../lib/http";
 
@@ -10,7 +10,7 @@ export function createQuotaRouter() {
 
   app.get("/api/quota", async (c) => {
     c.header("Cache-Control", "private, no-store");
-    const jwt = getCailIdentityJwt(c);
+    const jwt = getCailGatewayJwt(c);
     if (!jwt) jsonError("authentication_required", 401);
     if (!c.env.CAIL_API_BASE) jsonError("CAIL_API_BASE is not configured", 503);
 
