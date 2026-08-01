@@ -6,6 +6,7 @@ import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 import {
   cailAuthRequiredResponse,
   cailIdentityRequired,
+  resolveKeyringGatewayJwt,
   resolveRequestIdentity,
   type CailIdentity,
 } from "./cail-identity";
@@ -25,6 +26,7 @@ type SessionVariables = {
    * Downstream handlers forward this exact token to the CAIL model proxy.
    */
   cailIdentityJwt?: string;
+  cailGatewayJwt?: string;
 };
 
 /** KV session key for a verified CAIL subject. */
@@ -418,6 +420,21 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     const { identity, token } = identityResolution;
     c.set("cailIdentityJwt", token);
 
+    // Keyring gateway leg (identity-keyring-v1): verified against the
+    // gateway audience and bound to this request's subject before it may be
+    // forwarded. A present-but-invalid leg fails the request closed.
+    const gatewayLeg = await resolveKeyringGatewayJwt(
+      c.req.raw,
+      c.env,
+      identity.subject
+    );
+    if (gatewayLeg === "invalid") {
+      return cailAuthRequiredResponse();
+    }
+    if (gatewayLeg !== null) {
+      c.set("cailGatewayJwt", gatewayLeg);
+    }
+
     const subject = identity.subject;
 
     if (!importWindow) {
@@ -583,6 +600,11 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
 /** The verified CAIL identity JWT for this request, if any (already verified). */
 export function getCailIdentityJwt(c: { get: (key: "cailIdentityJwt") => string | undefined }): string | null {
   return c.get("cailIdentityJwt") ?? null;
+}
+
+/** The verified keyring gateway leg for this request, if delivered. */
+export function getCailGatewayJwt(c: { get: (key: "cailGatewayJwt") => string | undefined }): string | null {
+  return c.get("cailGatewayJwt") ?? null;
 }
 
 export function getUser(c: { get: (key: "user") => User }): User {

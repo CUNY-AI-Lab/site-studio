@@ -50,7 +50,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
   let kv: ReturnType<typeof createMockKV>;
   let bucket: R2Bucket;
   let csrf: CsrfSession;
-  let app: Hono<{ Bindings: Env; Variables: { user: { id: string }; cailIdentityJwt?: string } }>;
+  let app: Hono<{ Bindings: Env; Variables: { user: { id: string }; cailGatewayJwt?: string } }>;
 
   const env = () =>
     ({
@@ -65,10 +65,10 @@ describe("agent route WebSocket gate (rule 4)", () => {
     bucket = createMockBucket();
     csrf = await mintCsrfSession(bucket, USER_ID);
     vi.mocked(getAgentByName).mockClear();
-    app = new Hono<{ Bindings: Env; Variables: { user: { id: string }; cailIdentityJwt?: string } }>();
+    app = new Hono<{ Bindings: Env; Variables: { user: { id: string }; cailGatewayJwt?: string } }>();
     app.use("*", async (c, next) => {
       c.set("user", { id: USER_ID });
-      c.set("cailIdentityJwt", "verified-token");
+      c.set("cailGatewayJwt", "verified-token");
       await next();
     });
     app.route("/", createAgentRouter());
