@@ -106,9 +106,12 @@ socket, and requires a retry on the newly authenticated connection.
 
 `GET /api/quota` reads the gateway's typed `GET /quota` snapshot with the
 verified JWT, removes the subject, and returns a private no-store response. The
-chat panel displays the remaining percentage. Gateway `quota_exceeded` messages
-remain user-visible and are not retried. Gateway accounting is authoritative;
-Site Studio logs do not duplicate spend facts.
+chat panel displays the remaining percentage. The quota probe is optional: an
+`authentication_required` response hides the meter without redirecting, so an
+anonymous or local editor remains usable. Other protected API calls retain the
+canonical 401 login redirect. Gateway `quota_exceeded` messages remain
+user-visible and are not retried. Gateway accounting is authoritative; Site
+Studio logs do not duplicate spend facts.
 
 ## Upload admission
 

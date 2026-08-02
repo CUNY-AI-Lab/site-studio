@@ -117,7 +117,10 @@
 		// but it must be observable — otherwise a broken quota route is
 		// indistinguishable from "no quota configured".
 		try {
-			const response = await apiResponseFetch(resolvePath('/api/quota'), { credentials: 'include' });
+			const response = await apiResponseFetch(resolvePath('/api/quota'), {
+				credentials: 'include',
+				redirectOnAuthenticationRequired: false
+			});
 			if (!response.ok) {
 				console.warn(`Quota refresh failed (HTTP ${response.status}); hiding the quota pill`);
 				quota = null;

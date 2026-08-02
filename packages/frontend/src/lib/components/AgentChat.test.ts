@@ -348,6 +348,43 @@ describe('AgentChat', () => {
 		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
 	});
 
+	it('keeps the local editor usable when the optional quota probe requires authentication', async () => {
+		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
+			(symbol) => symbol.toString() === 'Symbol(impl)'
+		);
+		expect(locationImplSymbol).toBeDefined();
+		const locationImpl = (window.location as any)[locationImplSymbol as symbol] as {
+			assign: (url: string) => void;
+		};
+		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/api/quota')) {
+				return new Response(
+					JSON.stringify({ error: 'authentication_required', login_url: '/login' }),
+					{ status: 401, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		try {
+			mount();
+			await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+			expect(assignSpy).not.toHaveBeenCalled();
+			expect(screen.queryByRole('status', { name: /AI budget left/i })).not.toBeInTheDocument();
+		} finally {
+			assignSpy.mockRestore();
+			warnSpy.mockRestore();
+		}
+	});
+
 	it('describes a sliding quota with no reset time without inventing an epoch date', async () => {
 		const quotaResponse = {
 			object: 'quota',
