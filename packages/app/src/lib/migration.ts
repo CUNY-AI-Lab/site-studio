@@ -66,7 +66,13 @@ export interface MigrationPointer {
   slugs: Record<string, string>;
 }
 
-/** Ports Durable Object chat history between agent instances (best-effort). */
+/**
+ * Ports Durable Object chat history between agent instances.
+ *
+ * Account import treats a failed port as fatal for the sweep: the caller must
+ * retain the anonymous namespace so the next authenticated request can retry
+ * instead of retiring the only copy of the conversation.
+ */
 export interface ChatHistoryPorter {
   port(
     fromOwner: string,
@@ -412,7 +418,9 @@ async function copyAnonymousNamespace(options: {
       }
     }
 
-    // Agent chat history (Durable Object SQLite) — best-effort, never fatal.
+    // Agent chat history (Durable Object SQLite). A failed port must abort the
+    // sweep before the forwarding pointer/source deletion so the anonymous DO
+    // remains the recoverable source for a later retry.
     // Only the sweep that first sees a project ports it: chat history lives
     // in the DO, not in R2, so a mid-run file write never needs a re-port
     // (and the destination agent's import never overwrites anyway).
@@ -422,6 +430,9 @@ async function copyAnonymousNamespace(options: {
       } catch (error) {
         emitDiagnostic("warning", "migration_chat_history_port_failed", {
         }, logging);
+        throw new Error("Chat history migration failed; anonymous data retained for retry.", {
+          cause: error,
+        });
       }
     }
   }
@@ -446,7 +457,7 @@ export async function migrateAnonymousData(options: {
   subject: string;
   /** The anonymous KV session id (cookie value), deleted on completion. */
   anonSessionId?: string;
-  /** Best-effort Durable Object chat-history porter; failures never abort. */
+  /** Durable Object chat-history porter; failures retain the source for retry. */
   porter?: ChatHistoryPorter;
   logging?: SiteStudioLoggingContext;
   now?: () => string;

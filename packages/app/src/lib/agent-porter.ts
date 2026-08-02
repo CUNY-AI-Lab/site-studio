@@ -4,9 +4,11 @@
  * SiteBuilderAgent chat history lives in per-instance Durable Object SQLite,
  * keyed by the instance name `${ownerId}:${projectId}`. Re-homing a project
  * to the CAIL subject therefore also means moving its conversation to the
- * `${subject}:${newProjectId}` instance. This is best-effort by design: the
- * migration of files and snapshots must never fail because a conversation
- * could not be copied (e.g. RPC size limits on very large histories).
+ * `${subject}:${newProjectId}` instance. Account import fails closed when a
+ * conversation cannot be copied: the migration caller retains the anonymous
+ * namespace so a later request can retry instead of retiring the only
+ * recoverable copy. Standalone rename and delete helpers remain best-effort
+ * because they are outside account import.
  */
 
 import type { Env } from "../types";
@@ -59,8 +61,8 @@ export function createAgentHistoryPorter(
       // Imported lazily: the `agents` package depends on `cloudflare:workers`
       // scheme modules that only resolve inside workerd, so a static import
       // here would break every module that (transitively) imports the session
-      // middleware under vitest/Node. Porting is best-effort anyway — the
-      // caller catches failures.
+      // middleware under vitest/Node. The migration caller owns failure
+      // handling so it can retain the anonymous namespace for retry.
       const { getAgentByName } = await import("agents");
 
       const source = await getAgentByName(

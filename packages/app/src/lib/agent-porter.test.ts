@@ -98,4 +98,37 @@ describe("createAgentHistoryPorter", () => {
     // Only the source instance was contacted; no destination DO was created.
     expect(getAgentByName).toHaveBeenCalledTimes(1);
   });
+
+  it("propagates source export failures so account import can retry", async () => {
+    const error = new Error("anonymous chat export unavailable");
+    getAgentByName.mockResolvedValueOnce({
+      exportChatHistoryForMigration: vi.fn(async () => {
+        throw error;
+      })
+    });
+
+    const porter = createAgentHistoryPorter(env);
+    await expect(
+      porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
+    ).rejects.toBe(error);
+    expect(getAgentByName).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates destination import failures so account import retains the source", async () => {
+    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const error = new Error("subject chat import unavailable");
+    getAgentByName
+      .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
+      .mockResolvedValueOnce({
+        importChatHistoryForMigration: vi.fn(async () => {
+          throw error;
+        })
+      });
+
+    const porter = createAgentHistoryPorter(env);
+    await expect(
+      porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
+    ).rejects.toBe(error);
+    expect(getAgentByName).toHaveBeenCalledTimes(2);
+  });
 });

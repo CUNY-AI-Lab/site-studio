@@ -459,17 +459,60 @@ describe("migrateAnonymousData", () => {
     expect(resumedPointer.slugs).toEqual(completePointer.slugs);
   });
 
-  it("porter failures are non-fatal: files still migrate", async () => {
+  it("fails closed when chat history export is unavailable", async () => {
     seedAnonProject(bucket, "portfolio");
+    kv.store.set("session:anon-session-id", JSON.stringify({ id: ANON }));
     const porter: ChatHistoryPorter = {
       port: async () => {
-        throw new Error("DO unavailable");
+        throw new Error("anonymous chat export unavailable");
       }
     };
 
-    const result = await run({ porter });
-    expect(result.status).toBe("migrated");
+    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
+
+    // File copies may precede the chat call, but the source remains available
+    // because no forwarding pointer or completion claim was written.
     expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+    expect(kv.store.has("session:anon-session-id")).toBe(true);
+    expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
+  });
+
+  it("fails closed on chat import failure and retries the pending claim", async () => {
+    seedAnonProject(bucket, "portfolio");
+    let attempts = 0;
+    const porter: ChatHistoryPorter = {
+      port: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("subject chat import unavailable");
+        }
+      }
+    };
+
+    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+
+    const retry = await run({ porter });
+    expect(retry.status).toBe("migrated");
+    expect(attempts).toBe(2);
+    expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "complete",
+    });
   });
 });
 
