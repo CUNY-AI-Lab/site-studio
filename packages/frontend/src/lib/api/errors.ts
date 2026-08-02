@@ -73,9 +73,20 @@ export interface ApiResponseFetchOptions extends RequestInit {
 function redirectToLogin(loginUrl: string): void {
 	if (typeof window === 'undefined') return;
 	const rt = window.location.pathname + window.location.search;
-	// Ignore any absolute login_url the backend might send; always same-origin.
-	const path = loginUrl && loginUrl.startsWith('/') ? loginUrl : '/login';
-	window.location.assign(`${path}?rt=${encodeURIComponent(rt)}`);
+	let target = new URL('/login', window.location.origin);
+	try {
+		const candidate = new URL(loginUrl, window.location.origin);
+		// A leading slash is part of the CAIL contract. URL parsing additionally
+		// rejects protocol-relative and backslash-normalized cross-origin forms.
+		if (loginUrl.startsWith('/') && candidate.origin === window.location.origin) {
+			target = candidate;
+		}
+	} catch {
+		// Malformed or non-URL values fall back to the fixed same-origin login path.
+	}
+	target.hash = '';
+	target.searchParams.set('rt', rt);
+	window.location.assign(`${target.pathname}${target.search}`);
 }
 
 function isAuthenticationRequiredEnvelope(status: number, errorData: any): boolean {
