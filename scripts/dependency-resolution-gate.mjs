@@ -525,7 +525,26 @@ function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name, {
     if (resolvedPath) break;
   }
   const resolvedPackage = resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null;
-  const logicalPackage = packageDirectoryFromNodeModules(rootDir, packageDirectory, name);
+  // Walk up from the logical path first, then from the real path. Node's
+  // runtime resolver ascends from the REAL location (preserveSymlinks=false),
+  // so for a package linked into Bun's isolated store the dependency siblings
+  // live beside the store entry (.bun/<pkg@ver>/node_modules/<dep>), not on a
+  // hoisted root path. The createRequire probe above misses exactly the
+  // ESM-only packages whose exports map blocks require.resolve, so the walk
+  // must cover the real location too. Boundary and quarantine checks below
+  // still apply to whatever this returns.
+  const rootRealPathForWalk = realpathSafe(rootDir);
+  // The real-path walk must use the REAL root for its stop boundary: on
+  // macOS the logical root can sit on a symlinked prefix (/var vs
+  // /private/var), and a walk keyed to the logical stop from a real start
+  // would never terminate at the repository boundary.
+  const logicalPackage = packageDirectoryFromNodeModules(rootDir, packageDirectory, name)
+    ?? (realPackageDirectory
+      && realPackageDirectory !== packageDirectory
+      && rootRealPathForWalk
+      && pathInside(rootRealPathForWalk, realPackageDirectory)
+      ? packageDirectoryFromNodeModules(rootRealPathForWalk, realPackageDirectory, name)
+      : null);
   if (!logicalPackage && !resolvedPackage) {
     if (allowBunStoreFallback) {
       let packageManifest;
@@ -814,7 +833,11 @@ function packageDirectoryFromNodeModules(rootDir, baseDirectory, name) {
         return null;
       }
     }
-    directory = path.dirname(directory);
+    const parent = path.dirname(directory);
+    // Filesystem root: a walk whose start is not under `stop` (symlinked
+    // prefixes, external paths) must terminate rather than spin at `/`.
+    if (parent === directory) break;
+    directory = parent;
   }
   return null;
 }
