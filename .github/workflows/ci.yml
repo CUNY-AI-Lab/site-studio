@@ -25,6 +25,8 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.CAIL_PACKAGES_TOKEN }}
       - run: bun run verify:repository
+      - run: bun run check:dependencies
+      - run: bun run test:dependencies
       - run: bun run check
       - name: Validate app Worker bundle and migrations
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
