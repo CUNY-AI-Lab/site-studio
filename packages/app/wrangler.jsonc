@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "site-studio-app",
-  "account_id": "0c7ef775c8a1aa3f6b5bc0d2ae56167b",
+  "account_id": "452c33847cf5cb1e46f391fca32fd1b5",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
@@ -120,8 +120,11 @@
   "kv_namespaces": [
     {
       "binding": "SESSION_KV",
-      "id": "76d51fbed2074ae6a91c21c70f810a25",
-      "preview_id": "76d51fbed2074ae6a91c21c70f810a25"
+      // SITE_STUDIO_SESSION namespace in the CUNY AI Lab account. Session
+      // records are short-lived login state; the legacy personal-account
+      // namespace (76d51fbed2074ae6a91c21c70f810a25) is retained, untouched.
+      "id": "9bf40a0d317147079ce67088ed9f3205",
+      "preview_id": "9bf40a0d317147079ce67088ed9f3205"
     }
   ]
 }

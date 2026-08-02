@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "site-studio-publisher",
-  "account_id": "0c7ef775c8a1aa3f6b5bc0d2ae56167b",
+  "account_id": "452c33847cf5cb1e46f391fca32fd1b5",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-25",
   "compatibility_flags": ["nodejs_compat"],
@@ -17,19 +17,11 @@
     }
   },
   "workers_dev": true,
-  "routes": [
-    {
-      "pattern": "tools.cuny.qzz.io/sites/*",
-      "zone_name": "cuny.qzz.io"
-    },
-    // Canonical published URLs target /u/* on this host. The main app also
-    // serves /u/* at tools.ailab.gc.cuny.edu, but that app's custom-domain
-    // routing is dashboard-managed and cannot be verified from its wrangler.jsonc.
-    {
-      "pattern": "tools.cuny.qzz.io/u/*",
-      "zone_name": "cuny.qzz.io"
-    }
-  ],
+  // No zone routes: the public hostname's zone (cuny.qzz.io) lives in the
+  // legacy personal Cloudflare account, and Workers routes cannot cross
+  // accounts. The legacy personal site-studio-publisher keeps serving
+  // tools.cuny.qzz.io/sites/* and /u/* until the zone (or its routing) is
+  // migrated — that cutover is a separate, explicitly operator-approved step.
   "vars": {
     "CAIL_LOG_ENV": "production",
     "PUBLIC_DOMAIN": "https://tools.cuny.qzz.io"
