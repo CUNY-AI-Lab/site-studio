@@ -385,6 +385,50 @@ async function makePeerDependencyFixture({ workspace = false, optional = false, 
   return rootDir;
 }
 
+async function makeDuplicateDependencyFixture({ duplicateSection = 'optionalDependencies', duplicateSpec = '^1.0.0', optionalPeer = false, locked = true } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-duplicate-dependency-'));
+  const dependencyName = 'duplicate-tool';
+  const requiredSpec = '1.0.0';
+  const rootManifest = {
+    name: 'duplicate-dependency-fixture',
+    private: true,
+    dependencies: { [dependencyName]: requiredSpec },
+  };
+  rootManifest[duplicateSection] = { [dependencyName]: duplicateSpec };
+  if (duplicateSection === 'peerDependencies' && optionalPeer) {
+    rootManifest.peerDependenciesMeta = { [dependencyName]: { optional: true } };
+  }
+  await writeJson(path.join(rootDir, 'package.json'), rootManifest);
+
+  const importer = { name: rootManifest.name };
+  const packages = {};
+  if (locked) {
+    importer.dependencies = { [dependencyName]: requiredSpec };
+    packages[dependencyName] = [`${dependencyName}@${requiredSpec}`, '', {}, 'sha512-fixture'];
+    await writeInstalledPackage(rootDir, `node_modules/${dependencyName}`, dependencyName, requiredSpec);
+  }
+  await writeJson(path.join(rootDir, 'bun.lock'), { lockfileVersion: 1, workspaces: { '': importer }, packages });
+  return rootDir;
+}
+
+async function makeStrayOptionalMetadataFixture() {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-stray-peer-metadata-'));
+  const dependencyName = 'stray-tool';
+  const manifest = {
+    name: 'stray-peer-metadata-fixture',
+    private: true,
+    dependencies: { [dependencyName]: '1.0.0' },
+    peerDependenciesMeta: { [dependencyName]: { optional: true } },
+  };
+  await writeJson(path.join(rootDir, 'package.json'), manifest);
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces: { '': { name: manifest.name } },
+    packages: {},
+  });
+  return rootDir;
+}
+
 async function makeInvalidDependencyNameFixture() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-invalid-dependency-name-'));
   const dependencies = {
@@ -1178,6 +1222,51 @@ test('rejects a missing required peer dependency', async () => {
     const result = verifyDependencyResolution({ rootDir });
     assert.equal(result.ok, false);
     assert.match(result.issues.join('\n'), /required transitive dependency fast-uri of holder/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('does not let an optional peer duplicate hide a required dependency', async () => {
+  const rootDir = await makeDuplicateDependencyFixture({ duplicateSection: 'peerDependencies', optionalPeer: true, locked: false });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /declares duplicate-tool, but its bun\.lock importer does not/);
+    assert.match(result.issues.join('\n'), /duplicate-tool has unsupported lock resolution/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('does not let stray peer metadata make a required dependency optional', async () => {
+  const rootDir = await makeStrayOptionalMetadataFixture();
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /declares stray-tool, but its bun\.lock importer does not/);
+    assert.match(result.issues.join('\n'), /stray-tool has unsupported lock resolution/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('prefers a required declaration over a compatible optional duplicate', async () => {
+  const rootDir = await makeDuplicateDependencyFixture({ duplicateSection: 'optionalDependencies', duplicateSpec: '^1.0.0' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects incompatible required and optional duplicate specs explicitly', async () => {
+  const rootDir = await makeDuplicateDependencyFixture({ duplicateSection: 'peerDependencies', duplicateSpec: '2.0.0', optionalPeer: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /incompatible dependency specs for duplicate-tool/);
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

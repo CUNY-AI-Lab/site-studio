@@ -111,23 +111,64 @@ function isValidPackageName(name) {
   return !scoped ? encodeURIComponent(name) === name : true;
 }
 
-function dependencyMap(manifest, invalidNames = new Set()) {
+function isOptionalPeerDependency(manifest, name, { includeDevDependencies = true } = {}) {
+  const peerDependencies = manifest.peerDependencies;
+  if (!peerDependencies || typeof peerDependencies !== 'object' || Array.isArray(peerDependencies)) return false;
+  if (!Object.prototype.hasOwnProperty.call(peerDependencies, name)) return false;
+  if (Object.prototype.hasOwnProperty.call(manifest.dependencies ?? {}, name)) return false;
+  if (includeDevDependencies && Object.prototype.hasOwnProperty.call(manifest.devDependencies ?? {}, name)) return false;
+  const metadata = manifest.peerDependenciesMeta?.[name];
+  return metadata && typeof metadata === 'object' && metadata.optional === true;
+}
+
+function dependencySpecsConflict(left, right) {
+  if (left === right) return false;
+  if (isVersionForm(left) && isVersionForm(right)) {
+    try {
+      return !semver.intersects(left, right);
+    } catch {
+      return true;
+    }
+  }
+  return true;
+}
+
+function dependencyMap(manifest, invalidNames = new Set(), issues = [], label = 'manifest') {
   const result = new Map();
+  const declarations = new Map();
+  const reportedConflicts = new Set();
+
+  function add(section, name, spec, optional) {
+    const declaration = { section, spec, optional };
+    const existing = declarations.get(name) ?? [];
+    for (const previous of existing) {
+      if (!dependencySpecsConflict(previous.spec, spec)) continue;
+      const conflictKey = [name, previous.section, previous.spec, section, spec].join('\u0000');
+      if (reportedConflicts.has(conflictKey)) continue;
+      reportedConflicts.add(conflictKey);
+      issues.push(
+        `${label} declares incompatible dependency specs for ${name}: `
+          + `${previous.section}@${formatSpec(previous.spec)} vs ${section}@${formatSpec(spec)}`,
+      );
+    }
+    declarations.set(name, [...existing, declaration]);
+
+    const selected = result.get(name);
+    if (!selected || (selected.optional && !optional)) result.set(name, declaration);
+  }
+
   for (const section of DEPENDENCY_SECTIONS) {
     for (const [name, spec] of Object.entries(manifest[section] ?? {})) {
       if (!isValidPackageName(name)) {
         invalidNames.add(name);
         continue;
       }
-      result.set(name, spec);
+      const optional = section === 'optionalDependencies'
+        || (section === 'peerDependencies' && isOptionalPeerDependency(manifest, name));
+      add(section, name, spec, optional);
     }
   }
-  return result;
-}
-
-function isOptionalPeerDependency(manifest, name) {
-  const metadata = manifest.peerDependenciesMeta?.[name];
-  return metadata && typeof metadata === 'object' && metadata.optional === true;
+  return new Map([...result].map(([name, declaration]) => [name, declaration.spec]));
 }
 
 function hasGlob(segment) {
@@ -434,7 +475,7 @@ function installedDependencyMap(manifest) {
   for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) add(name, spec, false);
   for (const [name, spec] of Object.entries(manifest.optionalDependencies ?? {})) add(name, spec, true);
   for (const [name, spec] of Object.entries(manifest.peerDependencies ?? {})) {
-    add(name, spec, isOptionalPeerDependency(manifest, name));
+    add(name, spec, isOptionalPeerDependency(manifest, name, { includeDevDependencies: false }));
   }
   return result;
 }
@@ -928,7 +969,12 @@ function checkResolvedDependency(rootDir, workspace, dependencyName, spec, recor
 
 function compareManifestToLock(workspace, lock, issues) {
   const invalidManifestNames = new Set();
-  const manifestDependencies = dependencyMap(workspace.manifest, invalidManifestNames);
+  const manifestDependencies = dependencyMap(
+    workspace.manifest,
+    invalidManifestNames,
+    issues,
+    `${workspace.key || '.'} manifest`,
+  );
   invalidManifestNames.forEach(() => issues.push(`${workspace.key || '.'} declares invalid dependency name`));
   const importer = lockWorkspace(lock, workspace.key);
   if (!importer) {
@@ -944,7 +990,12 @@ function compareManifestToLock(workspace, lock, issues) {
   }
 
   const invalidLockedNames = new Set();
-  const lockedDependencies = dependencyMap(importer, invalidLockedNames);
+  const lockedDependencies = dependencyMap(
+    importer,
+    invalidLockedNames,
+    issues,
+    `${workspace.key || '.'} bun.lock importer`,
+  );
   invalidLockedNames.forEach(() => issues.push(`${workspace.key || '.'} bun.lock importer has invalid dependency name`));
   for (const [name, spec] of manifestDependencies) {
     if (!lockedDependencies.has(name)) {
