@@ -526,19 +526,22 @@ export async function migrateAnonymousData(options: {
   const knownProjects = stringMap(existingPointer?.projects);
   const knownSlugs = stringMap(existingPointer?.slugs);
 
-  // ---- Handle re-homing (before inventory so published URLs can use it) ----
-  // Move the anon user's public handle to the subject: the handle record is
-  // always re-pointed (so shared /u/{handle}/ links keep resolving), and the
-  // reverse record is promoted only when the subject has no handle of its own.
-  // Idempotent and non-destructive, matching this module's ordering.
-  await migrateHandle({ bucket, anonUserId, subject, now });
-  const subjectHandle = await getUserHandle(bucket, subject);
+  // Plan the handle without mutating ownership. The destination metadata can
+  // use the effective handle during the copy sweeps, but the forward/reverse
+  // records must remain anonymous-authoritative until every chat port has
+  // succeeded. Otherwise a failed chat import would make /u/{handle} resolve
+  // to a partial migration while the source is still the retry boundary.
+  const subjectHandle =
+    (await getUserHandle(bucket, subject)) ?? (await getUserHandle(bucket, anonUserId));
 
   // ---- Inventory ----
   const anonProjectIds = await listProjectIds(bucket, anonUserId);
   const uploadKeys = await listKeys(bucket, uploadsPrefix(anonUserId));
 
   if (anonProjectIds.length === 0 && uploadKeys.length === 0) {
+    // There are no project chats to port, so the planned handle can be
+    // committed before retiring the completed anonymous session as well.
+    await migrateHandle({ bucket, anonUserId, subject, now });
     return finish("nothing-to-migrate", {});
   }
 
@@ -569,6 +572,12 @@ export async function migrateAnonymousData(options: {
     knownSlugs: firstSweep.slugMap,
     logging,
   });
+
+  // All project chat ports have now completed. Re-home the handle only after
+  // that last success and before publishing the permanent pointer/deleting
+  // the anonymous source. A handle failure therefore also leaves the source
+  // and pending claim available for a later retry.
+  await migrateHandle({ bucket, anonUserId, subject, now });
 
   // ---- Forwarding pointer BEFORE deleting originals (URL continuity) ----
   // Written after the second sweep so a project first seen there is in it.

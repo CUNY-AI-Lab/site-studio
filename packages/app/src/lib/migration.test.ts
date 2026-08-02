@@ -142,6 +142,19 @@ function seedAnonProject(
   bucket.store.set(`projects/${ANON}/${projectId}/index.html`, { data: content });
 }
 
+function seedAnonHandle(
+  bucket: ReturnType<typeof createMockBucket>,
+  handle = "jane-rivera",
+) {
+  const claimedAt = "2026-01-01T00:00:00.000Z";
+  bucket.store.set(`handles/${handle}.json`, {
+    data: JSON.stringify({ ownerId: ANON, claimedAt })
+  });
+  bucket.store.set(`userhandles/${ANON}.json`, {
+    data: JSON.stringify({ handle, claimedAt })
+  });
+}
+
 describe("migrateAnonymousData", () => {
   let bucket: ReturnType<typeof createMockBucket>;
   let kv: ReturnType<typeof createMockKV>;
@@ -460,7 +473,12 @@ describe("migrateAnonymousData", () => {
   });
 
   it("fails closed when chat history export is unavailable", async () => {
-    seedAnonProject(bucket, "portfolio");
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
     kv.store.set("session:anon-session-id", JSON.stringify({ id: ANON }));
     const porter: ChatHistoryPorter = {
       port: async () => {
@@ -481,10 +499,20 @@ describe("migrateAnonymousData", () => {
     });
     expect(kv.store.has("session:anon-session-id")).toBe(true);
     expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
+    // Handle ownership and the old published namespace remain authoritative
+    // until chat history can be imported on a retry.
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
   });
 
   it("fails closed on chat import failure and retries the pending claim", async () => {
-    seedAnonProject(bucket, "portfolio");
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
     let attempts = 0;
     const porter: ChatHistoryPorter = {
       port: async () => {
@@ -502,6 +530,9 @@ describe("migrateAnonymousData", () => {
       subject: SUBJECT,
       status: "pending",
     });
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
     const retry = await run({ porter });
     expect(retry.status).toBe("migrated");
@@ -513,6 +544,9 @@ describe("migrateAnonymousData", () => {
       subject: SUBJECT,
       status: "complete",
     });
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(false);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
   });
 });
 
