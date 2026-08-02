@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -348,6 +349,83 @@ async function makeValidScopedNameFixture() {
   return rootDir;
 }
 
+async function makeOverrideFixture({
+  targetName = 'fast-uri',
+  override = '3.1.5',
+  lockVersion = override,
+  installedVersion = override,
+  location = 'root',
+  exportsBlocked = false,
+} = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-'));
+  const directDependencies = { holder: '1.0.0' };
+  await writeJson(path.join(rootDir, 'package.json'), {
+    name: 'override-fixture',
+    private: true,
+    dependencies: directDependencies,
+    overrides: { [targetName]: override },
+  });
+
+  const packages = {};
+  await writeInstalledPackage(rootDir, 'node_modules/holder', 'holder', '1.0.0');
+  await writeJson(path.join(rootDir, 'node_modules/holder/package.json'), {
+    name: 'holder',
+    version: '1.0.0',
+    dependencies: { [targetName]: override },
+    main: 'index.js',
+  });
+  packages.holder = ['holder@1.0.0', '', { dependencies: { [targetName]: override } }, 'sha512-fixture'];
+  if (location === 'nested') {
+    await writeInstalledPackage(
+      rootDir,
+      `node_modules/holder/node_modules/${targetName}`,
+      targetName,
+      installedVersion,
+    );
+    if (exportsBlocked) {
+      await writeJson(path.join(rootDir, `node_modules/holder/node_modules/${targetName}/package.json`), {
+        name: targetName,
+        version: installedVersion,
+        exports: { './feature': './feature.js' },
+      });
+    }
+    packages[`holder/${targetName}`] = [
+      `${targetName}@${lockVersion}`,
+      '',
+      {},
+      'sha512-fixture',
+    ];
+  } else if (location === 'quarantine') {
+    // Keep the effective root candidate valid; the stale copies below are
+    // only preserved backup/cache namespaces and must not affect resolution.
+    await writeInstalledPackage(rootDir, `node_modules/${targetName}`, targetName, override);
+    packages[targetName] = [`${targetName}@${lockVersion}`, '', {}, 'sha512-fixture'];
+    await writeInstalledPackage(
+      rootDir,
+      `node_modules/.old_modules-fixture/node_modules/${targetName}`,
+      targetName,
+      installedVersion,
+    );
+    await writeInstalledPackage(
+      rootDir,
+      `node_modules/.cache-fixture/node_modules/${targetName}`,
+      targetName,
+      installedVersion,
+    );
+  } else {
+    await writeInstalledPackage(rootDir, `node_modules/${targetName}`, targetName, installedVersion);
+    packages[targetName] = [`${targetName}@${lockVersion}`, '', {}, 'sha512-fixture'];
+  }
+
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces: { '': { name: 'override-fixture', dependencies: directDependencies } },
+    overrides: { [targetName]: override },
+    packages,
+  });
+  return rootDir;
+}
+
 test('parses Bun lock comments and trailing commas without evaluating package data', () => {
   const parsed = parseBunLock('{\n  // importer comment\n  "workspaces": {},\n  /* package comment */\n}\n');
   assert.deepEqual(parsed, { workspaces: {} });
@@ -652,6 +730,82 @@ test('accepts canonical scoped package names beginning with underscore or hyphen
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }
+});
+
+test('rejects a stale root override target', async () => {
+  const rootDir = await makeOverrideFixture({ installedVersion: '3.1.3' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /live override target fast-uri/);
+    assert.match(result.issues.join('\n'), /3\.1\.3/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a stale nested override target', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'nested', installedVersion: '3.1.3' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /holder\/node_modules\/fast-uri/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('accepts a correct nested override target', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'nested' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('checks a nested override target when package exports block package.json resolution', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'nested', exportsBlocked: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('ignores stale override copies in quarantined backup and cache paths', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'quarantine', installedVersion: '3.1.3' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a stale sharp override target', async () => {
+  const rootDir = await makeOverrideFixture({
+    targetName: 'sharp',
+    override: '0.35.2',
+    installedVersion: '0.34.5',
+  });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /live override target sharp/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('keeps the checked-in sharp override and lock record exact', () => {
+  const manifest = JSON.parse(readFileSync('package.json', 'utf8'));
+  const lock = parseBunLock(readFileSync('bun.lock', 'utf8'));
+  assert.equal(manifest.overrides.sharp, '0.35.2');
+  assert.equal(lock.overrides.sharp, '0.35.2');
+  assert.equal(lock.packages.sharp[0], 'sharp@0.35.2');
 });
 
 

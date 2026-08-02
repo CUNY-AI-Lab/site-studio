@@ -362,6 +362,19 @@ function relativePath(rootDir, filePath) {
   return path.relative(rootDir, filePath).replaceAll(path.sep, '/') || '.';
 }
 
+function isQuarantinedPath(filePath) {
+  // Inspect only the logical path selected by Node's resolver. Do not apply
+  // this predicate to a realpath: Bun's isolated linker intentionally points
+  // logical node_modules entries into its .bun store, and a store/cache-like
+  // target must remain subject to the reachability checks below.
+  const segments = path.resolve(filePath).split(path.sep).filter(Boolean);
+  return segments.some((segment) =>
+    /^\.old_modules(?:-|$)/.test(segment)
+    || /^\.cache(?:-|$)/.test(segment)
+    || /^\.backups?(?:-|$)/.test(segment),
+  );
+}
+
 function lockRecords(lock) {
   const records = [];
   for (const [key, value] of Object.entries(lock.packages ?? {})) {
@@ -378,6 +391,130 @@ function lockRecords(lock) {
     });
   }
   return records;
+}
+
+function readOverrideMap(value, label, issues) {
+  if (value === undefined) return new Map();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    issues.push(`${label} overrides must be an object`);
+    return new Map();
+  }
+
+  const overrides = new Map();
+  for (const [name, spec] of Object.entries(value)) {
+    if (!isValidPackageName(name)) {
+      issues.push(`${label} declares invalid override name`);
+      continue;
+    }
+    if (typeof spec !== 'string' || semver.validRange(spec) === null) {
+      issues.push(`${label} override ${name} has an unsupported version range`);
+      continue;
+    }
+    overrides.set(name, spec);
+  }
+  return overrides;
+}
+
+function installedDependencyMap(manifest) {
+  const result = new Map();
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [name, spec] of Object.entries(manifest[section] ?? {})) result.set(name, spec);
+  }
+  return result;
+}
+
+function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name) {
+  const requireFromPackage = createRequire(path.join(packageDirectory, 'package.json'));
+  let resolvedPath;
+  try {
+    resolvedPath = requireFromPackage.resolve(name);
+  } catch {
+    try {
+      resolvedPath = requireFromPackage.resolve(`${name}/package.json`);
+    } catch {
+      resolvedPath = null;
+    }
+  }
+  return (
+    (resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null)
+    ?? packageDirectoryFromNodeModules(rootDir, packageDirectory, name)
+  );
+}
+
+function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overrideSpecs, issues) {
+  if (overrideSpecs.size === 0) return;
+
+  const visited = new Set();
+  const queue = [];
+  for (const { workspace, directDependencies } of workspaceDependencyChecks) {
+    for (const dependencyName of directDependencies.keys()) {
+      const resolvedPackage = resolveInstalledPackage(rootDir, workspace, dependencyName);
+      if (resolvedPackage) queue.push(resolvedPackage);
+    }
+  }
+
+  while (queue.length > 0) {
+    const resolvedPackage = queue.shift();
+    // A quarantine namespace is an unreachable logical candidate, even if a
+    // symlink beneath it happens to resolve to a real package. Conversely, a
+    // normal logical path that resolves into a Bun store/cache is reachable
+    // and must be checked.
+    if (isQuarantinedPath(resolvedPackage.directory)) continue;
+    const realDirectory = realpathSafe(resolvedPackage.directory);
+    if (!realDirectory || visited.has(realDirectory)) continue;
+    visited.add(realDirectory);
+
+    const expectedRange = overrideSpecs.get(resolvedPackage.manifest.name);
+    if (expectedRange !== undefined) {
+      const version = normalizedVersion(resolvedPackage.manifest.version);
+      if (!version || !satisfiesVersionRange(version, expectedRange)) {
+        issues.push(
+          `live override target ${resolvedPackage.manifest.name} at ${relativePath(rootDir, resolvedPackage.directory)} resolves to `
+            + `${typeof resolvedPackage.manifest.version === 'string' ? resolvedPackage.manifest.version : '<unknown>'}, `
+            + `outside ${formatSpec(expectedRange)}`,
+        );
+      }
+    }
+
+    for (const dependencyName of installedDependencyMap(resolvedPackage.manifest).keys()) {
+      const dependency = resolveInstalledPackageFromDirectory(rootDir, resolvedPackage.directory, dependencyName);
+      if (!dependency) continue;
+      const dependencyRealDirectory = realpathSafe(dependency.directory);
+      if (!dependencyRealDirectory || isQuarantinedPath(dependency.directory)) continue;
+      queue.push(dependency);
+    }
+  }
+}
+
+function validateRootOverrides(rootManifest, lock, records, rootDir, workspaceDependencyChecks, issues) {
+  const manifestOverrides = readOverrideMap(rootManifest.overrides, 'root manifest', issues);
+  const lockOverrides = readOverrideMap(lock.overrides, 'bun.lock', issues);
+
+  for (const [name, spec] of manifestOverrides) {
+    if (lockOverrides.get(name) !== spec) {
+      issues.push(`root override ${name}@${formatSpec(spec)} is not mirrored by bun.lock`);
+    }
+
+    const matchingRecords = records.filter((record) => record.descriptorName === name);
+    if (matchingRecords.length === 0) {
+      issues.push(`root override ${name}@${formatSpec(spec)} has no matching bun.lock package record`);
+      continue;
+    }
+    for (const record of matchingRecords) {
+      const version = recordVersion(record, name, { kind: 'version', requested: spec, name });
+      if (!version || !satisfiesVersionRange(version, spec)) {
+        issues.push(
+          `root override ${name}@${formatSpec(spec)} conflicts with bun.lock record ${formatSpec(record.rawVersion)}`,
+        );
+      }
+    }
+  }
+
+  for (const name of lockOverrides.keys()) {
+    if (!manifestOverrides.has(name)) issues.push(`bun.lock has stale root override ${name}`);
+  }
+
+  checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, manifestOverrides, issues);
 }
 
 function recordVersion(record, packageName, specInfo) {
@@ -463,8 +600,8 @@ function packageDirectoryFromResolved(rootDir, resolvedPath) {
   return null;
 }
 
-function packageDirectoryFromWorkspaceNodeModules(rootDir, workspaceDirectory, name) {
-  let directory = path.resolve(workspaceDirectory);
+function packageDirectoryFromNodeModules(rootDir, baseDirectory, name) {
+  let directory = path.resolve(baseDirectory);
   const stop = path.dirname(rootDir);
   while (directory !== stop) {
     const packageDirectory = path.join(directory, 'node_modules', ...name.split('/'));
@@ -480,6 +617,10 @@ function packageDirectoryFromWorkspaceNodeModules(rootDir, workspaceDirectory, n
     directory = path.dirname(directory);
   }
   return null;
+}
+
+function packageDirectoryFromWorkspaceNodeModules(rootDir, workspaceDirectory, name) {
+  return packageDirectoryFromNodeModules(rootDir, workspaceDirectory, name);
 }
 
 function resolveInstalledPackage(rootDir, workspace, name) {
@@ -685,6 +826,7 @@ export function verifyDependencyResolution({ rootDir = process.cwd() } = {}) {
     const directDependencies = compareManifestToLock(workspace, lock, issues);
     workspaceDependencyChecks.push({ workspace, directDependencies });
   }
+  validateRootOverrides(rootManifest, lock, records, resolvedRoot, workspaceDependencyChecks, issues);
 
   const checks = [];
   for (const { workspace, directDependencies } of workspaceDependencyChecks) {
