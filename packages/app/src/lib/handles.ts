@@ -248,6 +248,27 @@ export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<
   return (await resolveHandleOwner(bucket, handle)) === ownerId ? handle : null;
 }
 
+/**
+ * Resolve the effective public handle while an anonymous migration is being
+ * retried. A crash can commit the forward `handles/{handle}` update before the
+ * subject reverse record, leaving the anonymous reverse record as the only
+ * durable clue. `getUserHandle` intentionally rejects that stale reverse
+ * record, so migration planning needs this narrowly-scoped recovery read.
+ */
+export async function getMigrationHandle(
+  bucket: R2Bucket,
+  anonUserId: string,
+  subject: string
+): Promise<string | null> {
+  const subjectHandle = await getUserHandle(bucket, subject);
+  if (subjectHandle) return subjectHandle;
+
+  const anonHandle = await getRecordedUserHandle(bucket, anonUserId);
+  if (!anonHandle) return null;
+  const owner = await resolveHandleOwner(bucket, anonHandle);
+  return owner === anonUserId || owner === subject ? anonHandle : null;
+}
+
 export type CheckHandleResult = {
   handle: string;
   valid: boolean;

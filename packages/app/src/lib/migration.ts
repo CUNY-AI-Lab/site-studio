@@ -38,7 +38,7 @@
  */
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
-import { getUserHandle, migrateHandle } from "./handles";
+import { getMigrationHandle, migrateHandle } from "./handles";
 import { readR2Json, putR2Json } from "./r2-json";
 import {
   emitDiagnostic,
@@ -531,8 +531,7 @@ export async function migrateAnonymousData(options: {
   // records must remain anonymous-authoritative until every chat port has
   // succeeded. Otherwise a failed chat import would make /u/{handle} resolve
   // to a partial migration while the source is still the retry boundary.
-  const subjectHandle =
-    (await getUserHandle(bucket, subject)) ?? (await getUserHandle(bucket, anonUserId));
+  const subjectHandle = await getMigrationHandle(bucket, anonUserId, subject);
 
   // ---- Inventory ----
   const anonProjectIds = await listProjectIds(bucket, anonUserId);

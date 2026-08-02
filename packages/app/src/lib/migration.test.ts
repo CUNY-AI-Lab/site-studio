@@ -12,6 +12,7 @@ import {
   type MigrationClaim,
   type MigrationPointer
 } from "./migration";
+import { getUserHandle } from "./handles";
 import { createPublishRouter } from "../routes/publish";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts).
@@ -547,6 +548,64 @@ describe("migrateAnonymousData", () => {
     expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(false);
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+  });
+
+  it("retries after forward handle ownership commits before the subject reverse record", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
+
+    const originalPut = bucket.put;
+    let failSubjectReverse = true;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === `userhandles/${SUBJECT}.json` && failSubjectReverse) {
+        failSubjectReverse = false;
+        throw new Error("injected subject reverse failure");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await expect(run()).rejects.toThrow("injected subject reverse failure");
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
+
+    await expect(run()).resolves.toMatchObject({ status: "migrated" });
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+  });
+
+  it("retries after subject reverse commit before anonymous reverse cleanup", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio");
+
+    const originalDelete = bucket.delete;
+    let failAnonReverseDelete = true;
+    bucket.delete = vi.fn(async (key: string) => {
+      if (key === `userhandles/${ANON}.json` && failAnonReverseDelete) {
+        failAnonReverseDelete = false;
+        throw new Error("injected anonymous reverse cleanup failure");
+      }
+      return originalDelete(key);
+    }) as typeof bucket.delete;
+
+    const first = await run();
+    expect(first.status).toBe("migrated");
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+
+    await expect(run()).resolves.toMatchObject({ status: "already-complete" });
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    // The cleanup failure is intentionally best-effort; the stale reverse
+    // record is not authoritative because its forward record points at the
+    // subject, and normal handle repair can reap it later.
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(await getUserHandle(bucket, ANON)).toBeNull();
   });
 });
 
