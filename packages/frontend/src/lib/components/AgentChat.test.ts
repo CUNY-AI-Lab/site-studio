@@ -122,6 +122,23 @@ describe('AgentChat', () => {
 		return { onUpdate };
 	}
 
+	function stubQuotaResponse(quotaResponse: Record<string, unknown>) {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/api/quota')) {
+				return new Response(JSON.stringify(quotaResponse), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+			return new Response('[]', { status: 200 });
+		});
+	}
+
 	it('opens a WebSocket to the site-builder path with the csrf token param', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
@@ -280,7 +297,7 @@ describe('AgentChat', () => {
 		mount();
 
 		await waitFor(() =>
-			expect(assignSpy).toHaveBeenCalledWith('/login?rt=%2F')
+			expect(assignSpy).toHaveBeenCalledWith('http://localhost:3000/login?rt=%2F')
 		);
 	});
 
@@ -329,6 +346,136 @@ describe('AgentChat', () => {
 		mount(); // default fetch stub returns [] for /get-messages
 		await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
 		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
+	});
+
+	it('keeps the local editor usable when the optional quota probe requires authentication', async () => {
+		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
+			(symbol) => symbol.toString() === 'Symbol(impl)'
+		);
+		expect(locationImplSymbol).toBeDefined();
+		const locationImpl = (window.location as any)[locationImplSymbol as symbol] as {
+			assign: (url: string) => void;
+		};
+		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/api/quota')) {
+				return new Response(
+					JSON.stringify({ error: 'authentication_required', login_url: '/login' }),
+					{ status: 401, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		try {
+			mount();
+			await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+			expect(assignSpy).not.toHaveBeenCalled();
+			expect(screen.queryByRole('status', { name: /AI budget left/i })).not.toBeInTheDocument();
+		} finally {
+			assignSpy.mockRestore();
+			warnSpy.mockRestore();
+		}
+	});
+
+	it('describes a sliding quota with no reset time without inventing an epoch date', async () => {
+		const quotaResponse = {
+			object: 'quota',
+			unit: 'microdollar',
+			currency: 'USD',
+			limit: 10_000_000,
+			used: 630_000,
+			remaining: 9_370_000,
+			reset: null,
+			window_technique: 'sliding',
+			window_seconds: 2_592_000,
+			state: 'stale',
+			enforced: true,
+			as_of: 1_720_600_000
+		};
+		stubQuotaResponse(quotaResponse);
+
+		mount();
+
+		const quotaMeter = await waitFor(() =>
+			screen.getByRole('status', { name: /94% AI budget left/i })
+		);
+		expect(quotaMeter).toHaveTextContent('94% AI budget left');
+		expect(quotaMeter).toHaveAccessibleName(
+			'94% AI budget left. Budget reset time unavailable (sliding window).'
+		);
+		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('1970'));
+		expect(quotaMeter).not.toHaveAttribute('title', expect.stringContaining('1970'));
+		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('resets '));
+	});
+
+	it('describes a fixed quota reset and preserves the visible percentage', async () => {
+		const reset = 1_783_123_200;
+		const resetLabel = new Date(reset * 1000).toLocaleString();
+		const quotaResponse = {
+			object: 'quota',
+			unit: 'microdollar',
+			currency: 'USD',
+			limit: 10_000_000,
+			used: 4_500_000,
+			remaining: 5_500_000,
+			reset,
+			window_technique: 'fixed',
+			window_seconds: 2_592_000,
+			state: 'stale',
+			enforced: true,
+			as_of: 1_720_600_000
+		};
+		stubQuotaResponse(quotaResponse);
+
+		mount();
+
+		const quotaMeter = await waitFor(() =>
+			screen.getByRole('status', { name: /55% AI budget left/i })
+		);
+		expect(quotaMeter).toHaveTextContent('55% AI budget left');
+		expect(quotaMeter).toHaveAccessibleName(
+			`55% AI budget left. Budget resets ${resetLabel} (fixed window).`
+		);
+		expect(quotaMeter).toHaveAttribute('title', `Budget resets ${resetLabel} (fixed window)`);
+	});
+
+	it('describes a numeric sliding reset as a conservative bound', async () => {
+		const reset = 1_783_123_200;
+		const resetLabel = new Date(reset * 1000).toLocaleString();
+		stubQuotaResponse({
+			object: 'quota',
+			unit: 'microdollar',
+			currency: 'USD',
+			limit: 10_000_000,
+			used: 2_500_000,
+			remaining: 7_500_000,
+			reset,
+			window_technique: 'sliding',
+			window_seconds: 2_592_000,
+			state: 'stale',
+			enforced: true,
+			as_of: 1_720_600_000
+		});
+
+		mount();
+
+		const quotaMeter = await waitFor(() =>
+			screen.getByRole('status', { name: /75% AI budget left/i })
+		);
+		expect(quotaMeter).toHaveTextContent('75% AI budget left');
+		expect(quotaMeter).toHaveAccessibleName(
+			`75% AI budget left. Budget reset bound ${resetLabel} (sliding window).`
+		);
+		expect(quotaMeter).toHaveAttribute('title', `Budget reset bound ${resetLabel} (sliding window)`);
+		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('Budget resets '));
 	});
 
 	it('a network failure loading history also surfaces the error state (SS-49)', async () => {

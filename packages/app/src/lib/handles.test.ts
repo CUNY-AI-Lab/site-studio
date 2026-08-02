@@ -308,6 +308,59 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
     expect(await resolveHandleOwner(bucket, "beta")).toBeNull();
   });
 
+  it("does not retire a newer healthy reverse generation after a repaired claim loses forward ownership", async () => {
+    const ownerId = OWNER;
+    await bucket.put(
+      userHandleRecordKey(ownerId),
+      JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" })
+    );
+    await claimHandle(bucket, RIVAL, "beta");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === userHandleRecordKey(ownerId) &&
+        options?.onlyIf?.etagMatches &&
+        String(data).includes('"1970-01-01T00:00:00.000Z"') &&
+        !injected
+      ) {
+        injected = true;
+        await originalPut(
+          handleRecordKey("alpha"),
+          JSON.stringify({ ownerId, claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+        await originalPut(
+          userHandleRecordKey(ownerId),
+          JSON.stringify({ handle: "alpha", claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const result = await claimHandle(
+      bucket,
+      ownerId,
+      "beta",
+      () => "2026-07-20T12:01:00.000Z"
+    );
+
+    expect(injected).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      reason: expect.stringContaining("taken")
+    });
+    expect(await getUserHandle(bucket, ownerId)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(ownerId);
+    expect(await resolveHandleOwner(bucket, "beta")).toBe(RIVAL);
+    expect(await claimHandle(bucket, ownerId, "alpha")).toEqual({
+      ok: true,
+      handle: "alpha",
+      alreadyOwned: true
+    });
+  });
+
   it("does not reap a fresh reverse record while its forward claim is still in flight", async () => {
     const ownerId = OWNER;
     let releaseForward!: () => void;
@@ -348,7 +401,7 @@ describe("claimHandle races (SS-4)", () => {
     bucket = createMockBucket();
   });
 
-  it("two users racing the SAME handle: exactly one wins, loser leaves no orphan", async () => {
+  it("two users racing the SAME handle: exactly one wins and loser has no authoritative ownership", async () => {
     const [a, b] = await Promise.all([
       claimHandle(bucket, RACER_A, "shared-one"),
       claimHandle(bucket, RACER_B, "shared-one")
@@ -361,12 +414,75 @@ describe("claimHandle races (SS-4)", () => {
     expect(losers[0]).toMatchObject({ ok: false, status: 409 });
 
     // The handle record points at exactly one owner, and that owner's reverse
-    // record agrees. The loser owns NO handle (its reverse slot was rolled back).
+    // record agrees. The loser's retired reverse generation conveys no ownership.
     const owner = await resolveHandleOwner(bucket, "shared-one");
     expect(owner === RACER_A || owner === RACER_B).toBe(true);
     const loserId = owner === RACER_A ? RACER_B : RACER_A;
     expect(await getUserHandle(bucket, owner!)).toBe("shared-one");
     expect(await getUserHandle(bucket, loserId)).toBeNull();
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(loserId)).data as string)).toEqual({
+      handle: "shared-one",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
+    expect(await claimHandle(bucket, owner!, "shared-one")).toEqual({
+      ok: true,
+      handle: "shared-one",
+      alreadyOwned: true
+    });
+    expect(await claimHandle(bucket, loserId, "recovered-one")).toEqual({
+      ok: true,
+      handle: "recovered-one",
+      alreadyOwned: false
+    });
+    expect(await getUserHandle(bucket, loserId)).toBe("recovered-one");
+  });
+
+  it("does not retire a newer healthy reverse generation after an ordinary claim loses forward ownership", async () => {
+    await claimHandle(bucket, RIVAL, "beta");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === userHandleRecordKey(OWNER) &&
+        options?.onlyIf?.etagMatches &&
+        String(data).includes('"1970-01-01T00:00:00.000Z"') &&
+        !injected
+      ) {
+        injected = true;
+        await originalPut(
+          handleRecordKey("alpha"),
+          JSON.stringify({ ownerId: OWNER, claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+        await originalPut(
+          userHandleRecordKey(OWNER),
+          JSON.stringify({ handle: "alpha", claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const result = await claimHandle(
+      bucket,
+      OWNER,
+      "beta",
+      () => "2026-07-20T12:01:00.000Z"
+    );
+
+    expect(injected).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      reason: expect.stringContaining("taken")
+    });
+    expect(await getUserHandle(bucket, OWNER)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(OWNER);
+    expect(await resolveHandleOwner(bucket, "beta")).toBe(RIVAL);
+    expect(await claimHandle(bucket, OWNER, "alpha")).toEqual({
+      ok: true,
+      handle: "alpha",
+      alreadyOwned: true
+    });
   });
 
   it("one user racing TWO different handles: ends up owning exactly one, no orphan handle record", async () => {
@@ -396,7 +512,7 @@ describe("createHandleRouter", () => {
   let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
   let kv: ReturnType<typeof createMockKV>;
   let csrf: CsrfSession;
-  const env = (b: R2Bucket) => ({ SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
+  const env = (b: R2Bucket) => ({ CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
   // Every POST carries the session CSRF token + same-origin posture, matching
   // production where csrfProtect guards all /api mutations (lib/csrf.ts).
   const postHeaders = () => ({ "Content-Type": "application/json", ...csrf.headers });
@@ -524,8 +640,12 @@ describe("migrateHandle", () => {
     expect(await getUserHandle(bucket, SUBJECT)).toBe("primary-handle");
     // The anon handle survives as an alias pointing at the subject.
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
-    // The anon reverse record is gone.
-    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(false);
+    // The exact old generation is retired as an orphan marker rather than
+    // unconditionally deleted; a concurrent newer anonymous claim must survive.
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+      handle: "anon-handle",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
   });
 
   it("is a no-op when the anon user has no handle", async () => {
@@ -582,7 +702,40 @@ describe("migrateHandle", () => {
     expect(await resolveHandleOwner(bucket, "my-new-handle")).toBe(SUBJECT);
     // ...and the anon handle stays an alias pointing at the subject.
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
-    // The anon reverse record is still cleaned up.
-    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(false);
+    // The old anonymous generation is retired without touching the subject's
+    // concurrent primary claim.
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+      handle: "anon-handle",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
+  });
+
+  it("does not retire a newer anonymous reverse generation during cleanup", async () => {
+    await claimHandle(bucket, ANON, "anon-handle", () => "2020-01-01T00:00:00.000Z");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === userHandleRecordKey(SUBJECT) && !injected) {
+        injected = true;
+        const claim = await claimHandle(
+          bucket,
+          ANON,
+          "new-handle",
+          () => "2026-07-20T00:00:00.000Z",
+        );
+        expect(claim).toEqual({ ok: true, handle: "new-handle", alreadyOwned: false });
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
+
+    // The concurrent claim replaced the old anonymous reverse generation; the
+    // migration's ETag-fenced retirement must lose and preserve that pair.
+    expect(injected).toBe(true);
+    expect(await getUserHandle(bucket, ANON)).toBe("new-handle");
+    expect(await resolveHandleOwner(bucket, "new-handle")).toBe(ANON);
+    expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
   });
 });

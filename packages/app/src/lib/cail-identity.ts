@@ -11,14 +11,17 @@
  * JWT verification is delegated to the shared `@cuny-ai-lab/cail-identity`
  * primitive. Site Studio accepts one contract: RS256, a public key selected
  * from `CAIL_IDENTITY_JWKS`, and the service-specific `cail:site-studio`
- * audience. The issuer must exactly match the deployment's single configured
- * `CAIL_IDENTITY_ISSUER`; production and staging trust are never combined. The stable
+ * audience. A source-owned deployment profile selects the exact issuer;
+ * `CAIL_IDENTITY_ISSUER` must match it and cannot define a new trust root.
+ * Production and staging trust are never combined. The stable
  * pseudonymous CAIL subject (`sub`) is the only durable key for workspace
  * ownership. Never key anything by email.
  */
 
 import {
+  CAIL_CANONICAL_ISSUER,
   CAIL_GATEWAY_AUDIENCE,
+  CAIL_STAGING_ISSUER,
   readIdentityKeyring,
   verifyKeyringGatewayJwt,
   type CailIdentity,
@@ -32,6 +35,7 @@ export type { CailIdentity };
 export interface IdentityVerificationEnv {
   CAIL_IDENTITY_JWKS?: string;
   CAIL_IDENTITY_ISSUER?: string;
+  CAIL_IDENTITY_PROFILE?: string;
 }
 
 export type RequestIdentityResolution =
@@ -42,6 +46,18 @@ export type RequestIdentityResolution =
 /** The header the SSO gate injects. Bare `X-CAIL-*` headers are never trusted. */
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
 export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
+
+const CAIL_IDENTITY_ISSUER_BY_PROFILE = Object.freeze({
+  production: CAIL_CANONICAL_ISSUER,
+  staging: CAIL_STAGING_ISSUER,
+});
+
+function sourceOwnedIssuer(env: IdentityVerificationEnv): string | null {
+  const profile = env.CAIL_IDENTITY_PROFILE;
+  if (profile !== "production" && profile !== "staging") return null;
+  const issuer = CAIL_IDENTITY_ISSUER_BY_PROFILE[profile];
+  return env.CAIL_IDENTITY_ISSUER === issuer ? issuer : null;
+}
 
 /**
  * cail-identity 5.0.0 replaced per-call jwks + options with a loader that
@@ -62,10 +78,8 @@ async function loadVerifier(
   audience: string = CAIL_IDENTITY_AUDIENCE
 ): Promise<IdentityVerifierConfig | null> {
   const jwks = env.CAIL_IDENTITY_JWKS;
-  const issuer = env.CAIL_IDENTITY_ISSUER;
-  if (!jwks || typeof issuer !== "string" || issuer.length === 0 || issuer.trim() !== issuer) {
-    return null;
-  }
+  const issuer = sourceOwnedIssuer(env);
+  if (!jwks || !issuer) return null;
   const key = `${audience}\u0000${issuer}\u0000${jwks}`;
   const cached = verifierCache.get(key);
   if (cached) return cached;

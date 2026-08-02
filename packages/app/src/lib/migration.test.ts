@@ -12,11 +12,13 @@ import {
   type MigrationClaim,
   type MigrationPointer
 } from "./migration";
+import { getUserHandle } from "./handles";
 import { createPublishRouter } from "../routes/publish";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts).
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any }>();
+  let revision = 0;
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag?: string }>();
 
   return {
     store,
@@ -27,8 +29,10 @@ function createMockBucket() {
       const entry = store.get(key);
       if (!entry) return null;
       const data = entry.data;
+      entry.etag ??= `etag-${++revision}`;
       return {
         key,
+        etag: entry.etag,
         size: typeof data === "string" ? data.length : (data as ArrayBuffer).byteLength,
         httpMetadata: entry.httpMetadata || {},
         text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer)),
@@ -42,6 +46,9 @@ function createMockBucket() {
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
+      if (options?.onlyIf?.etagMatches && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+        return null;
+      }
       let stored: ArrayBuffer | string;
       if (typeof data === "string") {
         stored = data;
@@ -52,8 +59,9 @@ function createMockBucket() {
       } else {
         stored = String(data);
       }
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
-      return { key };
+      const etag = `etag-${++revision}`;
+      store.set(key, { data: stored, httpMetadata: options?.httpMetadata, etag });
+      return { key, etag };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -140,6 +148,19 @@ function seedAnonProject(
 ) {
   bucket.store.set(`projects/${ANON}/${projectId}/.metadata.json`, { data: metadataFor(projectId, extra) });
   bucket.store.set(`projects/${ANON}/${projectId}/index.html`, { data: content });
+}
+
+function seedAnonHandle(
+  bucket: ReturnType<typeof createMockBucket>,
+  handle = "jane-rivera",
+) {
+  const claimedAt = "2026-01-01T00:00:00.000Z";
+  bucket.store.set(`handles/${handle}.json`, {
+    data: JSON.stringify({ ownerId: ANON, claimedAt })
+  });
+  bucket.store.set(`userhandles/${ANON}.json`, {
+    data: JSON.stringify({ handle, claimedAt })
+  });
 }
 
 describe("migrateAnonymousData", () => {
@@ -459,17 +480,147 @@ describe("migrateAnonymousData", () => {
     expect(resumedPointer.slugs).toEqual(completePointer.slugs);
   });
 
-  it("porter failures are non-fatal: files still migrate", async () => {
-    seedAnonProject(bucket, "portfolio");
+  it("fails closed when chat history export is unavailable", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
+    kv.store.set("session:anon-session-id", JSON.stringify({ id: ANON }));
     const porter: ChatHistoryPorter = {
       port: async () => {
-        throw new Error("DO unavailable");
+        throw new Error("anonymous chat export unavailable");
       }
     };
 
-    const result = await run({ porter });
-    expect(result.status).toBe("migrated");
+    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
+
+    // File copies may precede the chat call, but the source remains available
+    // because no forwarding pointer or completion claim was written.
     expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+    expect(kv.store.has("session:anon-session-id")).toBe(true);
+    expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
+    // Handle ownership and the old published namespace remain authoritative
+    // until chat history can be imported on a retry.
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
+  });
+
+  it("fails closed on chat import failure and retries the pending claim", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
+    let attempts = 0;
+    const porter: ChatHistoryPorter = {
+      port: async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("subject chat import unavailable");
+        }
+      }
+    };
+
+    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
+
+    const retry = await run({ porter });
+    expect(retry.status).toBe("migrated");
+    expect(attempts).toBe(2);
+    expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
+    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "complete",
+    });
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "jane-rivera",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+  });
+
+  it("retries after forward handle ownership commits before the subject reverse record", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+      publishedUrl: "https://tools.cuny.qzz.io/u/jane-rivera/portfolio/"
+    });
+
+    const originalPut = bucket.put;
+    let failSubjectReverse = true;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === `userhandles/${SUBJECT}.json` && failSubjectReverse) {
+        failSubjectReverse = false;
+        throw new Error("injected subject reverse failure");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await expect(run()).rejects.toThrow("injected subject reverse failure");
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
+
+    await expect(run()).resolves.toMatchObject({ status: "migrated" });
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+  });
+
+  it("retries after subject reverse commit before anonymous reverse cleanup", async () => {
+    seedAnonHandle(bucket);
+    seedAnonProject(bucket, "portfolio");
+
+    const originalPut = bucket.put;
+    let failAnonReverseRetirement = true;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === `userhandles/${ANON}.json`
+        && options?.onlyIf?.etagMatches
+        && failAnonReverseRetirement
+      ) {
+        failAnonReverseRetirement = false;
+        throw new Error("injected anonymous reverse cleanup failure");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const first = await run();
+    expect(first.status).toBe("migrated");
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+
+    await expect(run()).resolves.toMatchObject({ status: "already-complete" });
+    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    // The cleanup failure is intentionally best-effort; the stale reverse
+    // record is not authoritative because its forward record points at the
+    // subject, and normal handle repair can reap it later.
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(await getUserHandle(bucket, ANON)).toBeNull();
   });
 });
 
@@ -589,7 +740,10 @@ describe("handle re-homing through migration", () => {
     // Handle re-homed: record points at subject, reverse record moved.
     expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
-    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "jane-rivera",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
 
     // Migrated project's publishedUrl uses the handle, never the subject id.
     const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
@@ -608,6 +762,9 @@ describe("handle re-homing through migration", () => {
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("primary");
     // Anon handle survives as an alias pointing at the subject.
     expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`).data).ownerId).toBe(SUBJECT);
-    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "anon-alias",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
   });
 });

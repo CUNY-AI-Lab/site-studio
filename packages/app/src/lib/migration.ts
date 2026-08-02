@@ -38,9 +38,12 @@
  */
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
-import { getUserHandle, migrateHandle } from "./handles";
+import { getMigrationHandle, migrateHandle } from "./handles";
 import { readR2Json, putR2Json } from "./r2-json";
-import { emitDiagnostic } from "./logging";
+import {
+  emitDiagnostic,
+  type SiteStudioLoggingContext,
+} from "./logging";
 
 export interface MigrationClaim {
   subject: string;
@@ -63,7 +66,13 @@ export interface MigrationPointer {
   slugs: Record<string, string>;
 }
 
-/** Ports Durable Object chat history between agent instances (best-effort). */
+/**
+ * Ports Durable Object chat history between agent instances.
+ *
+ * Account import treats a failed port as fatal for the sweep: the caller must
+ * retain the anonymous namespace so the next authenticated request can retry
+ * instead of retiring the only copy of the conversation.
+ */
 export interface ChatHistoryPorter {
   port(
     fromOwner: string,
@@ -310,11 +319,12 @@ async function copyAnonymousNamespace(options: {
   knownProjects?: Record<string, string>;
   /** old published slug -> subject slug from an earlier sweep */
   knownSlugs?: Record<string, string>;
+  logging?: SiteStudioLoggingContext;
 }): Promise<{
   projectMap: Record<string, string>;
   slugMap: Record<string, string>;
 }> {
-  const { bucket, anonUserId, subject, subjectHandle, porter } = options;
+  const { bucket, anonUserId, subject, subjectHandle, porter, logging } = options;
   const projectMap: Record<string, string> = { ...options.knownProjects };
   const slugMap: Record<string, string> = { ...options.knownSlugs };
 
@@ -408,7 +418,9 @@ async function copyAnonymousNamespace(options: {
       }
     }
 
-    // Agent chat history (Durable Object SQLite) — best-effort, never fatal.
+    // Agent chat history (Durable Object SQLite). A failed port must abort the
+    // sweep before the forwarding pointer/source deletion so the anonymous DO
+    // remains the recoverable source for a later retry.
     // Only the sweep that first sees a project ports it: chat history lives
     // in the DO, not in R2, so a mid-run file write never needs a re-port
     // (and the destination agent's import never overwrites anyway).
@@ -417,7 +429,9 @@ async function copyAnonymousNamespace(options: {
         await porter.port(anonUserId, plan.oldId, subject, plan.newId);
       } catch (error) {
         emitDiagnostic("warning", "migration_chat_history_port_failed", {
-          subject,
+        }, logging);
+        throw new Error("Chat history migration failed; anonymous data retained for retry.", {
+          cause: error,
         });
       }
     }
@@ -443,11 +457,12 @@ export async function migrateAnonymousData(options: {
   subject: string;
   /** The anonymous KV session id (cookie value), deleted on completion. */
   anonSessionId?: string;
-  /** Best-effort Durable Object chat-history porter; failures never abort. */
+  /** Durable Object chat-history porter; failures retain the source for retry. */
   porter?: ChatHistoryPorter;
+  logging?: SiteStudioLoggingContext;
   now?: () => string;
 }): Promise<MigrationResult> {
-  const { bucket, kv, anonUserId, subject, anonSessionId, porter } = options;
+  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
   if (!isAnonymousUserId(anonUserId) || anonUserId === subject) {
@@ -511,19 +526,21 @@ export async function migrateAnonymousData(options: {
   const knownProjects = stringMap(existingPointer?.projects);
   const knownSlugs = stringMap(existingPointer?.slugs);
 
-  // ---- Handle re-homing (before inventory so published URLs can use it) ----
-  // Move the anon user's public handle to the subject: the handle record is
-  // always re-pointed (so shared /u/{handle}/ links keep resolving), and the
-  // reverse record is promoted only when the subject has no handle of its own.
-  // Idempotent and non-destructive, matching this module's ordering.
-  await migrateHandle({ bucket, anonUserId, subject, now });
-  const subjectHandle = await getUserHandle(bucket, subject);
+  // Plan the handle without mutating ownership. The destination metadata can
+  // use the effective handle during the copy sweeps, but the forward/reverse
+  // records must remain anonymous-authoritative until every chat port has
+  // succeeded. Otherwise a failed chat import would make /u/{handle} resolve
+  // to a partial migration while the source is still the retry boundary.
+  const subjectHandle = await getMigrationHandle(bucket, anonUserId, subject);
 
   // ---- Inventory ----
   const anonProjectIds = await listProjectIds(bucket, anonUserId);
   const uploadKeys = await listKeys(bucket, uploadsPrefix(anonUserId));
 
   if (anonProjectIds.length === 0 && uploadKeys.length === 0) {
+    // There are no project chats to port, so the planned handle can be
+    // committed before retiring the completed anonymous session as well.
+    await migrateHandle({ bucket, anonUserId, subject, now });
     return finish("nothing-to-migrate", {});
   }
 
@@ -535,7 +552,8 @@ export async function migrateAnonymousData(options: {
     subjectHandle,
     porter,
     knownProjects,
-    knownSlugs
+    knownSlugs,
+    logging,
   });
 
   // ---- Second copy sweep, immediately before delete ----
@@ -550,8 +568,15 @@ export async function migrateAnonymousData(options: {
     subjectHandle,
     porter,
     knownProjects: firstSweep.projectMap,
-    knownSlugs: firstSweep.slugMap
+    knownSlugs: firstSweep.slugMap,
+    logging,
   });
+
+  // All project chat ports have now completed. Re-home the handle only after
+  // that last success and before publishing the permanent pointer/deleting
+  // the anonymous source. A handle failure therefore also leaves the source
+  // and pending claim available for a later retry.
+  await migrateHandle({ bucket, anonUserId, subject, now });
 
   // ---- Forwarding pointer BEFORE deleting originals (URL continuity) ----
   // Written after the second sweep so a project first seen there is in it.

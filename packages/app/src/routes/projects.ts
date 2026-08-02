@@ -9,7 +9,12 @@ import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
-import { emitDiagnostic } from "../lib/logging";
+import {
+  emitDiagnostic,
+  getLoggingContext,
+  serializeSiteStudioLoggingContext,
+  type LoggingVariables,
+} from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
 
 const createProjectSchema = z.object({
@@ -36,11 +41,12 @@ function toProjectSummary(id: string, metadata: ProjectMetadata | null) {
 }
 
 export function createProjectRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & LoggingVariables }>();
 
   app.get("/api/projects", async (c) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
+    const logging = getLoggingContext(c, user.operationalSubject);
+    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, logging);
     const projectIds = await storage.listProjects(user.id);
     const projects = await Promise.all(
       projectIds.map(async (projectId) => toProjectSummary(projectId, await storage.getProjectMetadata(user.id, projectId)))
@@ -51,7 +57,8 @@ export function createProjectRouter() {
 
   app.post("/api/projects", async (c) => {
     const user = getUser(c);
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const logging = getLoggingContext(c, user.operationalSubject);
+    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, logging);
     const parsed = createProjectSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
       jsonError("Invalid project payload", 400);
@@ -75,7 +82,7 @@ export function createProjectRouter() {
         projectId,
         name,
         files
-      });
+      }, serializeSiteStudioLoggingContext(logging));
     } catch (error) {
       if (error instanceof ProjectExistsError || (error instanceof Error && error.message.includes("already exists"))) {
         jsonError("Project already exists", 409);
@@ -112,7 +119,7 @@ export function createProjectRouter() {
           projectId: currentId,
           nextProjectId: nextId,
           name
-        });
+        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       } catch (error) {
         if (error instanceof ProjectExistsError || (error instanceof Error && error.message.includes("already exists"))) {
           jsonError("Project already exists", 409);
@@ -126,9 +133,7 @@ export function createProjectRouter() {
       try {
         await moveProjectAgentHistory(c.env, user.id, currentId, nextId);
       } catch (error) {
-        emitDiagnostic("warning", "agent_history_move_failed", {
-          subject: user.id,
-        });
+        emitDiagnostic("warning", "agent_history_move_failed", {}, getLoggingContext(c, user.operationalSubject));
       }
     }
 
@@ -143,7 +148,7 @@ export function createProjectRouter() {
           type: "rename-project-display",
           projectId: nextId,
           name
-        });
+        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       }
       updated = await storage.getProjectMetadata(user.id, nextId);
     } catch (error) {
@@ -160,7 +165,12 @@ export function createProjectRouter() {
     const user = getUser(c);
     const projectId = c.get("projectId");
 
-    await executeOwnerMutation(c.env, user.id, { type: "delete-project", projectId });
+    await executeOwnerMutation(
+      c.env,
+      user.id,
+      { type: "delete-project", projectId },
+      serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)),
+    );
 
     // SS-41: R2 deletion does not remove the project-named agent Durable
     // Object. Clear its persisted messages best-effort so recreating the same
@@ -168,9 +178,7 @@ export function createProjectRouter() {
     try {
       await clearProjectAgentHistory(c.env, user.id, projectId);
     } catch (error) {
-      emitDiagnostic("warning", "agent_history_clear_failed", {
-        subject: user.id,
-      });
+      emitDiagnostic("warning", "agent_history_clear_failed", {}, getLoggingContext(c, user.operationalSubject));
     }
     return c.json({ success: true, message: "Project deleted successfully" });
   });
@@ -214,7 +222,7 @@ export function createProjectRouter() {
       projectId,
       trigger: "manual",
       label: parsed.data.label
-    });
+    }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     if (!("snapshot" in result)) throw new Error("Unexpected mutation result");
     const snapshot = result.snapshot;
 
@@ -249,7 +257,7 @@ export function createProjectRouter() {
       type: "restore-snapshot",
       projectId,
       snapshotId
-    });
+    }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     if (!("restoredSnapshot" in result)) throw new Error("Unexpected mutation result");
 
     return c.json({

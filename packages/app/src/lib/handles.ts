@@ -29,15 +29,16 @@
  * `userhandles/{owner}` is claimed FIRST because it is the "one handle per user"
  * gate — two handles racing for the same owner both contend on that one key, so
  * the loser has written nothing under `handles/…`. On then losing the forward
- * `handles/{handle}` write, the claim rolls back only its own reverse slot.
+ * `handles/{handle}` write, the claim retires only the exact reverse generation
+ * it created. A newer healthy replacement can never be deleted by the loser.
  *
  * These two writes are NOT one transaction, so a crash BETWEEN them can still
  * leave a durable orphan: the reverse slot written while the forward record was
  * never claimed (or was later won by someone else), pointing the user at a
  * handle they do not own. `claimHandle`'s fast path therefore VERIFIES the pair
  * before trusting the reverse slot — if the forward record is missing or points
- * at a different owner, the reverse slot is a stale orphan and is REAPED
- * (deleted) so the claim proceeds cleanly, instead of the old behavior of
+ * at a different owner, the reverse slot is a stale orphan and is conditionally
+ * replaced so the claim proceeds cleanly, instead of the old behavior of
  * falsely reporting "you already have a handle" and hiding the orphan forever.
  * The repair atomically replaces the exact stale R2 generation with the new
  * claim rather than deleting it, so two concurrent repairers cannot erase one
@@ -164,18 +165,55 @@ export function userHandleRecordKey(ownerId: string): string {
  * Atomic put-if-absent: write `value` at `key` only when no object exists
  * there. R2's conditional put `onlyIf: { etagDoesNotMatch: "*" }` succeeds iff
  * the key is empty (the wildcard etag never matches an existing object) and
- * returns `null` on a failed condition (no write, no throw). Returns `true`
- * when this call wrote the object, `false` when the key was already claimed.
+ * returns `null` on a failed condition (no write, no throw). The R2 object
+ * returned on success carries the ETag needed to fence any later retirement.
  *
  * This is the compare-and-set the claim flow relies on so two concurrent claims
  * can't both "win" a handle or leave a user owning two handle records.
  */
-async function putJsonIfAbsent(bucket: R2Bucket, key: string, value: unknown): Promise<boolean> {
-  const result = await bucket.put(key, JSON.stringify(value), {
+async function putJsonObjectIfAbsent(
+  bucket: R2Bucket,
+  key: string,
+  value: unknown
+): Promise<R2Object | null> {
+  return bucket.put(key, JSON.stringify(value), {
     onlyIf: { etagDoesNotMatch: "*" },
     httpMetadata: { contentType: "application/json" }
   });
-  return result !== null;
+}
+
+async function putJsonIfAbsent(bucket: R2Bucket, key: string, value: unknown): Promise<boolean> {
+  return (await putJsonObjectIfAbsent(bucket, key, value)) !== null;
+}
+
+const RETIRED_REVERSE_CLAIM_AT = "1970-01-01T00:00:00.000Z";
+
+/**
+ * Retire only the exact reverse generation whose forward claim lost.
+ *
+ * R2 has no conditional delete. An unconditional rollback delete can yield
+ * after observing the failed forward claim, then erase a newer healthy reverse
+ * record written by recovery or another claimant. Replacing the losing
+ * generation with an immediately repairable orphan marker preserves the
+ * generation fence: if anything changed the slot, this CAS loses harmlessly.
+ */
+async function retireReverseClaim(
+  bucket: R2Bucket,
+  key: string,
+  expectedEtag: string,
+  handle: string
+): Promise<void> {
+  await bucket.put(
+    key,
+    JSON.stringify({
+      handle,
+      claimedAt: RETIRED_REVERSE_CLAIM_AT
+    } satisfies UserHandleRecord),
+    {
+      onlyIf: { etagMatches: expectedEtag },
+      httpMetadata: { contentType: "application/json" }
+    }
+  );
 }
 
 /** The handle a candidate resolves to, if any (handle -> owner lookup). */
@@ -188,12 +226,30 @@ export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Prom
 }
 
 /** Read the reverse mapping without treating it as proof of ownership. */
-async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
-  const record = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
+async function readRecordedUserHandle(
+  bucket: R2Bucket,
+  ownerId: string,
+): Promise<{ record: UserHandleRecord; etag?: string } | null> {
+  const object = await bucket.get(userHandleRecordKey(ownerId));
+  if (!object) return null;
+
+  let record: UserHandleRecord;
+  try {
+    record = JSON.parse(await object.text()) as UserHandleRecord;
+  } catch {
+    return null;
+  }
   if (!record || typeof record.handle !== "string" || !record.handle) {
     return null;
   }
-  return record.handle;
+  return {
+    record,
+    etag: typeof object.etag === "string" && object.etag ? object.etag : undefined,
+  };
+}
+
+async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
+  return (await readRecordedUserHandle(bucket, ownerId))?.record.handle ?? null;
 }
 
 /**
@@ -208,6 +264,28 @@ export async function getUserHandle(bucket: R2Bucket, ownerId: string): Promise<
   const handle = await getRecordedUserHandle(bucket, ownerId);
   if (!handle) return null;
   return (await resolveHandleOwner(bucket, handle)) === ownerId ? handle : null;
+}
+
+/**
+ * Resolve the effective public handle while an anonymous migration is being
+ * retried. A crash can commit the forward `handles/{handle}` update before the
+ * subject reverse record, leaving the anonymous reverse record as the only
+ * durable clue. `getUserHandle` intentionally rejects that stale reverse
+ * record, so migration planning needs this narrowly-scoped recovery read.
+ */
+export async function getMigrationHandle(
+  bucket: R2Bucket,
+  anonUserId: string,
+  subject: string
+): Promise<string | null> {
+  const subjectHandle = await getUserHandle(bucket, subject);
+  if (subjectHandle) return subjectHandle;
+
+  const anonRecord = await readRecordedUserHandle(bucket, anonUserId);
+  if (!anonRecord) return null;
+  const anonHandle = anonRecord.record.handle;
+  const owner = await resolveHandleOwner(bucket, anonHandle);
+  return owner === anonUserId || owner === subject ? anonHandle : null;
 }
 
 export type CheckHandleResult = {
@@ -264,10 +342,9 @@ export type ClaimHandleResult =
  *      A lost reverse claim means the user already has (or just took)
  *      a handle: if it's this same handle, succeed idempotently; otherwise 409.
  *   2. Claim the handle record `handles/{handle}` with put-if-absent. A lost
- *      claim means another user won this handle; roll back the reverse slot we
- *      just wrote (it points at a handle we don't own) and 409. The rollback is
- *      safe because we only ever delete the reverse record we ourselves wrote in
- *      step 1, and only on the path where the handle claim failed.
+ *      claim means another user won this handle; conditionally retire the exact
+ *      reverse generation written in step 1 and 409. The conditional write
+ *      cannot alter a newer generation installed by a concurrent request.
  *
  * Expected interleavings:
  *  - Same user, two handles A and B: both reach step 1 on the same
@@ -275,8 +352,8 @@ export type ClaimHandleResult =
  *    request that observes the fresh half-claim returns a retryable 409.
  *  - Two users X and Y, same handle H, fully interleaved: each claims its own
  *    distinct reverse slot in step 1 (different keys, both succeed), then both
- *    contend on `handles/H` in step 2. One wins; the other rolls back only its
- *    own reverse slot and 409s. No orphan, handle owned by exactly one user.
+ *    contend on `handles/H` in step 2. One wins; the other retires only its exact
+ *    reverse generation and 409s. The handle is owned by exactly one user.
  */
 export async function claimHandle(
   bucket: R2Bucket,
@@ -418,7 +495,7 @@ export async function claimHandle(
       if (currentOwner === ownerId) {
         return { ok: true, handle, alreadyOwned: true };
       }
-      await bucket.delete(reverseKey);
+      await retireReverseClaim(bucket, reverseKey, replaced.etag, handle);
       return { ok: false, status: 409, reason: "That handle is taken." };
     }
 
@@ -427,11 +504,12 @@ export async function claimHandle(
     // Step 1: atomically claim the per-user reverse slot. This is the "one handle
     // per user" gate and it comes FIRST so a lost race here means no handle record
     // was written by this attempt (no orphan).
-    const reverseWon = await putJsonIfAbsent(bucket, userHandleRecordKey(ownerId), {
+    const reverseKey = userHandleRecordKey(ownerId);
+    const reverseClaim = await putJsonObjectIfAbsent(bucket, reverseKey, {
       handle,
       claimedAt
     } satisfies UserHandleRecord);
-    if (!reverseWon) {
+    if (!reverseClaim) {
       // We lost the reverse slot to a concurrent claim by this same owner. Read
       // what actually landed: same handle → idempotent success; different → 409.
       const settled = await getUserHandle(bucket, ownerId);
@@ -446,7 +524,8 @@ export async function claimHandle(
     }
 
     // Step 2: atomically claim the handle record. We now own the reverse slot, so
-    // any failure here must NOT leave that slot pointing at a handle we don't own.
+    // any failure here must NOT leave an authoritative reverse claim pointing at
+    // a handle we don't own.
     const handleWon = await putJsonIfAbsent(bucket, handleRecordKey(handle), {
       ownerId,
       claimedAt
@@ -463,9 +542,9 @@ export async function claimHandle(
       return { ok: true, handle, alreadyOwned: true };
     }
 
-    // Another user owns the handle. Roll back the reverse slot we wrote in step 1
-    // so we never leave a user pointed at a handle they don't own, then 409.
-    await bucket.delete(userHandleRecordKey(ownerId));
+    // Another user owns the handle. Retire only the exact reverse generation we
+    // wrote in step 1, without risking a newer healthy replacement, then 409.
+    await retireReverseClaim(bucket, reverseKey, reverseClaim.etag, handle);
     return { ok: false, status: 409, reason: "That handle is taken." };
   }
 
@@ -499,10 +578,11 @@ export async function migrateHandle(options: {
 
   // Migration must inspect a stale reverse record so it can distinguish
   // "nothing to move" from forward-ownership drift and fail the import closed.
-  const anonHandle = await getRecordedUserHandle(bucket, anonUserId);
-  if (!anonHandle) {
+  const anonReverse = await readRecordedUserHandle(bucket, anonUserId);
+  if (!anonReverse) {
     return; // nothing to move
   }
+  const anonHandle = anonReverse.record.handle;
 
   // Re-home the forward record only when its current ETag still proves that it
   // belongs to the anonymous owner. A stale/orphaned reverse record must never
@@ -557,6 +637,17 @@ export async function migrateHandle(options: {
     claimedAt
   } satisfies UserHandleRecord);
 
-  // Drop the anon reverse record (handle record already re-homed above).
-  await bucket.delete(userHandleRecordKey(anonUserId)).catch(() => undefined);
+  // R2 has no conditional delete. Retire only the exact anonymous reverse
+  // generation observed above; if another anonymous request replaced it while
+  // migration was in flight, the ETag condition loses and that newer claim
+  // survives. A storage failure is best-effort cleanup: the stale reverse is
+  // non-authoritative because its forward record now points at the subject.
+  if (anonReverse.etag) {
+    await retireReverseClaim(
+      bucket,
+      userHandleRecordKey(anonUserId),
+      anonReverse.etag,
+      anonHandle,
+    ).catch(() => undefined);
+  }
 }

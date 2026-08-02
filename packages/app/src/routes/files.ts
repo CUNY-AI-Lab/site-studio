@@ -21,6 +21,7 @@ import { lintProject } from "../lib/a11y-lint";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { executeOwnerMutation } from "../lib/owner-mutations";
 import { readBoundedFormData } from "../lib/multipart";
+import { getLoggingContext, serializeSiteStudioLoggingContext, type LoggingVariables } from "../lib/logging";
 
 const saveFileSchema = z.object({
   path: z.string().min(1),
@@ -134,7 +135,7 @@ function validateImageBytes(fileName: string, bytes: Uint8Array) {
 }
 
 export function createFileRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables }>();
+  const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & LoggingVariables }>();
 
   app.get("/api/projects/:id/files", async (c) => {
     const storage = c.get("storage");
@@ -239,7 +240,7 @@ export function createFileRouter() {
         path: filePath,
         content,
         baseEtag
-      });
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       if (!("etag" in result)) throw new Error("Unexpected mutation result");
       const etag = result.etag;
       if (etag === null) {
@@ -264,7 +265,7 @@ export function createFileRouter() {
       projectId,
       path: filePath,
       content
-    });
+    }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     if (!("etag" in result) || result.etag === null) throw new Error("Unexpected mutation result");
     const etag = result.etag;
     return c.json({
@@ -285,7 +286,12 @@ export function createFileRouter() {
       jsonError("Cannot delete protected files", 403);
     }
 
-    await executeOwnerMutation(c.env, user.id, { type: "delete-file", projectId, path: filePath });
+    await executeOwnerMutation(
+      c.env,
+      user.id,
+      { type: "delete-file", projectId, path: filePath },
+      serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)),
+    );
     return c.json({ success: true, message: "File deleted successfully" });
   });
 
@@ -322,7 +328,7 @@ export function createFileRouter() {
         projectId,
         oldPath: currentPath,
         newPath: nextPath
-      });
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
       if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
         jsonError("A file with that name already exists", 409);
@@ -417,7 +423,7 @@ export function createFileRouter() {
           content: buffer,
           admissionId: uploadAdmissionId,
           ...uploadPolicy
-        });
+        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Upload admission failed";
         if (message.includes("rate limit")) jsonError(message, 429);

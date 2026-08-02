@@ -127,6 +127,7 @@ function createTestApp() {
 
 function createEnv(bucket: R2Bucket): Env {
   return {
+    CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,

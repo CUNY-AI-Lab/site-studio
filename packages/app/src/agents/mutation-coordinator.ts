@@ -3,6 +3,10 @@ import type { Env } from "../types";
 import { OwnerMutationService, type OwnerMutation, type OwnerMutationResult } from "../lib/owner-mutations";
 import { migrateAnonymousData, type MigrationResult } from "../lib/migration";
 import { createAgentHistoryPorter } from "../lib/agent-porter";
+import {
+  createSiteStudioBoundaryContext,
+  type SiteStudioLoggingContextData,
+} from "../lib/logging";
 
 export class SerializedOperationQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -27,16 +31,25 @@ export class MutationCoordinator extends DurableObject<Env> {
    */
   private readonly mutations = new SerializedOperationQueue();
 
-  async execute(ownerId: string, operation: OwnerMutation): Promise<OwnerMutationResult> {
+  async execute(
+    ownerId: string,
+    operation: OwnerMutation,
+    logging?: SiteStudioLoggingContextData,
+  ): Promise<OwnerMutationResult> {
     return this.mutations.run(() =>
-      new OwnerMutationService(this.env.SITE_STUDIO_BUCKET, this.ctx.storage).execute(ownerId, operation)
+      new OwnerMutationService(
+        this.env.SITE_STUDIO_BUCKET,
+        this.ctx.storage,
+        logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
+      ).execute(ownerId, operation)
     );
   }
 
   async migrateAnonymous(
     anonUserId: string,
     subject: string,
-    anonSessionId?: string
+    anonSessionId?: string,
+    logging?: SiteStudioLoggingContextData,
   ): Promise<MigrationResult> {
     return this.mutations.run(async () => {
       // Account import shares the anonymous owner's mutation queue. Recover a
@@ -44,7 +57,8 @@ export class MutationCoordinator extends DurableObject<Env> {
       // never copies a hidden partial create or races its compensation.
       await new OwnerMutationService(
         this.env.SITE_STUDIO_BUCKET,
-        this.ctx.storage
+        this.ctx.storage,
+        logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
       ).recover(anonUserId);
       return migrateAnonymousData({
         bucket: this.env.SITE_STUDIO_BUCKET,
@@ -52,7 +66,8 @@ export class MutationCoordinator extends DurableObject<Env> {
         anonUserId,
         subject,
         anonSessionId,
-        porter: createAgentHistoryPorter(this.env)
+        porter: createAgentHistoryPorter(this.env),
+        logging: logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
       });
     });
   }

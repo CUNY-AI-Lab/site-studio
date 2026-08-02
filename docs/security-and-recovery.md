@@ -7,9 +7,11 @@ live routes, bindings, secrets, lifecycle rules, backups, or deployed versions.
 
 Protected requests accept identity only from a verified
 `X-CAIL-Identity-JWT`: RS256, required `kid`, configured public JWKS, exact
-single deployment issuer, and scalar audience `cail:site-studio`. Missing or
-malformed `CAIL_IDENTITY_JWKS` or `CAIL_IDENTITY_ISSUER` fails closed;
-production and staging issuers are never combined. An invalid presented token
+single deployment issuer, and scalar audience `cail:site-studio`. The
+source-owned `CAIL_IDENTITY_PROFILE` maps production and staging to their exact
+CAIL issuer constants; the issuer binding must equal that mapping and cannot
+authorize a new trust root. Missing or malformed JWKS, profile, or issuer fails
+closed; production and staging issuers are never combined. An invalid presented token
 is terminal. With `CAIL_REQUIRE_IDENTITY=true`, an absent token is also rejected.
 
 The durable owner key is the JWT subject preserved byte-for-byte. Email and
@@ -69,6 +71,12 @@ the same owner. Account import re-homes a handle only with an ETag condition
 that proves the forward record still belongs to the anonymous owner; ownership
 drift leaves the import pending.
 
+Because the Workers R2 binding has no conditional delete, a repair or ordinary
+claim that loses the forward-handle race does not unconditionally delete the
+reverse key. It conditionally retires only the exact losing reverse generation
+into an immediately repairable orphan marker. A newer healthy replacement
+therefore survives the rollback.
+
 Anonymous-to-subject import has a separate `MigrationCoordinator`, keyed by the
 anonymous owner, as its claim-once authority. Data copies use conditional
 destination writes. A lost condition is accepted only for byte-identical data;
@@ -98,9 +106,12 @@ socket, and requires a retry on the newly authenticated connection.
 
 `GET /api/quota` reads the gateway's typed `GET /quota` snapshot with the
 verified JWT, removes the subject, and returns a private no-store response. The
-chat panel displays the remaining percentage. Gateway `quota_exceeded` messages
-remain user-visible and are not retried. Gateway accounting is authoritative;
-Site Studio logs do not duplicate spend facts.
+chat panel displays the remaining percentage. The quota probe is optional: an
+`authentication_required` response hides the meter without redirecting, so an
+anonymous or local editor remains usable. Other protected API calls retain the
+canonical 401 login redirect. Gateway `quota_exceeded` messages remain
+user-visible and are not retried. Gateway accounting is authoritative; Site
+Studio logs do not duplicate spend facts.
 
 ## Upload admission
 

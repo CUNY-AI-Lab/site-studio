@@ -4,14 +4,21 @@ import type { Env } from "../types";
 import { CSRF_ERROR_BODY } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession } from "../lib/test-utils";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
+import { SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER } from "../lib/logging";
+import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
 
 // The real `agents` package imports `cloudflare:`-scheme modules that only
 // exist in the Workers runtime; stub getAgentByName with a DO stub that echoes
-// the forwarded request URL so the WS-gate behavior stays observable.
+// the forwarded URL and server-owned subject channel so the WS-gate behavior
+// stays observable.
 vi.mock("agents", () => ({
   getAgentByName: vi.fn(async () => ({
-    fetch: async (req: Request) =>
-      new Response(JSON.stringify({ forwardedUrl: req.url }), {
+      fetch: async (req: Request) =>
+      new Response(JSON.stringify({
+        forwardedUrl: req.url,
+        forwardedOperationalSubject: req.headers.get("x-site-studio-verified-operational-subject"),
+        forwardedIdentityJwt: req.headers.get(SITE_STUDIO_AGENT_PROPS_HEADER),
+      }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
       }),
@@ -24,6 +31,7 @@ import { getAgentByName } from "agents";
 
 const USER_ID = TEST_SUBJECTS.alice;
 const PROJECT_ID = "proj-1";
+const OPERATIONAL_SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 const OWN_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 
@@ -50,7 +58,10 @@ describe("agent route WebSocket gate (rule 4)", () => {
   let kv: ReturnType<typeof createMockKV>;
   let bucket: R2Bucket;
   let csrf: CsrfSession;
-  let app: Hono<{ Bindings: Env; Variables: { user: { id: string }; cailGatewayJwt?: string } }>;
+  let app: Hono<{
+    Bindings: Env;
+    Variables: { user: { id: string; operationalSubject?: string }; cailGatewayJwt?: string };
+  }>;
 
   const env = () =>
     ({
@@ -65,9 +76,12 @@ describe("agent route WebSocket gate (rule 4)", () => {
     bucket = createMockBucket();
     csrf = await mintCsrfSession(bucket, USER_ID);
     vi.mocked(getAgentByName).mockClear();
-    app = new Hono<{ Bindings: Env; Variables: { user: { id: string }; cailGatewayJwt?: string } }>();
+    app = new Hono<{
+      Bindings: Env;
+      Variables: { user: { id: string; operationalSubject?: string }; cailGatewayJwt?: string };
+    }>();
     app.use("*", async (c, next) => {
-      c.set("user", { id: USER_ID });
+      c.set("user", { id: USER_ID, operationalSubject: OPERATIONAL_SUBJECT });
       c.set("cailGatewayJwt", "verified-token");
       await next();
     });
@@ -146,14 +160,31 @@ describe("agent route WebSocket gate (rule 4)", () => {
   it("forwards the middleware-selected identity token in agent props", async () => {
     const res = await app.request(
       `${OWN_ORIGIN}/api/agents/site-builder/${PROJECT_ID}/get-messages`,
-      { headers: { "X-CAIL-Identity-JWT": "unverified-raw-token" } },
+      {
+        headers: {
+          "X-CAIL-Identity-JWT": "unverified-raw-token",
+          [SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER]: "client-chosen-subject",
+          [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: "client-chosen-token" }),
+        },
+      },
       env()
     );
     expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      forwardedOperationalSubject: OPERATIONAL_SUBJECT,
+      forwardedIdentityJwt: JSON.stringify({ identityJwt: "verified-token" }),
+    });
     expect(vi.mocked(getAgentByName)).toHaveBeenLastCalledWith(
       expect.anything(),
       `${USER_ID}:${PROJECT_ID}`,
-      { props: { userId: USER_ID, projectId: PROJECT_ID, identityJwt: "verified-token" } }
+      {
+        props: {
+          userId: USER_ID,
+          projectId: PROJECT_ID,
+          identityJwt: "verified-token",
+          operationalSubject: OPERATIONAL_SUBJECT,
+        },
+      }
     );
   });
 });

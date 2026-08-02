@@ -4,6 +4,7 @@ import { isSnapshotSkipped } from "../types";
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { OwnerMutationService, type MutationJournalStore } from "../lib/owner-mutations";
+import { createSiteStudioBoundaryContext } from "../lib/logging";
 
 // Mock R2 bucket
 function createMockBucket() {
@@ -146,7 +147,10 @@ describe("R2ProjectStorage", () => {
 
   beforeEach(() => {
     bucket = createMockBucket();
-    storage = new R2ProjectStorage(bucket as any);
+    storage = new R2ProjectStorage(
+      bucket as any,
+      createSiteStudioBoundaryContext({ CAIL_LOG_ENV: "test" }),
+    );
   });
 
   describe("createProject", () => {

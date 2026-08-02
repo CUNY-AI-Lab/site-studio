@@ -75,10 +75,12 @@ function createCoordinatorNamespace(): MockCoordinator {
 function createEnv(overrides?: Partial<Env>): Env {
   const now = Date.now();
   const env: Env = {
+    CAIL_LOG_ENV: "test",
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
     CAIL_IDENTITY_ISSUER: "https://tools.ailab.gc.cuny.edu/cail-sso",
+    CAIL_IDENTITY_PROFILE: "production",
     CAIL_MODEL: "test-model",
     CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
     CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),

@@ -24,8 +24,11 @@ import { isLoopbackOrigin } from "../lib/csrf";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
+  createSiteStudioBoundaryContext,
   emitDiagnostic,
   getBoundaryLogger,
+  getLoggingContext,
+  serializeSiteStudioLoggingContext,
   errorCodeFrom,
   getCorrelation,
   mintCorrelation,
@@ -188,7 +191,9 @@ export function createPublishRouter() {
       action: "publish",
       principal: principalForOperationalSubject(user.operationalSubject),
       correlation: getCorrelation(c) ?? mintCorrelation(),
-    }, getBoundaryLogger(c));
+    }, getBoundaryLogger(c) ?? createSiteStudioBoundaryContext(c.env, {
+      operationalSubject: user.operationalSubject,
+    }).logger);
     const actionAgent = c.env.SITE_BUILDER_AGENT.get(
       c.env.SITE_BUILDER_AGENT.idFromName(`${user.id}:${projectId}`),
     );
@@ -211,7 +216,7 @@ export function createPublishRouter() {
           desiredSlug,
           publishedBaseUrl: getPublishedBaseUrl(c),
           handle
-        });
+        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       } catch (error) {
         if (error instanceof Error && error.message.includes("Project not found")) {
           jsonError("Project not found", 404);
@@ -250,8 +255,11 @@ export function createPublishRouter() {
         emitDiagnostic(
           "error",
           "publish_terminal_record_failed",
-          { subject: user.id },
-          getBoundaryLogger(c),
+          {},
+          getLoggingContext(c, user.operationalSubject)
+            ?? createSiteStudioBoundaryContext(c.env, {
+              operationalSubject: user.operationalSubject,
+            }),
         );
       }
       const a11yFindings = await collectPublishA11yFindings(storage, user.id, projectId);
@@ -297,7 +305,7 @@ export function createPublishRouter() {
         type: "unpublish-project",
         projectId,
         unpublishedAt: new Date().toISOString()
-      });
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
       if (error instanceof Error && error.message.includes("Project not found")) {
         jsonError("Project not found", 404);
@@ -371,7 +379,7 @@ export function createPublishRouter() {
         maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
         maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
         uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
-      });
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Thumbnail admission failed";
       if (message.includes("rate limit")) jsonError(message, 429);
@@ -471,7 +479,7 @@ async function resolvePublishedSite(
 
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
 async function serveByHandle(c: AppContext, rawPath: string) {
-  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
   const handle = c.req.param("handle");
   const slug = c.req.param("slug");
   if (!handle || !slug) {
@@ -505,7 +513,7 @@ async function serveByHandle(c: AppContext, rawPath: string) {
  * content directly, so pre-handle published sites keep working unchanged.
  */
 async function serveLegacySite(c: AppContext, rawPath: string) {
-  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
   const requestedUserId = c.req.param("userId");
   const slug = c.req.param("slug");
   if (!requestedUserId || !slug) {

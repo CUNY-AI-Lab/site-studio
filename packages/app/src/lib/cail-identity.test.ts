@@ -18,7 +18,11 @@ const STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 const AUDIENCE = "cail:site-studio";
 
 let issuer: TestIdentityIssuer;
-let currentEnv: { CAIL_IDENTITY_JWKS: string; CAIL_IDENTITY_ISSUER: string };
+let currentEnv: {
+  CAIL_IDENTITY_JWKS: string;
+  CAIL_IDENTITY_ISSUER: string;
+  CAIL_IDENTITY_PROFILE: string;
+};
 
 beforeAll(async () => {
   // The kit's default issuer IS the canonical production issuer.
@@ -26,6 +30,7 @@ beforeAll(async () => {
   currentEnv = {
     CAIL_IDENTITY_JWKS: issuer.jwksJson,
     CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+    CAIL_IDENTITY_PROFILE: "production",
   };
 });
 
@@ -113,13 +118,18 @@ async function signLocalJwt(
 }
 
 let localKey: LocalKey;
-let localEnv: { CAIL_IDENTITY_JWKS: string; CAIL_IDENTITY_ISSUER: string };
+let localEnv: {
+  CAIL_IDENTITY_JWKS: string;
+  CAIL_IDENTITY_ISSUER: string;
+  CAIL_IDENTITY_PROFILE: string;
+};
 
 beforeAll(async () => {
   localKey = await generateLocalKey("local");
   localEnv = {
     CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [localKey.jwk] }),
     CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+    CAIL_IDENTITY_PROFILE: "production",
   };
 });
 
@@ -140,6 +150,7 @@ describe("getRequestIdentity", () => {
     await expect(getRequestIdentity(requestWithToken(token), {
       ...currentEnv,
       CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
+      CAIL_IDENTITY_PROFILE: "staging",
     }))
       .resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
     await expect(getRequestIdentity(requestWithToken(token), currentEnv)).resolves.toBeNull();
@@ -206,6 +217,40 @@ describe("getRequestIdentity", () => {
     expect(await getRequestIdentity(requestWithToken(lookAlike), currentEnv)).toBeNull();
   });
 
+  it("rejects a self-consistent attacker issuer, JWKS, and token configuration", async () => {
+    const attackerIssuer = "https://evil.example/cail-sso";
+    const attacker = await createTestIdentityIssuer({ kid: "attacker" });
+    const token = await attacker.mintIdentityJwt({
+      audience: AUDIENCE,
+      issuer: attackerIssuer,
+    });
+
+    await expect(getRequestIdentity(requestWithToken(token), {
+      CAIL_IDENTITY_JWKS: attacker.jwksJson,
+      CAIL_IDENTITY_ISSUER: attackerIssuer,
+      CAIL_IDENTITY_PROFILE: "production",
+    })).resolves.toBeNull();
+  });
+
+  it("fails closed when profile and source-owned issuer authority disagree", async () => {
+    const productionToken = await mintJwt();
+    const stagingToken = await mintJwt({ issuer: STAGING_ISSUER });
+
+    for (const env of [
+      { ...currentEnv, CAIL_IDENTITY_PROFILE: undefined },
+      { ...currentEnv, CAIL_IDENTITY_PROFILE: "unknown" },
+      { ...currentEnv, CAIL_IDENTITY_PROFILE: "staging" },
+    ]) {
+      await expect(getRequestIdentity(requestWithToken(productionToken), env))
+        .resolves.toBeNull();
+    }
+    await expect(getRequestIdentity(requestWithToken(stagingToken), {
+      ...currentEnv,
+      CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
+      CAIL_IDENTITY_PROFILE: "production",
+    })).resolves.toBeNull();
+  });
+
   it("rejects an empty subject", async () => {
     const token = await mintJwt({ subject: "" });
     expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
@@ -237,6 +282,7 @@ describe("resolveRequestIdentity", () => {
         keys: [...oldIssuer.jwks.keys, ...newIssuer.jwks.keys],
       }),
       CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+      CAIL_IDENTITY_PROFILE: "production",
     };
 
     await expect(resolveRequestIdentity(
@@ -264,6 +310,7 @@ describe("resolveRequestIdentity", () => {
     await expect(resolveRequestIdentity(requestWithToken(token), {
       CAIL_IDENTITY_JWKS: jwks,
       CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
+      CAIL_IDENTITY_PROFILE: "production",
     }))
       .resolves.toEqual({ status: "invalid" });
   });
@@ -275,6 +322,7 @@ describe("resolveRequestIdentity", () => {
       await expect(resolveRequestIdentity(requestWithToken(token), {
         CAIL_IDENTITY_JWKS: currentEnv.CAIL_IDENTITY_JWKS,
         CAIL_IDENTITY_ISSUER: issuerValue,
+        CAIL_IDENTITY_PROFILE: "production",
       })).resolves.toEqual({ status: "invalid" });
     },
   );

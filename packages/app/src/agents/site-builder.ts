@@ -3,12 +3,17 @@ import {
   createToolsFromClientSchemas,
   type ChatResponseResult,
 } from "@cloudflare/ai-chat";
-import { callable, type Connection, type ConnectionContext } from "agents";
+import {
+  callable,
+  getCurrentAgent,
+  type Connection,
+  type ConnectionContext,
+} from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
-import type { Env, SiteBuilderAgentProps, SnapshotResult } from "../types";
+import type { Env, SnapshotResult } from "../types";
 import { isSnapshotSkipped } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
@@ -22,9 +27,6 @@ import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 import {
-  REQUEST_ID_RE,
-  correlationFromHeaders,
-  type CailCorrelation,
   type CailOutcome,
   type CailTerminalReason,
 } from "@cuny-ai-lab/cail-log";
@@ -40,11 +42,16 @@ import {
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
+  createSiteStudioConnectionLoggingState,
+  createSiteStudioLoggingContext,
   createSiteStudioBoundaryLogger,
   emitDiagnostic,
   errorCodeFrom,
   mintCorrelation,
   principalForOperationalSubject,
+  serializeSiteStudioLoggingContext,
+  type SiteStudioConnectionLoggingState,
+  type SiteStudioLoggingContext,
   withCorrelationFetch,
 } from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
@@ -55,8 +62,6 @@ export { describeModelStreamError } from "../lib/model-stream-error";
 type Scope = {
   userId: string;
   projectId: string;
-  /** Verified `log_sub`; logging only, never derived from userId. */
-  operationalSubject?: string;
 };
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
@@ -131,6 +136,13 @@ const MAX_SNAPSHOT_LABEL_CHARS = 120;
 const MAX_OBSERVABILITY_EVENTS = 400;
 const MAX_OBSERVABILITY_REQUESTS = 20;
 const OBSERVABILITY_STALL_MS = 15_000;
+/**
+ * Action and call IDs are event identities, not transport request
+ * correlations. cail-log's request validator intentionally accepts UUIDv4
+ * and UUIDv7; this lifecycle contract remains UUIDv4-only.
+ */
+export const SITE_STUDIO_EVENT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CODEMODE_DESCRIPTION = `Inspect and modify the current Site Studio project inside a sandboxed Dynamic Worker.
 
 Project APIs:
@@ -346,8 +358,10 @@ export function createProjectTools(
   },
   fetchImpl?: typeof fetch,
   mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
+  logging?: SiteStudioLoggingContext,
 ) {
-  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
+  const serializedLogging = serializeSiteStudioLoggingContext(logging);
+  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
   let snapshotPromise: Promise<SnapshotResult> | null = null;
 
   async function writeIfAbsent(path: string, content: string): Promise<string | null> {
@@ -356,7 +370,7 @@ export function createProjectTools(
       projectId: scope.projectId,
       path,
       content
-    });
+    }, serializedLogging);
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
@@ -368,7 +382,7 @@ export function createProjectTools(
       path,
       content,
       baseEtag
-    });
+    }, serializedLogging);
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
@@ -385,7 +399,7 @@ export function createProjectTools(
         projectId: scope.projectId,
         trigger: snapshotOptions?.trigger || "agent",
         label: snapshotOptions?.label
-      }).then((result) => {
+      }, serializedLogging).then((result) => {
         if (!("snapshot" in result)) throw new Error("Unexpected mutation result");
         return result.snapshot;
       });
@@ -393,9 +407,7 @@ export function createProjectTools(
 
     const result = await snapshotPromise;
     if (isSnapshotSkipped(result)) {
-      emitDiagnostic("warning", "snapshot_too_large", {
-        subject: scope.userId,
-      });
+      emitDiagnostic("warning", "snapshot_too_large", {}, logging);
     }
   }
 
@@ -799,7 +811,7 @@ export function createProjectTools(
             projectId: scope.projectId,
             oldPath: currentPath,
             newPath: nextPath
-          });
+          }, serializedLogging);
         } catch (error) {
           if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
             return {
@@ -861,7 +873,7 @@ export function createProjectTools(
           type: "delete-file",
           projectId: scope.projectId,
           path: filePath
-        });
+        }, serializedLogging);
         mutationLifecycle?.acknowledgeMutation();
 
         return {
@@ -907,7 +919,7 @@ export function createProjectTools(
           projectId: scope.projectId,
           files: replacementFiles,
           label: `Before applying ${templateId} template`
-        });
+        }, serializedLogging);
         mutationLifecycle?.acknowledgeMutation();
         return { ok: true as const, templateId, filesWritten: Object.keys(replacementFiles).length };
       }
@@ -1043,7 +1055,7 @@ export function createProjectTools(
                 env.SITE_STUDIO_UPLOADS_PER_MINUTE,
                 "SITE_STUDIO_UPLOADS_PER_MINUTE"
               )
-            });
+            }, serializedLogging);
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
             return saved.written;
           }
@@ -1065,12 +1077,13 @@ function createChatTools(
   clientTools?: Parameters<typeof createToolsFromClientSchemas>[0],
   fetchImpl?: typeof fetch,
   mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
+  logging?: SiteStudioLoggingContext,
 ) {
   const projectTools = createProjectTools(env, scope, identityJwt, {
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
-  }, fetchImpl, mutationLifecycle);
-  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET);
+  }, fetchImpl, mutationLifecycle, logging);
+  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
     globalOutbound: null,
@@ -1166,44 +1179,32 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private observabilitySequence = 0;
   private buildActionAwaitingPersistence: SiteStudioActionLifecycle | null = null;
   /**
-   * The verified caller JWT, captured from connection props (routes/agents.ts).
-   * Forwarded to the CAIL model proxy on each model call. It refreshes on every
-   * connection, and the adapter rejects an expired token before an outbound
-   * gateway POST.
+   * Operational subject is deliberately not stored on the Durable Object.
+   * Each connection receives the route's middleware-verified subject and JWT
+   * through immutable PartyServer state, so missing or rotated values cannot
+   * reuse a previous connection's credentials.
    */
-  private identityJwt: string | null = null;
-
   /**
-   * Correlation for the wide events this agent emits and for its outbound CAIL
-   * gateway calls. Adopted from the forwarded request's `traceparent` /
-   * `X-CAIL-Request-Id` at connection time (routes/agents.ts stamps them);
-   * minted fresh only when no captured request exists (cail-log L7).
+   * Initialization props are intentionally not retained as caller credentials.
+   * `onStart` runs once per DO lifetime; the per-connection server-owned props
+   * header is read in `onConnect` below instead.
    */
-  private correlation: CailCorrelation | null = null;
-
-  /**
-   * Capture the caller JWT from connection props on first wake. `onStart` runs
-   * once per DO lifetime, so `onConnect` (below) is the per-connection refresh.
-   */
-  onStart(props?: Record<string, unknown>): void {
-    const jwt = props?.identityJwt;
-    if (typeof jwt === "string" && jwt) {
-      this.identityJwt = jwt;
-    }
-  }
+  onStart(_props?: Record<string, unknown>): void {}
 
   /**
    * Refresh the caller JWT on every new WebSocket connection. The upgrade
    * request carries the middleware-verified token in connection props.
    */
-  onConnect(_connection: Connection, ctx: ConnectionContext): void {
-    // Adopt the boundary's correlation for this connection's unit(s) of work.
-    this.correlation = correlationFromHeaders(ctx.request);
-
+  onConnect(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    ctx: ConnectionContext,
+  ): void {
+    // Adopt the boundary's correlation into per-connection state. A second
+    // socket therefore cannot overwrite the trace/request id used by a first
+    // socket that is still mid-turn.
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
-    if (identityJwt) {
-      this.identityJwt = identityJwt;
-    }
+    connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt));
+
   }
 
   async getObservability(): Promise<SiteBuilderObservabilitySnapshot> {
@@ -1214,7 +1215,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   recordActionAdmission(admission: ActionAttemptAdmission): void {
     const expectedRoute = OBSERVABILITY_CONTRACT.actions[admission.action]?.route;
     if (
-      !REQUEST_ID_RE.test(admission.actionId)
+      !SITE_STUDIO_EVENT_ID_RE.test(admission.actionId)
       || admission.route !== expectedRoute
       || !Number.isFinite(Date.parse(admission.admittedAt))
     ) {
@@ -1237,7 +1238,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   /** A terminal updates an existing admission; it can never fabricate one. */
   recordActionTerminal(terminal: ActionAttemptTerminal): void {
     if (
-      !REQUEST_ID_RE.test(terminal.actionId)
+      !SITE_STUDIO_EVENT_ID_RE.test(terminal.actionId)
       || !Number.isFinite(Date.parse(terminal.terminalAt))
       || !Number.isFinite(terminal.durationMs)
       || terminal.durationMs < 0
@@ -1345,10 +1346,22 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   ) {
     const requestId = options?.requestId ?? "unknown";
 
-    const correlation = this.correlation ?? (this.correlation = mintCorrelation());
+    const connection = getCurrentAgent().connection as
+      | Connection<SiteStudioConnectionLoggingState>
+      | undefined;
+    const connectionState = connection?.state;
+    const correlation = connectionState?.correlation ?? mintCorrelation();
+    const identityJwt = connectionState?.identityJwt ?? null;
+    const logging = createSiteStudioLoggingContext(
+      createSiteStudioBoundaryLogger(this.env),
+      {
+        correlation,
+        operationalSubject: connectionState?.operationalSubject,
+      },
+    );
 
     if (!this.env.CAIL_API_BASE) {
-      emitDiagnostic("error", "cail_api_base_missing", { status: 500 });
+      emitDiagnostic("error", "cail_api_base_missing", { status: 500 }, logging);
       return new Response(JSON.stringify({ error: "CAIL_API_BASE is not configured" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
@@ -1359,19 +1372,19 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     try {
       scope = parseScope(this.name);
     } catch {
-      emitDiagnostic("warning", "invalid_agent_scope", { status: 400 });
+      emitDiagnostic("warning", "invalid_agent_scope", { status: 400 }, logging);
       return new Response(JSON.stringify({ error: "Invalid agent scope" }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
       });
     }
-    const storage = new R2ProjectStorage(this.env.SITE_STUDIO_BUCKET);
+    const scopeLogging = logging;
+    const storage = new R2ProjectStorage(this.env.SITE_STUDIO_BUCKET, scopeLogging);
 
     if (!(await storage.projectExists(scope.userId, scope.projectId))) {
       emitDiagnostic("warning", "project_not_found", {
-        subject: scope.userId,
         status: 404,
-      });
+      }, scopeLogging);
       return new Response(JSON.stringify({ error: "Project not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" }
@@ -1380,9 +1393,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const buildAction = new SiteStudioActionLifecycle({
       action: "build",
-      principal: principalForOperationalSubject(scope.operationalSubject),
+      principal: principalForOperationalSubject(logging.operationalSubject),
       correlation,
-    }, createSiteStudioBoundaryLogger(this.env), Date.now, {
+    }, scopeLogging.logger, Date.now, {
       admit: (admission) => this.recordActionAdmission(admission),
       terminal: (terminal) => this.recordActionTerminal(terminal),
     });
@@ -1399,7 +1412,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // this request's traceparent + X-CAIL-Request-Id so spend and upstream
       // errors are followable end to end (browser → worker → DO → gateway).
       const gatewayFetch = withCorrelationFetch(correlation);
-      const model = createCailModel(this.env, this.identityJwt, gatewayFetch);
+      const model = createCailModel(this.env, identityJwt, gatewayFetch);
       const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
@@ -1407,11 +1420,12 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       const tools = createChatTools(
         this.env,
         scope,
-        this.identityJwt,
+        identityJwt,
         latestUserRequest,
         options?.clientTools,
         gatewayFetch,
         buildAction,
+        scopeLogging,
       );
 
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId);

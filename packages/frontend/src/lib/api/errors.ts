@@ -54,6 +54,17 @@ export class ApiError extends Error {
 }
 
 /**
+ * Options for a raw-response API request.
+ *
+ * Authentication redirects remain enabled by default for protected calls. An
+ * explicitly optional probe (such as the quota snapshot) may disable only that
+ * redirect while retaining the normal response/error handling.
+ */
+export interface ApiResponseFetchOptions extends RequestInit {
+	redirectOnAuthenticationRequired?: boolean;
+}
+
+/**
  * Redirect the browser to the CAIL SSO login, preserving where to return.
  *
  * The SSO gate serves `/login?rt=<same-origin-path>` (docs/INTEGRATION.md §2).
@@ -62,9 +73,27 @@ export class ApiError extends Error {
 function redirectToLogin(loginUrl: string): void {
 	if (typeof window === 'undefined') return;
 	const rt = window.location.pathname + window.location.search;
-	// Ignore any absolute login_url the backend might send; always same-origin.
-	const path = loginUrl && loginUrl.startsWith('/') ? loginUrl : '/login';
-	window.location.assign(`${path}?rt=${encodeURIComponent(rt)}`);
+	let target = new URL('/login', window.location.origin);
+	try {
+		const candidate = new URL(loginUrl, window.location.origin);
+		// A leading slash is part of the CAIL contract. URL parsing additionally
+		// rejects protocol-relative and backslash-normalized cross-origin forms.
+		if (
+			loginUrl.startsWith('/') &&
+			candidate.origin === window.location.origin &&
+			!candidate.pathname.startsWith('//')
+		) {
+			target = candidate;
+		}
+	} catch {
+		// Malformed or non-URL values fall back to the fixed same-origin login path.
+	}
+	target.hash = '';
+	target.searchParams.set('rt', rt);
+	// Navigate with the already-validated absolute serialization. Re-emitting a
+	// normalized pathname that begins `//` would make Location reparse it as a
+	// scheme-relative cross-origin URL.
+	window.location.assign(target.href);
 }
 
 function isAuthenticationRequiredEnvelope(status: number, errorData: any): boolean {
@@ -119,13 +148,15 @@ export async function handleApiError(response: Response): Promise<never> {
 
 /**
  * Wrapper for fetch callers that need the raw Response (blob downloads, 415
- * branching) while still honoring the shared 401 authentication redirect.
+ * branching) while still honoring the shared 401 authentication redirect by
+ * default. Optional probes may set `redirectOnAuthenticationRequired: false`.
  */
 export async function apiResponseFetch(
 	input: RequestInfo | URL,
-	init?: RequestInit
+	init?: ApiResponseFetchOptions
 ): Promise<Response> {
-	const response = await csrfFetch(input, init);
+	const { redirectOnAuthenticationRequired, ...requestInit } = init ?? {};
+	const response = await csrfFetch(input, requestInit);
 
 	if (response.status !== 401) {
 		return response;
@@ -142,7 +173,9 @@ export async function apiResponseFetch(
 		return response;
 	}
 
-	maybeRedirectToLogin(response.status, errorData);
+	if (redirectOnAuthenticationRequired !== false) {
+		maybeRedirectToLogin(response.status, errorData);
+	}
 	throw toApiError(response, errorData);
 }
 

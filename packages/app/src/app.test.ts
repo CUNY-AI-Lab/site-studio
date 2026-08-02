@@ -42,6 +42,7 @@ let bucket: R2Bucket;
 
 function createEnv(): Env {
   return {
+    CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],

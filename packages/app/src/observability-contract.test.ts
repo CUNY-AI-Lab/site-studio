@@ -5,10 +5,26 @@ import {
   OBSERVABILITY_CONTRACT_VERSION,
   auditTelemetryLifecyclePairs,
   createCloudflareHealthCheckSpec,
+  CAIL_LOG_ENVIRONMENTS,
+  parseCailLogEnvironment,
 } from "../../observability-core/src/contract";
 import { createHealthRouter } from "./routes/health";
+import type { Env } from "./types";
 
 describe("observability source contract", () => {
+  it("accepts only the exact cail-log environment vocabulary", () => {
+    expect(CAIL_LOG_ENVIRONMENTS).toEqual([
+      "production",
+      "staging",
+      "development",
+      "test",
+    ]);
+    expect(CAIL_LOG_ENVIRONMENTS.every((value) => parseCailLogEnvironment(value) === value)).toBe(true);
+    for (const value of [undefined, null, "", " production", "production ", "PRODUCTION", "qa"]) {
+      expect(parseCailLogEnvironment(value)).toBeUndefined();
+    }
+  });
+
   it.each([
     ["app", new URL("../wrangler.jsonc", import.meta.url)],
     ["publisher", new URL("../../worker/wrangler.jsonc", import.meta.url)],
@@ -312,7 +328,11 @@ describe("observability source contract", () => {
   });
 
   it("returns a stable, no-store app liveness response", async () => {
-    const response = await createHealthRouter().request("https://app.example/api/health");
+    const response = await createHealthRouter().request(
+      "https://app.example/api/health",
+      {},
+      { CAIL_LOG_ENV: "test" } as Env,
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-type")).toContain("application/json");

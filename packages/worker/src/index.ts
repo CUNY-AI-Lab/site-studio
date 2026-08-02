@@ -13,7 +13,6 @@ import {
   correlationFromHeaders,
   createCailLogger,
   extendCailEventCatalog,
-  workersStructuredSink,
   type CailCorrelation,
   type CailAnalyticsEngineDataset,
   type CailHttpMethod,
@@ -25,6 +24,8 @@ import {
   OBSERVABILITY_CONTRACT,
   PRODUCT_ID,
   healthResponse,
+  parseCailLogEnvironment,
+  serviceUnavailableResponse,
 } from "../../observability-core/src/contract";
 import { createSiteStudioBoundarySink } from "../../observability-core/src/fleet-projection";
 
@@ -39,12 +40,25 @@ const PUBLISHER_EVENT_CATALOG = extendCailEventCatalog({
   },
 });
 type PublisherLogger = CailLogger<typeof PUBLISHER_EVENT_CATALOG, "platform">;
+type PublisherLoggingContext = Readonly<{
+  logger: PublisherLogger;
+  correlation?: CailCorrelation;
+  http_method?: CailHttpMethod;
+  route?: string;
+}>;
+type PublisherDiagnosticTarget = PublisherLogger | PublisherLoggingContext;
 
-function createPublisherLogger(env: Env): PublisherLogger {
+export function createPublisherLogger(
+  env: Pick<Env, "CAIL_FLEET_EVENTS" | "CAIL_LOG_ENV">,
+): PublisherLogger {
+  const environment = parseCailLogEnvironment(env.CAIL_LOG_ENV);
+  if (!environment) {
+    throw new TypeError("CAIL_LOG_ENV must be exactly production, staging, development, or test");
+  }
   return createCailLogger({
     service: OBSERVABILITY_CONTRACT.services.publisher.name,
     release: OBSERVABILITY_CONTRACT.services.publisher.version,
-    env: env.CAIL_LOG_ENV ?? "production",
+    env: environment,
     sourceClass: "platform",
     subjectVersion: CAIL_LOG_SUBJECT_VERSION,
     catalog: PUBLISHER_EVENT_CATALOG,
@@ -93,18 +107,25 @@ function httpMethod(method: string): CailHttpMethod {
   }
 }
 
-function warnDiagnostic(errorType: string, logger?: PublisherLogger): void {
-  (logger ?? createCailLogger({
-    service: OBSERVABILITY_CONTRACT.services.publisher.name,
-    release: OBSERVABILITY_CONTRACT.services.publisher.version,
-    env: "production",
-    sourceClass: "platform",
-    subjectVersion: CAIL_LOG_SUBJECT_VERSION,
-    catalog: PUBLISHER_EVENT_CATALOG,
-    sink: workersStructuredSink,
-  })).emit(PUBLISHER_DIAGNOSTIC, {
+function warnDiagnostic(errorType: string, target?: PublisherDiagnosticTarget): void {
+  // Helpers are also exported for isolated migration/metadata tests. Without
+  // a request boundary logger they must not silently invent a production
+  // environment or bypass the fleet sink; production callers pass the
+  // invocation-local publisher logger explicitly.
+  if (!target) return;
+  const context = "logger" in target ? target : undefined;
+  const logger: PublisherLogger = "logger" in target ? target.logger : target;
+  logger.emit(PUBLISHER_DIAGNOSTIC, {
     product_id: PRODUCT_ID,
     error_type: errorType,
+    ...(context?.correlation
+      ? {
+          request_id: context.correlation.request_id,
+          trace: traceFromCorrelation(context.correlation),
+        }
+      : {}),
+    ...(context?.http_method ? { http_method: context.http_method } : {}),
+    ...(context?.route ? { route: context.route } : {}),
   });
 }
 
@@ -188,7 +209,7 @@ type MigrationPointer = {
 export async function loadMigrationPointer(
   bucket: R2Bucket,
   userId: string,
-  logger?: PublisherLogger,
+  logging?: PublisherDiagnosticTarget,
 ): Promise<MigrationPointer | null> {
   const object = await bucket.get(`projects/${userId}/.migrated.json`);
   if (!object) {
@@ -202,7 +223,7 @@ export async function loadMigrationPointer(
     }
     return pointer;
   } catch {
-    warnDiagnostic("invalid_migration_pointer", logger);
+    warnDiagnostic("invalid_migration_pointer", logging);
     return null;
   }
 }
@@ -319,7 +340,7 @@ export async function getProjectMetadata(
   bucket: R2Bucket,
   userId: string,
   projectId: string,
-  logger?: PublisherLogger,
+  logging?: PublisherDiagnosticTarget,
 ): Promise<ProjectMetadata | null> {
   const object = await bucket.get(metadataKey(userId, projectId));
   if (!object) {
@@ -329,7 +350,7 @@ export async function getProjectMetadata(
   try {
     return JSON.parse(await object.text()) as ProjectMetadata;
   } catch {
-    warnDiagnostic("invalid_project_metadata", logger);
+    warnDiagnostic("invalid_project_metadata", logging);
     return null;
   }
 }
@@ -338,13 +359,13 @@ export async function findPublishedProject(
   bucket: R2Bucket,
   userId: string,
   requestedSlug: string,
-  logger?: PublisherLogger,
+  logging?: PublisherDiagnosticTarget,
 ): Promise<{ projectId: string; metadata: ProjectMetadata } | null> {
   const projectIds = await listProjects(bucket, userId);
   const matches: Array<{ projectId: string; metadata: ProjectMetadata }> = [];
 
   for (const projectId of projectIds) {
-    const metadata = await getProjectMetadata(bucket, userId, projectId, logger);
+    const metadata = await getProjectMetadata(bucket, userId, projectId, logging);
     if (!metadata?.published) {
       continue;
     }
@@ -489,7 +510,7 @@ export async function notFoundResponse(
 async function handlePublishedRequest(
   request: Request,
   env: Env,
-  logger?: PublisherLogger,
+  logging?: PublisherDiagnosticTarget,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (
@@ -525,16 +546,16 @@ async function handlePublishedRequest(
   }
 
   let effectiveSlug = parsed.slug;
-  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logger);
+  let resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logging);
 
   if (!resolved) {
     // The owner id in the URL may be an anonymous namespace re-homed to a
     // CAIL subject; follow the forwarding pointer so old links keep working.
-    const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId, logger);
+    const pointer = await loadMigrationPointer(env.SITE_STUDIO_BUCKET, ownerId, logging);
     if (pointer) {
       ownerId = pointer.subject;
       effectiveSlug = pointer.slugs?.[parsed.slug] ?? parsed.slug;
-      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logger);
+      resolved = await findPublishedProject(env.SITE_STUDIO_BUCKET, ownerId, effectiveSlug, logging);
     }
   }
 
@@ -616,12 +637,21 @@ async function handlePublishedRequest(
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const log = createPublisherLogger(env);
+    const environment = parseCailLogEnvironment(env.CAIL_LOG_ENV);
+    if (!environment) return serviceUnavailableResponse();
+
+    const log = createPublisherLogger({ ...env, CAIL_LOG_ENV: environment });
     const correlation = correlationFromHeaders(request);
     const startedAt = Date.now();
     const url = new URL(request.url);
     const route = publisherRoute(url, parsePublishedRequest(url));
     const method = httpMethod(request.method);
+    const logging: PublisherLoggingContext = {
+      logger: log,
+      correlation,
+      http_method: method,
+      route,
+    };
     log.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
       request_id: correlation.request_id,
       product_id: PRODUCT_ID,
@@ -631,7 +661,7 @@ export default {
     });
 
     try {
-      const response = await handlePublishedRequest(request, env, log);
+      const response = await handlePublishedRequest(request, env, logging);
       const terminal = terminalForStatus(response.status);
       const completedBase = {
         request_id: correlation.request_id,

@@ -1,5 +1,4 @@
 import type { Context } from "hono";
-import { isCailSubject } from "@cuny-ai-lab/cail-identity";
 import { createMiddleware } from "hono/factory";
 import { matchedRoutes } from "hono/route";
 import {
@@ -8,10 +7,9 @@ import {
   createCailLogger,
   extendCailEventCatalog,
   outboundCorrelationHeaders,
-  workersStructuredSink,
   type CailCorrelation,
+  type CailTraceFields,
   type CailHttpMethod,
-  type CailLogEnvironment,
   type CailLogSink,
   type CailLogger,
   type CailPrincipalFields,
@@ -19,7 +17,9 @@ import {
 } from "@cuny-ai-lab/cail-log";
 import {
   OBSERVABILITY_CONTRACT,
+  parseCailLogEnvironment,
   PRODUCT_ID,
+  serviceUnavailableResponse,
 } from "../../../observability-core/src/contract";
 import { createSiteStudioBoundarySink } from "../../../observability-core/src/fleet-projection";
 import type { ActionAttemptRecorder } from "../../../observability-core/src/action-attempt";
@@ -28,7 +28,19 @@ import type { Env } from "../types";
 export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;
 export const LOG_RELEASE = OBSERVABILITY_CONTRACT.services.app.version;
 export const CAIL_LOG_SUBJECT_VERSION = "v1";
+/**
+ * Internal Worker-to-agent forwarding header. The app route overwrites this
+ * value from the middleware-verified user before forwarding a request; it is
+ * never accepted as caller identity. A missing/invalid value means the
+ * connection is intentionally anonymous for operational logging.
+ */
+export const SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER =
+  "x-site-studio-verified-operational-subject";
 export { PRODUCT_ID };
+
+const OPERATIONAL_SUBJECT_RE = new RegExp(
+  `^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`,
+);
 
 export const SITE_STUDIO_EVENTS = Object.freeze({
   DIAGNOSTIC_INFO: "site_studio.diagnostic.info",
@@ -59,16 +71,103 @@ export const SITE_STUDIO_EVENT_CATALOG = extendCailEventCatalog({
 
 export type SiteStudioLogger = CailLogger<typeof SITE_STUDIO_EVENT_CATALOG, "platform">;
 
+/**
+ * A correlation snapshot used by Site Studio's request/connection contexts.
+ * `trace` is kept alongside the wire fields so the context has one immutable
+ * nested trace object for every diagnostic emission.
+ */
+export type SiteStudioCorrelation = Readonly<CailCorrelation & {
+  trace: CailTraceFields;
+}>;
+
+/**
+ * Immutable per-invocation diagnostic context. The logger is created at a
+ * trusted Worker boundary and the correlation is adopted from that same
+ * request before helpers run. Durable Object RPCs carry the serializable
+ * fields in `SiteStudioLoggingContextData` and recreate this context there.
+ */
+export type SiteStudioLoggingContext = Readonly<{
+  logger: SiteStudioLogger;
+  correlation?: SiteStudioCorrelation;
+  operationalSubject?: string;
+}>;
+
+/** The JSON-safe portion forwarded across a Durable Object RPC boundary. */
+export type SiteStudioLoggingContextData = Readonly<{
+  correlation?: CailCorrelation | SiteStudioCorrelation;
+  operationalSubject?: string;
+}>;
+
+/**
+ * Connection-local state used by Durable Object agents. PartyServer persists
+ * this value on the individual WebSocket connection, so a later connection
+ * cannot overwrite the correlation adopted by an earlier turn.
+ */
+export type SiteStudioConnectionLoggingState = Readonly<{
+  correlation: SiteStudioCorrelation;
+  operationalSubject?: string;
+  /** Current connection's server-verified JWT; never retained on the DO. */
+  identityJwt?: string;
+}>;
+
+/** Only a verified, separately salted operational subject may become a user principal. */
+export function isOperationalSubject(value: unknown): value is string {
+  return typeof value === "string" && OPERATIONAL_SUBJECT_RE.test(value);
+}
+
+/** Clone the primitive correlation fields and deeply freeze its nested trace. */
+function cloneAndFreezeCorrelation(correlation: CailCorrelation): SiteStudioCorrelation {
+  const trace = Object.freeze({
+    trace_id: correlation.trace_id,
+    span_id: correlation.span_id,
+    trace_flags: correlation.trace_flags,
+  });
+  return Object.freeze({
+    trace_id: correlation.trace_id,
+    span_id: correlation.span_id,
+    trace_flags: correlation.trace_flags,
+    request_id: correlation.request_id,
+    ...(correlation.tracestate ? { tracestate: correlation.tracestate } : {}),
+    trace,
+  });
+}
+
+/**
+ * Adopt request correlation into immutable per-connection state. The nested
+ * correlation is copied and frozen as well, preventing accidental mutation of
+ * one socket's request context while another socket is active in the same DO.
+ */
+export function createSiteStudioConnectionLoggingState(
+  request: Request,
+  operationalSubject?: unknown,
+  identityJwt?: unknown,
+): SiteStudioConnectionLoggingState {
+  const parsedCorrelation = correlationFromHeaders(request);
+  const correlation = cloneAndFreezeCorrelation(parsedCorrelation);
+  const forwardedSubject = request.headers.get(SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER);
+  const subject = operationalSubject ?? forwardedSubject;
+  const jwt = typeof identityJwt === "string" && identityJwt ? identityJwt : undefined;
+  return Object.freeze({
+    correlation,
+    ...(isOperationalSubject(subject) ? { operationalSubject: subject } : {}),
+    ...(jwt ? { identityJwt: jwt } : {}),
+  });
+}
+
 export function createSiteStudioLogger(options: {
   sink: CailLogSink;
-  env?: CailLogEnvironment;
+  env: unknown;
   release?: string;
   clock?: () => number;
 }): SiteStudioLogger {
+  const environment = parseCailLogEnvironment(options.env);
+  if (!environment) {
+    throw new TypeError("CAIL_LOG_ENV must be exactly production, staging, development, or test");
+  }
   return createCailLogger({
     service: LOG_SERVICE,
     release: options.release ?? LOG_RELEASE,
-    env: options.env ?? "production",
+    env: environment,
     sourceClass: "platform",
     subjectVersion: CAIL_LOG_SUBJECT_VERSION,
     catalog: SITE_STUDIO_EVENT_CATALOG,
@@ -80,19 +179,76 @@ export function createSiteStudioLogger(options: {
 export function createSiteStudioBoundaryLogger(
   env: Pick<Env, "CAIL_FLEET_EVENTS" | "CAIL_LOG_ENV">,
 ): SiteStudioLogger {
+  const environment = parseCailLogEnvironment(env.CAIL_LOG_ENV);
+  if (!environment) {
+    throw new TypeError("CAIL_LOG_ENV must be exactly production, staging, development, or test");
+  }
   return createSiteStudioLogger({
     sink: createSiteStudioBoundarySink(env),
-    env: env.CAIL_LOG_ENV ?? "production",
+    env: environment,
   });
 }
 
-/** The Worker sink is explicit; release/environment are constructor-owned. */
-export const log = createSiteStudioLogger({ sink: workersStructuredSink });
+export function createSiteStudioLoggingContext(
+  logger: SiteStudioLogger,
+  data: SiteStudioLoggingContextData = {},
+): SiteStudioLoggingContext {
+  const correlation = data.correlation
+    ? cloneAndFreezeCorrelation(data.correlation)
+    : undefined;
+  return Object.freeze({
+    logger,
+    ...(correlation ? { correlation } : {}),
+    ...(data.operationalSubject ? { operationalSubject: data.operationalSubject } : {}),
+  });
+}
+
+export function createSiteStudioBoundaryContext(
+  env: Pick<Env, "CAIL_FLEET_EVENTS" | "CAIL_LOG_ENV">,
+  data: SiteStudioLoggingContextData = {},
+): SiteStudioLoggingContext {
+  return createSiteStudioLoggingContext(createSiteStudioBoundaryLogger(env), data);
+}
+
+export function serializeSiteStudioLoggingContext(
+  context: SiteStudioLoggingContext | undefined,
+): SiteStudioLoggingContextData | undefined {
+  if (!context) return undefined;
+  const correlation = context.correlation
+    ? cloneAndFreezeCorrelation(context.correlation)
+    : undefined;
+  return Object.freeze({
+    ...(correlation ? { correlation } : {}),
+    ...(context.operationalSubject ? { operationalSubject: context.operationalSubject } : {}),
+  });
+}
+
+export function withOperationalSubject(
+  context: SiteStudioLoggingContext | undefined,
+  operationalSubject?: string,
+): SiteStudioLoggingContext | undefined {
+  if (!context) return undefined;
+  return createSiteStudioLoggingContext(context.logger, {
+    correlation: context.correlation,
+    operationalSubject,
+  });
+}
 
 export type LoggingVariables = {
   correlation?: CailCorrelation;
   logger?: SiteStudioLogger;
 };
+
+export function getLoggingContext(c: {
+  get: (key: "logger" | "correlation") => unknown;
+}, operationalSubject?: string): SiteStudioLoggingContext | undefined {
+  const logger = c.get("logger") as SiteStudioLogger | undefined;
+  if (!logger) return undefined;
+  return createSiteStudioLoggingContext(logger, {
+    correlation: c.get("correlation") as CailCorrelation | undefined,
+    operationalSubject,
+  });
+}
 
 export function mintCorrelation(): CailCorrelation {
   return correlationFromHeaders({ get: () => null });
@@ -122,10 +278,7 @@ export function traceFromCorrelation(correlation: CailCorrelation) {
 export function principalForOperationalSubject(
   operationalSubject?: string,
 ): CailPrincipalFields {
-  if (
-    operationalSubject
-    && new RegExp(`^cail-${CAIL_LOG_SUBJECT_VERSION}-[0-9a-f]{32}$`).test(operationalSubject)
-  ) {
+  if (isOperationalSubject(operationalSubject)) {
     return { type: "user", subject: operationalSubject };
   }
   return { type: "anonymous" };
@@ -207,12 +360,28 @@ export function withCorrelationFetch(
 
 type DiagnosticSeverity = "info" | "warning" | "error";
 
+type DiagnosticTarget = SiteStudioLogger | SiteStudioLoggingContext;
+
 export function emitDiagnostic(
   severity: DiagnosticSeverity,
   errorType: string,
-  fields: { subject?: string; operationalSubject?: string; status?: number; retry_count?: number; req_bytes?: number } = {},
-  logger: SiteStudioLogger = log,
+  fields: {
+    operationalSubject?: string;
+    status?: number;
+    retry_count?: number;
+    req_bytes?: number;
+  } = {},
+  target: DiagnosticTarget | undefined,
 ): void {
+  if (!target) return;
+  let context: SiteStudioLoggingContext | undefined;
+  let logger: SiteStudioLogger;
+  if ("logger" in target) {
+    context = target;
+    logger = target.logger;
+  } else {
+    logger = target;
+  }
   const event = severity === "info"
     ? SITE_STUDIO_EVENTS.DIAGNOSTIC_INFO
     : severity === "warning"
@@ -221,8 +390,14 @@ export function emitDiagnostic(
   logger.emit(event, {
     product_id: PRODUCT_ID,
     error_type: errorType,
-    ...(fields.operationalSubject
-      ? { principal: principalForOperationalSubject(fields.operationalSubject) }
+    ...(fields.operationalSubject || context?.operationalSubject
+      ? { principal: principalForOperationalSubject(fields.operationalSubject ?? context?.operationalSubject) }
+      : {}),
+    ...(context?.correlation
+      ? {
+          request_id: context.correlation.request_id,
+          trace: traceFromCorrelation(context.correlation),
+        }
       : {}),
     ...(fields.status !== undefined ? { status: fields.status } : {}),
     ...(fields.retry_count !== undefined ? { retry_count: fields.retry_count } : {}),
@@ -249,7 +424,7 @@ export class SiteStudioActionLifecycle {
       principal: CailPrincipalFields;
       correlation: CailCorrelation;
     },
-    private readonly logger: SiteStudioLogger = log,
+    private readonly logger: SiteStudioLogger,
     private readonly clock: () => number = Date.now,
     private readonly recorder?: ActionAttemptRecorder,
   ) {
@@ -351,7 +526,13 @@ export function requestLogging(logger?: SiteStudioLogger) {
     Bindings: Env;
     Variables: LoggingVariables & { user?: { id: string } };
   }>(async (c, next) => {
-    const boundaryLogger = logger ?? createSiteStudioBoundaryLogger(c.env);
+    const environment = parseCailLogEnvironment(c.env.CAIL_LOG_ENV);
+    if (!environment) return serviceUnavailableResponse();
+
+    const boundaryLogger = logger ?? createSiteStudioBoundaryLogger({
+      ...c.env,
+      CAIL_LOG_ENV: environment,
+    });
     c.set("logger", boundaryLogger);
     const correlation = correlationFromHeaders(c.req.raw);
     c.set("correlation", correlation);

@@ -75,7 +75,7 @@ function createMockBucket() {
 }
 
 function createEnv(bucket: R2Bucket): Env {
-  return { SITE_STUDIO_BUCKET: bucket };
+  return { SITE_STUDIO_BUCKET: bucket, CAIL_LOG_ENV: "test" };
 }
 
 function publishProject(
