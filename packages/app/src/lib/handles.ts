@@ -226,12 +226,30 @@ export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Prom
 }
 
 /** Read the reverse mapping without treating it as proof of ownership. */
-async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
-  const record = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
+async function readRecordedUserHandle(
+  bucket: R2Bucket,
+  ownerId: string,
+): Promise<{ record: UserHandleRecord; etag?: string } | null> {
+  const object = await bucket.get(userHandleRecordKey(ownerId));
+  if (!object) return null;
+
+  let record: UserHandleRecord;
+  try {
+    record = JSON.parse(await object.text()) as UserHandleRecord;
+  } catch {
+    return null;
+  }
   if (!record || typeof record.handle !== "string" || !record.handle) {
     return null;
   }
-  return record.handle;
+  return {
+    record,
+    etag: typeof object.etag === "string" && object.etag ? object.etag : undefined,
+  };
+}
+
+async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
+  return (await readRecordedUserHandle(bucket, ownerId))?.record.handle ?? null;
 }
 
 /**
@@ -263,8 +281,9 @@ export async function getMigrationHandle(
   const subjectHandle = await getUserHandle(bucket, subject);
   if (subjectHandle) return subjectHandle;
 
-  const anonHandle = await getRecordedUserHandle(bucket, anonUserId);
-  if (!anonHandle) return null;
+  const anonRecord = await readRecordedUserHandle(bucket, anonUserId);
+  if (!anonRecord) return null;
+  const anonHandle = anonRecord.record.handle;
   const owner = await resolveHandleOwner(bucket, anonHandle);
   return owner === anonUserId || owner === subject ? anonHandle : null;
 }
@@ -559,10 +578,11 @@ export async function migrateHandle(options: {
 
   // Migration must inspect a stale reverse record so it can distinguish
   // "nothing to move" from forward-ownership drift and fail the import closed.
-  const anonHandle = await getRecordedUserHandle(bucket, anonUserId);
-  if (!anonHandle) {
+  const anonReverse = await readRecordedUserHandle(bucket, anonUserId);
+  if (!anonReverse) {
     return; // nothing to move
   }
+  const anonHandle = anonReverse.record.handle;
 
   // Re-home the forward record only when its current ETag still proves that it
   // belongs to the anonymous owner. A stale/orphaned reverse record must never
@@ -617,6 +637,17 @@ export async function migrateHandle(options: {
     claimedAt
   } satisfies UserHandleRecord);
 
-  // Drop the anon reverse record (handle record already re-homed above).
-  await bucket.delete(userHandleRecordKey(anonUserId)).catch(() => undefined);
+  // R2 has no conditional delete. Retire only the exact anonymous reverse
+  // generation observed above; if another anonymous request replaced it while
+  // migration was in flight, the ETag condition loses and that newer claim
+  // survives. A storage failure is best-effort cleanup: the stale reverse is
+  // non-authoritative because its forward record now points at the subject.
+  if (anonReverse.etag) {
+    await retireReverseClaim(
+      bucket,
+      userHandleRecordKey(anonUserId),
+      anonReverse.etag,
+      anonHandle,
+    ).catch(() => undefined);
+  }
 }

@@ -640,8 +640,12 @@ describe("migrateHandle", () => {
     expect(await getUserHandle(bucket, SUBJECT)).toBe("primary-handle");
     // The anon handle survives as an alias pointing at the subject.
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
-    // The anon reverse record is gone.
-    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(false);
+    // The exact old generation is retired as an orphan marker rather than
+    // unconditionally deleted; a concurrent newer anonymous claim must survive.
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+      handle: "anon-handle",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
   });
 
   it("is a no-op when the anon user has no handle", async () => {
@@ -698,7 +702,40 @@ describe("migrateHandle", () => {
     expect(await resolveHandleOwner(bucket, "my-new-handle")).toBe(SUBJECT);
     // ...and the anon handle stays an alias pointing at the subject.
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
-    // The anon reverse record is still cleaned up.
-    expect(bucket.store.has(userHandleRecordKey(ANON))).toBe(false);
+    // The old anonymous generation is retired without touching the subject's
+    // concurrent primary claim.
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+      handle: "anon-handle",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
+  });
+
+  it("does not retire a newer anonymous reverse generation during cleanup", async () => {
+    await claimHandle(bucket, ANON, "anon-handle", () => "2020-01-01T00:00:00.000Z");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (key === userHandleRecordKey(SUBJECT) && !injected) {
+        injected = true;
+        const claim = await claimHandle(
+          bucket,
+          ANON,
+          "new-handle",
+          () => "2026-07-20T00:00:00.000Z",
+        );
+        expect(claim).toEqual({ ok: true, handle: "new-handle", alreadyOwned: false });
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
+
+    // The concurrent claim replaced the old anonymous reverse generation; the
+    // migration's ETag-fenced retirement must lose and preserve that pair.
+    expect(injected).toBe(true);
+    expect(await getUserHandle(bucket, ANON)).toBe("new-handle");
+    expect(await resolveHandleOwner(bucket, "new-handle")).toBe(ANON);
+    expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
   });
 });

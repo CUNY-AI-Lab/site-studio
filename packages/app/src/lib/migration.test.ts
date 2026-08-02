@@ -17,7 +17,8 @@ import { createPublishRouter } from "../routes/publish";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts).
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any }>();
+  let revision = 0;
+  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag?: string }>();
 
   return {
     store,
@@ -28,8 +29,10 @@ function createMockBucket() {
       const entry = store.get(key);
       if (!entry) return null;
       const data = entry.data;
+      entry.etag ??= `etag-${++revision}`;
       return {
         key,
+        etag: entry.etag,
         size: typeof data === "string" ? data.length : (data as ArrayBuffer).byteLength,
         httpMetadata: entry.httpMetadata || {},
         text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer)),
@@ -43,6 +46,9 @@ function createMockBucket() {
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
+      if (options?.onlyIf?.etagMatches && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+        return null;
+      }
       let stored: ArrayBuffer | string;
       if (typeof data === "string") {
         stored = data;
@@ -53,8 +59,9 @@ function createMockBucket() {
       } else {
         stored = String(data);
       }
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
-      return { key };
+      const etag = `etag-${++revision}`;
+      store.set(key, { data: stored, httpMetadata: options?.httpMetadata, etag });
+      return { key, etag };
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
@@ -546,7 +553,11 @@ describe("migrateAnonymousData", () => {
       status: "complete",
     });
     expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
-    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(false);
+    expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "jane-rivera",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
   });
 
@@ -583,15 +594,19 @@ describe("migrateAnonymousData", () => {
     seedAnonHandle(bucket);
     seedAnonProject(bucket, "portfolio");
 
-    const originalDelete = bucket.delete;
-    let failAnonReverseDelete = true;
-    bucket.delete = vi.fn(async (key: string) => {
-      if (key === `userhandles/${ANON}.json` && failAnonReverseDelete) {
-        failAnonReverseDelete = false;
+    const originalPut = bucket.put;
+    let failAnonReverseRetirement = true;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === `userhandles/${ANON}.json`
+        && options?.onlyIf?.etagMatches
+        && failAnonReverseRetirement
+      ) {
+        failAnonReverseRetirement = false;
         throw new Error("injected anonymous reverse cleanup failure");
       }
-      return originalDelete(key);
-    }) as typeof bucket.delete;
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
 
     const first = await run();
     expect(first.status).toBe("migrated");
@@ -725,7 +740,10 @@ describe("handle re-homing through migration", () => {
     // Handle re-homed: record points at subject, reverse record moved.
     expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
-    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "jane-rivera",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
 
     // Migrated project's publishedUrl uses the handle, never the subject id.
     const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
@@ -744,6 +762,9 @@ describe("handle re-homing through migration", () => {
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("primary");
     // Anon handle survives as an alias pointing at the subject.
     expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`).data).ownerId).toBe(SUBJECT);
-    expect(bucket.store.get(`userhandles/${ANON}.json`)).toBeUndefined();
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+      handle: "anon-alias",
+      claimedAt: "1970-01-01T00:00:00.000Z",
+    });
   });
 });
