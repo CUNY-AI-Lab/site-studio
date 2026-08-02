@@ -101,7 +101,16 @@
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
 	let csrfRefreshedThisCycle = false;
-	let quota = $state<{ limit: number; remaining: number; reset: number } | null>(null);
+	type QuotaWindowTechnique = 'fixed' | 'sliding';
+
+	interface Quota {
+		limit: number;
+		remaining: number;
+		reset: number | null;
+		window_technique: QuotaWindowTechnique;
+	}
+
+	let quota = $state<Quota | null>(null);
 
 	async function refreshQuota() {
 		// Hiding the pill when the quota read fails is deliberate degradation,
@@ -238,6 +247,31 @@
 		const minutes = Math.floor(totalSeconds / 60);
 		const seconds = totalSeconds % 60;
 		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+	}
+
+	function formatQuotaReset(currentQuota: Quota): string {
+		if (currentQuota.reset === null) {
+			return `Budget reset time unavailable (${currentQuota.window_technique} window)`;
+		}
+
+		const resetLabel = new Date(currentQuota.reset * 1000).toLocaleString();
+		if (currentQuota.window_technique === 'sliding') {
+			return `Budget reset bound ${resetLabel} (sliding window)`;
+		}
+
+		return `Budget resets ${resetLabel} (fixed window)`;
+	}
+
+	function quotaPercentage(currentQuota: Quota): number {
+		if (!Number.isFinite(currentQuota.limit) || currentQuota.limit <= 0) {
+			return 0;
+		}
+
+		return Math.max(0, Math.round((currentQuota.remaining / currentQuota.limit) * 100));
+	}
+
+	function quotaAccessibleLabel(currentQuota: Quota): string {
+		return `${quotaPercentage(currentQuota)}% AI budget left. ${formatQuotaReset(currentQuota)}.`;
 	}
 
 	function trackToolStart(toolCallId: string) {
@@ -1575,8 +1609,13 @@
 
 		<div class="action-buttons">
 			{#if quota && quota.limit > 0}
-				<span class="quota-meter" title={`Budget resets ${new Date(quota.reset * 1000).toLocaleString()}`}>
-					{Math.max(0, Math.round((quota.remaining / quota.limit) * 100))}% AI budget left
+				<span
+					class="quota-meter"
+					role="status"
+					aria-label={quotaAccessibleLabel(quota)}
+					title={formatQuotaReset(quota)}
+				>
+					{quotaPercentage(quota)}% AI budget left
 				</span>
 			{/if}
 			<input
