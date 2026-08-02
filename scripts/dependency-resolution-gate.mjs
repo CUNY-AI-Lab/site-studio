@@ -417,8 +417,19 @@ function readOverrideMap(value, label, issues) {
 
 function installedDependencyMap(manifest) {
   const result = new Map();
-  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
-    for (const [name, spec] of Object.entries(manifest[section] ?? {})) result.set(name, spec);
+  const optionalPeers = new Set(
+    Object.entries(manifest.peerDependenciesMeta ?? {})
+      .filter(([, metadata]) => metadata && typeof metadata === 'object' && metadata.optional === true)
+      .map(([name]) => name),
+  );
+  for (const [section, names] of [
+    ['dependencies', new Set(Object.keys(manifest.dependencies ?? {}))],
+    ['optionalDependencies', new Set(Object.keys(manifest.optionalDependencies ?? {}))],
+    ['peerDependencies', optionalPeers],
+  ]) {
+    for (const [name, spec] of Object.entries(manifest[section] ?? {})) {
+      result.set(name, { spec, optional: section !== 'dependencies' && names.has(name) });
+    }
   }
   return result;
 }
@@ -440,29 +451,65 @@ function repositoryInstallRoots(rootRealPath, workspaces) {
   return roots;
 }
 
-function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name) {
-  const requireFromPackage = createRequire(path.join(packageDirectory, 'package.json'));
+function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name, { allowBunStoreFallback = true } = {}) {
   let resolvedPath;
-  try {
-    resolvedPath = requireFromPackage.resolve(name);
-  } catch {
+  const realPackageDirectory = realpathSafe(packageDirectory);
+  const requireDirectories = realPackageDirectory ? [realPackageDirectory] : [];
+  if (realPackageDirectory !== packageDirectory) requireDirectories.push(packageDirectory);
+  for (const requireDirectory of requireDirectories) {
+    const requireFromPackage = createRequire(path.join(requireDirectory, 'package.json'));
     try {
-      resolvedPath = requireFromPackage.resolve(`${name}/package.json`);
+      resolvedPath = requireFromPackage.resolve(name);
     } catch {
-      resolvedPath = null;
+      try {
+        resolvedPath = requireFromPackage.resolve(`${name}/package.json`);
+      } catch {
+        resolvedPath = null;
+      }
     }
+    if (resolvedPath) break;
   }
   const resolvedPackage = resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null;
   const logicalPackage = packageDirectoryFromNodeModules(rootDir, packageDirectory, name);
-  if (!logicalPackage) return null;
+  if (!logicalPackage && !resolvedPackage) {
+    if (allowBunStoreFallback) {
+      let packageManifest;
+      try {
+        packageManifest = readJson(path.join(packageDirectory, 'package.json'));
+      } catch {
+        packageManifest = null;
+      }
+      const storePackage = packageDirectoryFromBunStore(rootDir, packageManifest);
+      if (storePackage && realpathSafe(storePackage.directory) !== realpathSafe(packageDirectory)) {
+        return resolveInstalledPackageFromDirectory(rootDir, storePackage.directory, name, { allowBunStoreFallback: false });
+      }
+    }
+    return null;
+  }
   const packageInfo = resolvedPackage ?? logicalPackage;
-  const realDirectory = realpathSafe(resolvedPackage?.directory ?? logicalPackage.directory);
+  const resolvedRealDirectory = realpathSafe(resolvedPackage?.directory);
+  const logicalRealDirectory = realpathSafe(logicalPackage?.directory);
+  const matchingLogicalPackage = logicalPackage && resolvedRealDirectory === logicalRealDirectory
+    ? logicalPackage
+    : resolvedPackage
+      ? null
+      : logicalPackage;
+  const directory = matchingLogicalPackage?.directory ?? resolvedPackage?.directory ?? logicalPackage.directory;
+  const realDirectory = realpathSafe(directory);
   if (!realDirectory) return null;
+  const rootRealPath = realpathSafe(rootDir);
+  const logicalDirectory = matchingLogicalPackage?.directory
+    ?? (rootRealPath && pathInside(rootRealPath, directory) ? directory : null);
   return {
-    // `directory` is the logical candidate selected from node_modules. Keep it
-    // separate from `realDirectory`: quarantine decisions must never inspect a
-    // symlink target merely because its real path has a backup/cache segment.
-    directory: logicalPackage.directory,
+    // `directory` is the logical candidate selected from node_modules when one
+    // exists, or the resolver-selected fallback when it does not. Keep the
+    // logical path separate from `realDirectory`: quarantine decisions must
+    // never inspect a symlink target merely because its real path has a
+    // backup/cache segment. A resolver result from an isolated Bun store is
+    // accepted as its own logical install path; boundary checks still reject
+    // resolver fallbacks that escape the repository install roots.
+    directory,
+    logicalDirectory,
     realDirectory,
     manifest: packageInfo.manifest,
   };
@@ -486,6 +533,13 @@ function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overr
 
   while (queue.length > 0) {
     const resolvedPackage = queue.shift();
+    if (!resolvedPackage.logicalDirectory) {
+      issues.push(
+        `reachable dependency ${resolvedPackage.manifest.name} at ${relativePath(rootDir, resolvedPackage.directory)} `
+          + 'resolves through an external or ancestor module fallback without an accepted logical node_modules path',
+      );
+      continue;
+    }
     // A quarantine namespace is an unreachable logical candidate. A normal
     // logical path that resolves into a Bun store/cache remains reachable and
     // must be checked against the real repository install roots below.
@@ -515,9 +569,16 @@ function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overr
       }
     }
 
-    for (const dependencyName of installedDependencyMap(resolvedPackage.manifest).keys()) {
+    for (const [dependencyName, dependencyInfo] of installedDependencyMap(resolvedPackage.manifest)) {
       const dependency = resolveInstalledPackageFromDirectory(rootDir, resolvedPackage.directory, dependencyName);
-      if (dependency) queue.push(dependency);
+      if (dependency) {
+        queue.push(dependency);
+      } else if (!dependencyInfo.optional) {
+        issues.push(
+          `required transitive dependency ${dependencyName} of ${resolvedPackage.manifest.name} `
+            + 'cannot be resolved from the accepted repository install graph',
+        );
+      }
     }
   }
 }
@@ -633,6 +694,43 @@ function packageDirectoryFromResolved(rootDir, resolvedPath) {
     }
     directory = path.dirname(directory);
   }
+  return null;
+}
+
+const bunStorePackageCache = new Map();
+
+function packageDirectoryFromBunStore(rootDir, manifest) {
+  if (!manifest || typeof manifest.name !== 'string' || typeof manifest.version !== 'string') return null;
+  const rootRealPath = realpathSafe(rootDir);
+  if (!rootRealPath) return null;
+  const cacheKey = `${rootRealPath}:${manifest.name}@${manifest.version}`;
+  if (bunStorePackageCache.has(cacheKey)) return bunStorePackageCache.get(cacheKey);
+  const storeRoot = path.join(rootRealPath, 'node_modules', '.bun');
+  let entries;
+  try {
+    entries = fs.readdirSync(storeRoot, { withFileTypes: true });
+  } catch {
+    bunStorePackageCache.set(cacheKey, null);
+    return null;
+  }
+  const candidates = [
+    path.join(storeRoot, 'node_modules', ...manifest.name.split('/')),
+    ...entries
+      .filter((entry) => entry.isDirectory() && !isQuarantinedPath(entry.name))
+      .map((entry) => path.join(storeRoot, entry.name, 'node_modules', ...manifest.name.split('/'))),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const candidateManifest = readJson(path.join(candidate, 'package.json'));
+      if (candidateManifest.name !== manifest.name || candidateManifest.version !== manifest.version) continue;
+      const result = { directory: candidate, manifest: candidateManifest };
+      bunStorePackageCache.set(cacheKey, result);
+      return result;
+    } catch {
+      // Continue through unrelated Bun store entries.
+    }
+  }
+  bunStorePackageCache.set(cacheKey, null);
   return null;
 }
 

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { parseBunLock, verifyDependencyResolution } from './dependency-resolution-gate.mjs';
 
@@ -480,6 +482,111 @@ async function makeOutsideTransitiveOverrideFixture({ installedVersion = '3.1.3'
   return { rootDir, outsideDir };
 }
 
+async function makeFallbackOverrideFixture({ installedVersion = '3.1.3', fallback = 'node-path' } = {}) {
+  const rootDir = fallback === 'ancestor'
+    ? path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-ancestor-')), 'project')
+    : await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-node-path-'));
+  const fallbackRoot = fallback === 'ancestor'
+    ? path.dirname(rootDir)
+    : await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-global-cache-'));
+  const directDependencies = { holder: '1.0.0' };
+  const override = '3.1.5';
+  await writeJson(path.join(rootDir, 'package.json'), {
+    name: 'override-fallback-fixture',
+    private: true,
+    dependencies: directDependencies,
+    overrides: { 'fast-uri': override },
+  });
+  await writeInstalledPackage(rootDir, 'node_modules/holder', 'holder', '1.0.0');
+  await writeJson(path.join(rootDir, 'node_modules/holder/package.json'), {
+    name: 'holder',
+    version: '1.0.0',
+    dependencies: { 'fast-uri': override },
+    main: 'index.js',
+  });
+  await writeInstalledPackage(
+    fallbackRoot,
+    fallback === 'ancestor' ? 'node_modules/fast-uri' : 'fast-uri',
+    'fast-uri',
+    installedVersion,
+  );
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces: { '': { name: 'override-fallback-fixture', dependencies: directDependencies } },
+    overrides: { 'fast-uri': override },
+    packages: {
+      holder: ['holder@1.0.0', '', { dependencies: { 'fast-uri': override } }, 'sha512-fixture'],
+      'fast-uri': ['fast-uri@3.1.5', '', {}, 'sha512-fixture'],
+    },
+  });
+  return { rootDir, fallbackRoot };
+}
+
+async function makeMissingTransitiveFixture({ kind = 'required' } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-missing-'));
+  const override = '3.1.5';
+  const holderManifest = {
+    name: 'holder',
+    version: '1.0.0',
+    main: 'index.js',
+  };
+  if (kind === 'optional') {
+    holderManifest.optionalDependencies = { 'fast-uri': override };
+  } else if (kind === 'optional-peer') {
+    holderManifest.peerDependencies = { 'fast-uri': override };
+    holderManifest.peerDependenciesMeta = { 'fast-uri': { optional: true } };
+  } else {
+    holderManifest.dependencies = { 'fast-uri': override };
+    if (kind === 'required-peer') holderManifest.peerDependencies = { 'fast-uri': override };
+  }
+  await writeJson(path.join(rootDir, 'package.json'), {
+    name: 'override-missing-fixture',
+    private: true,
+    dependencies: { holder: '1.0.0' },
+    overrides: { 'fast-uri': override },
+  });
+  await writeJson(path.join(rootDir, 'node_modules/holder/package.json'), holderManifest);
+  await fs.writeFile(path.join(rootDir, 'node_modules/holder/index.js'), 'module.exports = {};\n');
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces: { '': { name: 'override-missing-fixture', dependencies: { holder: '1.0.0' } } },
+    overrides: { 'fast-uri': override },
+    packages: {
+      holder: [
+        'holder@1.0.0',
+        '',
+        {
+          dependencies: holderManifest.dependencies,
+          optionalDependencies: holderManifest.optionalDependencies,
+          peerDependencies: holderManifest.peerDependencies,
+        },
+        'sha512-fixture',
+      ],
+      'fast-uri': ['fast-uri@3.1.5', '', {}, 'sha512-fixture'],
+    },
+  });
+  return rootDir;
+}
+
+function verifyInFreshProcess(rootDir, nodePath) {
+  const gateUrl = pathToFileURL(path.resolve('scripts/dependency-resolution-gate.mjs')).href;
+  const script = [
+    `import { verifyDependencyResolution } from ${JSON.stringify(gateUrl)};`,
+    `const result = verifyDependencyResolution({ rootDir: ${JSON.stringify(rootDir)} });`,
+    'process.stdout.write(JSON.stringify(result));',
+  ].join('\n');
+  const env = { ...process.env };
+  if (nodePath === null) delete env.NODE_PATH;
+  else env.NODE_PATH = nodePath;
+  const child = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: process.cwd(),
+    env,
+    encoding: 'utf8',
+  });
+  assert.equal(child.status, 0, child.stderr || child.stdout);
+  return JSON.parse(child.stdout);
+}
+
 test('parses Bun lock comments and trailing commas without evaluating package data', () => {
   const parsed = parseBunLock('{\n  // importer comment\n  "workspaces": {},\n  /* package comment */\n}\n');
   assert.deepEqual(parsed, { workspaces: {} });
@@ -845,6 +952,83 @@ test('rejects a version-matching transitive target outside the repository instal
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
     await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a stale transitive target reached only through NODE_PATH', async () => {
+  const { rootDir, fallbackRoot } = await makeFallbackOverrideFixture();
+  try {
+    const result = verifyInFreshProcess(rootDir, fallbackRoot);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /external or ancestor module fallback/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(fallbackRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects a version-matching transitive target reached only through NODE_PATH', async () => {
+  const { rootDir, fallbackRoot } = await makeFallbackOverrideFixture({ installedVersion: '3.1.5' });
+  try {
+    const result = verifyInFreshProcess(rootDir, fallbackRoot);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /external or ancestor module fallback/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(fallbackRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects a transitive target reached through an ancestor node_modules directory', async () => {
+  const { rootDir } = await makeFallbackOverrideFixture({ fallback: 'ancestor' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /external or ancestor module fallback/);
+  } finally {
+    await fs.rm(path.dirname(rootDir), { recursive: true, force: true });
+  }
+});
+
+test('rejects a missing required transitive override target', async () => {
+  const rootDir = await makeMissingTransitiveFixture();
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /required transitive dependency fast-uri of holder/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('permits a missing optional transitive dependency', async () => {
+  const rootDir = await makeMissingTransitiveFixture({ kind: 'optional' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('permits a missing explicitly optional peer dependency', async () => {
+  const rootDir = await makeMissingTransitiveFixture({ kind: 'optional-peer' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a missing required peer dependency', async () => {
+  const rootDir = await makeMissingTransitiveFixture({ kind: 'required-peer' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /required transitive dependency fast-uri of holder/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
   }
 });
 
