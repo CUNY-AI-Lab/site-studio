@@ -27,7 +27,6 @@ import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 import {
-  REQUEST_ID_RE,
   type CailOutcome,
   type CailTerminalReason,
 } from "@cuny-ai-lab/cail-log";
@@ -137,6 +136,13 @@ const MAX_SNAPSHOT_LABEL_CHARS = 120;
 const MAX_OBSERVABILITY_EVENTS = 400;
 const MAX_OBSERVABILITY_REQUESTS = 20;
 const OBSERVABILITY_STALL_MS = 15_000;
+/**
+ * Action and call IDs are event identities, not transport request
+ * correlations. cail-log's request validator intentionally accepts UUIDv4
+ * and UUIDv7; this lifecycle contract remains UUIDv4-only.
+ */
+export const SITE_STUDIO_EVENT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CODEMODE_DESCRIPTION = `Inspect and modify the current Site Studio project inside a sandboxed Dynamic Worker.
 
 Project APIs:
@@ -1209,7 +1215,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   recordActionAdmission(admission: ActionAttemptAdmission): void {
     const expectedRoute = OBSERVABILITY_CONTRACT.actions[admission.action]?.route;
     if (
-      !REQUEST_ID_RE.test(admission.actionId)
+      !SITE_STUDIO_EVENT_ID_RE.test(admission.actionId)
       || admission.route !== expectedRoute
       || !Number.isFinite(Date.parse(admission.admittedAt))
     ) {
@@ -1232,7 +1238,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   /** A terminal updates an existing admission; it can never fabricate one. */
   recordActionTerminal(terminal: ActionAttemptTerminal): void {
     if (
-      !REQUEST_ID_RE.test(terminal.actionId)
+      !SITE_STUDIO_EVENT_ID_RE.test(terminal.actionId)
       || !Number.isFinite(Date.parse(terminal.terminalAt))
       || !Number.isFinite(terminal.durationMs)
       || terminal.durationMs < 0

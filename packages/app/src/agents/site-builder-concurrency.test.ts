@@ -40,6 +40,7 @@ import {
   createProjectTools,
   describeModelStreamError,
   SiteBuilderAgent,
+  SITE_STUDIO_EVENT_ID_RE,
   summarizeError
 } from "./site-builder";
 import {
@@ -90,6 +91,50 @@ function projectTool(name: "edit_file" | "write_file" | "rename_file") {
     execute: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   };
 }
+
+describe("Site Builder event ID contract", () => {
+  const UUID_V4 = "11111111-1111-4111-8111-111111111111";
+  const UUID_V7 = "019f8bdc-342a-76e1-ba71-005d69808f86";
+
+  it("accepts UUIDv4 and rejects UUIDv7 for action and call identities", () => {
+    for (const field of ["action_id", "call_id"] as const) {
+      expect(SITE_STUDIO_EVENT_ID_RE.test(UUID_V4), `${field} UUIDv4`).toBe(true);
+      expect(SITE_STUDIO_EVENT_ID_RE.test(UUID_V7), `${field} UUIDv7`).toBe(false);
+    }
+  });
+
+  it("uses the strict event-ID contract before touching durable action state", () => {
+    const sql = vi.fn(() => []);
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    (agent as unknown as { sql: typeof sql }).sql = sql;
+
+    expect(() => agent.recordActionAdmission({
+      actionId: UUID_V4,
+      action: "build",
+      route: "/api/agents/site-builder/{project_id}",
+      admittedAt: "2026-08-02T00:00:00.000Z",
+    })).not.toThrow();
+    expect(sql).toHaveBeenCalledTimes(3);
+
+    sql.mockClear();
+    expect(() => agent.recordActionAdmission({
+      actionId: UUID_V7,
+      action: "build",
+      route: "/api/agents/site-builder/{project_id}",
+      admittedAt: "2026-08-02T00:00:00.000Z",
+    })).toThrow("invalid Site Studio action admission");
+    expect(sql).not.toHaveBeenCalled();
+
+    expect(() => agent.recordActionTerminal({
+      actionId: UUID_V7,
+      outcome: "cancelled",
+      reason: "cancelled",
+      terminalAt: "2026-08-02T00:00:01.000Z",
+      durationMs: 1_000,
+    })).toThrow("invalid Site Studio action terminal");
+    expect(sql).not.toHaveBeenCalled();
+  });
+});
 
 describe("Site Builder file write concurrency", () => {
   beforeEach(() => {
