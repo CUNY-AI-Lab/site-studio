@@ -11,10 +11,11 @@ import { isProtectedServedPath } from "../../../serving-core/src/protected-files
 import { getUser } from "../lib/session";
 import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
+import { getLoggingContext, type LoggingVariables } from "../lib/logging";
 
 type AppContext = Context<{
   Bindings: Env;
-  Variables: { user: { id: string }; previewTokenExpiresAt?: number };
+  Variables: LoggingVariables & { user: { id: string }; previewTokenExpiresAt?: number };
 }>;
 
 function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
@@ -25,7 +26,7 @@ function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string)
 }
 
 export function createPreviewRouter() {
-  const app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
+  const app = new Hono<{ Bindings: Env; Variables: LoggingVariables & { user: { id: string } } }>();
 
   app.get("/preview/:id", async (c) => {
     return servePreviewFile(c, "index.html");
@@ -45,8 +46,11 @@ async function servePreviewFile(
   c: AppContext,
   requestedPath: string
 ) {
-  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
   const user = getUser(c);
+  const storage = new R2ProjectStorage(
+    c.env.SITE_STUDIO_BUCKET,
+    getLoggingContext(c, user.operationalSubject),
+  );
   const projectId = c.req.param("id");
   if (!projectId) {
     return previewNotFound(c, requestedPath);

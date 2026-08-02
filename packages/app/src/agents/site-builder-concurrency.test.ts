@@ -11,7 +11,8 @@ const storage = vi.hoisted(() => ({
 }));
 
 vi.mock("agents", () => ({
-  callable: () => () => undefined
+  callable: () => () => undefined,
+  getCurrentAgent: () => ({ connection: undefined }),
 }));
 
 vi.mock("@cloudflare/ai-chat", () => ({
@@ -38,8 +39,17 @@ import { FileExistsError } from "../storage/r2";
 import {
   createProjectTools,
   describeModelStreamError,
+  SiteBuilderAgent,
   summarizeError
 } from "./site-builder";
+import {
+  createSiteStudioLoggingContext,
+  serializeSiteStudioLoggingContext,
+  SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER,
+  type SiteStudioCorrelation,
+  type SiteStudioConnectionLoggingState,
+} from "../lib/logging";
+import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
 
 function projectTool(name: "edit_file" | "write_file" | "rename_file") {
   const mutationStub = {
@@ -211,6 +221,119 @@ describe("Site Builder file write concurrency", () => {
       message: "The destination file already exists."
     });
     expect(storage.renameFile).toHaveBeenCalledWith("user-1", "project-1", "old.html", "new.html");
+  });
+});
+
+describe("Site Builder connection logging concurrency", () => {
+  function fakeConnection() {
+    let current: SiteStudioConnectionLoggingState | null = null;
+    return {
+      get state() {
+        return current;
+      },
+      setState(next: SiteStudioConnectionLoggingState | null) {
+        current = next;
+        return current;
+      },
+    } as unknown as Parameters<SiteBuilderAgent["onConnect"]>[0];
+  }
+
+  it("retains socket A while missing and changed subjects clear/isolate later sockets", () => {
+    const subjectA = "cail-v1-0123456789abcdef0123456789abcdef";
+    const subjectB = "cail-v1-fedcba9876543210fedcba9876543210";
+    const jwtA = "verified-jwt-a";
+    const jwtB = "verified-jwt-b";
+    const requestA = new Request("https://site-studio.example/agent", {
+      headers: {
+        traceparent: `00-${"1".repeat(32)}-aaaaaaaaaaaaaaaa-01`,
+        "x-cail-request-id": "11111111-1111-4111-8111-111111111111",
+        [SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER]: subjectA,
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: jwtA }),
+      },
+    });
+    const requestB = new Request("https://site-studio.example/agent", {
+      headers: {
+        traceparent: `00-${"2".repeat(32)}-bbbbbbbbbbbbbbbb-01`,
+        "x-cail-request-id": "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    const requestC = new Request("https://site-studio.example/agent", {
+      headers: {
+        traceparent: `00-${"3".repeat(32)}-cccccccccccccccc-01`,
+        "x-cail-request-id": "33333333-3333-4333-8333-333333333333",
+        [SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER]: subjectB,
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: jwtB }),
+      },
+    });
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    // A subject in initialization props must not become a DO-wide fallback.
+    agent.onStart({ identityJwt: jwtA, operationalSubject: subjectA });
+    const connectionA = fakeConnection();
+    const connectionB = fakeConnection();
+    const connectionC = fakeConnection();
+
+    agent.onConnect(connectionA, { request: requestA });
+    const retainedA = connectionA.state;
+    agent.onConnect(connectionB, { request: requestB });
+    agent.onConnect(connectionC, { request: requestC });
+
+    expect(retainedA).toMatchObject({
+      correlation: {
+        trace_id: "1".repeat(32),
+        request_id: "11111111-1111-4111-8111-111111111111",
+      },
+      operationalSubject: subjectA,
+      identityJwt: jwtA,
+    });
+    expect(connectionA.state).toEqual(retainedA);
+    expect(connectionB.state).toMatchObject({
+      correlation: {
+        trace_id: "2".repeat(32),
+        request_id: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    expect(connectionB.state?.operationalSubject).toBeUndefined();
+    expect(connectionB.state?.identityJwt).toBeUndefined();
+    expect(connectionC.state).toMatchObject({
+      correlation: {
+        trace_id: "3".repeat(32),
+        request_id: "33333333-3333-4333-8333-333333333333",
+      },
+      operationalSubject: subjectB,
+      identityJwt: jwtB,
+    });
+    expect(connectionA.state).not.toBe(connectionB.state);
+    expect(connectionB.state).not.toBe(connectionC.state);
+    expect(Object.isFrozen(connectionA.state)).toBe(true);
+    expect(Object.isFrozen(connectionB.state)).toBe(true);
+    expect(Object.isFrozen(connectionC.state)).toBe(true);
+  });
+
+  it("clones and deeply freezes caller correlation snapshots", () => {
+    const callerCorrelation = {
+      trace_id: "a".repeat(32),
+      span_id: "b".repeat(16),
+      trace_flags: 1 as const,
+      request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    };
+    const logger = {
+      emit: () => undefined,
+    } as never;
+    const context = createSiteStudioLoggingContext(logger, {
+      correlation: callerCorrelation,
+    });
+    const snapshot = context.correlation as SiteStudioCorrelation;
+
+    expect(snapshot).not.toBe(callerCorrelation);
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.trace)).toBe(true);
+    callerCorrelation.trace_id = "c".repeat(32);
+    expect(snapshot.trace_id).toBe("a".repeat(32));
+
+    const serialized = serializeSiteStudioLoggingContext(context);
+    expect(serialized?.correlation).not.toBe(snapshot);
+    expect(Object.isFrozen(serialized?.correlation)).toBe(true);
+    expect(Object.isFrozen((serialized?.correlation as SiteStudioCorrelation).trace)).toBe(true);
   });
 });
 

@@ -4,6 +4,7 @@ import {
   CAIL_ANALYTICS_ENGINE_DOUBLES,
   CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION,
   CAIL_LOG_SCHEMA_VERSION,
+  type CailLogEnvironment,
 } from "@cuny-ai-lab/cail-log";
 import {
   ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
@@ -16,6 +17,41 @@ import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./fleet-projection"
 export const OBSERVABILITY_CONTRACT_VERSION = 3;
 export const PRODUCT_ID = "site-studio";
 export const SERVICE_VERSION = "0.1.0";
+
+/** Closed environment vocabulary shared by every Site Studio log boundary. */
+export const CAIL_LOG_ENVIRONMENTS = Object.freeze([
+  "production",
+  "staging",
+  "development",
+  "test",
+] as const);
+
+/**
+ * Parse the deployment environment without normalization or a fallback.
+ * Configuration typos must fail closed instead of relabeling telemetry.
+ */
+export function parseCailLogEnvironment(value: unknown): CailLogEnvironment | undefined {
+  switch (value) {
+    case "production":
+    case "staging":
+    case "development":
+    case "test":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+/** Non-cacheable response used when a required runtime contract is invalid. */
+export function serviceUnavailableResponse(): Response {
+  return new Response(JSON.stringify({ error: "Service unavailable" }), {
+    status: 503,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=UTF-8",
+    },
+  });
+}
 
 export const OBSERVABILITY_CONTRACT = {
   schemaVersion: OBSERVABILITY_CONTRACT_VERSION,

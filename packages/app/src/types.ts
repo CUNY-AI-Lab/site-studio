@@ -98,6 +98,8 @@ export interface SiteBuilderAgentProps {
   userId: string;
   projectId: string;
   identityJwt?: string;
+  /** Verified CAIL `log_sub`; logging only, never derived from `userId`. */
+  operationalSubject?: string;
   // Props are serialized to the `x-partykit-props` header by the agents SDK,
   // whose type requires an index signature (Props extends Record<string, unknown>).
   [key: string]: unknown;

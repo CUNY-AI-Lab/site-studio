@@ -9,7 +9,10 @@ import type {
 } from "../types";
 import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
-import { emitDiagnostic } from "../lib/logging";
+import {
+  emitDiagnostic,
+  type SiteStudioLoggingContext,
+} from "../lib/logging";
 
 export class FileNotFoundError extends Error {
   constructor(public readonly filePath: string) {
@@ -97,7 +100,12 @@ function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt;
 }
 
-function safeParseJson<T>(value: string, label: string, _key: string): T | null {
+function safeParseJson<T>(
+  value: string,
+  label: string,
+  _key: string,
+  logging?: SiteStudioLoggingContext,
+): T | null {
   try {
     return JSON.parse(value) as T;
   } catch {
@@ -106,6 +114,8 @@ function safeParseJson<T>(value: string, label: string, _key: string): T | null 
     emitDiagnostic(
       "warning",
       `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+      {},
+      logging,
     );
     return null;
   }
@@ -132,7 +142,10 @@ function sortSnapshotsNewestFirst(snapshots: ProjectSnapshot[]): ProjectSnapshot
 }
 
 export class R2ProjectStorage {
-  constructor(private readonly bucket: R2Bucket) {}
+  constructor(
+    private readonly bucket: R2Bucket,
+    private readonly logging?: SiteStudioLoggingContext,
+  ) {}
 
   async projectExists(userId: string, projectId: string): Promise<boolean> {
     const metadata = await this.getProjectMetadata(userId, projectId);
@@ -358,7 +371,7 @@ export class R2ProjectStorage {
       return null;
     }
 
-    return safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key);
+    return safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key, this.logging);
   }
 
   async updateProjectMetadata(
@@ -398,7 +411,7 @@ export class R2ProjectStorage {
       // A present-but-corrupt record is repaired from defaults (parse failures
       // never fabricate a project — the object demonstrably exists).
       const existing =
-        safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key) || defaultMetadata();
+        safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key, this.logging) || defaultMetadata();
 
       const next: ProjectMetadata = {
         ...existing,
@@ -675,9 +688,8 @@ export class R2ProjectStorage {
       // Surface the skip — never silent. Callers also relay it (see
       // ensureSnapshot in site-builder.ts and the manual snapshot route).
       emitDiagnostic("warning", "snapshot_too_large", {
-        subject: userId,
         req_bytes: totalBytes
-      });
+      }, this.logging);
       return { skipped: true, reason: "too-large", totalBytes, limitBytes: MAX_SNAPSHOT_BYTES };
     }
 
@@ -721,8 +733,7 @@ export class R2ProjectStorage {
       await this.pruneSnapshots(userId, projectId);
     } catch (error) {
       emitDiagnostic("warning", "snapshot_prune_failed", {
-        subject: userId,
-      });
+      }, this.logging);
     }
 
     return snapshot;
@@ -805,7 +816,7 @@ export class R2ProjectStorage {
       return null;
     }
 
-    return safeParseJson<ProjectSnapshot>(await object.text(), "snapshot metadata", key);
+    return safeParseJson<ProjectSnapshot>(await object.text(), "snapshot metadata", key, this.logging);
   }
 
   async resolvePublishedSlug(
@@ -906,7 +917,8 @@ export class R2ProjectStorage {
     const parsed = safeParseJson<{ projectId?: string | null; reservedAt?: string }>(
       await existing.text(),
       "slug reservation",
-      key
+      key,
+      this.logging,
     );
     const holder = parsed?.projectId ?? null;
 
@@ -970,7 +982,8 @@ export class R2ProjectStorage {
     const parsed = safeParseJson<{ projectId?: string | null }>(
       await existing.text(),
       "slug reservation",
-      key
+      key,
+      this.logging,
     );
     if (parsed?.projectId === toProjectId) return;
     if (parsed?.projectId !== fromProjectId) return;

@@ -7,6 +7,10 @@ import {
   R2ProjectStorage,
   SlugReservationLostError
 } from "../storage/r2";
+import {
+  type SiteStudioLoggingContext,
+  type SiteStudioLoggingContextData,
+} from "./logging";
 
 export type OwnerMutation =
   | { type: "create-project"; projectId: string; name: string; files: Record<string, string> }
@@ -82,8 +86,12 @@ type UploadAdmission = {
 export class OwnerMutationService {
   private readonly storage: R2ProjectStorage;
 
-  constructor(private readonly bucket: R2Bucket, private readonly journalStore: MutationJournalStore) {
-    this.storage = new R2ProjectStorage(bucket);
+  constructor(
+    private readonly bucket: R2Bucket,
+    private readonly journalStore: MutationJournalStore,
+    private readonly logging?: SiteStudioLoggingContext,
+  ) {
+    this.storage = new R2ProjectStorage(bucket, logging);
   }
 
   private async prefixBytes(prefix: string): Promise<number> {
@@ -503,9 +511,14 @@ export class OwnerMutationService {
   }
 }
 
-export async function executeOwnerMutation(env: Env, ownerId: string, operation: OwnerMutation): Promise<OwnerMutationResult> {
+export async function executeOwnerMutation(
+  env: Env,
+  ownerId: string,
+  operation: OwnerMutation,
+  logging?: SiteStudioLoggingContextData,
+): Promise<OwnerMutationResult> {
   const namespace = env.MUTATION_COORDINATOR;
   if (!namespace) throw new Error("MUTATION_COORDINATOR is not configured");
   const id = namespace.idFromName(`owner:${ownerId}`);
-  return namespace.get(id).execute(ownerId, operation);
+  return namespace.get(id).execute(ownerId, operation, logging);
 }

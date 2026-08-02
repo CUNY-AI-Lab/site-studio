@@ -56,6 +56,7 @@ function createMockBucket() {
 function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides: Partial<Env> = {}): Env {
   const now = Date.now();
   return {
+    CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,

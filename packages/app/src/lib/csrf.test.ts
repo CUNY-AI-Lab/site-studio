@@ -307,7 +307,7 @@ describe("csrfProtect middleware", () => {
     return app;
   }
 
-  const env = (bucket: R2Bucket) => ({ SITE_STUDIO_BUCKET: bucket, APP_PUBLIC_DOMAIN }) as unknown as Env;
+  const env = (bucket: R2Bucket) => ({ CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: bucket, APP_PUBLIC_DOMAIN }) as unknown as Env;
 
   it("no-ops on GET and OPTIONS", async () => {
     const bucket = createCsrfBucket();

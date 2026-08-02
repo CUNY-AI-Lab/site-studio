@@ -75,6 +75,7 @@ function createCoordinatorNamespace(): MockCoordinator {
 function createEnv(overrides?: Partial<Env>): Env {
   const now = Date.now();
   const env: Env = {
+    CAIL_LOG_ENV: "test",
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",

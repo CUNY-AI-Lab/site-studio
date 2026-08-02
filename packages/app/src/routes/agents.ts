@@ -6,7 +6,14 @@ import { jsonError } from "../lib/http";
 import { getCailGatewayJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
 import { R2ProjectStorage } from "../storage/r2";
-import { getCorrelation, type LoggingVariables } from "../lib/logging";
+import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
+import {
+  getCorrelation,
+  getLoggingContext,
+  isOperationalSubject,
+  SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER,
+  type LoggingVariables,
+} from "../lib/logging";
 import { outboundCorrelationHeaders } from "@cuny-ai-lab/cail-log";
 
 type AgentRouterVariables = LoggingVariables & { user: { id: string }; cailIdentityJwt?: string };
@@ -23,15 +30,31 @@ function agentInstanceName(userId: string, projectId: string): string {
  */
 function withCorrelationHeaders(
   request: Request,
-  c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>
+  c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>,
+  operationalSubject?: string,
+  identityJwt?: string | null,
 ): Request {
   const correlation = getCorrelation(c);
-  if (!correlation) {
-    return request;
-  }
   const forwarded = new Request(request);
-  for (const [name, value] of Object.entries(outboundCorrelationHeaders(correlation))) {
-    forwarded.headers.set(name, value);
+  // This header is an internal server-owned channel. Always overwrite a
+  // caller-supplied value so a browser cannot choose the log principal; an
+  // absent verified subject is represented by deletion and must clear any
+  // previous connection state at the agent boundary.
+  forwarded.headers.delete(SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER);
+  if (isOperationalSubject(operationalSubject)) {
+    forwarded.headers.set(SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER, operationalSubject);
+  }
+  // PartyServer's props header is also a server-owned channel here. Drop any
+  // browser-supplied value before carrying the current middleware-selected JWT
+  // to this connection; a missing token deliberately clears prior state.
+  forwarded.headers.delete(SITE_STUDIO_AGENT_PROPS_HEADER);
+  if (typeof identityJwt === "string" && identityJwt) {
+    forwarded.headers.set(SITE_STUDIO_AGENT_PROPS_HEADER, JSON.stringify({ identityJwt }));
+  }
+  if (correlation) {
+    for (const [name, value] of Object.entries(outboundCorrelationHeaders(correlation))) {
+      forwarded.headers.set(name, value);
+    }
   }
   return forwarded;
 }
@@ -48,7 +71,10 @@ export function createAgentRouter() {
     }
 
     const projectId = sanitizeProjectId(rawProjectId);
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
+    const storage = new R2ProjectStorage(
+      c.env.SITE_STUDIO_BUCKET,
+      getLoggingContext(c, user.operationalSubject),
+    );
 
     if (!(await storage.projectExists(user.id, projectId))) {
       return jsonError("Project not found", 404);
@@ -60,7 +86,10 @@ export function createAgentRouter() {
     const props: SiteBuilderAgentProps = {
       userId: user.id,
       projectId,
-      identityJwt: getCailGatewayJwt(c) ?? undefined
+      identityJwt: getCailGatewayJwt(c) ?? undefined,
+      ...(isOperationalSubject(user.operationalSubject)
+        ? { operationalSubject: user.operationalSubject }
+        : {}),
     };
 
     return getAgentByName(
@@ -71,6 +100,7 @@ export function createAgentRouter() {
   }
 
   async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
+    const user = getUser(c);
     // Rule 4 (docs/INTEGRATION.md §3¾): origin-check + token-gate WebSocket
     // upgrades BEFORE accepting. The browser enforces no same-origin policy on
     // WS handshakes, and the identity JWT is captured once at accept with no
@@ -85,7 +115,6 @@ export function createAgentRouter() {
     // on the wire before the token has been verified.
     const upgrade = c.req.header("Upgrade") ?? "";
     if (upgrade.toLowerCase() === "websocket") {
-      const user = getUser(c);
       const url = new URL(c.req.url);
       const accepted = verifyWsUpgrade({
         // Browsers always send Origin on WS upgrades; a present-but-foreign
@@ -110,7 +139,14 @@ export function createAgentRouter() {
       // Strip the csrf param before forwarding so the token never reaches the
       // Durable Object (or its logs/history).
       url.searchParams.delete("csrf");
-      return stub.fetch(withCorrelationHeaders(new Request(url.toString(), c.req.raw), c));
+      return stub.fetch(
+        withCorrelationHeaders(
+          new Request(url.toString(), c.req.raw),
+          c,
+          user.operationalSubject,
+          getCailGatewayJwt(c),
+        ),
+      );
     }
 
     // Non-WS requests: mutations (POSTs) to this route are covered by the
@@ -120,7 +156,9 @@ export function createAgentRouter() {
       return stub;
     }
 
-    return stub.fetch(withCorrelationHeaders(c.req.raw, c));
+    return stub.fetch(
+      withCorrelationHeaders(c.req.raw, c, user.operationalSubject, getCailGatewayJwt(c)),
+    );
   }
 
   app.get("/api/projects/:projectId/observability", async (c) => {

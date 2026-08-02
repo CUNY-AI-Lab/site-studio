@@ -396,7 +396,7 @@ describe("createHandleRouter", () => {
   let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
   let kv: ReturnType<typeof createMockKV>;
   let csrf: CsrfSession;
-  const env = (b: R2Bucket) => ({ SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
+  const env = (b: R2Bucket) => ({ CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
   // Every POST carries the session CSRF token + same-origin posture, matching
   // production where csrfProtect guards all /api mutations (lib/csrf.ts).
   const postHeaders = () => ({ "Content-Type": "application/json", ...csrf.headers });

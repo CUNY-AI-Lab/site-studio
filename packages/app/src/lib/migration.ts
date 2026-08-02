@@ -40,7 +40,10 @@
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { getUserHandle, migrateHandle } from "./handles";
 import { readR2Json, putR2Json } from "./r2-json";
-import { emitDiagnostic } from "./logging";
+import {
+  emitDiagnostic,
+  type SiteStudioLoggingContext,
+} from "./logging";
 
 export interface MigrationClaim {
   subject: string;
@@ -310,11 +313,12 @@ async function copyAnonymousNamespace(options: {
   knownProjects?: Record<string, string>;
   /** old published slug -> subject slug from an earlier sweep */
   knownSlugs?: Record<string, string>;
+  logging?: SiteStudioLoggingContext;
 }): Promise<{
   projectMap: Record<string, string>;
   slugMap: Record<string, string>;
 }> {
-  const { bucket, anonUserId, subject, subjectHandle, porter } = options;
+  const { bucket, anonUserId, subject, subjectHandle, porter, logging } = options;
   const projectMap: Record<string, string> = { ...options.knownProjects };
   const slugMap: Record<string, string> = { ...options.knownSlugs };
 
@@ -417,8 +421,7 @@ async function copyAnonymousNamespace(options: {
         await porter.port(anonUserId, plan.oldId, subject, plan.newId);
       } catch (error) {
         emitDiagnostic("warning", "migration_chat_history_port_failed", {
-          subject,
-        });
+        }, logging);
       }
     }
   }
@@ -445,9 +448,10 @@ export async function migrateAnonymousData(options: {
   anonSessionId?: string;
   /** Best-effort Durable Object chat-history porter; failures never abort. */
   porter?: ChatHistoryPorter;
+  logging?: SiteStudioLoggingContext;
   now?: () => string;
 }): Promise<MigrationResult> {
-  const { bucket, kv, anonUserId, subject, anonSessionId, porter } = options;
+  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
   if (!isAnonymousUserId(anonUserId) || anonUserId === subject) {
@@ -535,7 +539,8 @@ export async function migrateAnonymousData(options: {
     subjectHandle,
     porter,
     knownProjects,
-    knownSlugs
+    knownSlugs,
+    logging,
   });
 
   // ---- Second copy sweep, immediately before delete ----
@@ -550,7 +555,8 @@ export async function migrateAnonymousData(options: {
     subjectHandle,
     porter,
     knownProjects: firstSweep.projectMap,
-    knownSlugs: firstSweep.slugMap
+    knownSlugs: firstSweep.slugMap,
+    logging,
   });
 
   // ---- Forwarding pointer BEFORE deleting originals (URL continuity) ----

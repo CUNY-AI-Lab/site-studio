@@ -3,8 +3,13 @@ import type { Env, User } from "../types";
 import { R2ProjectStorage } from "../storage/r2";
 import { jsonError } from "./http";
 import { getUser } from "./session";
+import {
+  createSiteStudioBoundaryContext,
+  getLoggingContext,
+  type LoggingVariables,
+} from "./logging";
 
-export type RequireProjectVariables = {
+export type RequireProjectVariables = LoggingVariables & {
   user: User;
   storage: R2ProjectStorage;
   projectId: string;
@@ -12,8 +17,11 @@ export type RequireProjectVariables = {
 
 export function requireProject() {
   return createMiddleware<{ Bindings: Env; Variables: RequireProjectVariables }>(async (c, next) => {
-    const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET);
     const user = getUser(c);
+    const storage = new R2ProjectStorage(
+      c.env.SITE_STUDIO_BUCKET,
+      getLoggingContext(c, user.operationalSubject) ?? createSiteStudioBoundaryContext(c.env),
+    );
     const projectId = c.req.param("id");
     if (!projectId) {
       jsonError("Project not found", 404);

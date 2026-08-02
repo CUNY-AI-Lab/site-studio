@@ -11,7 +11,15 @@ import {
   type CailIdentity,
 } from "./cail-identity";
 import { migrationPendingKey } from "./migration";
-import { emitDiagnostic } from "./logging";
+import {
+  emitDiagnostic,
+  createSiteStudioBoundaryContext,
+  getLoggingContext,
+  serializeSiteStudioLoggingContext,
+  type LoggingVariables,
+  type SiteStudioLoggingContext,
+  withOperationalSubject,
+} from "./logging";
 import {
   AccountImportConfigurationError,
   resolveAccountImportWindow,
@@ -112,7 +120,11 @@ function accountImportConfigurationResponse(): Response {
   );
 }
 
-async function readCurrentSession(env: Env, sessionId: string): Promise<User | null> {
+async function readCurrentSession(
+  env: Env,
+  sessionId: string,
+  logging?: SiteStudioLoggingContext,
+): Promise<User | null> {
   // SS-46 outage-vs-invalid distinction: fetch the raw text so a KV transport
   // failure THROWS out of this function (store unavailable — must never be read
   // as "record absent"), while a stored value that fails to parse is invalid
@@ -133,7 +145,7 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
         return fromKv as User;
       }
     } catch {
-      emitDiagnostic("warning", "invalid_kv_session");
+      emitDiagnostic("warning", "invalid_kv_session", {}, logging);
     }
     // Invalid KV record: fall through to the legacy R2 record, as before.
   }
@@ -158,7 +170,7 @@ async function readCurrentSession(env: Env, sessionId: string): Promise<User | n
   try {
     parsed = JSON.parse(legacyText) as unknown;
   } catch {
-    emitDiagnostic("warning", "invalid_legacy_session");
+    emitDiagnostic("warning", "invalid_legacy_session", {}, logging);
     return null;
   }
 
@@ -213,8 +225,9 @@ function createAnonymousUser(): User {
  * deterministic renames).
  */
 async function migrateAnonymousSessionIfPresent(
-  c: Context<{ Bindings: Env; Variables: SessionVariables }>,
-  subject: string
+  c: Context<{ Bindings: Env; Variables: SessionVariables & LoggingVariables }>,
+  subject: string,
+  logging?: SiteStudioLoggingContext,
 ): Promise<boolean> {
   const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
 
@@ -222,11 +235,16 @@ async function migrateAnonymousSessionIfPresent(
     const namespace = c.env.MUTATION_COORDINATOR;
     if (!namespace) throw new Error("MUTATION_COORDINATOR is not configured");
     return namespace.get(namespace.idFromName(`owner:${anonUserId}`))
-      .migrateAnonymous(anonUserId, subject, anonSessionId);
+      .migrateAnonymous(
+        anonUserId,
+        subject,
+        anonSessionId,
+        serializeSiteStudioLoggingContext(logging),
+      );
   };
 
   if (cookieValue && cookieValue !== subject) {
-    const anonUser = await readCurrentSession(c.env, cookieValue);
+    const anonUser = await readCurrentSession(c.env, cookieValue, logging);
     // Only absorb a namespace when the presented cookie resolves to a live,
     // anonymous (`user_…`) KV/legacy session record. A random string, an expired
     // record, or a subject-owned record all fall through untouched.
@@ -291,7 +309,7 @@ async function migrateAnonymousSessionIfPresent(
         );
         await stub.markComplete(anonId, subject);
       } catch (error) {
-        emitDiagnostic("warning", "migration_mark_complete_failed", { subject });
+        emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
       }
       return true;
     }
@@ -315,8 +333,7 @@ async function migrateAnonymousSessionIfPresent(
       decision = await stub.claim(pendingAnonId, subject);
     } catch (error) {
       emitDiagnostic("error", "migration_resume_gate_failed", {
-        subject,
-      });
+      }, logging);
       return false;
     }
     if (!decision.granted) {
@@ -331,7 +348,7 @@ async function migrateAnonymousSessionIfPresent(
       );
       await stub.markComplete(pendingAnonId, subject);
     } catch (error) {
-      emitDiagnostic("warning", "migration_mark_complete_failed", { subject });
+      emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
     }
     return true;
   }
@@ -339,7 +356,11 @@ async function migrateAnonymousSessionIfPresent(
   return false;
 }
 
-async function discardClosedImportState(env: Env, subject: string): Promise<void> {
+async function discardClosedImportState(
+  env: Env,
+  subject: string,
+  logging?: SiteStudioLoggingContext,
+): Promise<void> {
   // TODO(account-import-removal): remove this temporary path by the configured
   // CAIL_ACCOUNT_IMPORT_UNTIL deadline. The permanent /sites serving
   // compatibility and migration pointers are outside that cleanup.
@@ -347,12 +368,14 @@ async function discardClosedImportState(env: Env, subject: string): Promise<void
     await env.SESSION_KV.delete(migrationPendingKey(subject));
   } catch (error) {
     emitDiagnostic("warning", "account_import_pending_cleanup_failed", {
-      subject,
-    });
+    }, logging);
   }
 }
 
-function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
+function resolveEnforcedImportWindow(
+  env: Env,
+  logging?: SiteStudioLoggingContext,
+): AccountImportWindow | Response {
   try {
     return resolveAccountImportWindow(env);
   } catch (error) {
@@ -362,7 +385,7 @@ function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
         : "account_import_config_invalid";
     emitDiagnostic("error", errorCode, {
       status: 500,
-    });
+    }, logging);
     return accountImportConfigurationResponse();
   }
 }
@@ -384,7 +407,11 @@ function resolveEnforcedImportWindow(env: Env): AccountImportWindow | Response {
  *      browsers redirect to /login?rt=…).
  *   3. No identity + not required → anonymous KV session.
  */
-export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: SessionVariables }>(async (c, next) => {
+export const authMiddleware = createMiddleware<{
+  Bindings: Env;
+  Variables: SessionVariables & LoggingVariables;
+}>(async (c, next) => {
+  const logging = getLoggingContext(c) ?? createSiteStudioBoundaryContext(c.env);
   const existingSessionId = c.get("sessionId") as string | undefined;
   const existingUser = c.get("user") as User | undefined;
 
@@ -401,7 +428,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
   // making an authentication decision so rollout cannot silently become an
   // unbounded import window.
   if (identityRequired) {
-    const resolved = resolveEnforcedImportWindow(c.env);
+    const resolved = resolveEnforcedImportWindow(c.env, logging);
     if (resolved instanceof Response) {
       return resolved;
     }
@@ -437,6 +464,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     }
 
     const subject = identity.subject;
+    const identityLogging = withOperationalSubject(logging, identity.operationalSubject);
 
     if (!importWindow) {
       try {
@@ -446,9 +474,7 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
           error instanceof AccountImportConfigurationError
             ? error.code
             : "account_import_config_invalid";
-        emitDiagnostic("warning", errorCode, {
-          subject,
-        });
+        emitDiagnostic("warning", errorCode, {}, identityLogging);
       }
     }
 
@@ -458,9 +484,9 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     // previously interrupted migration recorded under the subject.
     try {
       if (importWindow?.state === "open") {
-        const imported = await migrateAnonymousSessionIfPresent(c, subject);
+        const imported = await migrateAnonymousSessionIfPresent(c, subject, identityLogging);
         if (imported) {
-          emitDiagnostic("info", "account_import_completed", { subject });
+          emitDiagnostic("info", "account_import_completed", {}, identityLogging);
         }
       } else {
         const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
@@ -472,13 +498,14 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
               : importWindow?.state === "expired"
                 ? "account_import_expired"
                 : "account_import_config_invalid",
-            { subject },
+            {},
+            identityLogging,
           );
         }
         // Do not resolve, claim, or copy from the old cookie outside the window.
         // The subject cookie written below replaces it in the browser; this
         // removes any subject-keyed resume marker so later sessions cannot retry.
-        await discardClosedImportState(c.env, subject);
+        await discardClosedImportState(c.env, subject, identityLogging);
       }
     } catch (error) {
       if (error instanceof SessionStoreUnavailableError) {
@@ -487,17 +514,14 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
         // subject cookie below and permanently orphan the un-migrated anonymous
         // namespace; a 503 lets the user retry with the anon cookie intact.
         emitDiagnostic("error", "session_store_unavailable", {
-          subject,
           status: 503,
-        });
+        }, identityLogging);
         return sessionStoreUnavailableResponse();
       }
       // Other failures never block authentication — the pending marker written
       // at claim time makes the interrupted migration resumable on a later
       // login (migrateAnonymousSessionIfPresent escalates pre-marker failures).
-      emitDiagnostic("error", "account_import_migration_failed", {
-        subject,
-      });
+      emitDiagnostic("error", "account_import_migration_failed", {}, identityLogging);
     }
 
     const kvKey = cailSessionKey(subject);
@@ -554,12 +578,12 @@ export const authMiddleware = createMiddleware<{ Bindings: Env; Variables: Sessi
     // Absent/invalid records (readCurrentSession → null) still fall through to
     // a fresh anonymous session below.
     try {
-      user = await readCurrentSession(c.env, sessionId);
+      user = await readCurrentSession(c.env, sessionId, logging);
     } catch (error) {
       if (error instanceof SessionStoreUnavailableError) {
         emitDiagnostic("error", "session_store_unavailable", {
           status: 503,
-        });
+        }, logging);
         return sessionStoreUnavailableResponse();
       }
       throw error;

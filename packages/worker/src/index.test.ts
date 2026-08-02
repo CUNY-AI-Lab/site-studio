@@ -5,6 +5,7 @@ import worker, {
   getContentType,
   parsePublishedRequest,
   loadMigrationPointer,
+  createPublisherLogger,
   findPublishedProject,
   siteRootPath,
   looksLikePageNavigation,
@@ -78,7 +79,7 @@ function createMockBucket() {
 }
 
 function createEnv(bucket: R2Bucket): Env {
-  return { SITE_STUDIO_BUCKET: bucket };
+  return { SITE_STUDIO_BUCKET: bucket, CAIL_LOG_ENV: "test" };
 }
 
 /** Seed a published project with the given files (relative paths). */
@@ -703,6 +704,57 @@ describe("worker.fetch (integration)", () => {
 });
 
 describe("CAIL boundary logging", () => {
+  it.each(["production", "staging"] as const)("joins publisher diagnostics to exact %s environment", async (environment) => {
+    const bucket = createMockBucket();
+    bucket.store.set("projects/legacy/.migrated.json", { data: "not-json" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(
+        loadMigrationPointer(bucket, "legacy", createPublisherLogger({ CAIL_LOG_ENV: environment })),
+      ).resolves.toBeNull();
+      expect(warn.mock.calls[0]?.[0]).toMatchObject({
+        "deployment.environment.name": environment,
+        "service.name": "site-studio-publisher",
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.each([undefined, "", " production", "production ", "PRODUCTION", "qa"])(
+    "fails publisher health and site requests closed for invalid env %j",
+    async (environment) => {
+      const bucket = createMockBucket();
+      const info = vi.spyOn(console, "log").mockImplementation(() => {});
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const env = {
+          SITE_STUDIO_BUCKET: bucket,
+          CAIL_LOG_ENV: environment as Env["CAIL_LOG_ENV"],
+        } as Env;
+        const health = await worker.fetch(new Request("https://publisher.example/healthz"), env);
+        const site = await worker.fetch(new Request("https://publisher.example/sites/u/blog/"), env);
+
+        expect(health.status).toBe(503);
+        expect(site.status).toBe(503);
+        expect(bucket.get).not.toHaveBeenCalled();
+        expect(bucket.list).not.toHaveBeenCalled();
+        expect(info).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+      } finally {
+        info.mockRestore();
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    },
+  );
+
+  it("requires a validated environment in the publisher logger factory", () => {
+    expect(() => createPublisherLogger({ CAIL_LOG_ENV: "PRODUCTION" as never })).toThrow(/CAIL_LOG_ENV/);
+  });
+
   it("maps publisher requests to safe canonical received/completed events", async () => {
     const bucket = createMockBucket();
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -758,7 +810,9 @@ describe("CAIL boundary logging", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      await expect(loadMigrationPointer(bucket, "legacy")).resolves.toBeNull();
+      await expect(
+        loadMigrationPointer(bucket, "legacy", createPublisherLogger({ CAIL_LOG_ENV: "test" })),
+      ).resolves.toBeNull();
       expect(warn.mock.calls[0]?.[0]).toMatchObject({
         "event.name": "site_studio_publisher.diagnostic.warning",
         "service.name": "site-studio-publisher",
@@ -767,6 +821,48 @@ describe("CAIL boundary logging", () => {
       });
       expect(JSON.stringify(warn.mock.calls)).not.toContain("not-json-secret");
     } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("carries the request correlation through publisher metadata diagnostics", async () => {
+    const bucket = createMockBucket();
+    bucket.store.set("projects/legacy/.migrated.json", { data: "not-json-secret" });
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const requestId = "44444444-4444-4444-8444-444444444444";
+    const traceId = "4".repeat(32);
+    const request = new Request("https://x.test/sites/legacy/blog/index.html?token=secret", {
+      headers: {
+        Accept: "text/html",
+        traceparent: `00-${traceId}-4444444444444444-01`,
+        "x-cail-request-id": requestId,
+      },
+    });
+
+    try {
+      const response = await worker.fetch(request, createEnv(bucket));
+      expect(response.status).toBe(404);
+
+      const events = [...info.mock.calls, ...warn.mock.calls].map(
+        ([event]) => event as Record<string, unknown>,
+      );
+      const diagnostic = events.find(
+        (event) => event["event.name"] === "site_studio_publisher.diagnostic.warning",
+      );
+      expect(diagnostic).toMatchObject({
+        "cail.request.id": requestId,
+        trace_id: traceId,
+        "http.request.method": "GET",
+        "url.template": "/sites/{user_id}/{slug}/{path}",
+        "error.type": "invalid_migration_pointer",
+      });
+      expect(diagnostic?.span_id).toMatch(/^[0-9a-f]{16}$/);
+      expect(JSON.stringify(diagnostic)).not.toContain("legacy");
+      expect(JSON.stringify(diagnostic)).not.toContain("index.html");
+      expect(JSON.stringify(diagnostic)).not.toContain("token");
+    } finally {
+      info.mockRestore();
       warn.mockRestore();
     }
   });

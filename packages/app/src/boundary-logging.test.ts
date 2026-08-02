@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toWorkersLogEvent, type CailLogEvent } from "@cuny-ai-lab/cail-log";
+import {
+  CAIL_ANALYTICS_ENGINE_BLOBS,
+  toWorkersLogEvent,
+  type CailAnalyticsEngineDataPoint,
+  type CailLogEvent,
+} from "@cuny-ai-lab/cail-log";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
 import { createMockKV, type MockKV } from "./lib/test-utils";
@@ -16,6 +21,10 @@ import {
   PRODUCT_ID,
   SITE_STUDIO_EVENTS,
   SiteStudioActionLifecycle,
+  createSiteStudioBoundaryContext,
+  createSiteStudioBoundaryLogger,
+  createSiteStudioConnectionLoggingState,
+  createSiteStudioLoggingContext,
   createSiteStudioLogger,
   emitDiagnostic,
   errorCodeFrom,
@@ -53,6 +62,7 @@ let bucket: R2Bucket;
 function createEnv(extra?: Partial<Env>): Env {
   const now = Date.now();
   return {
+    CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
@@ -180,6 +190,46 @@ describe("canonical request mappings", () => {
   });
 });
 
+describe("CAIL_LOG_ENV boundary", () => {
+  it.each(["production", "staging"] as const)("joins diagnostic events to exact %s environment", (environment) => {
+    const events: CailLogEvent[] = [];
+    const logger = createSiteStudioLogger({
+      sink: (event) => events.push(event),
+      env: environment,
+    });
+    emitDiagnostic("info", "environment_probe", {}, logger);
+    expect(events[0]?.resource["deployment.environment.name"]).toBe(environment);
+  });
+
+  it.each([undefined, "", " production", "production ", "PRODUCTION", "qa"])(
+    "fails health and protected app requests closed for invalid env %j",
+    async (environment) => {
+      const capture = captureConsole();
+      try {
+        const env = createEnv({ CAIL_LOG_ENV: environment as Env["CAIL_LOG_ENV"] });
+        const health = await app.request(`${BASE}/api/health`, {}, env);
+        const operational = await app.request(`${BASE}/api/projects/probe`, {}, env);
+
+        expect(health.status).toBe(503);
+        expect(operational.status).toBe(503);
+        expect(kv.get).not.toHaveBeenCalled();
+        expect(bucket.get).not.toHaveBeenCalled();
+        expect(capture.events()).toHaveLength(0);
+      } finally {
+        capture.restore();
+      }
+    },
+  );
+
+  it("requires a validated environment in logger factories", () => {
+    expect(() => createSiteStudioLogger({
+      sink: () => undefined,
+      env: "PRODUCTION",
+    })).toThrow(/CAIL_LOG_ENV/);
+    expect(() => createSiteStudioBoundaryLogger({ CAIL_LOG_ENV: undefined })).toThrow(/CAIL_LOG_ENV/);
+  });
+});
+
 describe("canonical build/publish action mappings", () => {
   function createLifecycle(events: CailLogEvent[], clockValues = [100, 145]) {
     const logger = createSiteStudioLogger({
@@ -285,6 +335,123 @@ describe("canonical build/publish action mappings", () => {
 });
 
 describe("service-local diagnostics and helpers", () => {
+  it("fans diagnostics through the injected fleet sink without leaking identifiers", () => {
+    const points: CailAnalyticsEngineDataPoint[] = [];
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const logging = createSiteStudioBoundaryContext({
+        CAIL_LOG_ENV: "staging",
+        CAIL_FLEET_EVENTS: {
+          writeDataPoint: (point) => points.push(point),
+        },
+      }, {
+        correlation: {
+          trace_id: TRACE_ID,
+          span_id: "b".repeat(16),
+          trace_flags: 1,
+          request_id: REQUEST_ID,
+        },
+        operationalSubject: "cail-v1-0123456789abcdef0123456789abcdef",
+      });
+
+      emitDiagnostic("warning", "fleet_context_probe", {}, logging);
+
+      expect(points).toHaveLength(1);
+      expect(points[0]?.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.event_name - 1])
+        .toBe(SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING);
+      const serialized = JSON.stringify(points[0]);
+      expect(serialized).not.toContain(REQUEST_ID);
+      expect(serialized).not.toContain("cail-v1-0123456789abcdef0123456789abcdef");
+    } finally {
+      consoleWarn.mockRestore();
+    }
+  });
+
+  it("keeps diagnostic environment, correlation, and operational identity at the boundary", () => {
+    const events: CailLogEvent[] = [];
+    const correlation = {
+      trace_id: TRACE_ID,
+      span_id: "a".repeat(16),
+      trace_flags: 1 as const,
+      request_id: REQUEST_ID,
+    };
+    const logging = createSiteStudioLoggingContext(
+      createSiteStudioLogger({
+        sink: (event) => events.push(event),
+        env: "staging",
+        release: "9.9.0",
+      }),
+      {
+        correlation,
+        operationalSubject: "cail-v1-0123456789abcdef0123456789abcdef",
+      },
+    );
+
+    emitDiagnostic("warning", "context_probe", {}, logging);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      trace_id: TRACE_ID,
+      span_id: "a".repeat(16),
+      resource: {
+        "deployment.environment.name": "staging",
+        "service.version": "9.9.0",
+      },
+      attributes: {
+        "cail.request.id": REQUEST_ID,
+        "cail.principal.type": "user",
+        "enduser.pseudo.id": "cail-v1-0123456789abcdef0123456789abcdef",
+      },
+    });
+    expect(JSON.stringify(events[0])).not.toContain(TEST_SUBJECTS.alice);
+  });
+
+  it("keeps interleaved connection contexts independent after a later socket connects", () => {
+    const requestIdA = "11111111-1111-4111-8111-111111111111";
+    const requestIdB = "22222222-2222-4222-8222-222222222222";
+    const traceIdA = "1".repeat(32);
+    const traceIdB = "2".repeat(32);
+    const subjectA = "cail-v1-0123456789abcdef0123456789abcdef";
+    const subjectB = "cail-v1-fedcba9876543210fedcba9876543210";
+    const stateA = createSiteStudioConnectionLoggingState(
+      new Request("https://site-studio.example/agent", {
+        headers: {
+          traceparent: `00-${traceIdA}-aaaaaaaaaaaaaaaa-01`,
+          "x-cail-request-id": requestIdA,
+        },
+      }),
+      subjectA,
+    );
+    // Simulate socket B connecting before socket A's turn finishes. PartyServer
+    // keeps these states on their individual connections; no DO-wide field is
+    // allowed to replace stateA.
+    const stateB = createSiteStudioConnectionLoggingState(
+      new Request("https://site-studio.example/agent", {
+        headers: {
+          traceparent: `00-${traceIdB}-bbbbbbbbbbbbbbbb-01`,
+          "x-cail-request-id": requestIdB,
+        },
+      }),
+      subjectB,
+    );
+
+    const events: CailLogEvent[] = [];
+    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    emitDiagnostic("info", "interleaved_connection_a", {}, createSiteStudioLoggingContext(logger, stateA));
+    emitDiagnostic("info", "interleaved_connection_b", {}, createSiteStudioLoggingContext(logger, stateB));
+
+    expect(Object.isFrozen(stateA)).toBe(true);
+    expect(Object.isFrozen(stateA.correlation)).toBe(true);
+    expect(stateA.correlation.request_id).toBe(requestIdA);
+    expect(stateA.correlation.trace_id).toBe(traceIdA);
+    expect(stateA.operationalSubject).toBe(subjectA);
+    expect(stateB.correlation.request_id).toBe(requestIdB);
+    expect(stateB.correlation.trace_id).toBe(traceIdB);
+    expect(stateB.operationalSubject).toBe(subjectB);
+    expect(events.map((event) => event.attributes["cail.request.id"])).toEqual([requestIdA, requestIdB]);
+    expect(events.map((event) => event.attributes["enduser.pseudo.id"])).toEqual([subjectA, subjectB]);
+  });
+
   it("covers every fixed-severity diagnostic mapping without a free-text body", () => {
     const events: CailLogEvent[] = [];
     const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
