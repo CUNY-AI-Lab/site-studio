@@ -423,6 +423,23 @@ function installedDependencyMap(manifest) {
   return result;
 }
 
+function repositoryInstallRoots(rootRealPath, workspaces) {
+  // A package may be linked from any repository workspace or from the root
+  // hoist. Resolve the roots themselves before comparing package realpaths, and
+  // reject a node_modules root that escapes the repository through a symlink.
+  if (!rootRealPath) return [];
+  const candidates = [
+    path.join(rootRealPath, 'node_modules'),
+    ...workspaces.map((workspace) => path.join(workspace.realDirectory, 'node_modules')),
+  ];
+  const roots = [];
+  for (const candidate of candidates) {
+    const realRoot = realpathSafe(candidate);
+    if (realRoot && pathInside(rootRealPath, realRoot) && !roots.includes(realRoot)) roots.push(realRoot);
+  }
+  return roots;
+}
+
 function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name) {
   const requireFromPackage = createRequire(path.join(packageDirectory, 'package.json'));
   let resolvedPath;
@@ -435,14 +452,28 @@ function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name) {
       resolvedPath = null;
     }
   }
-  return (
-    (resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null)
-    ?? packageDirectoryFromNodeModules(rootDir, packageDirectory, name)
-  );
+  const resolvedPackage = resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null;
+  const logicalPackage = packageDirectoryFromNodeModules(rootDir, packageDirectory, name);
+  if (!logicalPackage) return null;
+  const packageInfo = resolvedPackage ?? logicalPackage;
+  const realDirectory = realpathSafe(resolvedPackage?.directory ?? logicalPackage.directory);
+  if (!realDirectory) return null;
+  return {
+    // `directory` is the logical candidate selected from node_modules. Keep it
+    // separate from `realDirectory`: quarantine decisions must never inspect a
+    // symlink target merely because its real path has a backup/cache segment.
+    directory: logicalPackage.directory,
+    realDirectory,
+    manifest: packageInfo.manifest,
+  };
 }
 
 function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overrideSpecs, issues) {
   if (overrideSpecs.size === 0) return;
+
+  const rootRealPath = realpathSafe(rootDir);
+  const workspaces = workspaceDependencyChecks.map(({ workspace }) => workspace);
+  const acceptedInstallRoots = repositoryInstallRoots(rootRealPath, workspaces);
 
   const visited = new Set();
   const queue = [];
@@ -455,14 +486,22 @@ function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overr
 
   while (queue.length > 0) {
     const resolvedPackage = queue.shift();
-    // A quarantine namespace is an unreachable logical candidate, even if a
-    // symlink beneath it happens to resolve to a real package. Conversely, a
-    // normal logical path that resolves into a Bun store/cache is reachable
-    // and must be checked.
+    // A quarantine namespace is an unreachable logical candidate. A normal
+    // logical path that resolves into a Bun store/cache remains reachable and
+    // must be checked against the real repository install roots below.
     if (isQuarantinedPath(resolvedPackage.directory)) continue;
-    const realDirectory = realpathSafe(resolvedPackage.directory);
+    const realDirectory = resolvedPackage.realDirectory;
     if (!realDirectory || visited.has(realDirectory)) continue;
     visited.add(realDirectory);
+
+    const isWorkspaceSource = workspaces.some((workspace) => workspace.realDirectory === realDirectory);
+    if (!isWorkspaceSource && !pathInsideAny(realDirectory, acceptedInstallRoots)) {
+      issues.push(
+        `reachable dependency ${resolvedPackage.manifest.name} at ${relativePath(rootDir, resolvedPackage.directory)} `
+          + 'resolves outside the accepted repository install root',
+      );
+      continue;
+    }
 
     const expectedRange = overrideSpecs.get(resolvedPackage.manifest.name);
     if (expectedRange !== undefined) {
@@ -478,10 +517,7 @@ function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overr
 
     for (const dependencyName of installedDependencyMap(resolvedPackage.manifest).keys()) {
       const dependency = resolveInstalledPackageFromDirectory(rootDir, resolvedPackage.directory, dependencyName);
-      if (!dependency) continue;
-      const dependencyRealDirectory = realpathSafe(dependency.directory);
-      if (!dependencyRealDirectory || isQuarantinedPath(dependency.directory)) continue;
-      queue.push(dependency);
+      if (dependency) queue.push(dependency);
     }
   }
 }
@@ -619,26 +655,8 @@ function packageDirectoryFromNodeModules(rootDir, baseDirectory, name) {
   return null;
 }
 
-function packageDirectoryFromWorkspaceNodeModules(rootDir, workspaceDirectory, name) {
-  return packageDirectoryFromNodeModules(rootDir, workspaceDirectory, name);
-}
-
 function resolveInstalledPackage(rootDir, workspace, name) {
-  const requireFromWorkspace = createRequire(path.join(workspace.directory, 'package.json'));
-  let resolvedPath;
-  try {
-    resolvedPath = requireFromWorkspace.resolve(name);
-  } catch {
-    try {
-      resolvedPath = requireFromWorkspace.resolve(`${name}/package.json`);
-    } catch {
-      resolvedPath = null;
-    }
-  }
-  return (
-    (resolvedPath ? packageDirectoryFromResolved(rootDir, resolvedPath) : null) ??
-    packageDirectoryFromWorkspaceNodeModules(rootDir, workspace.directory, name)
-  );
+  return resolveInstalledPackageFromDirectory(rootDir, workspace.directory, name);
 }
 
 function workspaceTarget(workspaces, dependencyName) {
@@ -732,7 +750,7 @@ function checkResolvedDependency(rootDir, workspace, dependencyName, spec, recor
     return;
   }
 
-  const actualDirectory = realpathSafe(resolvedPackage.directory);
+  const actualDirectory = resolvedPackage.realDirectory;
   const rootRealPath = realpathSafe(rootDir);
   const { directory: expectedDirectory, installRoot, isolatedRoots } = expectedInstallPaths(rootRealPath ?? rootDir, workspace, selection, dependencyName);
   const expectedRealDirectory = realpathSafe(expectedDirectory);
@@ -746,7 +764,12 @@ function checkResolvedDependency(rootDir, workspace, dependencyName, spec, recor
   } else {
     const expectedInstallRoot = installRoot ? realpathSafe(installRoot) : null;
     const actualInIsolatedInstall = actualDirectory && pathInsideAny(actualDirectory, isolatedRoots);
-    if (!expectedRealDirectory && !actualInIsolatedInstall) {
+    const acceptedInstallRoots = repositoryInstallRoots(rootRealPath, workspaces);
+    // The lock-location checks below are stricter than this boundary check;
+    // first ensure no package target escapes every repository install root.
+    if (!rootRealPath || !actualDirectory || !pathInsideAny(actualDirectory, acceptedInstallRoots)) {
+      issues.push(`${workspace.key || '.'} resolves ${dependencyName} outside the accepted repository install root`);
+    } else if (!expectedRealDirectory && !actualInIsolatedInstall) {
       issues.push(`${workspace.key || '.'} expected ${dependencyName} at its locked ${selection.location} install path, but that path is missing`);
     } else if (!rootRealPath || !expectedInstallRoot || !pathInside(rootRealPath, expectedInstallRoot) || !actualDirectory || !pathInside(rootRealPath, actualDirectory)) {
       issues.push(`${workspace.key || '.'} resolves ${dependencyName} outside the accepted repository install root`);

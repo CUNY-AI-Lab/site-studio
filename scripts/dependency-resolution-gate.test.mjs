@@ -395,6 +395,22 @@ async function makeOverrideFixture({
       {},
       'sha512-fixture',
     ];
+  } else if (location === 'effective-backup') {
+    const targetDirectory = `node_modules/.backups-fixture/node_modules/${targetName}`;
+    await writeInstalledPackage(rootDir, targetDirectory, targetName, installedVersion);
+    await writeSymlink(
+      path.join(rootDir, `node_modules/${targetName}`),
+      path.join(rootDir, targetDirectory),
+    );
+    packages[targetName] = [`${targetName}@${lockVersion}`, '', {}, 'sha512-fixture'];
+  } else if (location === 'bun') {
+    const targetDirectory = `node_modules/.bun/${targetName}@${override}/node_modules/${targetName}`;
+    await writeInstalledPackage(rootDir, targetDirectory, targetName, installedVersion);
+    await writeSymlink(
+      path.join(rootDir, `node_modules/${targetName}`),
+      path.join(rootDir, targetDirectory),
+    );
+    packages[targetName] = [`${targetName}@${lockVersion}`, '', {}, 'sha512-fixture'];
   } else if (location === 'quarantine') {
     // Keep the effective root candidate valid; the stale copies below are
     // only preserved backup/cache namespaces and must not affect resolution.
@@ -412,6 +428,12 @@ async function makeOverrideFixture({
       targetName,
       installedVersion,
     );
+    await writeInstalledPackage(
+      rootDir,
+      `node_modules/.backups-fixture/node_modules/${targetName}`,
+      targetName,
+      installedVersion,
+    );
   } else {
     await writeInstalledPackage(rootDir, `node_modules/${targetName}`, targetName, installedVersion);
     packages[targetName] = [`${targetName}@${lockVersion}`, '', {}, 'sha512-fixture'];
@@ -424,6 +446,38 @@ async function makeOverrideFixture({
     packages,
   });
   return rootDir;
+}
+
+async function makeOutsideTransitiveOverrideFixture({ installedVersion = '3.1.3' } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-outside-transitive-'));
+  const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-outside-target-'));
+  const directDependencies = { holder: '1.0.0' };
+  const override = '3.1.5';
+  await writeJson(path.join(rootDir, 'package.json'), {
+    name: 'override-outside-transitive-fixture',
+    private: true,
+    dependencies: directDependencies,
+    overrides: { 'fast-uri': override },
+  });
+  await writeInstalledPackage(rootDir, 'node_modules/holder', 'holder', '1.0.0');
+  await writeJson(path.join(rootDir, 'node_modules/holder/package.json'), {
+    name: 'holder',
+    version: '1.0.0',
+    dependencies: { 'fast-uri': override },
+    main: 'index.js',
+  });
+  await writeInstalledPackage(outsideDir, '.', 'fast-uri', installedVersion);
+  await writeSymlink(path.join(rootDir, 'node_modules/fast-uri'), outsideDir);
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces: { '': { name: 'override-outside-transitive-fixture', dependencies: directDependencies } },
+    overrides: { 'fast-uri': override },
+    packages: {
+      holder: ['holder@1.0.0', '', { dependencies: { 'fast-uri': override } }, 'sha512-fixture'],
+      'fast-uri': ['fast-uri@3.1.5', '', {}, 'sha512-fixture'],
+    },
+  });
+  return { rootDir, outsideDir };
 }
 
 test('parses Bun lock comments and trailing commas without evaluating package data', () => {
@@ -461,6 +515,20 @@ test('does not reject a legitimate nested package outside direct workspace depen
   const rootDir = await makeFixture();
   try {
     await writeInstalledPackage(rootDir, 'frontend/node_modules/transitive-tool', 'transitive-tool', '9.9.9');
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('preserves the explicit same-name/version byte-mutation residual', async () => {
+  const rootDir = await makeFixture();
+  try {
+    // This gate validates package identity/version and install placement, not
+    // package-file bytes. Keep that limitation explicit until an integrity
+    // source is available for every reachable package.
+    await fs.writeFile(path.join(rootDir, 'node_modules/root-tool/index.js'), 'module.exports = "mutated";\n');
     const result = verifyDependencyResolution({ rootDir });
     assert.equal(result.ok, true, result.issues.join('\n'));
   } finally {
@@ -750,6 +818,53 @@ test('rejects a stale nested override target', async () => {
     const result = verifyDependencyResolution({ rootDir });
     assert.equal(result.ok, false);
     assert.match(result.issues.join('\n'), /holder\/node_modules\/fast-uri/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a patched root whose reachable transitive target is stale and outside the repository', async () => {
+  const { rootDir, outsideDir } = await makeOutsideTransitiveOverrideFixture();
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    const diagnostics = result.issues.join('\n');
+    assert.equal(result.ok, false);
+    assert.match(diagnostics, /outside the accepted repository install root/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a version-matching transitive target outside the repository install roots', async () => {
+  const { rootDir, outsideDir } = await makeOutsideTransitiveOverrideFixture({ installedVersion: '3.1.5' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /outside the accepted repository install root/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await fs.rm(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a reachable symlink into a .backups target even when the logical path is normal', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'effective-backup', installedVersion: '3.1.3' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /live override target fast-uri/);
+    assert.match(result.issues.join('\n'), /3\.1\.3/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('accepts a reachable Bun .bun target when its override version is correct', async () => {
+  const rootDir = await makeOverrideFixture({ location: 'bun' });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }
