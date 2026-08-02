@@ -305,6 +305,86 @@ async function makeOutsideSymlinkFixture() {
   return { rootDir, outsideDir };
 }
 
+async function makeInstallRootPackageFixture({ workspace = false, bunStoreRoot = false } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-install-root-package-'));
+  const dependencyName = 'install-root-target';
+  const dependencySpec = '1.0.0';
+  const rootManifest = {
+    name: 'install-root-package-fixture',
+    private: true,
+    ...(workspace ? { workspaces: ['app'] } : { dependencies: { [dependencyName]: dependencySpec } }),
+  };
+  const appManifest = {
+    name: '@fixture/app',
+    private: true,
+    dependencies: { [dependencyName]: dependencySpec },
+  };
+  await writeJson(path.join(rootDir, 'package.json'), rootManifest);
+  if (workspace) await writeJson(path.join(rootDir, 'app/package.json'), appManifest);
+
+  const installRoot = workspace ? 'app/node_modules' : 'node_modules';
+  const targetRoot = bunStoreRoot ? `${installRoot}/.bun` : installRoot;
+  await writeInstalledPackage(rootDir, targetRoot, dependencyName, dependencySpec);
+  await writeSymlink(
+    path.join(rootDir, `${installRoot}/${dependencyName}`),
+    path.join(rootDir, targetRoot),
+  );
+
+  const workspaces = {
+    '': { name: rootManifest.name },
+    ...(workspace ? { app: { name: appManifest.name, dependencies: appManifest.dependencies } } : {}),
+  };
+  if (!workspace) workspaces[''].dependencies = rootManifest.dependencies;
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces,
+    packages: {
+      [dependencyName]: [`${dependencyName}@${dependencySpec}`, '', {}, 'sha512-fixture'],
+    },
+  });
+  return rootDir;
+}
+
+async function makePeerDependencyFixture({ workspace = false, optional = false, present = true } = {}) {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-peer-dependency-'));
+  const dependencyName = 'peer-tool';
+  const dependencySpec = '1.0.0';
+  const peerDependencies = { [dependencyName]: dependencySpec };
+  const peerDependenciesMeta = optional ? { [dependencyName]: { optional: true } } : undefined;
+  const rootManifest = {
+    name: 'peer-dependency-fixture',
+    private: true,
+    ...(workspace
+      ? { workspaces: ['app'] }
+      : { peerDependencies, ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}) }),
+  };
+  const appManifest = {
+    name: '@fixture/peer-app',
+    private: true,
+    peerDependencies,
+    ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
+  };
+  await writeJson(path.join(rootDir, 'package.json'), rootManifest);
+  if (workspace) await writeJson(path.join(rootDir, 'app/package.json'), appManifest);
+  if (present) await writeInstalledPackage(rootDir, `node_modules/${dependencyName}`, dependencyName, dependencySpec);
+
+  const workspaces = {
+    '': { name: rootManifest.name },
+    ...(workspace ? { app: { name: appManifest.name } } : {}),
+  };
+  const importer = workspace ? workspaces.app : workspaces[''];
+  importer.peerDependencies = peerDependencies;
+  if (optional) importer.optionalPeers = [dependencyName];
+  await writeJson(path.join(rootDir, 'bun.lock'), {
+    lockfileVersion: 1,
+    workspaces,
+    packages: present || !optional
+      ? { [dependencyName]: [`${dependencyName}@${dependencySpec}`, '', {}, 'sha512-fixture'] }
+      : {},
+  });
+  return rootDir;
+}
+
 async function makeInvalidDependencyNameFixture() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-invalid-dependency-name-'));
   const dependencies = {
@@ -887,6 +967,50 @@ test('rejects a dependency installed through an outside symlink', async () => {
   }
 });
 
+test('rejects a dependency whose real package directory is the root install root', async () => {
+  const rootDir = await makeInstallRootPackageFixture();
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /repository install root rather than a package directory/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a dependency whose real package directory is a workspace install root', async () => {
+  const rootDir = await makeInstallRootPackageFixture({ workspace: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /repository install root rather than a package directory/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a dependency whose symlink targets the root of Bun’s isolated store', async () => {
+  const rootDir = await makeInstallRootPackageFixture({ bunStoreRoot: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /repository install root rather than a package directory/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a workspace dependency whose symlink targets the root of Bun’s isolated store', async () => {
+  const rootDir = await makeInstallRootPackageFixture({ workspace: true, bunStoreRoot: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /repository install root rather than a package directory/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
 test('rejects traversal and extra-segment dependency names before resolution', async () => {
   const rootDir = await makeInvalidDependencyNameFixture();
   try {
@@ -1054,6 +1178,68 @@ test('rejects a missing required peer dependency', async () => {
     const result = verifyDependencyResolution({ rootDir });
     assert.equal(result.ok, false);
     assert.match(result.issues.join('\n'), /required transitive dependency fast-uri of holder/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('traverses a required root peer dependency when it is installed', async () => {
+  const rootDir = await makePeerDependencyFixture({ present: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a missing required root peer dependency', async () => {
+  const rootDir = await makePeerDependencyFixture({ present: false });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /cannot resolve peer-tool from its workspace cwd/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('permits an absent optional root peer dependency', async () => {
+  const rootDir = await makePeerDependencyFixture({ optional: true, present: false });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('traverses a required workspace peer dependency when it is installed', async () => {
+  const rootDir = await makePeerDependencyFixture({ workspace: true, present: true });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a missing required workspace peer dependency', async () => {
+  const rootDir = await makePeerDependencyFixture({ workspace: true, present: false });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /cannot resolve peer-tool from its workspace cwd/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('permits an absent optional workspace peer dependency', async () => {
+  const rootDir = await makePeerDependencyFixture({ workspace: true, optional: true, present: false });
+  try {
+    const result = verifyDependencyResolution({ rootDir });
+    assert.equal(result.ok, true, result.issues.join('\n'));
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
   }

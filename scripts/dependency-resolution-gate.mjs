@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import semver from 'semver';
 
-const DEPENDENCY_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+const DEPENDENCY_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -123,6 +123,11 @@ function dependencyMap(manifest, invalidNames = new Set()) {
     }
   }
   return result;
+}
+
+function isOptionalPeerDependency(manifest, name) {
+  const metadata = manifest.peerDependenciesMeta?.[name];
+  return metadata && typeof metadata === 'object' && metadata.optional === true;
 }
 
 function hasGlob(segment) {
@@ -417,19 +422,19 @@ function readOverrideMap(value, label, issues) {
 
 function installedDependencyMap(manifest) {
   const result = new Map();
-  const optionalPeers = new Set(
-    Object.entries(manifest.peerDependenciesMeta ?? {})
-      .filter(([, metadata]) => metadata && typeof metadata === 'object' && metadata.optional === true)
-      .map(([name]) => name),
-  );
-  for (const [section, names] of [
-    ['dependencies', new Set(Object.keys(manifest.dependencies ?? {}))],
-    ['optionalDependencies', new Set(Object.keys(manifest.optionalDependencies ?? {}))],
-    ['peerDependencies', optionalPeers],
-  ]) {
-    for (const [name, spec] of Object.entries(manifest[section] ?? {})) {
-      result.set(name, { spec, optional: section !== 'dependencies' && names.has(name) });
-    }
+
+  function add(name, spec, optional) {
+    const existing = result.get(name);
+    // A required declaration wins if a package appears in more than one
+    // dependency section. An optional peer must not weaken a required
+    // dependency or peer declaration for the same package name.
+    if (!existing || (existing.optional && !optional)) result.set(name, { spec, optional });
+  }
+
+  for (const [name, spec] of Object.entries(manifest.dependencies ?? {})) add(name, spec, false);
+  for (const [name, spec] of Object.entries(manifest.optionalDependencies ?? {})) add(name, spec, true);
+  for (const [name, spec] of Object.entries(manifest.peerDependencies ?? {})) {
+    add(name, spec, isOptionalPeerDependency(manifest, name));
   }
   return result;
 }
@@ -449,6 +454,15 @@ function repositoryInstallRoots(rootRealPath, workspaces) {
     if (realRoot && pathInside(rootRealPath, realRoot) && !roots.includes(realRoot)) roots.push(realRoot);
   }
   return roots;
+}
+
+function repositoryInstallRootMatch(candidate, installRoots) {
+  for (const installRoot of installRoots) {
+    if (candidate === installRoot) return installRoot;
+    const bunStoreRoot = realpathSafe(path.join(installRoot, '.bun'));
+    if (bunStoreRoot && candidate === bunStoreRoot) return bunStoreRoot;
+  }
+  return null;
 }
 
 function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name, { allowBunStoreFallback = true } = {}) {
@@ -548,6 +562,15 @@ function checkReachableOverrideTargets(rootDir, workspaceDependencyChecks, overr
     const realDirectory = resolvedPackage.realDirectory;
     if (!realDirectory || visited.has(realDirectory)) continue;
     visited.add(realDirectory);
+
+    const installRootMatch = repositoryInstallRootMatch(realDirectory, acceptedInstallRoots);
+    if (installRootMatch) {
+      issues.push(
+        `reachable dependency ${resolvedPackage.manifest.name} at ${relativePath(rootDir, resolvedPackage.directory)} `
+          + 'resolves to a repository install root rather than a package directory',
+      );
+      continue;
+    }
 
     const isWorkspaceSource = workspaces.some((workspace) => workspace.realDirectory === realDirectory);
     if (!isWorkspaceSource && !pathInsideAny(realDirectory, acceptedInstallRoots)) {
@@ -839,13 +862,16 @@ function pathInsideAny(candidate, roots) {
 }
 
 function checkResolvedDependency(rootDir, workspace, dependencyName, spec, records, workspaces, workspaceKeys, issues) {
+  const optionalPeer = isOptionalPeerDependency(workspace.manifest, dependencyName);
   const selection = expectedSelection(workspace, dependencyName, spec, records, workspaces, workspaceKeys);
   if (selection.error) {
+    if (optionalPeer && selection.error === 'no unambiguous importer-to-package lock record') return;
     issues.push(`${workspace.key || '.'} dependency ${dependencyName} has unsupported lock resolution (${selection.error})`);
     return;
   }
   const resolvedPackage = resolveInstalledPackage(rootDir, workspace, dependencyName);
   if (!resolvedPackage) {
+    if (optionalPeer) return;
     issues.push(`${workspace.key || '.'} cannot resolve ${dependencyName} from its workspace cwd`);
     return;
   }
@@ -865,9 +891,15 @@ function checkResolvedDependency(rootDir, workspace, dependencyName, spec, recor
     const expectedInstallRoot = installRoot ? realpathSafe(installRoot) : null;
     const actualInIsolatedInstall = actualDirectory && pathInsideAny(actualDirectory, isolatedRoots);
     const acceptedInstallRoots = repositoryInstallRoots(rootRealPath, workspaces);
+    const installRootMatch = actualDirectory && repositoryInstallRootMatch(actualDirectory, acceptedInstallRoots);
     // The lock-location checks below are stricter than this boundary check;
     // first ensure no package target escapes every repository install root.
-    if (!rootRealPath || !actualDirectory || !pathInsideAny(actualDirectory, acceptedInstallRoots)) {
+    if (installRootMatch) {
+      issues.push(
+        `${workspace.key || '.'} resolves ${dependencyName} to ${relativePath(rootDir, actualDirectory)}, `
+          + 'a repository install root rather than a package directory',
+      );
+    } else if (!rootRealPath || !actualDirectory || !pathInsideAny(actualDirectory, acceptedInstallRoots)) {
       issues.push(`${workspace.key || '.'} resolves ${dependencyName} outside the accepted repository install root`);
     } else if (!expectedRealDirectory && !actualInIsolatedInstall) {
       issues.push(`${workspace.key || '.'} expected ${dependencyName} at its locked ${selection.location} install path, but that path is missing`);
@@ -916,6 +948,7 @@ function compareManifestToLock(workspace, lock, issues) {
   invalidLockedNames.forEach(() => issues.push(`${workspace.key || '.'} bun.lock importer has invalid dependency name`));
   for (const [name, spec] of manifestDependencies) {
     if (!lockedDependencies.has(name)) {
+      if (isOptionalPeerDependency(workspace.manifest, name)) continue;
       issues.push(`${workspace.key || '.'} declares ${name}, but its bun.lock importer does not`);
     } else if (lockedDependencies.get(name) !== spec) {
       issues.push(
