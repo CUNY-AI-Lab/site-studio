@@ -308,6 +308,59 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
     expect(await resolveHandleOwner(bucket, "beta")).toBeNull();
   });
 
+  it("does not retire a newer healthy reverse generation after a repaired claim loses forward ownership", async () => {
+    const ownerId = OWNER;
+    await bucket.put(
+      userHandleRecordKey(ownerId),
+      JSON.stringify({ handle: "orphaned-one", claimedAt: "2020-01-01T00:00:00.000Z" })
+    );
+    await claimHandle(bucket, RIVAL, "beta");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === userHandleRecordKey(ownerId) &&
+        options?.onlyIf?.etagMatches &&
+        String(data).includes('"1970-01-01T00:00:00.000Z"') &&
+        !injected
+      ) {
+        injected = true;
+        await originalPut(
+          handleRecordKey("alpha"),
+          JSON.stringify({ ownerId, claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+        await originalPut(
+          userHandleRecordKey(ownerId),
+          JSON.stringify({ handle: "alpha", claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const result = await claimHandle(
+      bucket,
+      ownerId,
+      "beta",
+      () => "2026-07-20T12:01:00.000Z"
+    );
+
+    expect(injected).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      reason: expect.stringContaining("taken")
+    });
+    expect(await getUserHandle(bucket, ownerId)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(ownerId);
+    expect(await resolveHandleOwner(bucket, "beta")).toBe(RIVAL);
+    expect(await claimHandle(bucket, ownerId, "alpha")).toEqual({
+      ok: true,
+      handle: "alpha",
+      alreadyOwned: true
+    });
+  });
+
   it("does not reap a fresh reverse record while its forward claim is still in flight", async () => {
     const ownerId = OWNER;
     let releaseForward!: () => void;
@@ -348,7 +401,7 @@ describe("claimHandle races (SS-4)", () => {
     bucket = createMockBucket();
   });
 
-  it("two users racing the SAME handle: exactly one wins, loser leaves no orphan", async () => {
+  it("two users racing the SAME handle: exactly one wins and loser has no authoritative ownership", async () => {
     const [a, b] = await Promise.all([
       claimHandle(bucket, RACER_A, "shared-one"),
       claimHandle(bucket, RACER_B, "shared-one")
@@ -361,12 +414,75 @@ describe("claimHandle races (SS-4)", () => {
     expect(losers[0]).toMatchObject({ ok: false, status: 409 });
 
     // The handle record points at exactly one owner, and that owner's reverse
-    // record agrees. The loser owns NO handle (its reverse slot was rolled back).
+    // record agrees. The loser's retired reverse generation conveys no ownership.
     const owner = await resolveHandleOwner(bucket, "shared-one");
     expect(owner === RACER_A || owner === RACER_B).toBe(true);
     const loserId = owner === RACER_A ? RACER_B : RACER_A;
     expect(await getUserHandle(bucket, owner!)).toBe("shared-one");
     expect(await getUserHandle(bucket, loserId)).toBeNull();
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(loserId)).data as string)).toEqual({
+      handle: "shared-one",
+      claimedAt: "1970-01-01T00:00:00.000Z"
+    });
+    expect(await claimHandle(bucket, owner!, "shared-one")).toEqual({
+      ok: true,
+      handle: "shared-one",
+      alreadyOwned: true
+    });
+    expect(await claimHandle(bucket, loserId, "recovered-one")).toEqual({
+      ok: true,
+      handle: "recovered-one",
+      alreadyOwned: false
+    });
+    expect(await getUserHandle(bucket, loserId)).toBe("recovered-one");
+  });
+
+  it("does not retire a newer healthy reverse generation after an ordinary claim loses forward ownership", async () => {
+    await claimHandle(bucket, RIVAL, "beta");
+
+    const originalPut = bucket.put;
+    let injected = false;
+    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      if (
+        key === userHandleRecordKey(OWNER) &&
+        options?.onlyIf?.etagMatches &&
+        String(data).includes('"1970-01-01T00:00:00.000Z"') &&
+        !injected
+      ) {
+        injected = true;
+        await originalPut(
+          handleRecordKey("alpha"),
+          JSON.stringify({ ownerId: OWNER, claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+        await originalPut(
+          userHandleRecordKey(OWNER),
+          JSON.stringify({ handle: "alpha", claimedAt: "2026-07-20T12:00:00.000Z" })
+        );
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const result = await claimHandle(
+      bucket,
+      OWNER,
+      "beta",
+      () => "2026-07-20T12:01:00.000Z"
+    );
+
+    expect(injected).toBe(true);
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      reason: expect.stringContaining("taken")
+    });
+    expect(await getUserHandle(bucket, OWNER)).toBe("alpha");
+    expect(await resolveHandleOwner(bucket, "alpha")).toBe(OWNER);
+    expect(await resolveHandleOwner(bucket, "beta")).toBe(RIVAL);
+    expect(await claimHandle(bucket, OWNER, "alpha")).toEqual({
+      ok: true,
+      handle: "alpha",
+      alreadyOwned: true
+    });
   });
 
   it("one user racing TWO different handles: ends up owning exactly one, no orphan handle record", async () => {

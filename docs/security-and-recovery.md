@@ -71,6 +71,12 @@ the same owner. Account import re-homes a handle only with an ETag condition
 that proves the forward record still belongs to the anonymous owner; ownership
 drift leaves the import pending.
 
+Because the Workers R2 binding has no conditional delete, a repair or ordinary
+claim that loses the forward-handle race does not unconditionally delete the
+reverse key. It conditionally retires only the exact losing reverse generation
+into an immediately repairable orphan marker. A newer healthy replacement
+therefore survives the rollback.
+
 Anonymous-to-subject import has a separate `MigrationCoordinator`, keyed by the
 anonymous owner, as its claim-once authority. Data copies use conditional
 destination writes. A lost condition is accepted only for byte-identical data;
