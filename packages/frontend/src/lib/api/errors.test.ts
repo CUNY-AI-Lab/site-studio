@@ -24,6 +24,8 @@ describe('apiResponseFetch', () => {
 	it.each([
 		['protocol-relative', '//evil.example/login'],
 		['backslash-normalized', '/\\evil.example/login'],
+		['dot-segment scheme-relative', '/..//evil.example/login'],
+		['encoded dot-segment scheme-relative', '/foo/%2e%2e//evil.example/login'],
 		['absolute', 'https://evil.example/login'],
 		['non-path relative', 'login'],
 		['non-URL scheme', 'javascript:alert(1)']
@@ -38,7 +40,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://studio.example.edu/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
 		);
 	});
 
@@ -56,7 +58,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'/login?profile=production&rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://studio.example.edu/login?profile=production&rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
 		);
 	});
 
@@ -78,7 +80,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://studio.example.edu/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
 		);
 	});
 
@@ -95,7 +97,7 @@ describe('apiResponseFetch', () => {
 		).rejects.toMatchObject({ statusCode: 401, code: 'authentication_required' });
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://studio.example.edu/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
 		);
 	});
 

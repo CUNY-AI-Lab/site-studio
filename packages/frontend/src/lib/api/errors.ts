@@ -78,7 +78,11 @@ function redirectToLogin(loginUrl: string): void {
 		const candidate = new URL(loginUrl, window.location.origin);
 		// A leading slash is part of the CAIL contract. URL parsing additionally
 		// rejects protocol-relative and backslash-normalized cross-origin forms.
-		if (loginUrl.startsWith('/') && candidate.origin === window.location.origin) {
+		if (
+			loginUrl.startsWith('/') &&
+			candidate.origin === window.location.origin &&
+			!candidate.pathname.startsWith('//')
+		) {
 			target = candidate;
 		}
 	} catch {
@@ -86,7 +90,10 @@ function redirectToLogin(loginUrl: string): void {
 	}
 	target.hash = '';
 	target.searchParams.set('rt', rt);
-	window.location.assign(`${target.pathname}${target.search}`);
+	// Navigate with the already-validated absolute serialization. Re-emitting a
+	// normalized pathname that begins `//` would make Location reparse it as a
+	// scheme-relative cross-origin URL.
+	window.location.assign(target.href);
 }
 
 function isAuthenticationRequiredEnvelope(status: number, errorData: any): boolean {

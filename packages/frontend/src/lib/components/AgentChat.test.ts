@@ -297,7 +297,7 @@ describe('AgentChat', () => {
 		mount();
 
 		await waitFor(() =>
-			expect(assignSpy).toHaveBeenCalledWith('/login?rt=%2F')
+			expect(assignSpy).toHaveBeenCalledWith('http://localhost:3000/login?rt=%2F')
 		);
 	});
 
