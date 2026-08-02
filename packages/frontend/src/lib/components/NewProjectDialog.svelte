@@ -78,6 +78,7 @@
 	let projectName = $state('');
 	let isCreating = $state(false);
 	let hasUserEditedName = $state(false);
+	let suggestionGeneration = 0;
 
 	async function loadTemplates() {
 		isLoadingTemplates = true;
@@ -99,6 +100,7 @@
 	// Reset state when dialog closes
 	$effect(() => {
 		if (!open) {
+			suggestionGeneration += 1;
 			selectedTemplate = null;
 			projectName = '';
 			hasUserEditedName = false;
@@ -171,12 +173,18 @@
 	}
 
 	async function selectTemplate(template: TemplateMetadata) {
+		const requestGeneration = ++suggestionGeneration;
 		selectedTemplate = template;
 		// Auto-suggest project name based on template with sequential numbering
 		// Only auto-fill if user hasn't manually edited the name
 		if (!hasUserEditedName) {
 			const nextNumber = await getNextNumber(template.id);
-			if (selectedTemplate?.id !== template.id || hasUserEditedName) return;
+			if (
+				requestGeneration !== suggestionGeneration ||
+				selectedTemplate?.id !== template.id ||
+				hasUserEditedName
+			)
+				return;
 			projectName = `${template.id}-${nextNumber}`;
 		}
 	}
@@ -258,10 +266,11 @@
 						variant="ghost"
 						size="sm"
 						onclick={() => {
-					selectedTemplate = null;
-					projectName = '';
-					hasUserEditedName = false;
-				}}
+							suggestionGeneration += 1;
+							selectedTemplate = null;
+							projectName = '';
+							hasUserEditedName = false;
+						}}
 					>
 						Change
 					</Button>

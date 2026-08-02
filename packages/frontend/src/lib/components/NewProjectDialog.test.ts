@@ -120,4 +120,29 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		await flushPendingUpdates();
 		expect(input.value).toBe('beta-1');
 	});
+
+	it('keeps the newest same-template suggestion when an older request settles later', async () => {
+		const firstRequest = deferred<Project[]>();
+		const secondRequest = deferred<Project[]>();
+		mockFetchProjects
+			.mockReturnValueOnce(firstRequest.promise)
+			.mockReturnValueOnce(secondRequest.promise);
+		openDialog();
+
+		const { user } = await chooseTemplate(/Alpha template/);
+		await user.click(screen.getByRole('button', { name: 'Change' }));
+		await user.click(await screen.findByRole('button', { name: /Alpha template/ }));
+		expect(mockFetchProjects).toHaveBeenCalledTimes(2);
+		const input = screen.getByLabelText('Project Name (optional)') as HTMLInputElement;
+
+		secondRequest.resolve([{ id: 'alpha-4', name: 'alpha-4' }]);
+		await secondRequest.promise;
+		await flushPendingUpdates();
+		expect(input.value).toBe('alpha-5');
+
+		firstRequest.resolve([]);
+		await firstRequest.promise;
+		await flushPendingUpdates();
+		expect(input.value).toBe('alpha-5');
+	});
 });
