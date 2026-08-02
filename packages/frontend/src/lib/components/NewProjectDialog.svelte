@@ -176,6 +176,7 @@
 		// Only auto-fill if user hasn't manually edited the name
 		if (!hasUserEditedName) {
 			const nextNumber = await getNextNumber(template.id);
+			if (selectedTemplate?.id !== template.id || hasUserEditedName) return;
 			projectName = `${template.id}-${nextNumber}`;
 		}
 	}
