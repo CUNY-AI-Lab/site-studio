@@ -488,7 +488,9 @@ async function makeFallbackOverrideFixture({ installedVersion = '3.1.3', fallbac
     : await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-node-path-'));
   const fallbackRoot = fallback === 'ancestor'
     ? path.dirname(rootDir)
-    : await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-global-cache-'));
+    : fallback === 'in-repo-node-path'
+      ? path.join(rootDir, 'node_modules', 'in-repo-node-path')
+      : await fs.mkdtemp(path.join(os.tmpdir(), 'site-studio-override-global-cache-'));
   const directDependencies = { holder: '1.0.0' };
   const override = '3.1.5';
   await writeJson(path.join(rootDir, 'package.json'), {
@@ -976,6 +978,31 @@ test('rejects a version-matching transitive target reached only through NODE_PAT
   } finally {
     await fs.rm(rootDir, { recursive: true, force: true });
     await fs.rm(fallbackRoot, { recursive: true, force: true });
+  }
+});
+
+test('rejects a stale transitive target reached through an in-repo NODE_PATH fallback', async () => {
+  const { rootDir, fallbackRoot } = await makeFallbackOverrideFixture({ fallback: 'in-repo-node-path' });
+  try {
+    const result = verifyInFreshProcess(rootDir, fallbackRoot);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /external or ancestor module fallback/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('rejects a version-matching transitive target reached through an in-repo NODE_PATH fallback', async () => {
+  const { rootDir, fallbackRoot } = await makeFallbackOverrideFixture({
+    fallback: 'in-repo-node-path',
+    installedVersion: '3.1.5',
+  });
+  try {
+    const result = verifyInFreshProcess(rootDir, fallbackRoot);
+    assert.equal(result.ok, false);
+    assert.match(result.issues.join('\n'), /external or ancestor module fallback/);
+  } finally {
+    await fs.rm(rootDir, { recursive: true, force: true });
   }
 });
 

@@ -498,8 +498,9 @@ function resolveInstalledPackageFromDirectory(rootDir, packageDirectory, name, {
   const realDirectory = realpathSafe(directory);
   if (!realDirectory) return null;
   const rootRealPath = realpathSafe(rootDir);
+  const bunStoreRoot = rootRealPath ? path.join(rootRealPath, 'node_modules', '.bun') : null;
   const logicalDirectory = matchingLogicalPackage?.directory
-    ?? (rootRealPath && pathInside(rootRealPath, directory) ? directory : null);
+    ?? (bunStoreRoot && pathInside(bunStoreRoot, directory) ? directory : null);
   return {
     // `directory` is the logical candidate selected from node_modules when one
     // exists, or the resolver-selected fallback when it does not. Keep the
@@ -680,6 +681,7 @@ function expectedRecord(records, workspace, dependencyName, specInfo, workspaceK
 }
 
 function packageDirectoryFromResolved(rootDir, resolvedPath) {
+  if (!path.isAbsolute(resolvedPath)) return null;
   let directory = path.dirname(resolvedPath);
   const stop = path.dirname(rootDir);
   while (directory !== stop) {
