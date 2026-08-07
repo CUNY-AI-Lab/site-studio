@@ -10,6 +10,8 @@ import {
   resolveModelId,
 } from "./model";
 
+const VALID_REQUEST_ID = "019f8bdc-342a-76e1-ba71-005d69808f86";
+
 describe("model-call JWT expiry guard", () => {
   const token = (exp: number) => `header.${btoa(JSON.stringify({ exp })).replace(/=/g, "")}.signature`;
 
@@ -84,7 +86,7 @@ describe("gateway quota errors at the adapter boundary", () => {
         quotaExceededEnvelope({ message: verbatim, retryAfterSeconds: 1800 }),
         {
           "retry-after": "1800",
-          "x-request-id": "req-site-quota-1",
+          "x-request-id": VALID_REQUEST_ID,
           "x-should-retry": "false",
         }
       );
@@ -105,7 +107,8 @@ describe("gateway quota errors at the adapter boundary", () => {
     expect(cailError.message).toBe(verbatim);
     expect(cailError.extras.retry_after_seconds).toBe(1800);
     expect(cailError.extras.retry_after).toBe("1800");
-    expect(cailError.extras.request_id).toBe("req-site-quota-1");
+    // cail-client 3.0.0 promotes valid UUIDv4/v7 request IDs into typed extras.
+    expect(cailError.extras.request_id).toBe(VALID_REQUEST_ID);
     expect(cailError.extras.should_retry).toBe(false);
     expect(calls).toBe(1);
   });
@@ -138,10 +141,12 @@ describe("gateway quota errors at the adapter boundary", () => {
       status: 401,
       code: "authentication_required",
       extras: expect.objectContaining({
-        request_id: "req-site-auth-1",
+        login_url: "/login",
         should_retry: false,
       }),
     });
+    // A malformed synthetic request-id header is intentionally ignored.
+    expect((thrown as CailError).extras).not.toHaveProperty("request_id");
     expect(calls).toBe(1);
   });
 

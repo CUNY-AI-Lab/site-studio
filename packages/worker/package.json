@@ -14,7 +14,7 @@
     "check": "vitest run && tsc --noEmit"
   },
   "dependencies": {
-    "@cuny-ai-lab/cail-log": "^0.4.0"
+    "@cuny-ai-lab/cail-log": "0.6.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260722.1",

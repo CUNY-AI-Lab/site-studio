@@ -1,8 +1,8 @@
 # CAIL logging alignment
 
-This source alignment uses `@cuny-ai-lab/cail-log` `^0.4.0`; the committed Bun
-lockfile currently resolves `0.4.0` for the app, publisher, and shared
-observability workspace package.
+This source alignment uses the exact published `@cuny-ai-lab/cail-log`
+`0.6.0`; the committed Bun lockfile resolves that one version for the app,
+publisher, and shared observability workspace package.
 
 ## Identity and ownership
 

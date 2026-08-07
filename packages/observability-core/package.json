@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cuny-ai-lab/cail-log": "^0.4.0"
+    "@cuny-ai-lab/cail-log": "0.6.0"
   }
 }
