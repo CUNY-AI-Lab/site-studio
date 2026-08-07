@@ -44,7 +44,7 @@ describe("observability source contract", () => {
     new URL("../../observability-core/package.json", import.meta.url),
   ])("pins the reviewed fleet projection dependency in %s", (url) => {
     expect(readFileSync(url, "utf8")).toContain(
-      '"@cuny-ai-lab/cail-log": "^0.4.0"',
+      '"@cuny-ai-lab/cail-log": "0.6.0"',
     );
   });
 
@@ -57,7 +57,7 @@ describe("observability source contract", () => {
       '"@cuny-ai-lab/cail-identity": "5.1.0"',
     );
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-client": "^1.3.0"',
+      '"@cuny-ai-lab/cail-client": "3.0.0"',
     );
     expect(source).not.toContain("cail-sandbox-client");
   });

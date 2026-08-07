@@ -215,13 +215,12 @@ claim readiness for R2, KV, Durable Objects, or the model gateway.
 See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map,
 denominator rules, operating defaults, and remaining external inputs.
 
-The package manifests accept compatible releases of the reviewed CAIL
-primitives; the committed Bun lockfile currently resolves `cail-identity`
-`4.4.0`, `cail-log` `0.4.0`, and `cail-client` `1.3.0`. Review lockfile changes
-as dependency changes rather than treating the manifest ranges as immutable
-source pins. Site Studio does not directly depend on `cail-sandbox-client`;
-Sandbox accounting remains an external authority rather than an application
-transport boundary.
+The package manifests pin the reviewed CAIL primitives to one published
+instance each: `cail-identity` `5.1.0`, `cail-log` `0.6.0`, and `cail-client`
+`3.0.0`. Review lockfile changes as dependency changes rather than treating
+the package versions as immutable source pins. Site Studio does not directly
+depend on `cail-sandbox-client`; Sandbox accounting remains an external
+authority rather than an application transport boundary.
 
 ## Security, ownership, and recovery boundaries
 
