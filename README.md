@@ -210,7 +210,12 @@ respective accounting systems.
 `GET /api/health` and the publisher's `GET /healthz` return static
 `cail.health.v1` liveness markers with `Cache-Control: no-store`. They prove that
 the relevant Worker loaded and dispatched the request; they deliberately do not
-claim readiness for R2, KV, Durable Objects, or the model gateway.
+claim readiness for R2, KV, Durable Objects, or the model gateway. When the
+Cloudflare [version-metadata binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/version-metadata/)
+is available, each response exposes only a canonical Cloudflare version UUID
+and a lowercase 40-hex `version_tag`; local, older, or nonconforming metadata
+returns `null`. Deployment automation must still set and verify that tag from
+the intended Git SHA before treating it as source linkage.
 
 See [`docs/cail-log-alignment.md`](docs/cail-log-alignment.md) for the event map,
 denominator rules, operating defaults, and remaining external inputs.

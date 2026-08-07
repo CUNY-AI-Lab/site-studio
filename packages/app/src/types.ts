@@ -7,6 +7,9 @@ import type {
 } from "@cuny-ai-lab/cail-log";
 
 export interface Env {
+  // Cloudflare Version Metadata binding. It is unavailable in local/test
+  // runtimes, so the health response treats it as optional.
+  CF_VERSION_METADATA?: WorkerVersionMetadata;
   // Source-ready fleet projection. The live Analytics Engine dataset/binding
   // is provisioned separately; without it Workers structured logs continue.
   CAIL_FLEET_EVENTS?: CailAnalyticsEngineDataset;

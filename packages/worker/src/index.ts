@@ -139,6 +139,9 @@ function errorTypeFrom(error: unknown): string {
 }
 
 export type Env = {
+  // Cloudflare Version Metadata binding. It is unavailable in local/test
+  // runtimes, so the health response treats it as optional.
+  CF_VERSION_METADATA?: WorkerVersionMetadata;
   PUBLIC_DOMAIN?: string;
   CAIL_FLEET_EVENTS?: CailAnalyticsEngineDataset;
   CAIL_LOG_ENV?: CailLogEnvironment;
@@ -517,7 +520,7 @@ async function handlePublishedRequest(
     url.pathname === OBSERVABILITY_CONTRACT.services.publisher.healthPath
     && (request.method === "GET" || request.method === "HEAD")
   ) {
-    const response = healthResponse("publisher");
+    const response = healthResponse("publisher", env.CF_VERSION_METADATA);
     return request.method === "HEAD"
       ? new Response(null, { status: response.status, headers: response.headers })
       : response;

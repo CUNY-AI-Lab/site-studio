@@ -14,7 +14,7 @@ export function createHealthRouter() {
     if (!parseCailLogEnvironment(c.env.CAIL_LOG_ENV)) {
       return serviceUnavailableResponse();
     }
-    return healthResponse("app");
+    return healthResponse("app", c.env.CF_VERSION_METADATA);
   });
 
   return app;

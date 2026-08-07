@@ -559,7 +559,38 @@ export function auditTelemetryLifecyclePairs(
   return issues;
 }
 
-export function healthResponse(service: SiteStudioService): Response {
+/**
+ * The Cloudflare version-metadata binding is absent in local development and
+ * older deployments. Keep its public health projection joinable and explicit:
+ * only a canonical Cloudflare version UUID and a lowercase full Git SHA tag
+ * are exposed; invalid or missing fields become null.
+ */
+export type HealthVersionMetadata = Readonly<{
+  id: string;
+  tag: string;
+  timestamp?: string;
+}>;
+
+const CLOUDFLARE_VERSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const GIT_SHA_VERSION_TAG_PATTERN = /^[0-9a-f]{40}$/;
+
+function cloudflareVersionId(value: unknown): string | null {
+  return typeof value === "string" && CLOUDFLARE_VERSION_ID_PATTERN.test(value)
+    ? value
+    : null;
+}
+
+function gitShaVersionTag(value: unknown): string | null {
+  return typeof value === "string" && GIT_SHA_VERSION_TAG_PATTERN.test(value)
+    ? value
+    : null;
+}
+
+export function healthResponse(
+  service: SiteStudioService,
+  versionMetadata?: HealthVersionMetadata | null,
+): Response {
   const definition = OBSERVABILITY_CONTRACT.services[service];
   return Response.json(
     {
@@ -572,6 +603,8 @@ export function healthResponse(service: SiteStudioService): Response {
         name: definition.name,
         version: definition.version,
       },
+      version_id: cloudflareVersionId(versionMetadata?.id),
+      version_tag: gitShaVersionTag(versionMetadata?.tag),
     },
     {
       status: 200,
