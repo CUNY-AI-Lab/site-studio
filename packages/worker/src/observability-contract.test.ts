@@ -58,11 +58,45 @@ describe("publisher observability contract", () => {
         name: "site-studio-publisher",
         version: "0.1.0",
       },
+      version_id: null,
+      version_tag: null,
     });
     expect(bucket.get).not.toHaveBeenCalled();
     expect(points).toHaveLength(4);
     expect(points.every((point) => point.indexes[0] === "test:site-studio")).toBe(true);
     expect(JSON.stringify(points)).not.toContain("private=value");
+
+    const versioned = await worker.fetch(
+      new Request("https://publisher.example/healthz"),
+      {
+        ...env,
+        CF_VERSION_METADATA: {
+          id: "1a88955c-2fbd-4a72-9d9b-3ba1e59842f2",
+          tag: "fedcba9876543210fedcba9876543210fedcba98",
+          timestamp: "2026-08-07T12:00:00.000Z",
+        },
+      },
+    );
+    expect(await versioned.json()).toMatchObject({
+      version_id: "1a88955c-2fbd-4a72-9d9b-3ba1e59842f2",
+      version_tag: "fedcba9876543210fedcba9876543210fedcba98",
+    });
+
+    const invalid = await worker.fetch(
+      new Request("https://publisher.example/healthz"),
+      {
+        ...env,
+        CF_VERSION_METADATA: {
+          id: "1A88955C-2FBD-4A72-9D9B-3BA1E59842F2",
+          tag: "release-2026-08-07",
+          timestamp: "2026-08-07T12:00:00.000Z",
+        },
+      },
+    );
+    expect(await invalid.json()).toMatchObject({
+      version_id: null,
+      version_tag: null,
+    });
   });
 
   it("classifies health as a safe dashboard route", () => {

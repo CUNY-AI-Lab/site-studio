@@ -327,7 +327,7 @@ describe("observability source contract", () => {
     });
   });
 
-  it("returns a stable, no-store app liveness response", async () => {
+  it("returns a stable, no-store app liveness response with null local metadata", async () => {
     const response = await createHealthRouter().request(
       "https://app.example/api/health",
       {},
@@ -346,6 +346,47 @@ describe("observability source contract", () => {
         name: "site-studio-app",
         version: "0.1.0",
       },
+      version_id: null,
+      version_tag: null,
+    });
+  });
+
+  it("returns exact canonical Cloudflare version metadata when present", async () => {
+    const response = await createHealthRouter().request(
+      "https://app.example/api/health",
+      {},
+      {
+        CAIL_LOG_ENV: "test",
+        CF_VERSION_METADATA: {
+          id: "095f00a7-23a7-43b7-a227-e4c97cab5f22",
+          tag: "0123456789abcdef0123456789abcdef01234567",
+          timestamp: "2026-08-07T12:00:00.000Z",
+        },
+      } as Env,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      version_id: "095f00a7-23a7-43b7-a227-e4c97cab5f22",
+      version_tag: "0123456789abcdef0123456789abcdef01234567",
+    });
+  });
+
+  it("nulls non-canonical version metadata", async () => {
+    const response = await createHealthRouter().request(
+      "https://app.example/api/health",
+      {},
+      {
+        CAIL_LOG_ENV: "test",
+        CF_VERSION_METADATA: {
+          id: "095F00A7-23A7-43B7-A227-E4C97CAB5F22",
+          tag: "release-2026-08-07",
+          timestamp: "2026-08-07T12:00:00.000Z",
+        },
+      } as Env,
+    );
+    expect(await response.json()).toMatchObject({
+      version_id: null,
+      version_tag: null,
     });
   });
 
