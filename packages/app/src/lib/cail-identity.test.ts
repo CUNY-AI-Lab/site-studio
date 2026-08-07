@@ -55,7 +55,7 @@ function requestWithToken(token: string): Request {
 // Hand-rolled negative-path fixture for the one shape the testing kit cannot
 // express: mintIdentityJwt only signs RS256, so the alg-tampering contract
 // violation needs a local signer. (The array-audience negative moved onto the
-// kit in cail-identity 5.1.0.)
+// kit in cail-identity 5.1.2.)
 // ---------------------------------------------------------------------------
 
 function base64url(bytes: Uint8Array): string {
