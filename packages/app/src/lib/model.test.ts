@@ -107,7 +107,7 @@ describe("gateway quota errors at the adapter boundary", () => {
     expect(cailError.message).toBe(verbatim);
     expect(cailError.extras.retry_after_seconds).toBe(1800);
     expect(cailError.extras.retry_after).toBe("1800");
-    // cail-client 3.0.0 promotes valid UUIDv4/v7 request IDs into typed extras.
+    // cail-client 3.0.1 promotes valid UUIDv4/v7 request IDs into typed extras.
     expect(cailError.extras.request_id).toBe(VALID_REQUEST_ID);
     expect(cailError.extras.should_retry).toBe(false);
     expect(calls).toBe(1);
