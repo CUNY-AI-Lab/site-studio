@@ -38,6 +38,13 @@ describe("observability source contract", () => {
     expect(source).not.toContain("analytics_engine_datasets");
   });
 
+  it("pins the app to the canonical production CAIL Model API Worker", () => {
+    const source = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+    expect(source).toMatch(
+      /"CAIL_API_BASE"\s*:\s*"https:\/\/cail-model-api\.ailab-452\.workers\.dev"/,
+    );
+  });
+
   it.each([
     new URL("../package.json", import.meta.url),
     new URL("../../worker/package.json", import.meta.url),
