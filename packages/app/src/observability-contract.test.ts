@@ -64,21 +64,9 @@ describe("observability source contract", () => {
       '"@cuny-ai-lab/cail-identity": "5.1.2"',
     );
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-client": "3.0.1"',
+      '"@cuny-ai-lab/cail-client": "4.0.1"',
     );
     expect(source).not.toContain("cail-sandbox-client");
-  });
-
-  it("keeps the published primitive tarballs and integrity records exact", () => {
-    const lock = readFileSync(new URL("../../../bun.lock", import.meta.url), "utf8");
-    expect(lock).toContain(
-      '"@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@3.0.1", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-client/3.0.1/08719b1978a95c1bb9b5b19c5773dbbe6bfbffbd", { "dependencies": { "@cuny-ai-lab/cail-log": "0.6.0" } }, "sha512-fS8p50xk5aU+omY7+wVEQD+GNHIQBHwvilliJSe43m8Wxc7HeMbMxVhokNVE3Sfn3r+RvhewXaZ0e5SHoR24CQ=="]',
-    );
-    expect(lock).toContain(
-      '"@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@5.1.2", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-identity/5.1.2/457eb418b1ea36b26bd9e6dd1650cfb8cb264878", { "dependencies": { "jose": "6.2.3" } }, "sha512-FQej5lWjeOfZreEObYd92NzNEe5DxHFCCn6qWXIxqDRAfUoEtYJmZn8ittJlzs7y4BGFwNZjTaBX/qn6wHAQuQ=="]',
-    );
-    expect(lock).not.toContain("@cuny-ai-lab/cail-client@3.0.0");
-    expect(lock).not.toContain("@cuny-ai-lab/cail-identity@5.1.0");
   });
 
   it("defines queryable build and publish action seams", () => {

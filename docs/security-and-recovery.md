@@ -99,6 +99,15 @@ automatically retried after ambiguous outcomes. Chat, image, and classifier
 configuration rejects any model id outside the Cloudflare Workers AI `@cf/...`
 catalog namespace.
 
+The Worker forwards the already verified Doorway JWT as the ordinary
+`Authorization: Bearer` credential on each gateway call. Its final fetch seam
+removes caller-supplied authority, provider-routing, cookie, `X-CAIL-*`,
+`cf-aig-*`, and `x-openwebui-*` headers, then stamps the server-owned bearer and
+`X-CAIL-App: site-studio`; `X-CAIL-Identity-JWT` and caller metadata never leave
+the Worker. JSON chat requests use the official OpenAI-compatible AI SDK; image
+screening additionally requests a bounded structured verdict and fails closed
+when the provider cannot produce one.
+
 The browser reconnects before a new turn when its WebSocket is older than four
 minutes. The model adapter checks the verified token expiry before every gateway
 POST. A turn that outlives its token stops before the next model call, closes the

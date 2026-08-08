@@ -400,10 +400,13 @@ describe("describeModelStreamError", () => {
     expect(described.message).toBe("Daily quota exhausted");
   });
 
-  it("SS-44: identifies a nested quota error", () => {
+  it("does not misclassify a bare provider 429 as CAIL quota", () => {
     expect(describeModelStreamError({
       cause: { statusCode: 429, responseBody: "quota_exceeded" }
-    })).toMatchObject({ quota: true });
+    })).toEqual({
+      quota: false,
+      message: "Site Studio hit an internal error while streaming this response."
+    });
   });
 
   it("SS-44: keeps the generic response for an unrelated error", () => {

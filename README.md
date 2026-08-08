@@ -222,7 +222,7 @@ denominator rules, operating defaults, and remaining external inputs.
 
 The package manifests pin the reviewed CAIL primitives to one published
 instance each: `cail-identity` `5.1.2`, `cail-log` `0.6.0`, and `cail-client`
-`3.0.1`. Review lockfile changes as dependency changes rather than treating
+`4.0.1`. Review lockfile changes as dependency changes rather than treating
 the package versions as immutable source pins. Site Studio does not directly
 depend on `cail-sandbox-client`; Sandbox accounting remains an external
 authority rather than an application transport boundary.

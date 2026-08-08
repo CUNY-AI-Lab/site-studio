@@ -10,9 +10,9 @@ describe("quota route", () => {
   it("uses the verified JWT wire contract and never exposes the subject", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
-      expect(headers.get("X-CAIL-Identity-JWT")).toBe("verified-jwt");
+      expect(headers.get("Authorization")).toBe("Bearer verified-jwt");
       expect(headers.get("X-CAIL-App")).toBe("site-studio");
-      expect(headers.has("Authorization")).toBe(false);
+      expect(headers.has("X-CAIL-Identity-JWT")).toBe(false);
       return quotaSnapshotResponse();
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -53,7 +53,7 @@ describe("quota route", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
       error: "network_error",
-      message: "Network request to the CAIL backbone failed."
+      message: "The network request to the CAIL backbone failed."
     });
   });
 });

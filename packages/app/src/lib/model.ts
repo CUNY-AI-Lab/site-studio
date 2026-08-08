@@ -1,24 +1,5 @@
-/**
- * Model access via the CAIL gateway, through the shared
- * `@cuny-ai-lab/cail-client` library.
- *
- * Site Studio holds NO provider API keys. Every chat call goes to the CAIL
- * gateway's OpenAI-compatible endpoint at
- * `POST {CAIL_API_BASE}/v1/chat/completions`. The gateway authenticates the
- * caller, stamps per-user spend metadata keyed to the CAIL subject, attaches
- * the real provider credentials, and forwards upstream. A tool that bypasses
- * the gateway has no model access.
- *
- * The shared client owns the wire contract: the caller's `X-CAIL-Identity-JWT`
- * (the browser session's verified identity, minted by the SSO gate) plus the
- * stable `X-CAIL-App` slug travel on every call, and exactly ONE credential
- * reaches the wire — the client's `chatFetch` adapter strips the AI SDK's
- * dummy `Authorization` bearer before the request leaves.
- */
-
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
-import { createCailClient } from "@cuny-ai-lab/cail-client";
 
 /** Stable spend-attribution slug for this tool. */
 export const CAIL_APP_SLUG = "site-studio";
@@ -39,6 +20,11 @@ export const DEFAULT_CAIL_MODEL = "@cf/zai-org/glm-5.2";
 export interface CailModelEnv {
   CAIL_API_BASE?: string;
   CAIL_MODEL?: string;
+}
+
+export interface CailModelOptions {
+  /** Enable provider JSON-schema output only for a proven model path. */
+  supportsStructuredOutputs?: boolean;
 }
 
 const WORKERS_AI_MODEL_ID_RE = /^@cf\/[a-z0-9][a-z0-9._/-]*$/i;
@@ -74,6 +60,95 @@ export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtl
 }
 
 /**
+ * Validate the public gateway base before a provider can construct a request.
+ * The only plaintext exception is the exact loopback opt-in used by local
+ * Worker development; deployment values must be HTTPS and cannot carry
+ * credentials, query parameters, fragments, whitespace, or controls.
+ */
+export function canonicalCailApiBase(apiBase: string): string {
+  if (apiBase.trim() !== apiBase || /[\u0000-\u001f\u007f\s\\]/.test(apiBase)) {
+    throw new Error("CAIL_API_BASE must be a trimmed absolute HTTPS URL.");
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(apiBase);
+  } catch {
+    throw new Error("CAIL_API_BASE must be a trimmed absolute HTTPS URL.");
+  }
+
+  if (
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    apiBase.includes("?") ||
+    apiBase.includes("#")
+  ) {
+    throw new Error("CAIL_API_BASE must not contain credentials, a query, or a fragment.");
+  }
+
+  const loopback =
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "localhost" ||
+      parsed.hostname === "127.0.0.1" ||
+      parsed.hostname === "[::1]");
+  if (parsed.protocol !== "https:" && !loopback) {
+    throw new Error(
+      "CAIL_API_BASE must use HTTPS; HTTP is allowed only for an exact loopback host.",
+    );
+  }
+
+  return apiBase.replace(/\/+$/, "");
+}
+
+const SAFE_GATEWAY_HEADERS = [
+  "accept",
+  "user-agent",
+  "traceparent",
+  "tracestate",
+] as const;
+
+/**
+ * Keep provider and caller authority out of the final model request. The AI
+ * SDK merges per-call headers after provider defaults, so this is the last
+ * trust boundary before a billed request leaves the Worker.
+ */
+export function createCailAuthorityFetch(
+  identityJwt: string,
+  fetchImpl: typeof fetch = fetch,
+): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    assertCailJwtFresh(identityJwt);
+
+    // AI SDK normally passes a URL plus init, but the Web Fetch contract also
+    // permits a Request carrying its own hostile headers. Normalize both
+    // sources before the allowlist so the final seam has one view of caller
+    // input and does not accidentally forward Request-owned authority.
+    const sourceRequest = input instanceof Request ? new Request(input, init) : undefined;
+    const sdkHeaders = sourceRequest
+      ? new Headers(sourceRequest.headers)
+      : new Headers(init?.headers);
+    const safeHeaders = new Headers();
+    for (const name of SAFE_GATEWAY_HEADERS) {
+      const value = sdkHeaders.get(name);
+      if (value !== null) safeHeaders.set(name, value);
+    }
+
+    // Every billed CAIL chat request is JSON. Do not let a per-call header
+    // change the body interpretation at the gateway boundary.
+    safeHeaders.set("content-type", "application/json");
+    safeHeaders.set("authorization", `Bearer ${identityJwt}`);
+    safeHeaders.set("x-cail-app", CAIL_APP_SLUG);
+
+    return fetchImpl(sourceRequest ?? input, {
+      ...init,
+      headers: safeHeaders,
+      credentials: "omit",
+      redirect: "error",
+    });
+  }) as typeof fetch;
+}
+
+/**
  * Resolve the configured model id.
  */
 export function resolveModelId(env: CailModelEnv): string {
@@ -82,18 +157,9 @@ export function resolveModelId(env: CailModelEnv): string {
 
 /**
  * Build an AI-SDK language model bound to the CAIL gateway for the given
- * caller.
- *
- * One-credential contract (CAIL backbone rule): a gateway request carries
- * exactly ONE credential. On the browser/JWT path that is
- * `X-CAIL-Identity-JWT`, and there must be NO `Authorization` header — the
- * gateway is JWT-first/strict. The cail-client `chatFetch` adapter enforces
- * this: the `apiKey` handed to the SDK below is a dummy the adapter strips
- * before the request reaches the wire (pinned by the wire test in
- * model.test.ts). Ordinary provider errors keep raw fetch semantics. Gateway
- * responses marked `X-Should-Retry: false`, quota exhaustion, and ambiguous
- * network failures throw `CailError` by default so the SDK cannot replay them.
- * Site Studio keeps AI SDK retries disabled as a second guard.
+ * caller. The verified Doorway JWT is the ordinary bearer credential used by
+ * the OpenAI-compatible provider. The final fetch seam strips any per-call
+ * authority/routing headers and stamps the server-owned bearer and app slug.
  *
  * Throws when `CAIL_API_BASE` is unset. The checked-in value is not a live
  * deployment attestation, and there is no local fallback because there are no
@@ -107,7 +173,8 @@ export function resolveModelId(env: CailModelEnv): string {
 export function createCailModel(
   env: CailModelEnv,
   identityJwt: string | null,
-  fetchImpl?: typeof fetch
+  fetchImpl?: typeof fetch,
+  options: CailModelOptions = {},
 ): LanguageModel {
   if (!env.CAIL_API_BASE) {
     throw new Error("CAIL_API_BASE is not configured");
@@ -116,26 +183,15 @@ export function createCailModel(
     throw new Error("CAIL identity JWT is missing — model access requires an authenticated caller");
   }
 
-  const baseUrl = env.CAIL_API_BASE.replace(/\/+$/, "");
-  const client = createCailClient({
-    baseUrl,
-    app: CAIL_APP_SLUG,
-    fetchImpl,
-    // The primitive still restricts this opt-in to exact loopback hosts.
-    allowInsecureLoopback: true,
-  });
-  const gatewayFetch = client.chatFetch({ kind: "jwt", token: identityJwt }) as typeof fetch;
+  const baseUrl = canonicalCailApiBase(env.CAIL_API_BASE);
+  const gatewayFetch = createCailAuthorityFetch(identityJwt, fetchImpl);
 
   const provider = createOpenAICompatible({
     name: "cail",
     baseURL: `${baseUrl}/v1`,
-    // Dummy — the chatFetch adapter strips it and sends X-CAIL-Identity-JWT
-    // instead (one-credential contract).
-    apiKey: "cail-proxy",
-    fetch: ((input: string | URL | Request, init?: RequestInit) => {
-      assertCailJwtFresh(identityJwt);
-      return gatewayFetch(input, init);
-    }) as typeof fetch,
+    apiKey: identityJwt,
+    supportsStructuredOutputs: options.supportsStructuredOutputs ?? false,
+    fetch: gatewayFetch,
   });
 
   return provider(resolveModelId(env));

@@ -1,29 +1,17 @@
 /**
- * AI image generation + a REQUIRED moderation gate, both via the CAIL gateway
- * through the shared `@cuny-ai-lab/cail-client` library. Same one-credential
- * contract as model.ts: the client sends the caller's identity in
- * `X-CAIL-Identity-JWT` and NEVER an `Authorization` header. The gateway
- * authenticates on the JWT, attaches the real provider credentials, and
- * forwards to Workers AI.
- *
- * Unlike the chat path (which adapts the client for the OpenAI-compatible AI
- * SDK), these call the client's model endpoints directly:
- *   - generation → `client.run({model, input})`, the gateway's native
- *     Cloudflare endpoint `POST {CAIL_API_BASE}/v1/run` (buffered; returns the
- *     UNWRAPPED native result — the image payload directly).
- *   - moderation → `client.chatCompletions(...)`, the OpenAI-compatible
- *     `POST {CAIL_API_BASE}/v1/chat/completions`, so we can send a multimodal
- *     (image_url) message to a vision model.
- *
- * The client still sends `options.metadata` (`X-CAIL-Metadata` on the wire),
- * but the current canonical gateway ignores caller metadata. It must not be
- * treated as authoritative per-purpose spend attribution.
+ * AI image generation + a REQUIRED moderation gate through the CAIL gateway.
+ * Native image generation uses the retained cail-client `/v1/run` extension;
+ * vision moderation uses the same official OpenAI-compatible AI SDK path as
+ * chat, with a structured JSON result and the final authority sanitizer.
  */
 
-import { CailError, createCailClient, type CailClient } from "@cuny-ai-lab/cail-client";
+import { generateText, Output } from "ai";
+import { CailError, createCailClient } from "@cuny-ai-lab/cail-client";
+import { z } from "zod";
 import {
   assertCailJwtFresh,
   CAIL_APP_SLUG,
+  createCailModel,
   resolveWorkersAiModelId,
   type CailModelEnv
 } from "./model";
@@ -105,15 +93,12 @@ export function clampDimension(value: number | undefined): number {
   return Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, rounded));
 }
 
-/** Build the shared CAIL client bound to this tool's spend-attribution slug. */
-function cailClient(apiBase: string, fetchImpl: typeof fetch): CailClient {
-  // Image generation and moderation are billed POSTs. Disable automatic
-  // retries until the gateway can deduplicate execution, not only ledger rows.
+/** Build the retained native-extension client for `/v1/run`. */
+function cailClient(apiBase: string, fetchImpl: typeof fetch): ReturnType<typeof createCailClient> {
   return createCailClient({
     baseUrl: apiBase,
     app: CAIL_APP_SLUG,
     fetchImpl,
-    maxRetries: 0,
     allowInsecureLoopback: true,
   });
 }
@@ -195,9 +180,8 @@ export interface GenerateImageInput {
 /**
  * Generate an image via the gateway's native `/v1/run` endpoint.
  *
- * One-credential contract: `{kind: "jwt"}` only — the client guarantees no
- * `Authorization` header. Purpose metadata is advisory at the client only; the
- * current gateway ignores it.
+ * The verified Doorway JWT is sent as the standard bearer credential. The
+ * retained client owns the bounded native request and makes one attempt.
  *
  * On a gateway/provider error the client throws a typed `CailError` whose
  * `message` is the CAIL error envelope's message verbatim; we pass it through
@@ -225,10 +209,15 @@ export async function generateImage(
 
   let response: Response;
   try {
-    response = await cailClient(env.CAIL_API_BASE, fetchImpl).run(
+    const billedFetch = ((request: RequestInfo | URL, init?: RequestInit) => {
+      // Keep the expiry check immediately before the one native billed POST;
+      // the caller's verified token is never refreshed or replaced here.
+      assertCailJwtFresh(jwt);
+      return fetchImpl(request, init);
+    }) as typeof fetch;
+    response = await cailClient(env.CAIL_API_BASE, billedFetch).run(
       { model, input: { prompt: input.prompt, width, height } },
-      { kind: "jwt", token: jwt },
-      { metadata: { purpose: "image-generation" } }
+      jwt,
     );
   } catch (error) {
     if (error instanceof CailError) {
@@ -289,59 +278,6 @@ export interface ScreenImageResult {
   reason?: string;
 }
 
-/** Encode bytes to a base64 string for a data URI (`btoa`, Workers + Node). */
-function encodeBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-/** Pull the assistant text out of an OpenAI-style chat-completions response. */
-function extractAssistantText(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const choices = (payload as Record<string, unknown>).choices;
-  if (!Array.isArray(choices) || choices.length === 0) {
-    return null;
-  }
-  const message = (choices[0] as Record<string, unknown>)?.message as
-    | Record<string, unknown>
-    | undefined;
-  const content = message?.content;
-  return typeof content === "string" ? content : null;
-}
-
-/**
- * Parse the classifier's answer defensively. Accepts a bare JSON object or JSON
- * embedded in surrounding prose. Returns null when no usable verdict is found.
- */
-function parseModerationVerdict(text: string): ScreenImageResult | null {
-  const match = /\{[\s\S]*\}/.exec(text);
-  if (!match) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(match[0]);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.allowed !== "boolean") {
-    return null;
-  }
-  return {
-    allowed: record.allowed,
-    reason: typeof record.reason === "string" ? record.reason : undefined
-  };
-}
-
 /**
  * The REQUIRED moderation gate. Screens generated image bytes with a vision
  * model before they can be saved to a project.
@@ -350,8 +286,10 @@ function parseModerationVerdict(text: string): ScreenImageResult | null {
  * value other than `allowed === true` results in `{ allowed: false }`. The gate
  * only opens when the classifier explicitly answers `{"allowed": true}`.
  *
- * Same one-credential contract + spend metadata as generation, purpose
- * "image-moderation".
+ * Moderation uses the official AI SDK's OpenAI-compatible provider with an
+ * object output. The provider emits JSON response_format metadata and the SDK
+ * validates the bounded verdict; no custom chat/SSE normalizer or caller
+ * metadata header is involved.
  */
 export async function screenImage(
   env: CailImageEnv,
@@ -370,51 +308,46 @@ export async function screenImage(
     return { allowed: false };
   }
   const mimeType = imageType === "jpeg" ? "image/jpeg" : `image/${imageType}`;
-  const dataUri = `data:${mimeType};base64,${encodeBase64(bytes)}`;
 
-  let response: Response;
   try {
-    response = await cailClient(env.CAIL_API_BASE, fetchImpl).chatCompletions(
-      {
-        model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: IMAGE_MODERATION_INSTRUCTION },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "Is this image appropriate to publish? Answer with the JSON only." },
-              { type: "image_url", image_url: { url: dataUri } }
-            ]
-          }
-        ]
-      },
-      { kind: "jwt", token: jwt },
-      { metadata: { purpose: "image-moderation" } }
+    const languageModel = createCailModel(
+      { CAIL_API_BASE: env.CAIL_API_BASE, CAIL_MODEL: model },
+      jwt,
+      fetchImpl,
+      { supportsStructuredOutputs: true },
     );
+    const result = await generateText({
+      model: languageModel,
+      maxRetries: 0,
+      system: IMAGE_MODERATION_INSTRUCTION,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Is this image appropriate to publish? Answer with the JSON only." },
+            { type: "file", data: bytes, mediaType: mimeType },
+          ],
+        },
+      ],
+      output: Output.object({
+        schema: z.object({
+          allowed: z.boolean(),
+          reason: z.string().optional(),
+        }),
+      }),
+      temperature: 0,
+    });
+
+    const verdict = result.output;
+    if (!verdict || verdict.allowed !== true) {
+      return { allowed: false, reason: verdict?.reason };
+    }
+    return { allowed: true, reason: verdict.reason };
   } catch {
-    // FAIL CLOSED: CailError (any non-2xx) and network throws alike.
+    // FAIL CLOSED: provider errors, malformed structured output, and network
+    // throws alike.
     return { allowed: false };
   }
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    return { allowed: false };
-  }
-
-  const text = extractAssistantText(payload);
-  if (!text) {
-    return { allowed: false };
-  }
-
-  const verdict = parseModerationVerdict(text);
-  if (!verdict || verdict.allowed !== true) {
-    return { allowed: false, reason: verdict?.reason };
-  }
-
-  return { allowed: true, reason: verdict.reason };
 }
 
 /** Calm, non-shaming rejection copy. The classifier's reason is never echoed. */

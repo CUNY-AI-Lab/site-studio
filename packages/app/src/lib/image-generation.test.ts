@@ -104,7 +104,7 @@ describe("clampDimension", () => {
 });
 
 describe("generateImage wire contract", () => {
-  it("hits /v1/run with {model, input}, the image-generation purpose, and one credential", async () => {
+  it("hits /v1/run with {model, input} and one bearer credential", async () => {
     const { fetch: stub, captured } = captureFetch(() => json({ image: PNG_BASE64 }));
 
     const result = await generateImage(env, "jwt-token", { prompt: "a quiet library" }, stub);
@@ -112,14 +112,13 @@ describe("generateImage wire contract", () => {
 
     const cap = captured();
     expect(cap.url).toBe(`${BASE}/v1/run`);
-    // spend attribution slug + per-purpose metadata
+    // Spend attribution is server-owned; callers do not send purpose metadata.
     expect(cap.headers.get("x-cail-app")).toBe("site-studio");
-    expect(cap.headers.get("x-cail-identity-jwt")).toBe("jwt-token");
-    expect(JSON.parse(cap.headers.get("x-cail-metadata") || "{}")).toEqual({
-      purpose: "image-generation"
-    });
-    // one-credential contract: never an Authorization header
-    expect(cap.headers.has("authorization")).toBe(false);
+    expect(cap.headers.get("authorization")).toBe("Bearer jwt-token");
+    expect(cap.headers.get("x-cail-identity-jwt")).toBeNull();
+    expect(cap.headers.get("x-cail-metadata")).toBeNull();
+    expect(cap.init.credentials).toBe("omit");
+    expect(cap.init.redirect).toBe("error");
 
     // Cloudflare's native {model, input} body.
     const body = JSON.parse(String(cap.init.body));
@@ -222,9 +221,20 @@ describe("screenImage moderation gate (fail closed)", () => {
     await expect(screenImage(env, expiredJwt(), PNG_BYTES, stub)).rejects.toThrow("identity expired");
     expect(calls()).toBe(0);
   });
-  it("hits /v1/chat/completions with the image-moderation purpose and one credential", async () => {
+  it("uses the official AI SDK JSON path with one bearer and no caller metadata", async () => {
     const { fetch: stub, captured } = captureFetch(() =>
-      json({ choices: [{ message: { content: '{"allowed": true, "reason": "ok"}' } }] })
+      json({
+        id: "chatcmpl-moderation",
+        object: "chat.completion",
+        created: 0,
+        model: DEFAULT_CAIL_IMAGE_CLASSIFIER,
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: '{"allowed": true, "reason": "ok"}' },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })
     );
 
     const result = await screenImage(env, "jwt-token", PNG_BYTES, stub);
@@ -233,17 +243,33 @@ describe("screenImage moderation gate (fail closed)", () => {
     const cap = captured();
     expect(cap.url).toBe(`${BASE}/v1/chat/completions`);
     expect(cap.headers.get("x-cail-app")).toBe("site-studio");
-    expect(cap.headers.get("x-cail-identity-jwt")).toBe("jwt-token");
-    expect(JSON.parse(cap.headers.get("x-cail-metadata") || "{}")).toEqual({
-      purpose: "image-moderation"
-    });
-    expect(cap.headers.has("authorization")).toBe(false);
+    expect(cap.headers.get("authorization")).toBe("Bearer jwt-token");
+    expect(cap.headers.get("x-cail-identity-jwt")).toBeNull();
+    expect(cap.headers.get("x-cail-metadata")).toBeNull();
+    expect(cap.init.credentials).toBe("omit");
+    expect(cap.init.redirect).toBe("error");
 
     // The image travels as a data-URI image_url content part, plus the strict
     // system instruction.
     const body = JSON.parse(String(cap.init.body));
     expect(body.model).toBe(DEFAULT_CAIL_IMAGE_CLASSIFIER);
     expect(body.messages[0].content).toBe(IMAGE_MODERATION_INSTRUCTION);
+    expect(body.response_format).toMatchObject({
+      type: "json_schema",
+      json_schema: {
+        name: "response",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            allowed: { type: "boolean" },
+            reason: { type: "string" },
+          },
+          required: ["allowed"],
+          additionalProperties: false,
+        },
+      },
+    });
     const parts = body.messages[1].content as Array<Record<string, unknown>>;
     const imagePart = parts.find((p) => p.type === "image_url") as
       | { image_url: { url: string } }
@@ -253,14 +279,20 @@ describe("screenImage moderation gate (fail closed)", () => {
 
   it("allows only on an explicit {\"allowed\": true}", async () => {
     const { fetch: stub } = captureFetch(() =>
-      json({ choices: [{ message: { content: '{"allowed": true}' } }] })
+      json({
+        id: "chatcmpl-moderation",
+        choices: [{ message: { role: "assistant", content: '{"allowed": true}' }, finish_reason: "stop" }],
+      })
     );
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(true);
   });
 
   it("rejects an explicit {\"allowed\": false}", async () => {
     const { fetch: stub } = captureFetch(() =>
-      json({ choices: [{ message: { content: '{"allowed": false, "reason": "nsfw"}' } }] })
+      json({
+        id: "chatcmpl-moderation",
+        choices: [{ message: { role: "assistant", content: '{"allowed": false, "reason": "nsfw"}' }, finish_reason: "stop" }],
+      })
     );
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
   });
@@ -271,14 +303,23 @@ describe("screenImage moderation gate (fail closed)", () => {
     expect(calls()).toBe(1);
   });
 
+  it.each([429, 503])("fails closed on a classifier %s with one attempt", async (status) => {
+    const { fetch: stub, calls } = captureFetch(() => new Response("upstream error", { status }));
+    expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
+    expect(calls()).toBe(1);
+  });
+
   it("fails closed on a gibberish (non-JSON) answer", async () => {
     const { fetch: stub } = captureFetch(() =>
-      json({ choices: [{ message: { content: "sure looks fine to me!" } }] })
+      json({
+        id: "chatcmpl-moderation",
+        choices: [{ message: { role: "assistant", content: "sure looks fine to me!" }, finish_reason: "stop" }],
+      })
     );
     expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
   });
 
-  it("fails closed on a network throw", async () => {
+  it("fails closed on a network throw with one attempt", async () => {
     let calls = 0;
     const stub = (async () => {
       calls += 1;
@@ -300,11 +341,14 @@ describe("screenImage moderation gate (fail closed)", () => {
     expect(captured().url).toBe("");
   });
 
-  it("parses JSON embedded in surrounding prose", async () => {
+  it("fails closed when JSON is embedded in surrounding prose", async () => {
     const { fetch: stub } = captureFetch(() =>
-      json({ choices: [{ message: { content: 'Here is my verdict: {"allowed": true, "reason": "academic"}' } }] })
+      json({
+        id: "chatcmpl-moderation",
+        choices: [{ message: { role: "assistant", content: 'Here is my verdict: {"allowed": true}' }, finish_reason: "stop" }],
+      })
     );
-    expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(true);
+    expect((await screenImage(env, "jwt", PNG_BYTES, stub)).allowed).toBe(false);
   });
 });
 
@@ -318,7 +362,10 @@ describe("screenImage strict-boolean verdicts", () => {
     ['{"allowed":1,"reason":"numeric one"}', "numeric 1"]
   ])("rejects a truthy non-boolean verdict %s", async (body) => {
     const { fetch: stub } = captureFetch(() =>
-      json({ choices: [{ message: { role: "assistant", content: body } }] })
+      json({
+        id: "chatcmpl-moderation",
+        choices: [{ message: { role: "assistant", content: body }, finish_reason: "stop" }],
+      })
     );
     const result = await screenImage(env, "jwt", PNG_BYTES, stub);
     expect(result.allowed).toBe(false);

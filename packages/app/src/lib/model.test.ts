@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { generateText } from "ai";
-import { CailError } from "@cuny-ai-lab/cail-client";
+import { generateText, streamText } from "ai";
+import { extractCailError } from "@cuny-ai-lab/cail-client";
 import { cailErrorEnvelope, cailErrorResponse, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import {
   CAIL_APP_SLUG,
   DEFAULT_CAIL_MODEL,
   assertCailJwtFresh,
+  canonicalCailApiBase,
+  createCailAuthorityFetch,
   createCailModel,
   resolveModelId,
 } from "./model";
@@ -76,7 +78,7 @@ describe("createCailModel", () => {
 
 /** The adapter throws gateway-declared non-retryable errors before SDK retry logic. */
 describe("gateway quota errors at the adapter boundary", () => {
-  it("propagates the thrown CailError verbatim without retrying", async () => {
+  it("preserves the typed CAIL envelope through the direct provider without retrying", async () => {
     const verbatim = "You have used your hourly AI quota. It resets on the hour.";
     let calls = 0;
     const upstream = (async () => {
@@ -95,19 +97,22 @@ describe("gateway quota errors at the adapter boundary", () => {
 
     let thrown: unknown;
     try {
-      await generateText({ model, prompt: "hi" });
+      await generateText({ model, prompt: "hi", maxRetries: 0 });
     } catch (error) {
       thrown = error;
     }
 
-    expect(thrown).toBeInstanceOf(CailError);
-    const cailError = thrown as CailError;
+    expect(thrown).toMatchObject({ name: "AI_APICallError", statusCode: 429 });
+    const cailError = extractCailError(thrown);
+    expect(cailError).not.toBeNull();
+    if (!cailError) throw new Error("expected a typed CAIL error");
     expect(cailError.code).toBe("quota_exceeded");
     expect(cailError.status).toBe(429);
     expect(cailError.message).toBe(verbatim);
     expect(cailError.extras.retry_after_seconds).toBe(1800);
     expect(cailError.extras.retry_after).toBe("1800");
-    // cail-client 3.0.1 promotes valid UUIDv4/v7 request IDs into typed extras.
+    // The direct provider keeps the response headers available to the CAIL
+    // extractor, which promotes valid UUID request ids into typed extras.
     expect(cailError.extras.request_id).toBe(VALID_REQUEST_ID);
     expect(cailError.extras.should_retry).toBe(false);
     expect(calls).toBe(1);
@@ -133,10 +138,10 @@ describe("gateway quota errors at the adapter boundary", () => {
     }) as typeof fetch;
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
 
-    const thrown = await generateText({ model, prompt: "hi" }).catch((error: unknown) => error);
+    const thrown = await generateText({ model, prompt: "hi", maxRetries: 0 }).catch((error: unknown) => error);
 
-    expect(thrown).toMatchObject({
-      name: "CailError",
+    expect(thrown).toMatchObject({ name: "AI_APICallError" });
+    expect(extractCailError(thrown)).toMatchObject({
       message: "Sign in to use CAIL models.",
       status: 401,
       code: "authentication_required",
@@ -146,7 +151,7 @@ describe("gateway quota errors at the adapter boundary", () => {
       }),
     });
     // A malformed synthetic request-id header is intentionally ignored.
-    expect((thrown as CailError).extras).not.toHaveProperty("request_id");
+    expect(extractCailError(thrown)?.extras).not.toHaveProperty("request_id");
     expect(calls).toBe(1);
   });
 
@@ -156,18 +161,28 @@ describe("gateway quota errors at the adapter boundary", () => {
     expect(() => createCailModel({ CAIL_API_BASE: "http://gateway.example" }, "jwt"))
       .toThrow(/HTTPS|loopback/i);
   });
+
+  it("rejects unsafe gateway bases before any provider request", () => {
+    for (const base of [
+      "http://gateway.example",
+      "https://user:password@gateway.example",
+      "https://gateway.example?token=secret",
+      "https://gateway.example#fragment",
+      " https://gateway.example",
+      "https://gateway.example ",
+      "https://gateway.example/path with spaces",
+      "https://gateway.example/\u0000",
+      "not-a-url",
+    ]) {
+      expect(() => canonicalCailApiBase(base)).toThrow(/CAIL_API_BASE/);
+    }
+    expect(canonicalCailApiBase("https://gateway.example///")).toBe("https://gateway.example");
+  });
 });
 
 /**
- * Wire-level pin for the CAIL one-credential contract: a model-proxy request
- * must send exactly ONE credential. On the browser/JWT path that is
- * X-CAIL-Identity-JWT and there must be NO Authorization header — the gateway
- * is JWT-first/strict. The AI SDK is handed a dummy apiKey (it refuses to run
- * without one), so the cail-client chatFetch adapter MUST strip the resulting
- * `Authorization: Bearer cail-proxy` before the request reaches the wire. We
- * assert on the CAPTURED OUTBOUND REQUEST at the underlying fetch (the
- * adapter's test seam), so a regression in either the SDK or the adapter
- * fails this test instead of silently breaking the gateway.
+ * Wire-level pins for the direct OpenAI-compatible contract. The final fetch
+ * seam owns the bearer and app headers and strips per-call authority.
  */
 describe("createCailModel wire contract", () => {
   /** Minimal valid OpenAI-style chat-completions body — enough for doGenerate. */
@@ -214,7 +229,7 @@ describe("createCailModel wire contract", () => {
     };
   }
 
-  it("sends X-CAIL-Identity-JWT and X-CAIL-App to /v1/chat/completions, never Authorization", async () => {
+  it("sends one verified bearer and X-CAIL-App to /v1/chat/completions", async () => {
     const { fetch: stub, captured } = makeCaptureFetch();
     const model = createCailModel(
       { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
@@ -227,12 +242,129 @@ describe("createCailModel wire contract", () => {
     const { url, headers } = captured();
     // (a) the new gateway contract: the OpenAI-compatible chat endpoint
     expect(url).toBe("https://cail.example/proxy/v1/chat/completions");
-    // (b) the adapter stripped the SDK's dummy bearer — no Authorization on
-    //     the JWT path
-    expect(headers.has("authorization")).toBe(false);
-    // (c) the caller identity travels in X-CAIL-Identity-JWT
-    expect(headers.get("x-cail-identity-jwt")).toBe("jwt-token");
-    // (d) spend attribution slug is always present
+    expect(headers.get("authorization")).toBe("Bearer jwt-token");
+    expect(headers.get("x-cail-identity-jwt")).toBeNull();
     expect(headers.get("x-cail-app")).toBe("site-studio");
+    expect(captured().headers.get("cookie")).toBeNull();
+  });
+
+  it("strips hostile authority/routing headers on buffered and streaming calls", async () => {
+    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown>; init: RequestInit }> = [];
+    const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      calls.push({ url: String(input), headers, body, init: init ?? {} });
+      if (body.stream === true) {
+        return new Response(
+          'data: {"id":"chatcmpl-stream","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}\n\n' +
+            "data: [DONE]\n\n",
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return chatCompletionResponse();
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "verified-jwt", stub);
+    const hostileHeaders = {
+      Authorization: "Bearer attacker",
+      Cookie: "session=attacker",
+      "X-CAIL-App": "attacker-app",
+      "X-CAIL-Identity-JWT": "attacker-jwt",
+      "X-CAIL-Request-Id": "attacker-request",
+      "cf-aig-provider": "attacker-provider",
+      "cf-aig-cache-ttl": "9999",
+      "x-openwebui-model": "attacker-model",
+      "x-provider-key": "attacker-key",
+      "Content-Type": "text/plain",
+      Accept: "text/plain",
+    };
+
+    await generateText({ model, prompt: "hello", headers: hostileHeaders, maxRetries: 0 });
+    const streamed = streamText({ model, prompt: "hello", headers: hostileHeaders, maxRetries: 0 });
+    for await (const _part of streamed.textStream) {
+      // Consume the stream so the provider performs its actual fetch.
+    }
+
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call.url).toBe("https://cail.example/v1/chat/completions");
+      expect(call.headers.get("authorization")).toBe("Bearer verified-jwt");
+      expect(call.headers.get("x-cail-app")).toBe("site-studio");
+      expect(call.headers.get("x-cail-identity-jwt")).toBeNull();
+      expect(call.headers.get("x-cail-request-id")).toBeNull();
+      expect(call.headers.get("cookie")).toBeNull();
+      expect(call.headers.get("cf-aig-provider")).toBeNull();
+      expect(call.headers.get("cf-aig-cache-ttl")).toBeNull();
+      expect(call.headers.get("x-openwebui-model")).toBeNull();
+      expect(call.headers.get("x-provider-key")).toBeNull();
+      expect(call.headers.get("content-type")).toBe("application/json");
+      expect(call.headers.get("accept")).toBe("text/plain");
+      expect(call.init.credentials).toBe("omit");
+      expect(call.init.redirect).toBe("error");
+    }
+  });
+
+  it.each([429, 503])("makes exactly one attempt for a %s gateway response", async (status) => {
+    let calls = 0;
+    const stub = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ error: { message: "upstream failure" } }), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", stub);
+    await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
+    expect(calls).toBe(1);
+  });
+
+  it("makes exactly one attempt when the gateway connection is ambiguous", async () => {
+    let calls = 0;
+    const stub = (async () => {
+      calls += 1;
+      throw new TypeError("connection reset");
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", stub);
+    await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
+    expect(calls).toBe(1);
+  });
+
+  it("checks JWT freshness immediately before a billed request", async () => {
+    const expired = `header.${btoa(JSON.stringify({ exp: 1 })).replace(/=/g, "")}.signature`;
+    let calls = 0;
+    const stub = (async () => {
+      calls += 1;
+      return chatCompletionResponse();
+    }) as typeof fetch;
+    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, expired, stub);
+    await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
+    expect(calls).toBe(0);
+  });
+
+  it("sanitizes authority headers owned by a Request input as well as init", async () => {
+    let captured: Headers | undefined;
+    const authorityFetch = createCailAuthorityFetch("verified-jwt", (async (
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      captured = new Headers(init?.headers);
+      return chatCompletionResponse();
+    }) as typeof fetch);
+    const request = new Request("https://cail.example/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer attacker",
+        Cookie: "session=attacker",
+        "X-CAIL-Identity-JWT": "attacker-jwt",
+        "X-Provider-Key": "attacker-key",
+      },
+      body: "{}",
+    });
+
+    await authorityFetch(request);
+    expect(captured?.get("authorization")).toBe("Bearer verified-jwt");
+    expect(captured?.get("x-cail-app")).toBe("site-studio");
+    expect(captured?.get("cookie")).toBeNull();
+    expect(captured?.get("x-cail-identity-jwt")).toBeNull();
+    expect(captured?.get("x-provider-key")).toBeNull();
   });
 });

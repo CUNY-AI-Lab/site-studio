@@ -19,7 +19,7 @@ export function createQuotaRouter() {
         baseUrl: c.env.CAIL_API_BASE.replace(/\/+$/, ""),
         app: CAIL_APP_SLUG,
         allowInsecureLoopback: true
-      }).getQuota({ kind: "jwt", token: jwt });
+      }).getQuota(jwt);
       const { subject: _subject, ...publicQuota } = quota;
       return c.json(publicQuota);
     } catch (error) {
