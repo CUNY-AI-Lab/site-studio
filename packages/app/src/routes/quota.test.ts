@@ -7,7 +7,7 @@ import { createQuotaRouter } from "./quota";
 describe("quota route", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("uses the verified JWT wire contract and never exposes the subject", async () => {
+  it("proxies the verified JWT Cloudflare estimate without changing the wire shape", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBe("Bearer verified-jwt");
@@ -30,8 +30,21 @@ describe("quota route", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     const body = await response.json() as Record<string, unknown>;
-    expect(body.subject).toBeUndefined();
-    expect(body).toMatchObject({ limit: 10000000, remaining: 9370000, enforced: true });
+    expect(body).toEqual({
+      object: "quota",
+      managed_by: "cloudflare",
+      state: "estimated",
+      unit: "microdollar",
+      currency: "USD",
+      limit: 10000000,
+      estimated_used: 630000,
+      estimated_remaining: 9370000,
+      used_percent: 6,
+      remaining_percent: 94,
+      window_seconds: 2592000,
+      window_technique: "sliding",
+      calculated_at: 1720600000,
+    });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 

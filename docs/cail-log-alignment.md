@@ -225,7 +225,7 @@ the approved monthly product budget, secrets, and deployment authorization also
 remain external.
 
 Site Studio surfaces terminal `quota_exceeded` failures and proxies the typed
-gateway `GET /quota` snapshot to the authenticated UI without the subject. The
+Cloudflare-managed `GET /quota` usage estimate to the authenticated UI. The
 gateway ignores caller-supplied `X-CAIL-Metadata`, so local
 purpose/project/course labels must not be described as authoritative cost
 attribution.

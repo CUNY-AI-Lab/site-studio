@@ -113,9 +113,11 @@ minutes. The model adapter checks the verified token expiry before every gateway
 POST. A turn that outlives its token stops before the next model call, closes the
 socket, and requires a retry on the newly authenticated connection.
 
-`GET /api/quota` reads the gateway's typed `GET /quota` snapshot with the
-verified JWT, removes the subject, and returns a private no-store response. The
-chat panel displays the remaining percentage. The quota probe is optional: an
+`GET /api/quota` reads the gateway's typed `GET /quota` Cloudflare usage estimate
+with the verified JWT and returns it unchanged in a private no-store response.
+The chat panel displays the server-provided remaining percentage and labels it
+as an estimate whose usage may be delayed, including the calculation time. The
+quota probe is optional: an
 `authentication_required` response hides the meter without redirecting, so an
 anonymous or local editor remains usable. Other protected API calls retain the
 canonical 401 login redirect. Gateway `quota_exceeded` messages remain

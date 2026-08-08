@@ -20,8 +20,7 @@ export function createQuotaRouter() {
         app: CAIL_APP_SLUG,
         allowInsecureLoopback: true
       }).getQuota(jwt);
-      const { subject: _subject, ...publicQuota } = quota;
-      return c.json(publicQuota);
+      return c.json(quota);
     } catch (error) {
       if (error instanceof CailError) {
         const status = error.status >= 400 && error.status <= 599 ? error.status : 503;

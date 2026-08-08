@@ -64,7 +64,7 @@ describe("observability source contract", () => {
       '"@cuny-ai-lab/cail-identity": "5.1.2"',
     );
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-client": "4.0.1"',
+      '"@cuny-ai-lab/cail-client": "5.0.0"',
     );
     expect(source).not.toContain("cail-sandbox-client");
   });

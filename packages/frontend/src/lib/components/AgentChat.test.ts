@@ -385,97 +385,40 @@ describe('AgentChat', () => {
 		}
 	});
 
-	it('describes a sliding quota with no reset time without inventing an epoch date', async () => {
-		const quotaResponse = {
-			object: 'quota',
-			unit: 'microdollar',
-			currency: 'USD',
-			limit: 10_000_000,
-			used: 630_000,
-			remaining: 9_370_000,
-			reset: null,
-			window_technique: 'sliding',
-			window_seconds: 2_592_000,
-			state: 'stale',
-			enforced: true,
-			as_of: 1_720_600_000
-		};
-		stubQuotaResponse(quotaResponse);
-
-		mount();
-
-		const quotaMeter = await waitFor(() =>
-			screen.getByRole('status', { name: /94% AI budget left/i })
-		);
-		expect(quotaMeter).toHaveTextContent('94% AI budget left');
-		expect(quotaMeter).toHaveAccessibleName(
-			'94% AI budget left. Budget reset time unavailable (sliding window).'
-		);
-		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('1970'));
-		expect(quotaMeter).not.toHaveAttribute('title', expect.stringContaining('1970'));
-		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('resets '));
-	});
-
-	it('describes a fixed quota reset and preserves the visible percentage', async () => {
-		const reset = 1_783_123_200;
-		const resetLabel = new Date(reset * 1000).toLocaleString();
-		const quotaResponse = {
-			object: 'quota',
-			unit: 'microdollar',
-			currency: 'USD',
-			limit: 10_000_000,
-			used: 4_500_000,
-			remaining: 5_500_000,
-			reset,
-			window_technique: 'fixed',
-			window_seconds: 2_592_000,
-			state: 'stale',
-			enforced: true,
-			as_of: 1_720_600_000
-		};
-		stubQuotaResponse(quotaResponse);
-
-		mount();
-
-		const quotaMeter = await waitFor(() =>
-			screen.getByRole('status', { name: /55% AI budget left/i })
-		);
-		expect(quotaMeter).toHaveTextContent('55% AI budget left');
-		expect(quotaMeter).toHaveAccessibleName(
-			`55% AI budget left. Budget resets ${resetLabel} (fixed window).`
-		);
-		expect(quotaMeter).toHaveAttribute('title', `Budget resets ${resetLabel} (fixed window)`);
-	});
-
-	it('describes a numeric sliding reset as a conservative bound', async () => {
-		const reset = 1_783_123_200;
-		const resetLabel = new Date(reset * 1000).toLocaleString();
+	it('shows the server-provided Cloudflare usage estimate', async () => {
+		const calculatedAt = 1_783_123_200;
+		const calculatedLabel = new Date(calculatedAt * 1000).toLocaleString();
 		stubQuotaResponse({
 			object: 'quota',
+			managed_by: 'cloudflare',
+			state: 'estimated',
 			unit: 'microdollar',
 			currency: 'USD',
 			limit: 10_000_000,
-			used: 2_500_000,
-			remaining: 7_500_000,
-			reset,
+			estimated_used: 2_700_000,
+			estimated_remaining: 7_300_000,
+			used_percent: 27,
+			remaining_percent: 73,
 			window_technique: 'sliding',
 			window_seconds: 2_592_000,
-			state: 'stale',
-			enforced: true,
-			as_of: 1_720_600_000
+			calculated_at: calculatedAt
 		});
 
 		mount();
 
 		const quotaMeter = await waitFor(() =>
-			screen.getByRole('status', { name: /75% AI budget left/i })
+			screen.getByRole('status', { name: /~73% AI budget left/i })
 		);
-		expect(quotaMeter).toHaveTextContent('75% AI budget left');
+		expect(quotaMeter).toHaveTextContent('~73% AI budget left');
 		expect(quotaMeter).toHaveAccessibleName(
-			`75% AI budget left. Budget reset bound ${resetLabel} (sliding window).`
+			`~73% AI budget left. Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`
 		);
-		expect(quotaMeter).toHaveAttribute('title', `Budget reset bound ${resetLabel} (sliding window)`);
-		expect(quotaMeter).not.toHaveAccessibleName(expect.stringContaining('Budget resets '));
+		expect(quotaMeter).toHaveAttribute(
+			'title',
+			`Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`
+		);
+		expect(quotaMeter).not.toHaveAccessibleName(expect.stringMatching(/reset/i));
+		expect(quotaMeter).not.toHaveAttribute('title', expect.stringMatching(/reset/i));
 	});
 
 	it('a network failure loading history also surfaces the error state (SS-49)', async () => {

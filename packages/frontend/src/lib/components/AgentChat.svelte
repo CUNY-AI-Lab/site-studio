@@ -101,13 +101,20 @@
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
 	let csrfRefreshedThisCycle = false;
-	type QuotaWindowTechnique = 'fixed' | 'sliding';
-
 	interface Quota {
+		object: 'quota';
+		managed_by: 'cloudflare';
+		state: 'estimated';
+		unit: 'microdollar';
+		currency: 'USD';
 		limit: number;
-		remaining: number;
-		reset: number | null;
-		window_technique: QuotaWindowTechnique;
+		estimated_used: number;
+		estimated_remaining: number;
+		used_percent: number;
+		remaining_percent: number;
+		window_seconds: number;
+		window_technique: 'fixed' | 'sliding';
+		calculated_at: number;
 	}
 
 	let quota = $state<Quota | null>(null);
@@ -252,29 +259,13 @@
 		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 	}
 
-	function formatQuotaReset(currentQuota: Quota): string {
-		if (currentQuota.reset === null) {
-			return `Budget reset time unavailable (${currentQuota.window_technique} window)`;
-		}
-
-		const resetLabel = new Date(currentQuota.reset * 1000).toLocaleString();
-		if (currentQuota.window_technique === 'sliding') {
-			return `Budget reset bound ${resetLabel} (sliding window)`;
-		}
-
-		return `Budget resets ${resetLabel} (fixed window)`;
-	}
-
-	function quotaPercentage(currentQuota: Quota): number {
-		if (!Number.isFinite(currentQuota.limit) || currentQuota.limit <= 0) {
-			return 0;
-		}
-
-		return Math.max(0, Math.round((currentQuota.remaining / currentQuota.limit) * 100));
+	function quotaEstimateDetails(currentQuota: Quota): string {
+		const calculatedLabel = new Date(currentQuota.calculated_at * 1000).toLocaleString();
+		return `Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`;
 	}
 
 	function quotaAccessibleLabel(currentQuota: Quota): string {
-		return `${quotaPercentage(currentQuota)}% AI budget left. ${formatQuotaReset(currentQuota)}.`;
+		return `~${currentQuota.remaining_percent}% AI budget left. ${quotaEstimateDetails(currentQuota)}`;
 	}
 
 	function trackToolStart(toolCallId: string) {
@@ -1616,9 +1607,9 @@
 					class="quota-meter"
 					role="status"
 					aria-label={quotaAccessibleLabel(quota)}
-					title={formatQuotaReset(quota)}
+					title={quotaEstimateDetails(quota)}
 				>
-					{quotaPercentage(quota)}% AI budget left
+					~{quota.remaining_percent}% AI budget left
 				</span>
 			{/if}
 			<input
