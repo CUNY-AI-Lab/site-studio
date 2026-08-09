@@ -11,7 +11,13 @@ import {
 } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { convertToModelMessages, pruneMessages, streamText, tool } from "ai";
+import {
+  convertToModelMessages,
+  isLoopFinished,
+  pruneMessages,
+  streamText,
+  tool,
+} from "ai";
 import { z } from "zod";
 import type { Env, SnapshotResult } from "../types";
 import { isSnapshotSkipped } from "../types";
@@ -1437,6 +1443,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         // execution idempotency. Retrying an uncertain request can run it
         // twice, so fail once and let the user explicitly retry.
         maxRetries: 0,
+        stopWhen: isLoopFinished(),
         abortSignal: options?.abortSignal,
         system: systemPrompt,
         messages: pruneMessages({

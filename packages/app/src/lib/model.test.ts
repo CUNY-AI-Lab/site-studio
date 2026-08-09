@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { generateText, streamText } from "ai";
+import { generateText, isLoopFinished, streamText, tool } from "ai";
+import { z } from "zod";
 import { extractCailError } from "@cuny-ai-lab/cail-client";
 import { cailErrorEnvelope, cailErrorResponse, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import {
@@ -228,6 +229,81 @@ describe("createCailModel wire contract", () => {
       captured: () => seen ?? { url: "", headers: new Headers() },
     };
   }
+
+  it("continues after a streamed tool call until the model returns text", async () => {
+    let calls = 0;
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requestBodies.push(body);
+      const response = calls === 1
+        ? {
+            id: "chatcmpl-tool-call",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: "@cf/openai/gpt-oss-120b",
+            choices: [{
+              index: 0,
+              delta: {
+                tool_calls: [{
+                  id: "call_lookup",
+                  type: "function",
+                  function: {
+                    name: "lookup",
+                    arguments: '{"query":"status"}',
+                  },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+          }
+        : {
+            id: "chatcmpl-tool-result",
+            object: "chat.completion.chunk",
+            created: 0,
+            model: "@cf/openai/gpt-oss-120b",
+            choices: [{
+              index: 0,
+              delta: { content: "The status is ready." },
+              finish_reason: "stop",
+            }],
+          };
+      return new Response(`data: ${JSON.stringify(response)}\n\ndata: [DONE]\n\n`, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const model = createCailModel(
+      { CAIL_API_BASE: "https://cail.example", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
+      "jwt",
+      upstream,
+    );
+
+    const result = streamText({
+      model,
+      messages: [{ role: "user", content: "Check the status." }],
+      tools: {
+        lookup: tool({
+          description: "Look up a status.",
+          inputSchema: z.object({ query: z.string() }),
+          execute: async ({ query }) => ({ query, status: "ready" }),
+        }),
+      },
+      stopWhen: isLoopFinished(),
+      maxRetries: 0,
+    });
+    const chunks = [];
+    for await (const chunk of result.fullStream) {
+      chunks.push(chunk);
+    }
+
+    expect(calls).toBe(2);
+    expect(chunks.some((chunk) => chunk.type === "tool-result")).toBe(true);
+    expect(await result.text).toBe("The status is ready.");
+    expect(JSON.stringify(requestBodies[1])).toContain('"role":"tool"');
+    expect(JSON.stringify(requestBodies[1])).toContain("call_lookup");
+  });
 
   it("sends one verified bearer and X-CAIL-App to /v1/chat/completions", async () => {
     const { fetch: stub, captured } = makeCaptureFetch();
