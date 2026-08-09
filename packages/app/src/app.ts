@@ -27,22 +27,30 @@ const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & Loggi
 
 /**
  * The production ingress mounts the Worker at /site-studio while the assets
- * binding stores the built files from the origin root. Remove that mount only
- * for the asset fetch; API, preview, and published routes remain path-aware.
+ * binding stores the built files from the origin root. Normalize it at the
+ * Worker boundary so every route (and the asset fallback) sees root-relative
+ * paths, while root-mounted local development remains unchanged.
  */
-function assetRequest(c: { req: { raw: Request; url: string }; env: Env }): Request {
-  const mountPath = c.env.CSRF_COOKIE_PATH?.trim().replace(/\/+$/, "") || "";
-  const requestUrl = new URL(c.req.url);
+export function normalizeMountedRequest(
+  request: Request,
+  env: Pick<Env, "CSRF_COOKIE_PATH">,
+): Request {
+  const mountPath = env.CSRF_COOKIE_PATH?.trim().replace(/\/+$/, "") || "";
+  const requestUrl = new URL(request.url);
   if (
     !mountPath
     || mountPath === "/"
     || (requestUrl.pathname !== mountPath && !requestUrl.pathname.startsWith(`${mountPath}/`))
   ) {
-    return c.req.raw;
+    return request;
   }
 
   requestUrl.pathname = requestUrl.pathname.slice(mountPath.length) || "/";
-  return new Request(requestUrl, c.req.raw);
+  return new Request(requestUrl, request);
+}
+
+function assetRequest(c: { req: { raw: Request; url: string }; env: Env }): Request {
+  return normalizeMountedRequest(c.req.raw, c.env);
 }
 
 // Fleet logging standard (cail-log): adopt/mint correlation at the fetch
