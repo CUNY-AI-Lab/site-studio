@@ -82,20 +82,6 @@
         "@cuny-ai-lab/cail-log": "0.6.0",
       },
     },
-    "packages/worker": {
-      "name": "@site-studio/worker",
-      "version": "0.1.0",
-      "dependencies": {
-        "@cuny-ai-lab/cail-log": "0.6.0",
-      },
-      "devDependencies": {
-        "@cloudflare/workers-types": "5.20260722.1",
-        "@types/node": "26.1.1",
-        "typescript": "5.9.3",
-        "vitest": "4.1.10",
-        "wrangler": "4.115.0",
-      },
-    },
   },
   "overrides": {
     "@hono/node-server": "2.0.12",
@@ -473,8 +459,6 @@
     "@site-studio/frontend": ["@site-studio/frontend@workspace:packages/frontend"],
 
     "@site-studio/observability-core": ["@site-studio/observability-core@workspace:packages/observability-core"],
-
-    "@site-studio/worker": ["@site-studio/worker@workspace:packages/worker"],
 
     "@speed-highlight/core": ["@speed-highlight/core@1.2.17", "", {}, "sha512-Z92FwKpCtfaW1V0jTU/fh3QzYEZN8wDwrzRIBoADCJfn4mJCNcJN/XegifX7BDrQ8/h9Xh/JnbyMchL0FqXrkg=="],
 
