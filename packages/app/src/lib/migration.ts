@@ -26,20 +26,13 @@
  *   in the anonymous owner's MutationCoordinator, the same object used by file
  *   writes. A second idempotent copy sweep remains as defense for data written
  *   by an older deployment or out-of-band bucket actor.
- * - **Published-site continuity**: published sites serve live from
- *   `projects/{userId}/…` and the public URL embeds the anonymous id. After
- *   copying, a permanent forwarding pointer (`projects/<anonId>/.migrated.json`)
- *   is written BEFORE originals are deleted; both published-site servers
- *   (app worker `/sites/*` route and the publisher worker) fall back to it,
- *   so old URLs keep serving — the originals during the copy window, the
- *   subject's live copy afterwards.
  * - **No identity, no change**: this only runs from the verified-identity
  *   branch of the auth middleware. The pure anonymous flow is untouched.
  */
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { getMigrationHandle, migrateHandle } from "./handles";
-import { readR2Json, putR2Json } from "./r2-json";
+import { readR2Json } from "./r2-json";
 import {
   emitDiagnostic,
   type SiteStudioLoggingContext,
@@ -50,20 +43,6 @@ export interface MigrationClaim {
   status: "pending" | "complete";
   startedAt: string;
   completedAt?: string;
-}
-
-/**
- * Permanent forwarding pointer left in the anonymous namespace so published
- * URLs that embed the anonymous id keep resolving after the data moves.
- */
-export interface MigrationPointer {
-  version: 1;
-  subject: string;
-  migratedAt: string;
-  /** old anonymous projectId -> projectId in the subject namespace */
-  projects: Record<string, string>;
-  /** old published slug (or slug-less projectId) -> slug in the subject namespace */
-  slugs: Record<string, string>;
 }
 
 /**
@@ -107,10 +86,6 @@ export function migrationPendingKey(subject: string): string {
   return `migration-pending:${subject}`;
 }
 
-export function migrationPointerKey(anonUserId: string): string {
-  return `projects/${anonUserId}/.migrated.json`;
-}
-
 function projectPrefix(userId: string): string {
   return `projects/${userId}/`;
 }
@@ -129,8 +104,8 @@ function isAnonymousUserId(id: string): boolean {
 
 /**
  * Rewrite a stored published URL to the canonical /u/{handle}/{slug}/ form,
- * preserving the origin. Handles both the legacy /sites/{owner}/{slug}/ shape
- * and an already-/u/ shape, so this is safe to run on any stored URL.
+ * preserving the origin. The import accepts the old owner-addressed value only
+ * while copying it into the new authoritative metadata.
  */
 function rewritePublishedUrl(publishedUrl: string, handle: string, slug: string): string {
   return publishedUrl.replace(/\/(?:sites|u)\/[^/]+\/[^/]+/, `/u/${handle}/${slug}`);
@@ -157,18 +132,6 @@ function bytesEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
     if (a[index] !== b[index]) return false;
   }
   return true;
-}
-
-function stringMap(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0
-    )
-  );
 }
 
 /**
@@ -207,7 +170,7 @@ async function putJsonIfAbsentOrEqual(bucket: R2Bucket, key: string, value: unkn
   }
 }
 
-/** Distinct project ids under a user namespace (dotfiles like the pointer excluded). */
+/** Distinct project ids under a user namespace. */
 async function listProjectIds(bucket: R2Bucket, userId: string): Promise<string[]> {
   const prefix = projectPrefix(userId);
   const ids = new Set<string>();
@@ -419,7 +382,7 @@ async function copyAnonymousNamespace(options: {
     }
 
     // Agent chat history (Durable Object SQLite). A failed port must abort the
-    // sweep before the forwarding pointer/source deletion so the anonymous DO
+    // sweep before source deletion so the anonymous DO
     // remains the recoverable source for a later retry.
     // Only the sweep that first sees a project ports it: chat history lives
     // in the DO, not in R2, so a mid-run file write never needs a re-port
@@ -513,19 +476,6 @@ export async function migrateAnonymousData(options: {
     return { status, projects } as MigrationResult;
   };
 
-  // A prior attempt may have written the complete forwarding pointer and then
-  // failed partway through deleting the anonymous source namespace. Seed every
-  // retry from that pointer before inventorying what remains. Otherwise already
-  // deleted projects disappear from the recomputed maps and the retry
-  // overwrites `.migrated.json` with a strict subset, breaking remapped legacy
-  // slugs permanently.
-  const existingPointer = await loadMigrationPointer(bucket, anonUserId);
-  if (existingPointer && existingPointer.subject !== subject) {
-    throw new Error("Anonymous-data migration stopped because forwarding ownership changed.");
-  }
-  const knownProjects = stringMap(existingPointer?.projects);
-  const knownSlugs = stringMap(existingPointer?.slugs);
-
   // Plan the handle without mutating ownership. The destination metadata can
   // use the effective handle during the copy sweeps, but the forward/reverse
   // records must remain anonymous-authoritative until every chat port has
@@ -551,8 +501,8 @@ export async function migrateAnonymousData(options: {
     subject,
     subjectHandle,
     porter,
-    knownProjects,
-    knownSlugs,
+    knownProjects: {},
+    knownSlugs: {},
     logging,
   });
 
@@ -561,7 +511,7 @@ export async function migrateAnonymousData(options: {
   // during this run. Re-list anyway so an older deployment or out-of-band
   // bucket writer cannot be deleted merely because it appeared after the first
   // inventory. Conditional copy-or-equal keeps this sweep idempotent.
-  const { projectMap, slugMap } = await copyAnonymousNamespace({
+  const { projectMap } = await copyAnonymousNamespace({
     bucket,
     anonUserId,
     subject,
@@ -573,26 +523,13 @@ export async function migrateAnonymousData(options: {
   });
 
   // All project chat ports have now completed. Re-home the handle only after
-  // that last success and before publishing the permanent pointer/deleting
+  // that last success and before deleting
   // the anonymous source. A handle failure therefore also leaves the source
   // and pending claim available for a later retry.
   await migrateHandle({ bucket, anonUserId, subject, now });
 
-  // ---- Forwarding pointer BEFORE deleting originals (URL continuity) ----
-  // Written after the second sweep so a project first seen there is in it.
-  const pointer: MigrationPointer = {
-    version: 1,
-    subject,
-    migratedAt: now(),
-    projects: projectMap,
-    slugs: slugMap
-  };
-  await putR2Json(bucket, migrationPointerKey(anonUserId), pointer);
-
-  // ---- Delete originals (the pointer object stays forever) ----
-  const pointerKey = migrationPointerKey(anonUserId);
+  // ---- Delete originals ----
   for (const key of await listKeys(bucket, projectPrefix(anonUserId))) {
-    if (key === pointerKey) continue;
     await bucket.delete(key);
   }
   for (const key of await listKeys(bucket, snapshotUserPrefix(anonUserId))) {
@@ -603,24 +540,4 @@ export async function migrateAnonymousData(options: {
   }
 
   return finish("migrated", projectMap);
-}
-
-/**
- * Load the forwarding pointer for a user namespace, if that namespace was
- * migrated. Used by the published-site servers as a fallback when normal
- * slug resolution finds nothing under the (old, anonymous) owner id.
- */
-export async function loadMigrationPointer(
-  bucket: R2Bucket,
-  userId: string
-): Promise<MigrationPointer | null> {
-  const pointer = await readR2Json<MigrationPointer>(bucket, migrationPointerKey(userId));
-  // SS-27: reject an empty subject as well as a missing/non-string one. An empty
-  // subject cannot own a namespace, and the publisher worker's copy of this
-  // guard already rejected it — accepting `subject:""` here would follow a
-  // pointer to `projects//…`, diverging from the publisher.
-  if (!pointer || pointer.version !== 1 || typeof pointer.subject !== "string" || !pointer.subject) {
-    return null;
-  }
-  return pointer;
 }

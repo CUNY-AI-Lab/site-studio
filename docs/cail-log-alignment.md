@@ -1,18 +1,18 @@
 # CAIL logging alignment
 
 This source alignment uses the exact published `@cuny-ai-lab/cail-log`
-`0.6.0`; the committed Bun lockfile resolves that one version for the app,
-publisher, and shared observability workspace package.
+`0.6.0`; the committed Bun lockfile resolves that one version for the app and
+shared observability workspace package.
 
 ## Identity and ownership
 
 - Fleet product: `site-studio`
-- Worker services: `site-studio-app` and `site-studio-publisher`
+- Worker service: `site-studio-app`
 - Kale project identity: none; Site Studio is not deployed through Kale
 - Authenticated principal: a verified durable owner key of
   `cail-<32 lowercase hex>` projects to the schema-2 logging subject
   `cail-v1-<32 lowercase hex>`. This is a log representation only; storage,
-  Durable Object, handle, and publisher keys remain the exact identity `sub`.
+  Durable Object and handle keys remain the exact identity `sub`.
   Legacy and anonymous owner identifiers remain anonymous.
 - The CAIL model gateway remains the owner of model-call success, token, quota,
   latency, and spend records. Site Studio does not duplicate those events or use
@@ -23,10 +23,10 @@ publisher, and shared observability workspace package.
 | Boundary | Admission | Terminal or diagnostic acknowledgement |
 | --- | --- | --- |
 | App HTTP request | `cail.request.received` on entry | `cail.request.completed` after Hono produces a response; `cail.auth.denied` additionally for 401/403 |
-| Published-site request | `cail.request.received` on publisher entry | `cail.request.completed` after the publisher produces a response |
+| Published-site request | `cail.request.received` on app entry | `cail.request.completed` after the app produces a response |
 | Agent build | `cail.action.admitted` immediately before the first mutating tool operation | success only after an awaited R2 mutation and the assistant message's Durable Object SQLite persistence/broadcast; failure/cancellation after an admitted mutation gets one terminal event |
 | Publish | `cail.action.admitted` after project and handle validation, before slug reservation | success only after the conditional R2 metadata update acknowledges the live published-state change; failure gets one terminal event |
-| Service conditions | none | `site_studio.diagnostic.*` or `site_studio_publisher.diagnostic.warning`, with cail-log's fixed `Service event recorded.` body and a bounded machine `error.type` |
+| Service conditions | none | `site_studio.diagnostic.*`, with cail-log's fixed `Service event recorded.` body and a bounded machine `error.type` |
 
 An HTTP completion means that the Worker produced a response, not that the client
 received it. Build and publish action success is narrower: it requires the durable
@@ -74,14 +74,13 @@ release generation. Agent messages use the installed `@cloudflare/ai-chat`
 assistant message is persisted, so the implementation completes an admitted build
 there without overriding the framework's persistence method.
 
-`/api/health` and the publisher's `/healthz` are versioned liveness responses.
-Each contains a static monitor marker, is smaller than Cloudflare's 10 KB body
+`/api/health` is the versioned liveness response. It contains a static monitor marker, is smaller than Cloudflare's 10 KB body
 matching limit, and returns `Cache-Control: no-store`. They do not probe R2, KV,
 Durable Objects, or the model gateway. Cloudflare's native request/error/CPU/
 wall-time signals remain the canonical platform-health layer.
 
 The shared source contract in `packages/observability-core/src/contract.ts`
-defines both services, action route templates, dashboard measures/groupings, and
+defines the app service, action route templates, dashboard measures/groupings, and
 an offline lifecycle-pair auditor. The auditor detects missing or duplicate
 request/action events, route drift, and invalid terminal duration in a closed
 export window. It evaluates the diagnostic projection, never product state.
@@ -94,7 +93,7 @@ bands. Its action SLI sub-contract versions admission-window assignment, a
 15-minute terminal grace period, exact terminal matching, durable-success
 semantics, and separate build/publish denominators.
 
-The initial profile uses one 60-second `ENAM` synthetic check per Worker, a
+The initial profile uses one 60-second `ENAM` synthetic check for the Worker, a
 five-second timeout, two retries, and two consecutive intervals for a state
 transition. Reliability uses a rolling 24-hour window evaluated every 15
 minutes. Build/publish admissions get a 15-minute terminal grace period.
@@ -106,8 +105,7 @@ minutes. Build/publish admissions get a 15-minute terminal grace period.
 | Build/publish success | below 95.0% | below 80.0% | 10 actions |
 | Build/publish terminal coverage | below 99.5% | below 98.0% | 10 actions |
 
-Request p95 latency warns above five seconds for the app and one second for the
-publisher. Action p95 warns above ten minutes for build and 30 seconds for
+Request p95 latency warns above five seconds for the app. Action p95 warns above ten minutes for build and 30 seconds for
 publish; critical latency is twice the warning threshold. Spend is
 calendar-month-to-date UTC from the gateway ledger, with bands at 80%, 95%, and
 100% of the externally approved product budget.

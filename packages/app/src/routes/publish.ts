@@ -8,7 +8,6 @@ import {
   MAX_THUMBNAIL_DIMENSION
 } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
-import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders } from "../lib/serving-headers";
@@ -108,7 +107,7 @@ async function missingPublishedFile(
       // Project-supplied 404.html is agent/student-authored active content served
       // on our origin — §3¾ containment applies (see lib/serving-headers.ts). It
       // goes through the same header builder as a 200 so the content-type,
-      // caching validators, and CSP match the publisher's notFoundResponse.
+      // caching validators and CSP match normal published responses.
       return new Response(binaryBody(new Uint8Array(await custom.arrayBuffer())), {
         status: 404,
         headers: publishedResponseHeaders("404.html", custom)
@@ -432,49 +431,16 @@ export function createPublishRouter() {
     return serveByHandle(c, filePath);
   });
 
-  // Legacy published URL: /sites/{ownerId}/{slug}/*. Kept working. If the
-  // resolved owner has a handle we 301 to the equivalent /u/ address;
-  // otherwise (pre-handle sites) we serve content directly.
-  app.get("/sites/:userId/:slug", async (c) => {
-    return serveLegacySite(c, "index.html");
-  });
-
-  app.get("/sites/:userId/:slug/*", async (c) => {
-    const base = `/sites/${c.req.param("userId")}/${c.req.param("slug")}/`;
-    const url = new URL(c.req.url);
-    const filePath = url.pathname.slice(base.length) || "index.html";
-    return serveLegacySite(c, filePath);
-  });
-
   return app;
 }
 
-/**
- * Resolve a published project under `userId`, following the migration
- * forwarding pointer (lib/migration.ts) so re-homed anonymous namespaces keep
- * serving. Returns the effective owner id (post-migration) and the resolved
- * project, or null when nothing matches.
- */
 async function resolvePublishedSite(
   storage: R2ProjectStorage,
-  bucket: R2Bucket,
-  requestedUserId: string,
+  ownerId: string,
   slug: string
-): Promise<{ ownerId: string; effectiveSlug: string; resolved: { projectId: string } } | null> {
-  let userId = requestedUserId;
-  let effectiveSlug = slug;
-  let resolved = await storage.findPublishedProjectBySlug(userId, slug);
-
-  if (!resolved) {
-    const pointer = await loadMigrationPointer(bucket, userId);
-    if (pointer) {
-      userId = pointer.subject;
-      effectiveSlug = pointer.slugs[slug] ?? slug;
-      resolved = await storage.findPublishedProjectBySlug(userId, effectiveSlug);
-    }
-  }
-
-  return resolved ? { ownerId: userId, effectiveSlug, resolved } : null;
+): Promise<{ ownerId: string; resolved: { projectId: string } } | null> {
+  const resolved = await storage.findPublishedProjectBySlug(ownerId, slug);
+  return resolved ? { ownerId, resolved } : null;
 }
 
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
@@ -493,58 +459,13 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return publishedNotFound(c, rawPath);
   }
 
-  const site = await resolvePublishedSite(storage, c.env.SITE_STUDIO_BUCKET, ownerId, slug);
+  const site = await resolvePublishedSite(storage, ownerId, slug);
   if (!site) {
     return publishedNotFound(c, rawPath);
   }
 
   const url = new URL(c.req.url);
   if (url.pathname === `/u/${handle}/${slug}`) {
-    return c.redirect(`${url.pathname}/${url.search}`, 301);
-  }
-
-  return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
-}
-
-/**
- * Serve a legacy /sites/{ownerId}/{slug}/ request. If the (post-migration)
- * owner has a handle, 301 to the equivalent /u/{handle}/{slug}/{filePath}
- * preserving the sub-path and query string. Only owners with NO handle serve
- * content directly, so pre-handle published sites keep working unchanged.
- */
-async function serveLegacySite(c: AppContext, rawPath: string) {
-  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
-  const requestedUserId = c.req.param("userId");
-  const slug = c.req.param("slug");
-  if (!requestedUserId || !slug) {
-    return publishedNotFound(c, rawPath);
-  }
-
-  const siteRootPath = `/sites/${requestedUserId}/${slug}/`;
-
-  const site = await resolvePublishedSite(storage, c.env.SITE_STUDIO_BUCKET, requestedUserId, slug);
-  if (!site) {
-    return publishedNotFound(c, rawPath);
-  }
-
-  // If the resolved owner has a handle, the canonical home is /u/{handle}/…;
-  // redirect there so a single public address wins and the owner id stops
-  // appearing in the URL. A migration pointer may have remapped a colliding
-  // legacy slug, so the canonical URL must use the effective slug that actually
-  // resolved—not the old requested slug.
-  const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, site.ownerId);
-  if (handle) {
-    // Preserve the exact sub-path from the request (not the "index.html"
-    // default) and the query string, so deep links redirect faithfully.
-    const url = new URL(c.req.url);
-    const base = `/sites/${requestedUserId}/${slug}/`;
-    const subPath = url.pathname.startsWith(base) ? url.pathname.slice(base.length) : "";
-    const location = `/u/${handle}/${site.effectiveSlug}/${subPath}${url.search}`;
-    return c.redirect(location, 301);
-  }
-
-  const url = new URL(c.req.url);
-  if (url.pathname === `/sites/${requestedUserId}/${slug}`) {
     return c.redirect(`${url.pathname}/${url.search}`, 301);
   }
 
@@ -607,8 +528,7 @@ export function publishedResponseHeaders(filePath: string, object: R2ObjectBody)
   // §3¾: agent/student-authored bytes on our origin get the opaque-origin
   // containment (sandbox allow-scripts + nosniff + no-referrer). These COMPOSE
   // with the caching validators above — the CSP/security keys and the caching
-  // keys are disjoint, so neither clobbers the other. serveByHandle (/u/) and
-  // serveLegacySite (/sites/) both funnel through here, covering every byte.
+  // keys are disjoint, so neither clobbers the other.
   for (const [key, value] of Object.entries(servedContentHeaders())) {
     headers.set(key, value);
   }

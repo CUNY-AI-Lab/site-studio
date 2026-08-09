@@ -37,7 +37,7 @@ export const CSRF_ERROR_BODY = {
 
 /**
  * The production app shares an origin with sibling tools and untrusted
- * `/sites/*` content. Keep the script-readable delivery cookie inside Site
+ * user-authored published content. Keep the script-readable delivery cookie inside Site
  * Studio's mount point; a root-scoped value would expose it to that content.
  */
 export function validateCsrfCookiePath(path: string | undefined, requestUrl?: string): string {
@@ -112,7 +112,7 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
 /**
  * Deliver the R2 token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
  * "Delivery"). The token must NEVER appear in a response body — a same-origin
- * sibling or student-authored /sites/ script could fetch GET /api/csrf with the
+ * sibling or user-authored published script could fetch GET /api/csrf with the
  * ambient session cookie and read a JSON token straight out of the body,
  * defeating rule 3. A path-scoped cookie is the one same-origin-proof channel:
  * browsers only expose a cookie to pages under its Path.

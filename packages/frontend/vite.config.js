@@ -51,10 +51,6 @@ export default defineConfig({
 				target: 'http://localhost:8792',
 				changeOrigin: true
 			},
-			'/sites': {
-				target: 'http://localhost:8792',
-				changeOrigin: true
-			},
 			'/u': {
 				target: 'http://localhost:8792',
 				changeOrigin: true

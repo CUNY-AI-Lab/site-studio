@@ -64,6 +64,22 @@ describe("project agent history lifecycle", () => {
     expect(getAgentByName).toHaveBeenCalledTimes(1);
     expect(source.clearChatHistory).toHaveBeenCalledOnce();
   });
+
+  it("SS-41: preserves source history when the rename destination refuses it", async () => {
+    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const source = {
+      exportChatHistoryForMigration: vi.fn(async () => messages),
+      clearChatHistory: vi.fn(async () => undefined)
+    };
+    getAgentByName
+      .mockResolvedValueOnce(source)
+      .mockResolvedValueOnce({ importChatHistoryForMigration: vi.fn(async () => false) });
+
+    await expect(
+      moveProjectAgentHistory(env, "owner-1", "old-name", "new-name")
+    ).rejects.toThrow("Destination chat history differs");
+    expect(source.clearChatHistory).not.toHaveBeenCalled();
+  });
 });
 
 describe("createAgentHistoryPorter", () => {
@@ -130,5 +146,17 @@ describe("createAgentHistoryPorter", () => {
       porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
     ).rejects.toBe(error);
     expect(getAgentByName).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails when the destination refuses different existing history", async () => {
+    const messages = [{ id: "m1", role: "user", parts: [] }];
+    getAgentByName
+      .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
+      .mockResolvedValueOnce({ importChatHistoryForMigration: vi.fn(async () => false) });
+
+    const porter = createAgentHistoryPorter(env);
+    await expect(
+      porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
+    ).rejects.toThrow("Destination chat history differs");
   });
 });

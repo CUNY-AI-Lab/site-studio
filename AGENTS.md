@@ -47,7 +47,8 @@ site-studio/
 - Cloudflare Worker + Hono
 - Native R2, KV, and Durable Object bindings
 - Same-origin preview and public-site serving
-- Anonymous session cookie continuity via `site-studio-session`
+- Verified CAIL identity on every product route
+- One-time first-login import from a resolvable legacy R2 session
 
 ### Agent Layer
 
@@ -82,12 +83,20 @@ site-studio/
 - Tailwind CSS v4
 - CodeMirror 6
 
-## Compatibility Requirements
+## Compatibility Position
 
-This is a rewrite, not a migration, but two compatibility layers matter:
+This is a greenfield product with one narrow data-preservation exception.
+Canonical published URLs are `/u/:handle/:slug/*`; there is no `/sites` route,
+forwarding pointer, migration window, dual-read, or compatibility API.
 
-- Canonical published URLs are `/u/:handle/:slug/*` (user-chosen handle; the owner/subject id never appears in a public URL). Old published sites must still resolve permanently from the same R2 content and the legacy `/sites/:userId/:slug/*` shape, which 301s to the `/u/…` equivalent once the owner has a handle and otherwise serves directly. This is a permanent compatibility exception, not part of temporary account-import cleanup; retain `/sites` routes and `.migrated.json` forwarding-pointer behavior.
-- During the configured account-import window only, returning anonymous users should see prior projects when their legacy `site-studio-session` cookie can be resolved from R2 session records. Remove this import path by `CAIL_ACCOUNT_IMPORT_UNTIL`, no later than 30 days after the switch.
+On a user's first verified CAIL login only, an old `site-studio-session` cookie
+may resolve an unexpired R2 legacy session. Its server-stored anonymous owner is
+imported into the exact verified subject. The import must remain idempotent,
+must preserve projects/files/snapshots/uploads/chat/published state/handles,
+and must write its minimal subject completion record only after success. A
+failure returns a private retryable error without replacing the old cookie.
+After success, only the subject store is authoritative. Never infer a mapping
+from email, content, or a caller-provided identifier.
 
 Do not infer R2 multi-object atomicity from a successful operation. Adopted
 project/file writes use the owner-scoped mutation coordinator and recovery
@@ -109,8 +118,12 @@ Local ports:
 ## Important Constraints
 
 - Prefer editing the Worker app, not inventing parallel backend code
+- Keep preview, publishing, and public serving in that same Worker
 - Keep the app static-file oriented; runtime build tools are out of scope
-- Treat this as a greenfield app, not a migration
+- Do not add compatibility layers beyond the first-login import above
+- Preserve the exact two-leg CAIL identity and direct CAIL Gateway model path
+- Do not impose arbitrary model token, step, timeout, or message caps
+- Call tests E2E only when they cross real process and resource boundaries
 - Preserve same-origin assumptions for preview and thumbnail capture unless deliberately redesigned
 - Use Svelte 5 runes patterns in frontend code
 - Default to execute-plus-clarify, not approval-first UX

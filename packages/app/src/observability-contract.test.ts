@@ -129,7 +129,7 @@ describe("observability source contract", () => {
     });
     expect(OBSERVABILITY_CONTRACT.telemetryQuality.actionPair.joinKey).toBe("cail.action.id");
     expect(OBSERVABILITY_CONTRACT.dashboardViews.healthReliability.filter["url.template"])
-      .toEqual(["/api/health", "/healthz"]);
+      .toEqual(["/api/health"]);
   });
 
   it("pins privacy, access, export, and conservative monitor defaults", () => {
@@ -144,7 +144,6 @@ describe("observability source contract", () => {
       externalExporter: null,
     });
     expect(OBSERVABILITY_CONTRACT.fleetProjection).toMatchObject({
-      libraryCommit: "75e0dda3068794ae1543e1e2bb98c9c920bb848f",
       logSchemaVersion: 2,
       provider: "cloudflare-analytics-engine",
       dataset: "cail_fleet_events_v1",
@@ -193,10 +192,10 @@ describe("observability source contract", () => {
       notifyOn: ["unhealthy", "healthy"],
     });
 
-    expect(createCloudflareHealthCheckSpec("publisher", "Sites.Example.edu")).toEqual({
-      address: "sites.example.edu",
-      name: "site-studio-publisher",
-      description: "site-studio-publisher liveness (/healthz)",
+    expect(createCloudflareHealthCheckSpec("app", "Studio.Example.edu")).toEqual({
+      address: "studio.example.edu",
+      name: "site-studio-app",
+      description: "site-studio-app liveness (/api/health)",
       type: "HTTPS",
       check_regions: ["ENAM"],
       interval: 60,
@@ -206,11 +205,11 @@ describe("observability source contract", () => {
       consecutive_successes: 2,
       http_config: {
         allow_insecure: false,
-        expected_body: "site-studio-publisher:alive:v1",
+        expected_body: "site-studio-app:alive:v1",
         expected_codes: ["200"],
         follow_redirects: false,
         method: "GET",
-        path: "/healthz",
+        path: "/api/health",
         port: 443,
       },
     });
@@ -239,7 +238,7 @@ describe("observability source contract", () => {
       denominator: {
         eventName: "cail.request.completed",
         uniqueBy: ["service.name", "cail.request.id"],
-        excludeRouteTemplates: ["/api/health", "/healthz"],
+        excludeRouteTemplates: ["/api/health"],
         excludeOutcomes: ["client_error", "denied"],
       },
       successOutcomes: ["ok"],
@@ -253,7 +252,6 @@ describe("observability source contract", () => {
       percentile: 95,
       warningMillisecondsByService: {
         "site-studio-app": 5_000,
-        "site-studio-publisher": 1_000,
       },
       criticalMultiplier: 2,
       minimumEligibleRequests: 100,

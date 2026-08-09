@@ -7,7 +7,7 @@
     "prebuild": "node scripts/bundle-templates.ts",
     "build": "tsc --noEmit",
     "dev": "wrangler dev --port 8792",
-    "predeploy": "bun run --cwd ../frontend build && bun run prebuild",
+    "predeploy": "PUBLIC_BASE_PATH=/site-studio bun run --cwd ../frontend build && bun run prebuild",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",

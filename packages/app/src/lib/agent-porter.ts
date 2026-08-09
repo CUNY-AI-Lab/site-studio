@@ -47,7 +47,10 @@ export async function moveProjectAgentHistory(
       env.SITE_BUILDER_AGENT,
       `${owner}:${toProjectId}`
     );
-    await destination.importChatHistoryForMigration(messages);
+    const imported = await destination.importChatHistoryForMigration(messages);
+    if (!imported) {
+      throw new Error("Destination chat history differs from the source project");
+    }
   }
 
   await source.clearChatHistory();
@@ -80,7 +83,10 @@ export function createAgentHistoryPorter(
         env.SITE_BUILDER_AGENT,
         `${toOwner}:${toProjectId}`
       );
-      await destination.importChatHistoryForMigration(messages);
+      const imported = await destination.importChatHistoryForMigration(messages);
+      if (!imported) {
+        throw new Error("Destination chat history differs from the legacy source");
+      }
     }
   };
 }

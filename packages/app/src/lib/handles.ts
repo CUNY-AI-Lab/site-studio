@@ -2,8 +2,7 @@
  * User-chosen public handles.
  *
  * A handle is the human-readable segment in a published-site URL:
- * `/u/{handle}/{slug}/`. It replaces the old `/sites/{ownerId}/{slug}/` shape,
- * whose owner id leaked the internal CAIL subject into every public URL.
+ * `/u/{handle}/{slug}/`; internal CAIL subjects never appear in public URLs.
  *
  * Backbone contract (do not weaken):
  * - A handle is **user-chosen only**. It is NEVER derived from the CAIL subject
@@ -16,8 +15,7 @@
  * - Claim-once and immutable in v1 (no rename). The first session to claim a
  *   handle owns it; a subject may hold at most one handle.
  *
- * Storage (R2, readable by BOTH the app worker and the publisher worker, which
- * has no KV — so the mapping lives in the bucket, not KV):
+ * Storage (R2, shared by the app routes and public serving path):
  *   - `handles/{handle}.json`      -> { ownerId, claimedAt }  (handle -> owner)
  *   - `userhandles/{ownerId}.json` -> { handle, claimedAt }   (owner -> handle)
  *

@@ -37,8 +37,7 @@ app.use("*", requestLogging());
 const allowedOrigins = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-  "https://tools.ailab.gc.cuny.edu",
-  "https://tools.cuny.qzz.io"
+  "https://tools.ailab.gc.cuny.edu"
 ]);
 
 app.use("/api/*", cors({
@@ -79,7 +78,7 @@ app.use("/api/projects/:id/*", requireProject());
 // Token issuance for the shared contract (INTEGRATION.md §3¾ rule 3): GET
 // /api/csrf mints/looks-up the stable per-session R2 token and DELIVERS it via
 // a path-scoped Set-Cookie (setCsrfCookie) — never in the response body. A body
-// token would be readable by any same-origin sibling or /sites/ script that
+// token would be readable by any same-origin sibling or published-site script that
 // fetches this endpoint with the ambient session cookie, defeating rule 3. The
 // body is 204 with no token anywhere.
 app.get("/api/csrf", async (c) => {
@@ -118,10 +117,12 @@ app.notFound(async (c) => {
     || pathname.startsWith("/api/")
     || pathname === "/preview"
     || pathname.startsWith("/preview/")
-    || pathname === "/sites"
-    || pathname.startsWith("/sites/")
     || pathname === "/u"
-    || pathname.startsWith("/u/");
+    || pathname.startsWith("/u/")
+    // Retired owner-addressed public URLs must be an explicit 404, never the
+    // Svelte SPA fallback.
+    || pathname === "/sites"
+    || pathname.startsWith("/sites/");
 
   if (!isWorkerRoute && c.env.ASSETS) {
     return c.env.ASSETS.fetch(c.req.raw);

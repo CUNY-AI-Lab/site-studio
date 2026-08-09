@@ -199,14 +199,14 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
     expect(setCookie).toContain("Path=/site-studio");
   });
 
-  it("keeps the cookie out of a hostile /sites page's browser path scope", async () => {
+  it("keeps the cookie out of a hostile published page's browser path scope", async () => {
     const setCookie = await setCookieHeader(
       "https://tools.ailab.gc.cuny.edu/site-studio/api/csrf",
       SITE_STUDIO_CSRF_COOKIE_PATH
     );
     expect(setCookie).toMatch(/(?:^|;\s*)Path=\/site-studio(?:;|$)/);
     expect(setCookie).not.toMatch(/(?:^|;\s*)Path=\/(?:;|$)/);
-    expect("/sites/attacker/index.html".startsWith(SITE_STUDIO_CSRF_COOKIE_PATH)).toBe(false);
+    expect("/u/attacker/site/index.html".startsWith(SITE_STUDIO_CSRF_COOKIE_PATH)).toBe(false);
   });
 
   it("pins the checked-in Wrangler production value to /site-studio", () => {

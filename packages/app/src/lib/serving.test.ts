@@ -77,8 +77,8 @@ describe("app serving security headers", () => {
 
 describe("app not-found page", () => {
   it("renders a home link only when a site root path is supplied", () => {
-    const withLink = renderNotFoundPage("/sites/u/blog/");
-    expect(withLink).toContain('href="/sites/u/blog/"');
+    const withLink = renderNotFoundPage("/u/example/blog/");
+    expect(withLink).toContain('href="/u/example/blog/"');
     expect(withLink).toContain("Go to site home");
 
     const withoutLink = renderNotFoundPage();
@@ -86,7 +86,7 @@ describe("app not-found page", () => {
   });
 
   it("escapes the site root path into the href attribute", () => {
-    const html = renderNotFoundPage('/sites/"><script>/');
+    const html = renderNotFoundPage('/u/example/"><script>/');
     expect(html).not.toContain('"><script>');
     expect(html).toContain("&quot;&gt;&lt;script&gt;");
   });
