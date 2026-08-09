@@ -25,6 +25,26 @@ import { requestLogging, type LoggingVariables } from "./lib/logging";
  */
 const app = new Hono<{ Bindings: Env; Variables: RequireProjectVariables & LoggingVariables & { sessionId: string } }>();
 
+/**
+ * The production ingress mounts the Worker at /site-studio while the assets
+ * binding stores the built files from the origin root. Remove that mount only
+ * for the asset fetch; API, preview, and published routes remain path-aware.
+ */
+function assetRequest(c: { req: { raw: Request; url: string }; env: Env }): Request {
+  const mountPath = c.env.CSRF_COOKIE_PATH?.trim().replace(/\/+$/, "") || "";
+  const requestUrl = new URL(c.req.url);
+  if (
+    !mountPath
+    || mountPath === "/"
+    || (requestUrl.pathname !== mountPath && !requestUrl.pathname.startsWith(`${mountPath}/`))
+  ) {
+    return c.req.raw;
+  }
+
+  requestUrl.pathname = requestUrl.pathname.slice(mountPath.length) || "/";
+  return new Request(requestUrl, c.req.raw);
+}
+
 // Fleet logging standard (cail-log): adopt/mint correlation at the fetch
 // boundary and emit ONE wide `request.completed` / `auth.denied` event per
 // request — metadata only (subject, classified route, status, outcome,
@@ -125,7 +145,7 @@ app.notFound(async (c) => {
     || pathname.startsWith("/sites/");
 
   if (!isWorkerRoute && c.env.ASSETS) {
-    return c.env.ASSETS.fetch(c.req.raw);
+    return c.env.ASSETS.fetch(assetRequest(c));
   }
 
   return c.json({ error: "Not found" }, 404);

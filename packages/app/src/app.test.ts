@@ -166,6 +166,40 @@ describe("retired public routes", () => {
   });
 });
 
+describe("mounted SPA assets", () => {
+  it("strips the configured mount before forwarding root and nested assets", async () => {
+    const requestedPaths: string[] = [];
+    const assetFetch = vi.fn(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      requestedPaths.push(path);
+      return path === "/"
+        ? new Response("<html>Site Studio</html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          })
+        : new Response("export const ready = true;", {
+            status: 200,
+            headers: { "content-type": "application/javascript" },
+          });
+    });
+    const env = createEnv();
+    env.ASSETS = { fetch: assetFetch } as unknown as Fetcher;
+
+    const root = await app.request(`${BASE}/site-studio/`, {}, env);
+    const asset = await app.request(
+      `${BASE}/site-studio/_app/immutable/entry/start.js`,
+      {},
+      env,
+    );
+
+    expect(root.status).toBe(200);
+    expect(root.headers.get("content-type")).toContain("text/html");
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toContain("application/javascript");
+    expect(requestedPaths).toEqual(["/", "/_app/immutable/entry/start.js"]);
+  });
+});
+
 describe("subject session retirement", () => {
   it("does not mint a subject session cookie after identity auth", async () => {
     const res = await app.request(`${BASE}/api/csrf`, { headers: await identityHeaders() }, createEnv());
