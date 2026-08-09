@@ -55,7 +55,7 @@ independent authoritative identity mapping is recovered.
 ## Browser and serving defenses
 
 Unsafe API requests require same-origin posture plus the R2-backed
-`X-CAIL-CSRF` value. WebSocket upgrades pass the same token and origin checks.
+`X-CSRF-Token` value. WebSocket upgrades pass the same token and origin checks.
 The script-readable CSRF cookie is scoped to `/site-studio` outside loopback;
 the HttpOnly legacy import cookie is Secure and SameSite=Strict until the app
 deletes it after import closes. No subject continuity cookie is minted.

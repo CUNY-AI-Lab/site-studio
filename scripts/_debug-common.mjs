@@ -122,7 +122,7 @@ export async function createProject(session, name, template) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-CAIL-CSRF': csrf,
+      'X-CSRF-Token': csrf,
     },
     body: JSON.stringify({
       name,

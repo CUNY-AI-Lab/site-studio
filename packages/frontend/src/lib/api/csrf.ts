@@ -3,7 +3,7 @@ import { resolvePath } from '$lib/utils/paths';
 /**
  * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
  *
- * Every state-changing request to /api/* must carry an `X-CAIL-CSRF` header, and
+ * Every state-changing request to /api/* must carry an `X-CSRF-Token` header, and
  * agent WebSocket connects must append `?csrf=<token>`. The token is DELIVERED by
  * the server as the `cail_csrf_sitestudio` cookie (rule 3 "Delivery") rather than
  * in a response body — a body token would be readable by any same-origin sibling
@@ -21,7 +21,7 @@ import { resolvePath } from '$lib/utils/paths';
  * siblings and published-site JS under other prefixes never see it.
  */
 
-const CSRF_HEADER = 'X-CAIL-CSRF';
+const CSRF_HEADER = 'X-CSRF-Token';
 const CSRF_ERROR_CODE = 'csrf_verification_failed';
 /** Name of the delivery cookie the server sets (server: lib/constants.ts). */
 const CSRF_COOKIE_NAME = 'cail_csrf_sitestudio';

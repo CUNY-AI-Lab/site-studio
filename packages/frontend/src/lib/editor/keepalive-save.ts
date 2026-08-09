@@ -18,7 +18,7 @@ export function buildKeepaliveSave(
 			credentials: 'include',
 			headers: {
 				'Content-Type': 'application/json',
-				'X-CAIL-CSRF': options.csrfToken
+				'X-CSRF-Token': options.csrfToken
 			},
 			body: JSON.stringify({
 				path: snapshot.filePath,

@@ -16,7 +16,7 @@ import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
  *   Rule 2 — origin-check every state-changing route (Sec-Fetch-Site
  *            preferred, Origin fallback; both-absent falls through to the
  *            token, never to "trust").
- *   Rule 3 — require the per-session X-CAIL-CSRF token on every mutation.
+ *   Rule 3 — require the per-session X-CSRF-Token on every mutation.
  *
  * No Authorization / sk-cail exemption exists here on purpose: the contract's
  * "pure API clients authenticating with `Authorization: Bearer sk-cail-…`"
@@ -26,7 +26,9 @@ import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
  * mutation must pass the token check.
  */
 
-export const CSRF_HEADER_NAME = "X-CAIL-CSRF";
+// Keep this outside the CAIL authority namespace. The shared Doorway owns and
+// strips every `X-CAIL-*` request header before forwarding to the Worker.
+export const CSRF_HEADER_NAME = "X-CSRF-Token";
 export const SITE_STUDIO_CSRF_COOKIE_PATH = "/site-studio";
 
 /** Exact 403 body for every CSRF rejection (shared contract with the frontend). */

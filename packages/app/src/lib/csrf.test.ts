@@ -28,6 +28,10 @@ const REQUEST_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 const TOKEN = "a".repeat(64);
 
+it("uses a non-authority header that survives the shared Doorway", () => {
+  expect(CSRF_HEADER_NAME).toBe("X-CSRF-Token");
+});
+
 function createCsrfBucket(): R2Bucket {
   const store = new Map<string, string>();
   return {

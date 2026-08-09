@@ -95,7 +95,7 @@ describe('csrf token client', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('csrfFetch sets the X-CAIL-CSRF header on a POST', async () => {
+	it('csrfFetch sets the X-CSRF-Token header on a POST', async () => {
 		setCookieToken('tok-post');
 		fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
 
@@ -105,7 +105,7 @@ describe('csrf token client', () => {
 		expect(requestCall).toBeDefined();
 		const init = requestCall![1] as RequestInit;
 		const headers = new Headers(init.headers);
-		expect(headers.get('X-CAIL-CSRF')).toBe('tok-post');
+		expect(headers.get('X-CSRF-Token')).toBe('tok-post');
 		expect(init.credentials).toBe('include');
 	});
 
@@ -119,7 +119,7 @@ describe('csrf token client', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		const [, init] = fetchMock.mock.calls[0];
 		const headers = new Headers((init as RequestInit).headers);
-		expect(headers.has('X-CAIL-CSRF')).toBe(false);
+		expect(headers.has('X-CSRF-Token')).toBe(false);
 		expect((init as RequestInit).credentials).toBe('include');
 	});
 
@@ -132,7 +132,7 @@ describe('csrf token client', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		const [, init] = fetchMock.mock.calls[0];
 		const headers = new Headers((init as RequestInit | undefined)?.headers);
-		expect(headers.has('X-CAIL-CSRF')).toBe(false);
+		expect(headers.has('X-CSRF-Token')).toBe(false);
 	});
 
 	it('on csrf_verification_failed 403: re-fetches /api/csrf, re-reads the cookie, retries once', async () => {
@@ -164,9 +164,9 @@ describe('csrf token client', () => {
 		const requestCalls = fetchMock.mock.calls.filter((c) => !isTokenFetch(c));
 		expect(requestCalls).toHaveLength(2);
 		const firstHeaders = new Headers((requestCalls[0][1] as RequestInit).headers);
-		expect(firstHeaders.get('X-CAIL-CSRF')).toBe('tok-stale');
+		expect(firstHeaders.get('X-CSRF-Token')).toBe('tok-stale');
 		const retryHeaders = new Headers((requestCalls[1][1] as RequestInit).headers);
-		expect(retryHeaders.get('X-CAIL-CSRF')).toBe('tok-fresh');
+		expect(retryHeaders.get('X-CSRF-Token')).toBe('tok-fresh');
 	});
 
 	it('does not retry on a non-CSRF 403', async () => {

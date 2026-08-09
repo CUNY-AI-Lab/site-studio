@@ -22,7 +22,7 @@ describe('buildKeepaliveSave', () => {
 		expect(request.init.credentials).toBe('include');
 		expect(request.init.headers).toMatchObject({
 			'Content-Type': 'application/json',
-			'X-CAIL-CSRF': 'csrf-token'
+			'X-CSRF-Token': 'csrf-token'
 		});
 		expect(JSON.parse(request.init.body as string)).toEqual({
 			path: 'index.html',
