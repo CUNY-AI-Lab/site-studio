@@ -54,7 +54,6 @@ function createMockBucket() {
 }
 
 function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides: Partial<Env> = {}): Env {
-  const now = Date.now();
   return {
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
@@ -62,8 +61,6 @@ function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     LOADER: {} as WorkerLoader,
-    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
-    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     ASSETS: undefined,
     ...overrides
   };
@@ -262,17 +259,17 @@ describe("preview token authentication", () => {
       createEnv(bucket, kv)
     );
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
-  it("falls through to normal anonymous auth for a garbage token", async () => {
+  it("requires verified identity for a garbage preview token", async () => {
     const res = await app.request(
       "http://site-studio.test/preview/proj/styles.css?pt=garbage",
       {},
       createEnv(bucket, kv)
     );
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   it("never authorizes an API route", async () => {
@@ -280,7 +277,7 @@ describe("preview token authentication", () => {
     const res = await app.request(
       `http://site-studio.test/api/private?pt=${token}`,
       {},
-      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+      createEnv(bucket, kv)
     );
 
     expect(res.status).toBe(401);
@@ -292,7 +289,7 @@ describe("preview token authentication", () => {
     const res = await app.request(
       `http://site-studio.test/preview/proj/private.txt?pt=${token}`,
       {},
-      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+      createEnv(bucket, kv)
     );
     expect(res.status).toBe(401);
   });
@@ -316,7 +313,7 @@ describe("preview token authentication", () => {
     const res = await app.request(
       `http://site-studio.test/preview/proj/about.html?pt=${parent}`,
       { headers: { Accept: "text/html" } },
-      createEnv(bucket, kv, { CAIL_REQUIRE_IDENTITY: "true" })
+      createEnv(bucket, kv)
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -330,12 +327,11 @@ describe("preview token authentication", () => {
 
 /**
  * Preview-vs-publish extensionless PARITY. Post-alignment the two routes share
- * one resolver (packages/serving-core/src/extensionless.ts), so they must resolve
- * the same extensionless request to the same body. This test is the anti-drift
- * guard that STAYS after the dedup: it drives the SAME seeded project through
- * both /preview/ and the published /u/{handle}/{slug}/ path and asserts the
- * served bytes match, across all three resolution cases (flat sibling wins,
- * flat-preferred-over-nested, nested fallback).
+ * one app-local resolver, so they must resolve the same extensionless request
+ * to the same body. This test is the anti-drift guard: it drives the SAME
+ * seeded project through both /preview/ and the published /u/{handle}/{slug}/
+ * path and asserts the served bytes match, across all three resolution cases
+ * (flat sibling wins, flat-preferred-over-nested, nested fallback).
  */
 describe("preview ↔ publish extensionless parity", () => {
   const userId = "user_test123";

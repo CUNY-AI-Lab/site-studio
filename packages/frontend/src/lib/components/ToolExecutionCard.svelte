@@ -22,15 +22,9 @@
 	}
 
 	let {
-		tool,
-		index = 0,
-		projectId = '',
-		onRevert
+		tool
 	}: {
 		tool: ToolExecution;
-		index?: number;
-		projectId?: string;
-		onRevert?: () => void;
 	} = $props();
 
 	let expanded = $state(false);

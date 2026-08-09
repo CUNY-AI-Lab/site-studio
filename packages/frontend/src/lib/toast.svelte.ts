@@ -11,13 +11,6 @@ export interface Toast {
 let counter = 0;
 
 /**
- * Hard cap on how many toasts stack at once. Error toasts persist (duration 0),
- * so a burst of repeated failures would otherwise grow the stack without bound.
- * When adding a toast would exceed the cap, the oldest is dropped.
- */
-const MAX_TOASTS = 4;
-
-/**
  * Reactive list of active toasts. Read by the single <Toaster /> mounted at the
  * root layout. Mutated via the exported `toast` helpers below.
  */
@@ -33,12 +26,6 @@ function push(kind: ToastKind, message: string, duration: number): number {
 
 	const id = ++counter;
 	toasts.push({ id, kind, message, duration });
-
-	// SS-23: cap the stack. Drop the oldest toasts so persistent errors can't pile
-	// up unboundedly on repeated failures.
-	while (toasts.length > MAX_TOASTS) {
-		toasts.shift();
-	}
 
 	if (duration > 0) {
 		setTimeout(() => dismiss(id), duration);

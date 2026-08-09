@@ -7,12 +7,12 @@
     "prebuild": "node scripts/bundle-templates.ts",
     "build": "tsc --noEmit",
     "dev": "wrangler dev --port 8792",
-    "predeploy": "bun run --cwd ../frontend build && bun run prebuild",
+    "predeploy": "PUBLIC_BASE_PATH=/site-studio bun run --cwd ../frontend build && bun run prebuild",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "vitest run && tsc --noEmit"
+    "check": "bun run prebuild && vitest run && tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.59",

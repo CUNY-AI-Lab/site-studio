@@ -43,20 +43,12 @@ export interface Env {
   // Source-owned issuer profile. The configured issuer must exactly match the
   // canonical issuer assigned to this profile.
   CAIL_IDENTITY_PROFILE?: string;
-  // "true" makes protected routes reject anonymous requests (401). Flip in
-  // lockstep with the gateway's CAIL_SSO_MODE=enforce.
-  CAIL_REQUIRE_IDENTITY?: string;
-  // Required when identity enforcement is enabled. These ISO instants bound
-  // the temporary legacy-account import window; runtime validation also
-  // requires end >= start and a duration no longer than 30 days.
-  CAIL_SSO_SWITCHED_AT?: string;
-  CAIL_ACCOUNT_IMPORT_UNTIL?: string;
   SITE_STUDIO_MAX_PROJECT_BYTES?: string;
   SITE_STUDIO_MAX_OWNER_BYTES?: string;
   SITE_STUDIO_UPLOADS_PER_MINUTE?: string;
   // Path scope for the anti-CSRF delivery cookie (cail_csrf_sitestudio).
   // Production is mounted at /site-studio on a shared origin alongside
-  // sibling tools and untrusted /sites/ content. Runtime validation rejects a
+  // sibling tools and untrusted published content. Runtime validation rejects a
   // missing value or any value other than "/site-studio".
   CSRF_COOKIE_PATH?: string;
   SESSION_KV: KVNamespace;

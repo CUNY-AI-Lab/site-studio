@@ -8,7 +8,6 @@ import {
 } from "@cuny-ai-lab/cail-identity/testing";
 import {
   cailAuthRequiredResponse,
-  cailIdentityRequired,
   getRequestIdentity,
   resolveRequestIdentity,
 } from "./cail-identity";
@@ -332,14 +331,6 @@ describe("resolveRequestIdentity", () => {
       headers: { "X-CAIL-Subject": TEST_SUBJECTS.bob },
     });
     await expect(resolveRequestIdentity(request, currentEnv)).resolves.toEqual({ status: "absent" });
-  });
-});
-
-describe("cailIdentityRequired", () => {
-  it("is true only when the flag is exactly 'true'", () => {
-    expect(cailIdentityRequired({ CAIL_REQUIRE_IDENTITY: "true" })).toBe(true);
-    expect(cailIdentityRequired({ CAIL_REQUIRE_IDENTITY: "false" })).toBe(false);
-    expect(cailIdentityRequired({})).toBe(false);
   });
 });
 

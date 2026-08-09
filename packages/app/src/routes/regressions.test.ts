@@ -721,83 +721,46 @@ describe("route regressions", () => {
     expect(response.headers.get("Location")).toBe("/u/janedoe/slashroot/?ref=x");
   });
 
-  it("301s a legacy /sites/{owner}/{slug} URL to /u/{handle}/ preserving path and query", async () => {
-    await storage.createProject(userId, "port", "Portfolio");
-    await storage.writeFile(userId, "port", "index.html", "<h1>Home</h1>");
-    await storage.writeFile(userId, "port", "about/index.html", "<h1>About</h1>");
-    await storage.updateProjectMetadata(userId, "port", { published: true, slug: "port" });
-
-    const response = await app.request(
-      "http://site-studio.test/sites/user_test123/port/about/?ref=x",
-      { redirect: "manual" },
-      createEnv(bucket)
-    );
-
-    expect(response.status).toBe(301);
-    expect(response.headers.get("Location")).toBe("/u/janedoe/port/about/?ref=x");
-  });
-
-  it("redirects a migrated legacy slug to the effective canonical slug", async () => {
-    await storage.createProject(userId, "imported", "Imported");
-    await storage.writeFile(userId, "imported", "index.html", "<h1>Imported</h1>");
-    await storage.updateProjectMetadata(userId, "imported", {
+  it("retains the configured ingress prefix in slashless redirects", async () => {
+    await storage.createProject(userId, "prefixed-root", "Prefixed Root");
+    await storage.writeFile(userId, "prefixed-root", "index.html", "<h1>Prefixed</h1>");
+    await storage.updateProjectMetadata(userId, "prefixed-root", {
       published: true,
-      slug: "portfolio-2"
-    });
-    bucket.store.set("projects/user_anon/.migrated.json", {
-      data: JSON.stringify({
-        version: 1,
-        subject: userId,
-        migratedAt: "2026-07-14T12:00:00.000Z",
-        projects: { portfolio: "imported" },
-        slugs: { portfolio: "portfolio-2" }
-      })
+      slug: "prefixed-root"
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_anon/portfolio/about/?ref=x",
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-root?ref=x",
       { redirect: "manual" },
-      createEnv(bucket)
+      {
+        ...createEnv(bucket),
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+      }
     );
 
     expect(response.status).toBe(301);
-    expect(response.headers.get("Location")).toBe("/u/janedoe/portfolio-2/about/?ref=x");
+    expect(response.headers.get("Location")).toBe("/site-studio/u/janedoe/prefixed-root/?ref=x");
   });
 
-  it("serves a legacy /sites/{owner}/{slug} URL directly when the owner has no handle", async () => {
-    // A different owner with published content but no handle: content serves,
-    // no redirect (zero breakage for pre-handle sites).
-    bucket.store.set(`projects/user_other/legacy/.metadata.json`, {
-      data: JSON.stringify({ id: "legacy", name: "legacy", published: true, slug: "legacy" })
-    });
-    bucket.store.set(`projects/user_other/legacy/index.html`, { data: "<h1>Legacy Home</h1>" });
-
-    const response = await app.request(
-      "http://site-studio.test/sites/user_other/legacy/",
-      { redirect: "manual" },
-      createEnv(bucket)
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("<h1>Legacy Home</h1>");
-  });
-
-  it("301s a slashless directly served legacy root to a trailing slash", async () => {
-    bucket.store.set(`projects/user_other/legacy/.metadata.json`, {
-      data: JSON.stringify({ id: "legacy", name: "legacy", published: true, slug: "legacy" })
-    });
-    bucket.store.set(`projects/user_other/legacy/index.html`, {
-      data: '<link href="styles.css">'
+  it("retains the configured ingress prefix in styled 404 home links", async () => {
+    await storage.createProject(userId, "prefixed-404", "Prefixed 404");
+    await storage.writeFile(userId, "prefixed-404", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "prefixed-404", {
+      published: true,
+      slug: "prefixed-404"
     });
 
     const response = await app.request(
-      "http://site-studio.test/sites/user_other/legacy?ref=x",
-      { redirect: "manual" },
-      createEnv(bucket)
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-404/missing",
+      { headers: { Accept: "text/html" } },
+      {
+        ...createEnv(bucket),
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+      }
     );
 
-    expect(response.status).toBe(301);
-    expect(response.headers.get("Location")).toBe("/sites/user_other/legacy/?ref=x");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain('href="/site-studio/u/janedoe/prefixed-404/"');
   });
 
   it("SS-14: resolves an extensionless path to {path}.html", async () => {
@@ -829,22 +792,6 @@ describe("route regressions", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain("Flat");
-  });
-
-  it("SS-13: serves a slug-less published project addressed by projectId", async () => {
-    // A different owner with no handle so the legacy /sites/ path serves directly.
-    bucket.store.set(`projects/user_slugless/legacy/.metadata.json`, {
-      data: JSON.stringify({ id: "legacy", name: "legacy", published: true })
-    });
-    bucket.store.set(`projects/user_slugless/legacy/index.html`, { data: "<h1>Slugless</h1>" });
-
-    const response = await app.request(
-      "http://site-studio.test/sites/user_slugless/legacy/",
-      { redirect: "manual" },
-      createEnv(bucket)
-    );
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("<h1>Slugless</h1>");
   });
 
   it("published HTML revalidates mutable URLs and carries ETag with the CSP", async () => {

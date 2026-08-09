@@ -16,10 +16,6 @@
     let hasLoadedOnce = $state(false);
     let activeLoadingIframe = $state<1 | 2 | null>(1); // Track which iframe is actively loading (1 for initial load)
 
-    // Retained only so requestThumbnailCapture() keeps its old signature; the
-    // actual capture is a no-op now (see tryCaptureAndUpload).
-    let forceNextCapture = false;
-
     // Dual iframe swap technique to prevent white flash
     export function refresh() {
         isLoading = true; // Show loading skeleton
@@ -35,26 +31,6 @@
         if (onRefresh) {
             onRefresh();
         }
-    }
-
-    // §3¾ active-content invariant tradeoff (KNOWN UX REGRESSION):
-    // Auto-thumbnail capture is DISABLED. It relied on reading the preview
-    // iframe's `contentDocument` to rasterize a screenshot, but the preview is
-    // now served with `Content-Security-Policy: sandbox allow-scripts` (no
-    // allow-same-origin), which forces the framed document into an opaque
-    // origin. `contentDocument` is therefore cross-origin and unreadable — the
-    // only safe posture for agent/student-authored HTML on our own origin.
-    //
-    // Consequence: dashboard project cards fall back to placeholder thumbnails
-    // instead of live captures. Restoring live thumbnails would require an
-    // in-frame capture handshake (inject a capture script into preview HTML
-    // server-side + postMessage the PNG out), which was out of scope for this
-    // security fix. The preview itself still renders normally.
-    async function tryCaptureAndUpload(_ignoreThrottle = false) {
-        // Intentionally a no-op — see the comment above. Kept as a stable
-        // call site so refresh()/requestThumbnailCapture() need no changes and
-        // the capture can be re-enabled behind a handshake later.
-        return;
     }
 
     function handleIframeLoad(isIframe1: boolean) {
@@ -92,20 +68,6 @@
             activeLoadingIframe = null;
         }
 
-        // Attempt a thumbnail capture after each load
-        // Delay slightly to allow layout and fonts to settle
-        setTimeout(() => {
-            const ignore = forceNextCapture;
-            forceNextCapture = false;
-            tryCaptureAndUpload(ignore);
-        }, 200);
-    }
-
-    // Helper: request an immediate thumbnail capture on next load
-    // This forces bypassing the throttle once
-    export function requestThumbnailCapture() {
-        forceNextCapture = true;
-        refresh();
     }
 </script>
 

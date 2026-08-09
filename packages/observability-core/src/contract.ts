@@ -63,12 +63,6 @@ export const OBSERVABILITY_CONTRACT = {
       healthPath: "/api/health",
       healthMarker: "site-studio-app:alive:v1",
     },
-    publisher: {
-      name: "site-studio-publisher",
-      version: SERVICE_VERSION,
-      healthPath: "/healthz",
-      healthMarker: "site-studio-publisher:alive:v1",
-    },
   },
   actions: {
     build: {
@@ -91,7 +85,6 @@ export const OBSERVABILITY_CONTRACT = {
     externalExporter: null,
   },
   fleetProjection: {
-    libraryCommit: "75e0dda3068794ae1543e1e2bb98c9c920bb848f",
     logSchemaVersion: CAIL_LOG_SCHEMA_VERSION,
     provider: "cloudflare-analytics-engine",
     dataset: CAIL_ANALYTICS_ENGINE_DATASET,
@@ -166,7 +159,7 @@ export const OBSERVABILITY_CONTRACT = {
       denominator: {
         eventName: "cail.request.completed",
         uniqueBy: ["service.name", "cail.request.id"],
-        excludeRouteTemplates: ["/api/health", "/healthz"],
+        excludeRouteTemplates: ["/api/health"],
         excludeOutcomes: ["client_error", "denied"],
       },
       successOutcomes: ["ok"],
@@ -180,7 +173,6 @@ export const OBSERVABILITY_CONTRACT = {
       percentile: 95,
       warningMillisecondsByService: {
         "site-studio-app": 5_000,
-        "site-studio-publisher": 1_000,
       },
       criticalMultiplier: 2,
       minimumEligibleRequests: 100,
@@ -342,7 +334,7 @@ export const OBSERVABILITY_CONTRACT = {
       eventName: "cail.request.completed",
       filter: {
         "cail.product.id": PRODUCT_ID,
-        "url.template": ["/api/health", "/healthz"],
+        "url.template": ["/api/health"],
       },
       measures: [
         { operation: "count" },

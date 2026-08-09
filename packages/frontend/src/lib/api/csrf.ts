@@ -7,7 +7,7 @@ import { resolvePath } from '$lib/utils/paths';
  * agent WebSocket connects must append `?csrf=<token>`. The token is DELIVERED by
  * the server as the `cail_csrf_sitestudio` cookie (rule 3 "Delivery") rather than
  * in a response body — a body token would be readable by any same-origin sibling
- * or /sites/ script. We read the token out of `document.cookie`; if it is absent
+ * or published-site script. We read the token out of `document.cookie`; if it is absent
  * we hit `GET /api/csrf` (session-cookie authenticated) once to trigger the
  * Set-Cookie, then re-read. The token is cached in module state so we make at
  * most one network round-trip per session. If the session rotates the server

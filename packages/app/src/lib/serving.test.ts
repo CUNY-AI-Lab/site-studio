@@ -2,20 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   SERVED_CONTENT_TYPES,
   getServedContentType
-} from "../../serving-core/src/content-types";
-import { servedContentHeaders } from "../../serving-core/src/serving-headers";
-import { renderNotFoundPage } from "../../serving-core/src/not-found-page";
-import { looksLikePageNavigation } from "../../serving-core/src/page-navigation";
+} from "./content-types";
+import { servedContentHeaders } from "./serving-headers";
+import { renderNotFoundPage } from "./not-found-page";
+import { looksLikePageNavigation } from "./page-navigation";
 
-/**
- * Unit coverage for packages/serving-core — the single source of truth both
- * workers import. Formerly the app worker and the publisher worker each carried
- * hand-duplicated copies guarded by a cross-package parity test; now there is
- * one copy, and this suite owns its behavior directly. (The publisher's
- * end-to-end route behavior stays in serving-parity.test.ts.)
- */
-
-describe("serving-core content-types (SS-8)", () => {
+describe("app serving content-types (SS-8)", () => {
   const EXTENSION_MATRIX: Array<[string, string]> = [
     ["index.html", "text/html; charset=utf-8"],
     ["page.htm", "text/html; charset=utf-8"],
@@ -71,7 +63,7 @@ describe("serving-core content-types (SS-8)", () => {
   });
 });
 
-describe("serving-core §3¾ security headers", () => {
+describe("app serving security headers", () => {
   it("emits the load-bearing opaque-origin CSP (sandbox, NO allow-same-origin)", () => {
     const headers = servedContentHeaders();
     expect(headers["Content-Security-Policy"]).toBe("sandbox allow-scripts");
@@ -83,10 +75,10 @@ describe("serving-core §3¾ security headers", () => {
   });
 });
 
-describe("serving-core not-found page", () => {
+describe("app not-found page", () => {
   it("renders a home link only when a site root path is supplied", () => {
-    const withLink = renderNotFoundPage("/sites/u/blog/");
-    expect(withLink).toContain('href="/sites/u/blog/"');
+    const withLink = renderNotFoundPage("/u/example/blog/");
+    expect(withLink).toContain('href="/u/example/blog/"');
     expect(withLink).toContain("Go to site home");
 
     const withoutLink = renderNotFoundPage();
@@ -94,7 +86,7 @@ describe("serving-core not-found page", () => {
   });
 
   it("escapes the site root path into the href attribute", () => {
-    const html = renderNotFoundPage('/sites/"><script>/');
+    const html = renderNotFoundPage('/u/example/"><script>/');
     expect(html).not.toContain('"><script>');
     expect(html).toContain("&quot;&gt;&lt;script&gt;");
   });
@@ -106,7 +98,7 @@ describe("serving-core not-found page", () => {
   });
 });
 
-describe("serving-core looksLikePageNavigation", () => {
+describe("app looksLikePageNavigation", () => {
   it("treats an Accept: text/html request as a navigation regardless of path", () => {
     expect(looksLikePageNavigation("text/html", "some.css")).toBe(true);
     expect(looksLikePageNavigation("text/html,*/*", "logo.png")).toBe(true);

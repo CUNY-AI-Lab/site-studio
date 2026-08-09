@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isProtectedServedPath } from "../../serving-core/src/protected-files";
+import { isProtectedServedPath } from "./protected-files";
 
 describe("isProtectedServedPath", () => {
   it("protects bookkeeping files by final path segment", () => {

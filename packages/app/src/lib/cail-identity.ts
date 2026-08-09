@@ -133,17 +133,6 @@ export async function getRequestIdentity(
 }
 
 /**
- * True when the worker must reject anonymous requests to protected routes (401).
- * Flip `CAIL_REQUIRE_IDENTITY="true"` with JWKS verification configured at the same time the
- * gateway lands `CAIL_SSO_MODE=enforce` — otherwise the workers.dev URL stays an
- * anonymous bypass around SSO and budgets. If the flag is on but verification
- * material is missing or malformed, protected routes close by misconfiguration.
- */
-export function cailIdentityRequired(env: { CAIL_REQUIRE_IDENTITY?: string }): boolean {
-  return env.CAIL_REQUIRE_IDENTITY === "true";
-}
-
-/**
  * The CAIL `authentication_required` envelope (docs/INTEGRATION.md §2), returned
  * verbatim so the frontend treats worker-issued and gate-issued 401s alike and
  * redirects to `/login?rt=<current-path>`.

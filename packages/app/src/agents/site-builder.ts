@@ -11,7 +11,7 @@ import {
 } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import { convertToModelMessages, pruneMessages, stepCountIs, streamText, tool } from "ai";
+import { convertToModelMessages, pruneMessages, streamText, tool } from "ai";
 import { z } from "zod";
 import type { Env, SnapshotResult } from "../types";
 import { isSnapshotSkipped } from "../types";
@@ -1086,8 +1086,7 @@ function createChatTools(
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
-    globalOutbound: null,
-    timeout: 20_000
+    globalOutbound: null
   });
 
   return {
@@ -1173,7 +1172,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     sendIdentityOnConnect: true
   };
 
-  maxPersistedMessages = 150;
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
@@ -1305,7 +1303,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    */
   async importChatHistoryForMigration(messages: unknown[]): Promise<boolean> {
     if (this.messages.length > 0) {
-      return false; // never overwrite an existing conversation
+      // A retry after a later migration step failed must accept the exact chat
+      // it already imported, while still refusing to overwrite different work.
+      return JSON.stringify(this.messages) === JSON.stringify(messages);
     }
     await this.saveMessages(messages as typeof this.messages);
     return true;
@@ -1444,7 +1444,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
           toolCalls: "before-last-2-messages"
         }),
         tools,
-        stopWhen: stepCountIs(12),
         temperature: 0.2,
         includeRawChunks: true,
         experimental_onStepStart: () => {

@@ -182,9 +182,8 @@ export class R2ProjectStorage {
       for (const object of listed.objects) {
         const relative = object.key.slice(prefix.length);
         const [projectId] = relative.split("/");
-        // Dotfile entries are system objects (e.g. the migration forwarding
-        // pointer .migrated.json), never projects — sanitizeProjectId cannot
-        // produce ids starting with ".".
+        // Dotfile entries are system objects, never projects —
+        // sanitizeProjectId cannot produce ids starting with ".".
         if (projectId && !projectId.startsWith(".")) {
           ids.add(projectId);
         }
@@ -519,7 +518,7 @@ export class R2ProjectStorage {
   /**
    * Raw R2 object for a project file (or null if absent), exposing `etag` and
    * `uploaded` so the published-site serving path can emit ETag/Last-Modified
-   * validators identically to the standalone publisher worker (SS-15 parity).
+   * validators used by the published-site serving path.
    */
   async readObject(userId: string, projectId: string, filePath: string): Promise<R2ObjectBody | null> {
     return this.bucket.get(fileKey(userId, projectId, filePath));
@@ -1004,11 +1003,7 @@ export class R2ProjectStorage {
 
     for (const projectId of projectIds) {
       const metadata = await this.getProjectMetadata(userId, projectId);
-      // SS-13: match by slug, OR by projectId when the metadata carries no slug
-      // (legacy/migrated sites published before slugs existed). Kept identical to
-      // the publisher worker's findPublishedProject so a slug-less site resolves
-      // the same on both origins instead of 404-ing on one.
-      if (metadata?.published && (metadata.slug === slug || (!metadata.slug && projectId === slug))) {
+      if (metadata?.published && metadata.slug === slug) {
         matches.push({ projectId, metadata });
       }
     }

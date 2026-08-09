@@ -122,23 +122,6 @@ describe('AgentChat', () => {
 		return { onUpdate };
 	}
 
-	function stubQuotaResponse(quotaResponse: Record<string, unknown>) {
-		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
-			if (url.endsWith('/api/csrf')) {
-				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
-				return new Response(null, { status: 204 });
-			}
-			if (url.endsWith('/api/quota')) {
-				return new Response(JSON.stringify(quotaResponse), {
-					status: 200,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
-			return new Response('[]', { status: 200 });
-		});
-	}
-
 	it('opens a WebSocket to the site-builder path with the csrf token param', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
@@ -348,77 +331,10 @@ describe('AgentChat', () => {
 		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
 	});
 
-	it('keeps the local editor usable when the optional quota probe requires authentication', async () => {
-		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
-			(symbol) => symbol.toString() === 'Symbol(impl)'
-		);
-		expect(locationImplSymbol).toBeDefined();
-		const locationImpl = (window.location as any)[locationImplSymbol as symbol] as {
-			assign: (url: string) => void;
-		};
-		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
-		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
-			if (url.endsWith('/api/csrf')) {
-				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
-				return new Response(null, { status: 204 });
-			}
-			if (url.endsWith('/api/quota')) {
-				return new Response(
-					JSON.stringify({ error: 'authentication_required', login_url: '/login' }),
-					{ status: 401, headers: { 'Content-Type': 'application/json' } }
-				);
-			}
-			return new Response('[]', { status: 200 });
-		});
-
-		try {
-			mount();
-			await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
-			expect(assignSpy).not.toHaveBeenCalled();
-			expect(screen.queryByRole('status', { name: /AI budget left/i })).not.toBeInTheDocument();
-		} finally {
-			assignSpy.mockRestore();
-			warnSpy.mockRestore();
-		}
-	});
-
-	it('shows the server-provided Cloudflare usage estimate', async () => {
-		const calculatedAt = 1_783_123_200;
-		const calculatedLabel = new Date(calculatedAt * 1000).toLocaleString();
-		stubQuotaResponse({
-			object: 'quota',
-			managed_by: 'cloudflare',
-			state: 'estimated',
-			unit: 'microdollar',
-			currency: 'USD',
-			limit: 10_000_000,
-			estimated_used: 2_700_000,
-			estimated_remaining: 7_300_000,
-			used_percent: 27,
-			remaining_percent: 73,
-			window_technique: 'sliding',
-			window_seconds: 2_592_000,
-			calculated_at: calculatedAt
-		});
-
+	it('does not probe the optional quota endpoint', async () => {
 		mount();
-
-		const quotaMeter = await waitFor(() =>
-			screen.getByRole('status', { name: /~73% AI budget left/i })
-		);
-		expect(quotaMeter).toHaveTextContent('~73% AI budget left');
-		expect(quotaMeter).toHaveAccessibleName(
-			`~73% AI budget left. Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`
-		);
-		expect(quotaMeter).toHaveAttribute(
-			'title',
-			`Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`
-		);
-		expect(quotaMeter).not.toHaveAccessibleName(expect.stringMatching(/reset/i));
-		expect(quotaMeter).not.toHaveAttribute('title', expect.stringMatching(/reset/i));
+		await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/quota'))).toBe(false);
 	});
 
 	it('a network failure loading history also surfaces the error state (SS-49)', async () => {
@@ -456,6 +372,35 @@ describe('AgentChat', () => {
 
 		expect(screen.getByText('Make me a homepage')).toBeInTheDocument();
 		expect(screen.getByText('Sure, here you go.')).toBeInTheDocument();
+	});
+
+	it('renders the complete persisted history without truncating older messages', async () => {
+		const historyTexts = Array.from({ length: 12 }, (_, index) => `History message ${index + 1}`);
+		const history: UIChatMessage[] = historyTexts.map((text, index) => ({
+			id: `history-${index + 1}`,
+			role: 'user',
+			parts: [{ type: 'text', text }]
+		}));
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				return new Response(JSON.stringify(history), {
+					status: 200,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+		await waitFor(() => expect(screen.getByText('History message 12')).toBeInTheDocument());
+		for (const text of historyTexts) {
+			expect(screen.getByText(text)).toBeInTheDocument();
+		}
 	});
 
 	it('renders streamed assistant text progressively across CF_AGENT_USE_CHAT_RESPONSE chunks', async () => {
@@ -695,9 +640,10 @@ describe('AgentChat', () => {
 		}
 	});
 
-	// SS-11 (cont.): the recovery must not refresh-storm or spawn unbounded sockets —
-	// after MAX_RECONNECT_ATTEMPTS the reconnect loop gives up.
-	it('stops reconnecting after MAX_RECONNECT_ATTEMPTS (SS-11 no infinite loop)', async () => {
+	// SS-11 (cont.): recovery remains available for the lifetime of the active
+	// project. Backoff is capped, but reconnects do not stop after an arbitrary
+	// number of failures.
+	it('continues reconnecting with bounded backoff while the project is active', async () => {
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
 			const url = typeof input === 'string' ? input : input.toString();
 			if (url.endsWith('/api/csrf')) {
@@ -712,20 +658,22 @@ describe('AgentChat', () => {
 
 		vi.useFakeTimers();
 		try {
-			// Every new socket also fails pre-OPEN; drive the full backoff schedule.
-			for (let i = 0; i < 10; i += 1) {
+			// Every new socket also fails pre-OPEN; drive eight backoff cycles. The
+			// delay reaches its 15s cap after the fourth reconnect.
+			for (let attempt = 0; attempt < 8; attempt += 1) {
 				const current = FakeWebSocket.last();
 				if (current.readyState !== FakeWebSocket.CLOSED) {
 					current.serverClose();
 					flushSync();
 				}
-				await vi.advanceTimersByTimeAsync(20000);
+				const delay = Math.min(1000 * 2 ** attempt, 15000);
+				await vi.advanceTimersByTimeAsync(delay);
 				flushSync();
 				await vi.advanceTimersByTimeAsync(0);
 				flushSync();
 			}
-			// 1 initial + at most MAX_RECONNECT_ATTEMPTS (5) reconnect sockets.
-			expect(FakeWebSocket.instances.length).toBeLessThanOrEqual(6);
+			expect(FakeWebSocket.instances.length).toBe(9);
+			expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -822,10 +770,9 @@ describe('AgentChat', () => {
 		expect(screen.getByText('still alive')).toBeInTheDocument();
 	});
 
-	// SS-10: dropping the socket mid-request must NOT append a permanent dead-end
-	// error while a reconnect is pending (transient reconnecting state instead);
-	// once reconnect attempts are exhausted, the error IS surfaced.
-	it('shows no dead-end error while reconnecting, surfaces it when exhausted (SS-10)', async () => {
+	// SS-10: dropping the socket mid-request must not append a permanent dead-end
+	// error while reconnects continue in the background.
+	it('keeps the request live while reconnecting after a mid-request drop (SS-10)', async () => {
 		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
 		let ws = FakeWebSocket.last();
@@ -842,7 +789,8 @@ describe('AgentChat', () => {
 			flushSync();
 			expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
 
-			// Exhaust reconnect attempts: each new socket also drops pre-OPEN.
+			// Each new socket also drops pre-OPEN. The reconnect loop continues without
+			// surfacing a terminal error.
 			for (let i = 0; i < 8; i += 1) {
 				await vi.advanceTimersByTimeAsync(20000);
 				flushSync();
@@ -860,8 +808,8 @@ describe('AgentChat', () => {
 		}
 		await settle();
 
-		// After the reconnect budget is spent, the permanent error is surfaced.
-		expect(screen.getByText(/Connection lost while the agent was responding/)).toBeInTheDocument();
+		// There is no retry budget to exhaust while this project remains active.
+		expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
 	});
 
 	it('schedules a reconnect with backoff after an unexpected socket close', async () => {

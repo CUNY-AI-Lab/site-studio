@@ -60,7 +60,6 @@ let kv: MockKV;
 let bucket: R2Bucket;
 
 function createEnv(extra?: Partial<Env>): Env {
-  const now = Date.now();
   return {
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
@@ -68,8 +67,6 @@ function createEnv(extra?: Partial<Env>): Env {
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
     LOADER: {} as WorkerLoader,
-    CAIL_SSO_SWITCHED_AT: new Date(now - 86_400_000).toISOString(),
-    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 86_400_000).toISOString(),
     ASSETS: undefined,
     ...extra
   };
@@ -156,7 +153,7 @@ describe("canonical request mappings", () => {
       const response = await app.request(
         `${BASE}/api/projects`,
         { headers: { "x-cail-request-id": REQUEST_ID } },
-        createEnv({ CAIL_REQUIRE_IDENTITY: "true" })
+        createEnv()
       );
       expect(response.status).toBe(401);
       const events = capture.events();

@@ -1,23 +1,6 @@
 /**
- * Dignified fallback "Page not found" document served on students' OWN
- * published sites (and in the editor preview) when a requested page is missing
- * and the project supplies no 404.html of its own. Shared by the app worker
- * (packages/app) and the standalone publisher worker (packages/worker).
- *
- * Design constraints (a broken link on someone else's live site should not look
- * like our infrastructure leaking through):
- * - neutral, no Site Studio branding beyond at most a muted one-liner
- * - system font stack; honors prefers-color-scheme (light + dark)
- * - accessible: lang, landmarks, sufficient contrast, real heading
- * - zero JavaScript, zero external requests, inline CSS only
- */
-
-/**
- * Render the fallback 404 HTML document.
- *
- * @param siteRootPath Optional path to the site's root (e.g. "/sites/u/slug/").
- *   When provided, a "Go to site home" link is rendered. When omitted, the
- *   link is dropped so the page never points somewhere it cannot resolve.
+ * Render the neutral fallback document used by preview and published-site
+ * routes when a requested page is missing and the project has no `404.html`.
  */
 export function renderNotFoundPage(siteRootPath?: string): string {
   const homeLink = siteRootPath

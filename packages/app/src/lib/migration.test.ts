@@ -1,19 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { canonicalTestSubject } from "@cuny-ai-lab/cail-identity/testing";
-import { Hono } from "hono";
-import type { Env, ProjectMetadata } from "../types";
+import type { ProjectMetadata } from "../types";
 import {
   migrateAnonymousData,
   migrationClaimKey,
   migrationPendingKey,
-  migrationPointerKey,
-  loadMigrationPointer,
   type ChatHistoryPorter,
-  type MigrationClaim,
-  type MigrationPointer
+  type MigrationClaim
 } from "./migration";
 import { getUserHandle } from "./handles";
-import { createPublishRouter } from "../routes/publish";
 
 // Mock R2 bucket (same shape as storage/r2.test.ts).
 function createMockBucket() {
@@ -218,13 +213,11 @@ describe("migrateAnonymousData", () => {
     // Chat history ported with mapped ids.
     expect(ported).toEqual([`${ANON}:portfolio->${SUBJECT}:portfolio`]);
 
-    // Originals deleted; the forwarding pointer remains.
+    // Originals are retired after the complete copy.
     expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
     expect(bucket.store.get(`snapshots/${ANON}/portfolio/snap1.zip`)).toBeUndefined();
     expect(bucket.store.get(`uploads/${ANON}/paper.pdf`)).toBeUndefined();
-    const pointer = (await loadMigrationPointer(bucket, ANON)) as MigrationPointer;
-    expect(pointer.subject).toBe(SUBJECT);
-    expect(pointer.projects).toEqual({ portfolio: "portfolio" });
+    expect([...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`))).toBe(false);
 
     // Claim recorded complete; anon session and pending marker cleared.
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
@@ -293,7 +286,6 @@ describe("migrateAnonymousData", () => {
     );
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim.status).toBe("pending");
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
   });
 
   it("claims once: a second subject is refused and receives nothing", async () => {
@@ -342,8 +334,6 @@ describe("migrateAnonymousData", () => {
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim.status).toBe("complete");
     expect(kv.store.has("session:anon-session-id")).toBe(false);
-    // No pointer needed when nothing moved.
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
   });
 
   /**
@@ -384,12 +374,12 @@ describe("migrateAnonymousData", () => {
     expect(textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/late-edit.html`))).toContain(
       "written mid-migration"
     );
-    // ...and the anon original is gone (only the pointer remains).
+    // ...and the anon original is gone.
     const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
-    expect(anonKeys).toEqual([migrationPointerKey(ANON)]);
+    expect(anonKeys).toEqual([]);
   });
 
-  it("SS-54: a brand-new anon project created during the copy sweep is migrated and in the pointer", async () => {
+  it("SS-54: a brand-new anon project created during the copy sweep is migrated", async () => {
     seedAnonProject(bucket, "portfolio");
 
     // Lists of `projects/<anon>/` (exact prefix): #1 is the inventory, #2 is
@@ -408,12 +398,9 @@ describe("migrateAnonymousData", () => {
     const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`).data);
     expect(meta.importedFrom).toBe(ANON);
     expect(textOf(bucket.store.get(`projects/${SUBJECT}/newproj/index.html`))).toContain("newproj (anon)");
-    // ...is in the forwarding pointer...
-    const pointer = (await loadMigrationPointer(bucket, ANON)) as MigrationPointer;
-    expect(pointer.projects).toEqual({ portfolio: "portfolio", newproj: "newproj" });
-    // ...and the anon originals are gone (only the pointer remains).
+    // ...and the anon originals are gone.
     const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
-    expect(anonKeys).toEqual([migrationPointerKey(ANON)]);
+    expect(anonKeys).toEqual([]);
   });
 
   it("SS-54: the second sweep does not disturb what the first sweep copied", async () => {
@@ -439,9 +426,7 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`).data).toBe("<h1>subject original</h1>");
   });
 
-  it("preserves the complete forwarding map when a retry resumes after partial source deletion", async () => {
-    // Force a published-slug remap so dropping the first mapping would make the
-    // old anonymous URL resolve the subject's different `site` project.
+  it("resumes after partial source deletion without duplicating imported projects", async () => {
     bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
       data: metadataFor("site", { published: true, slug: "site" })
     });
@@ -462,22 +447,19 @@ describe("migrateAnonymousData", () => {
     }) as typeof bucket.delete;
 
     await expect(run()).rejects.toThrow("injected delete interruption");
-    const completePointer = (await loadMigrationPointer(bucket, ANON))!;
-    expect(completePointer.projects).toEqual({
-      site: "site-imported",
-      notes: "notes"
-    });
-    expect(completePointer.slugs).toEqual({
-      site: "site-2",
-      notes: "notes"
-    });
+    expect(bucket.store.has(`projects/${SUBJECT}/site-imported/.metadata.json`)).toBe(true);
+    expect(bucket.store.has(`projects/${SUBJECT}/notes/.metadata.json`)).toBe(true);
     expect(bucket.store.has(`projects/${ANON}/site/.metadata.json`)).toBe(false);
     expect(bucket.store.has(`projects/${ANON}/notes/.metadata.json`)).toBe(true);
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
-    const resumedPointer = (await loadMigrationPointer(bucket, ANON))!;
-    expect(resumedPointer.projects).toEqual(completePointer.projects);
-    expect(resumedPointer.slugs).toEqual(completePointer.slugs);
+    const subjectProjectIds = new Set(
+      [...bucket.store.keys()]
+        .filter((key) => key.startsWith(`projects/${SUBJECT}/`))
+        .map((key) => key.slice(`projects/${SUBJECT}/`.length).split("/")[0])
+    );
+    expect([...subjectProjectIds].sort()).toEqual(["notes", "site", "site-imported"]);
+    expect([...bucket.store.keys()].filter((key) => key.startsWith(`projects/${ANON}/`))).toEqual([]);
   });
 
   it("fails closed when chat history export is unavailable", async () => {
@@ -497,10 +479,9 @@ describe("migrateAnonymousData", () => {
     await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
 
     // File copies may precede the chat call, but the source remains available
-    // because no forwarding pointer or completion claim was written.
+    // because no completion claim was written.
     expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
     expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "pending",
@@ -533,7 +514,6 @@ describe("migrateAnonymousData", () => {
 
     await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
     expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeUndefined();
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "pending",
@@ -547,7 +527,7 @@ describe("migrateAnonymousData", () => {
     expect(attempts).toBe(2);
     expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
     expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect([...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`))).toBe(false);
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "complete",
@@ -585,7 +565,6 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
     expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
   });
@@ -615,94 +594,12 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
 
     await expect(run()).resolves.toMatchObject({ status: "already-complete" });
-    expect(bucket.store.get(migrationPointerKey(ANON))).toBeTruthy();
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
     // The cleanup failure is intentionally best-effort; the stale reverse
     // record is not authoritative because its forward record points at the
     // subject, and normal handle repair can reap it later.
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(await getUserHandle(bucket, ANON)).toBeNull();
-  });
-});
-
-describe("published-site continuity through migration", () => {
-  let bucket: ReturnType<typeof createMockBucket>;
-  let kv: ReturnType<typeof createMockKV>;
-  let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
-  let env: Env;
-
-  beforeEach(() => {
-    bucket = createMockBucket();
-    kv = createMockKV();
-    app = new Hono<{ Bindings: Env; Variables: { user: { id: string } } }>();
-    app.route("/", createPublishRouter());
-    env = {
-      LOADER: {} as WorkerLoader,
-      SESSION_KV: kv,
-      SITE_STUDIO_BUCKET: bucket,
-      SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
-      MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>
-    } as Env;
-  });
-
-  it("keeps an old /sites/<anon>/<slug>/ URL serving before and after migration", async () => {
-    seedAnonProject(
-      bucket,
-      "portfolio",
-      { published: true, slug: "portfolio", publishedAt: "2026-01-02T00:00:00.000Z" },
-      "<h1>my published site</h1>"
-    );
-
-    // Before migration: normal resolution.
-    const before = await app.request(`/sites/${ANON}/portfolio/`, {}, env);
-    expect(before.status).toBe(200);
-    expect(await before.text()).toContain("my published site");
-
-    await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
-
-    // After migration the originals are gone, but the pointer keeps the old
-    // URL serving the (live, migrated) site.
-    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
-    const after = await app.request(`/sites/${ANON}/portfolio/`, {}, env);
-    expect(after.status).toBe(200);
-    expect(await after.text()).toContain("my published site");
-
-    // The new canonical URL under the subject works too.
-    const canonical = await app.request(`/sites/${SUBJECT}/portfolio/`, {}, env);
-    expect(canonical.status).toBe(200);
-    expect(await canonical.text()).toContain("my published site");
-  });
-
-  it("remaps colliding published slugs without shadowing the subject's own site", async () => {
-    // Subject already publishes "portfolio".
-    bucket.store.set(`projects/${SUBJECT}/portfolio/.metadata.json`, {
-      data: metadataFor("portfolio", { published: true, slug: "portfolio", publishedAt: "2026-01-03T00:00:00.000Z" })
-    });
-    bucket.store.set(`projects/${SUBJECT}/portfolio/index.html`, { data: "<h1>subject site</h1>" });
-
-    // Anonymous user also published "portfolio".
-    seedAnonProject(
-      bucket,
-      "portfolio",
-      { published: true, slug: "portfolio", publishedAt: "2026-01-02T00:00:00.000Z" },
-      "<h1>anon site</h1>"
-    );
-
-    const result = await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
-    expect(result.projects).toEqual({ portfolio: "portfolio-imported" });
-
-    // Old anon URL serves the anon content via the slug remap in the pointer.
-    const old = await app.request(`/sites/${ANON}/portfolio/`, {}, env);
-    expect(old.status).toBe(200);
-    expect(await old.text()).toContain("anon site");
-
-    // The subject's own published site is not shadowed.
-    const subjectSite = await app.request(`/sites/${SUBJECT}/portfolio/`, {}, env);
-    expect(subjectSite.status).toBe(200);
-    expect(await subjectSite.text()).toContain("subject site");
-
-    // The remapped slug is recorded in the pointer.
-    const pointer = (await loadMigrationPointer(bucket, ANON))!;
-    expect(pointer.slugs).toEqual({ portfolio: "portfolio-2" });
   });
 });
 

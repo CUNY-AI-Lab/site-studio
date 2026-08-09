@@ -3,6 +3,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
 	import { AtSign, Check, Loader2, X } from 'lucide-svelte';
 	import { checkHandle, claimHandle, type HandleCheckResult } from '$lib/api/handles';
+	import { resolvePath } from '$lib/utils/paths';
 
 	let {
 		open = false,
@@ -28,6 +29,7 @@
 	// Preview of the public address. Uses the live origin so it matches reality.
 	let origin = $derived(typeof window !== 'undefined' ? window.location.origin : '');
 	let previewHandle = $derived(value.trim() || 'your-handle');
+	let publicPath = $derived(resolvePath(`/u/${previewHandle}/`));
 
 	// Focus the input when the dialog opens; reset state on close.
 	$effect(() => {
@@ -150,7 +152,7 @@
 			</div>
 
 			<p id="handle-preview" class="preview">
-				{origin}/u/<span class="preview-handle">{previewHandle}</span>/
+				{origin}{publicPath}
 			</p>
 
 			<p id="handle-status" class="status {status?.tone ?? 'muted'}" aria-live="polite">
@@ -248,11 +250,6 @@
 		font-family: var(--font-mono, monospace);
 		word-break: break-all;
 	}
-	.preview-handle {
-		color: var(--color-text-secondary);
-		font-weight: 600;
-	}
-
 	.status {
 		margin: 0;
 		min-height: 1.1em;

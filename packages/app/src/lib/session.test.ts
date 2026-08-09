@@ -73,7 +73,6 @@ function createCoordinatorNamespace(): MockCoordinator {
 }
 
 function createEnv(overrides?: Partial<Env>): Env {
-  const now = Date.now();
   const env: Env = {
     CAIL_LOG_ENV: "test",
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
@@ -82,8 +81,6 @@ function createEnv(overrides?: Partial<Env>): Env {
     CAIL_IDENTITY_ISSUER: "https://tools.ailab.gc.cuny.edu/cail-sso",
     CAIL_IDENTITY_PROFILE: "production",
     CAIL_MODEL: "test-model",
-    CAIL_SSO_SWITCHED_AT: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
-    CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
     SESSION_KV: {
       get: vi.fn(async () => null),
       put: vi.fn(async () => undefined)
@@ -114,42 +111,6 @@ function createEnv(overrides?: Partial<Env>): Env {
 }
 
 describe("authMiddleware", () => {
-  it("creates a new anonymous session when a legacy session blob is malformed", async () => {
-    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
-    app.use("*", authMiddleware);
-    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
-
-    const kvPut = vi.fn(async () => undefined);
-    const env = createEnv({
-      SESSION_KV: {
-        get: vi.fn(async () => null),
-        put: kvPut
-      } as unknown as KVNamespace,
-      SITE_STUDIO_BUCKET: {
-        get: vi.fn(async () => ({
-          text: async () => "{not valid json"
-        })),
-        put: vi.fn(async (key: string) => ({ key }))
-      } as unknown as R2Bucket
-    });
-
-    const response = await app.request("http://site-studio.test/api/test", {
-      headers: {
-        Cookie: "site-studio-session=broken-session"
-      }
-    }, env);
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      user: {
-        id: expect.stringMatching(/^user_/),
-        createdAt: expect.any(String)
-      }
-    });
-    expect(kvPut).toHaveBeenCalledTimes(1);
-    expect(response.headers.get("set-cookie")).toContain("site-studio-session=");
-  });
-
   it("keys the user by the CAIL subject when a verified identity JWT is present", async () => {
     const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
     app.use("*", authMiddleware);
@@ -177,8 +138,49 @@ describe("authMiddleware", () => {
     expect(body.user.id).toBe(subject);
     expect(body.user.cail).toBe(true);
     expect(body.user.email).toBe("u@gc.cuny.edu");
-    // Session is bound to the subject, not a random cookie id.
-    expect(response.headers.get("set-cookie")).toContain(`site-studio-session=${subject}`);
+    // The verified subject is request authority; no subject session cookie or
+    // KV record is minted. A first-login request without a legacy cookie emits
+    // no continuity cookie at all.
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(kvPut).not.toHaveBeenCalled();
+  });
+
+  it("does not consult a subject session cookie or cail KV record for auth", async () => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const subject = TEST_SUBJECTS.alice;
+    const token = await mintIdentityJwt(subject);
+    const bucketGet = vi.fn(async (..._args: unknown[]) => null);
+    const kvGet = vi.fn(async (..._args: unknown[]) => null);
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SITE_STUDIO_BUCKET: {
+        get: bucketGet,
+        put: vi.fn(async () => undefined)
+      } as unknown as R2Bucket,
+      SESSION_KV: {
+        get: kvGet,
+        put: vi.fn(async () => undefined)
+      } as unknown as KVNamespace
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      {
+        headers: {
+          "X-CAIL-Identity-JWT": token,
+          Cookie: `site-studio-session=${subject}`
+        }
+      },
+      env
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ user: { id: subject } });
+    expect(bucketGet.mock.calls.some(([key]) => key === `sessions/${subject}.json`)).toBe(false);
+    expect(kvGet.mock.calls.some(([key]) => key === `cail:${subject}`)).toBe(false);
   });
 
   it("returns the authentication_required envelope when identity is required but absent", async () => {
@@ -187,8 +189,7 @@ describe("authMiddleware", () => {
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
 
     const env = createEnv({
-      CAIL_IDENTITY_JWKS: identityJwks,
-      CAIL_REQUIRE_IDENTITY: "true"
+      CAIL_IDENTITY_JWKS: identityJwks
     });
 
     const response = await app.request("http://site-studio.test/api/test", {}, env);
@@ -197,36 +198,7 @@ describe("authMiddleware", () => {
     expect(body.error).toBe("authentication_required");
   });
 
-  it.each([
-    {
-      name: "missing",
-      config: { CAIL_SSO_SWITCHED_AT: undefined },
-    },
-    {
-      name: "longer than 30 days",
-      config: {
-        CAIL_SSO_SWITCHED_AT: "2026-07-01T00:00:00.000Z",
-        CAIL_ACCOUNT_IMPORT_UNTIL: "2026-08-01T00:00:00.001Z",
-      },
-    },
-  ])("fails loudly when enforced identity has $name import-window configuration", async ({ config }) => {
-    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
-    app.use("*", authMiddleware);
-    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
-
-    const response = await app.request(
-      "http://site-studio.test/api/test",
-      {},
-      createEnv({ CAIL_REQUIRE_IDENTITY: "true", ...config })
-    );
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "invalid_account_import_configuration",
-    });
-  });
-
-  it("rejects a presented invalid identity token even when identity is optional", async () => {
+  it("rejects a presented invalid identity token", async () => {
     const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
@@ -262,7 +234,7 @@ describe("authMiddleware", () => {
     });
   });
 
-  it("ignores a bare X-CAIL-Subject header and falls back to anonymous", async () => {
+  it("ignores a bare X-CAIL-Subject header and requires verified identity", async () => {
     const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
     app.use("*", authMiddleware);
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
@@ -274,9 +246,7 @@ describe("authMiddleware", () => {
       env
     );
 
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string } };
-    expect(body.user.id).toMatch(/^user_/); // anonymous, not the forged subject
+    expect(response.status).toBe(401);
   });
 });
 
@@ -334,6 +304,20 @@ function createLiveBucket() {
   } as unknown as R2Bucket & { store: Map<string, string> };
 }
 
+function seedLegacySession(
+  bucket: ReturnType<typeof createLiveBucket>,
+  sessionId: string,
+  userId: string,
+) {
+  bucket.store.set(
+    `sessions/${sessionId}.json`,
+    JSON.stringify({
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      user: { id: userId, createdAt: "2026-01-01T00:00:00.000Z" },
+    })
+  );
+}
+
 describe("authMiddleware anonymous-data migration", () => {
   const SUBJECT = canonicalTestSubject("migration-owner"); // cail-f4729c5b5359d13d2cd445c3151109d3
   const ANON = "user_anon42";
@@ -348,10 +332,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("migrates the anonymous namespace on the first authenticated request carrying the anon cookie", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     bucket.store.set(
       `projects/${ANON}/blog/.metadata.json`,
       JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
@@ -374,23 +355,260 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { user: { id: string } };
     expect(body.user.id).toBe(SUBJECT);
+    expect(response.headers.get("set-cookie")).toMatch(/site-studio-session=;[^\r\n]*Max-Age=0/);
 
     // Data re-homed to the subject; originals gone; claim recorded complete.
     expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
     expect(bucket.store.has(`projects/${ANON}/blog/index.html`)).toBe(false);
     const claim = JSON.parse(kv.store.get(`migration:${ANON}`)!);
     expect(claim).toMatchObject({ subject: SUBJECT, status: "complete" });
-    // The anonymous KV session is retired.
-    expect(kv.store.has("session:anon-cookie-1")).toBe(false);
+    expect(bucket.store.has("sessions/anon-cookie-1.json")).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+  });
+
+  it("does not rerun import after the per-subject completion record exists", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-repeat", ANON);
+    bucket.store.set(
+      `projects/${ANON}/blog/.metadata.json`,
+      JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
+    );
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    const migrateAnonymous = vi.fn(
+      (anonUserId: string, subject: string, anonSessionId?: string) =>
+        migrateAnonymousData({
+          bucket,
+          kv,
+          anonUserId,
+          subject,
+          anonSessionId,
+        })
+    );
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      MUTATION_COORDINATOR: {
+        idFromName: (name: string) => name as unknown as DurableObjectId,
+        get: () => ({ migrateAnonymous }),
+      } as unknown as Env["MUTATION_COORDINATOR"],
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-repeat" } },
+      env
+    );
+    expect(first.status).toBe(200);
+    expect(migrateAnonymous).toHaveBeenCalledTimes(1);
+
+    const repeat = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: `site-studio-session=${SUBJECT}` } },
+      env
+    );
+    expect(repeat.status).toBe(200);
+    expect(migrateAnonymous).toHaveBeenCalledTimes(1);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+  });
+
+  it("closes first-login import without guessing when no legacy source resolves", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=unresolvable" } },
+      env
+    );
+    expect(first.status).toBe(200);
+    expect(first.headers.get("set-cookie")).toMatch(/site-studio-session=;[^\r\n]*Max-Age=0/);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+
+    // A later caller cannot turn an unrelated legacy cookie into a second
+    // import opportunity for this already-established subject.
+    seedLegacySession(bucket, "late-cookie", ANON);
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>leave in place</h1>");
+    const later = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=late-cookie" } },
+      env
+    );
+    expect(later.status).toBe(200);
+    expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
+    expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>leave in place</h1>");
+  });
+
+  it("leaves import incomplete on failure and succeeds on a later login retry", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-retry", ANON);
+    bucket.store.set(
+      `projects/${ANON}/blog/.metadata.json`,
+      JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
+    );
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    let attempts = 0;
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    env.MUTATION_COORDINATOR = {
+      idFromName: (name: string) => name as unknown as DurableObjectId,
+      get: () => ({
+        migrateAnonymous: async (anonUserId: string, subject: string, anonSessionId?: string) => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("injected import failure");
+          return migrateAnonymousData({ bucket, kv, anonUserId, subject, anonSessionId });
+        },
+      }),
+    } as unknown as Env["MUTATION_COORDINATOR"];
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-retry" } },
+      env
+    );
+    expect(first.status).toBe(503);
+    const privateError = await first.text();
+    expect(privateError).toContain("session_store_unavailable");
+    expect(privateError).not.toContain(SUBJECT);
+    expect(privateError).not.toContain(ANON);
+    expect(first.headers.get("set-cookie")).toBeNull();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+    expect(bucket.store.has("sessions/anon-cookie-retry.json")).toBe(true);
+
+    const retry = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-retry" } },
+      env
+    );
+    expect(retry.status).toBe(200);
+    expect(attempts).toBe(2);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+    expect(bucket.store.has(`projects/${ANON}/blog/index.html`)).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+  });
+
+  it("does not complete or retire a legacy session when the durable migration claim refuses", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const otherSubject = canonicalTestSubject("prior-migration-owner");
+    seedLegacySession(bucket, "anon-cookie-refused", ANON);
+    kv.store.set(
+      `migration:${ANON}`,
+      JSON.stringify({ subject: otherSubject, status: "complete", startedAt: "x" })
+    );
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-refused" } },
+      env
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+    expect(bucket.store.has("sessions/anon-cookie-refused.json")).toBe(true);
+  });
+
+  it("retries when legacy session retirement fails before completion", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-retire", ANON);
+    bucket.store.set(
+      `projects/${ANON}/blog/.metadata.json`,
+      JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
+    );
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+    const originalDelete = bucket.delete.bind(bucket);
+    let failRetirement = true;
+    bucket.delete = vi.fn(async (key: string) => {
+      if (key === "sessions/anon-cookie-retire.json" && failRetirement) {
+        failRetirement = false;
+        throw new Error("injected retirement failure");
+      }
+      return originalDelete(key);
+    }) as typeof bucket.delete;
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-retire" } },
+      env
+    );
+    expect(first.status).toBe(503);
+    expect(first.headers.get("set-cookie")).toBeNull();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+    expect(bucket.store.has("sessions/anon-cookie-retire.json")).toBe(true);
+
+    const retry = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-retire" } },
+      env
+    );
+    expect(retry.status).toBe(200);
+    expect(bucket.store.has("sessions/anon-cookie-retire.json")).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+  });
+
+  it("does not import from a legacy session with an invalid expiry", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    bucket.store.set(
+      "sessions/anon-cookie-invalid-expiry.json",
+      JSON.stringify({
+        expiresAt: "not-a-date",
+        user: { id: ANON, createdAt: "2026-01-01T00:00:00.000Z" },
+      })
+    );
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>leave in place</h1>");
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-invalid-expiry" } },
+      env
+    );
+
+    expect(response.status).toBe(200);
+    expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
+    expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>leave in place</h1>");
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
   });
 
   it("emits completion telemetry without legacy account identifiers", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    kv.store.set(
-      "session:anon-cookie-telemetry",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-telemetry", ANON);
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
 
     try {
@@ -464,54 +682,32 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
   });
 
-  it("refuses an expired import without reading legacy session material and clears resume state", async () => {
+  it("fails closed when a pending resume marker points to another subject's claim", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    const now = Date.now();
+    const otherSubject = canonicalTestSubject("resume-owner");
     kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
+      `migration:${ANON}`,
+      JSON.stringify({ subject: otherSubject, status: "pending", startedAt: "x" })
     );
     kv.store.set(`migration-pending:${SUBJECT}`, ANON);
-    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
-    const coordinator = createCoordinatorNamespace();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
 
-    try {
-      const env = createEnv({
-        CAIL_IDENTITY_JWKS: identityJwks,
-        CAIL_REQUIRE_IDENTITY: "true",
-        CAIL_SSO_SWITCHED_AT: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        CAIL_ACCOUNT_IMPORT_UNTIL: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
-        SESSION_KV: kv,
-        SITE_STUDIO_BUCKET: bucket,
-        MIGRATION_COORDINATOR: coordinator.namespace,
-      });
-      const token = await mintIdentityJwt(SUBJECT);
-      const response = await buildApp().request(
-        "http://site-studio.test/api/test",
-        { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-1" } },
-        env
-      );
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token } },
+      env
+    );
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get("set-cookie")).toContain(`site-studio-session=${SUBJECT}`);
-      expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
-      expect(kv.store.has("session:anon-cookie-1")).toBe(true);
-      expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");
-      expect(coordinator.records.size).toBe(0);
-      expect(kv.get).not.toHaveBeenCalledWith("session:anon-cookie-1", "text");
-
-      const events = warn.mock.calls.map(([event]) => event as Record<string, unknown>);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          "event.name": "site_studio.diagnostic.warning",
-          "error.type": "account_import_expired",
-        })
-      );
-    } finally {
-      warn.mockRestore();
-    }
+    expect(response.status).toBe(503);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+    expect(kv.store.get(`migration-pending:${SUBJECT}`)).toBe(ANON);
   });
 
   // SS-3 / SS-19: the anon namespace to absorb is picked from the
@@ -527,10 +723,7 @@ describe("authMiddleware anonymous-data migration", () => {
     const OTHER_SUBJECT = canonicalTestSubject("other-owner");
 
     // A live anon session record still exists (attacker replays this cookie).
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     // Residual anon data that must NOT be re-homed into the new subject.
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
@@ -552,9 +745,11 @@ describe("authMiddleware anonymous-data migration", () => {
       env
     );
 
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string } };
-    expect(body.user.id).toBe(SUBJECT);
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "session_store_unavailable"
+    });
+    expect(response.headers.get("set-cookie")).toBeNull();
 
     // Nothing re-homed into SUBJECT; the DO claim still owned by OTHER_SUBJECT.
     expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
@@ -562,6 +757,7 @@ describe("authMiddleware anonymous-data migration", () => {
     // No KV claim or pending marker was written for SUBJECT (we bailed at the gate).
     expect(kv.store.has(`migration:${ANON}`)).toBe(false);
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
   });
 
   // SS-3: two DIFFERENT subjects presenting the SAME anon cookie — the classic
@@ -573,10 +769,7 @@ describe("authMiddleware anonymous-data migration", () => {
     const SUBJECT_A = canonicalTestSubject("race-subject-a");
     const SUBJECT_B = canonicalTestSubject("race-subject-b");
 
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     bucket.store.set(
       `projects/${ANON}/blog/.metadata.json`,
       JSON.stringify({ id: "blog", name: "blog", createdAt: "x", updatedAt: "x", published: false })
@@ -605,47 +798,40 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(bucket.store.get(`projects/${SUBJECT_A}/blog/index.html`)).toBe("<h1>anon blog</h1>");
     expect(coordinator.records.get(ANON)?.subject).toBe(SUBJECT_A);
 
-    // B now presents the same anon cookie (the session was deleted on A's
-    // completion, but re-seed it to model a replay/concurrent presentation).
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    // B now presents the same anon cookie after a replay/concurrent browser
+    // retained the old legacy record.
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     const tokenB = await mintIdentityJwt(SUBJECT_B);
     const respB = await buildApp().request(
       "http://site-studio.test/api/test",
       { headers: { "X-CAIL-Identity-JWT": tokenB, Cookie: "site-studio-session=anon-cookie-1" } },
       env
     );
-    expect(respB.status).toBe(200);
+    expect(respB.status).toBe(503);
+    expect(respB.headers.get("set-cookie")).toBeNull();
 
     // B was refused — nothing landed under SUBJECT_B; the anon namespace stays
     // bound to SUBJECT_A. No split brain.
     expect(bucket.store.has(`projects/${SUBJECT_B}/blog/index.html`)).toBe(false);
     expect(coordinator.records.get(ANON)?.subject).toBe(SUBJECT_A);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT_B)}`)).toBe(false);
   });
 
   // ---- SS-46: storage outage must never read as "record absent" ----
   // An outage while resolving the anon cookie (or while establishing migration
   // resumability) must fail loud with a 503 and leave the anon cookie intact.
-  // The old behavior swallowed the outage, skipped migration, and overwrote the
-  // anon cookie with the subject cookie — permanently orphaning the pre-SSO
+  // The old behavior swallowed the outage, skipped migration, and cleared the
+  // anon cookie — permanently orphaning the pre-SSO
   // namespace in R2.
 
-  it("SS-46: KV outage during SSO first login fails 503 and does not orphan the anon namespace", async () => {
+  it("SS-46: R2 outage during SSO first login fails 503 and does not orphan the anon namespace", async () => {
     const bucket = createLiveBucket();
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
-    const kvPut = vi.fn(async () => undefined);
+    const get = bucket.get as ReturnType<typeof vi.fn>;
+    get.mockRejectedValue(new Error("R2 transport failure"));
     const env = createEnv({
       CAIL_IDENTITY_JWKS: identityJwks,
-      SESSION_KV: {
-        // Transient outage: reads fail, writes would succeed.
-        get: vi.fn(async () => {
-          throw new Error("KV transport failure");
-        }),
-        put: kvPut
-      } as unknown as KVNamespace,
       SITE_STUDIO_BUCKET: bucket
     });
 
@@ -656,11 +842,11 @@ describe("authMiddleware anonymous-data migration", () => {
       env
     );
 
-    // Fail loud and retryable — NOT a 200 that overwrites the anon cookie.
+    // Fail loud and retryable — NOT a 200 that clears the anon cookie.
     expect(response.status).toBe(503);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.error).toBe("session_store_unavailable");
-    // The anon cookie is NOT replaced by the subject cookie.
+    // The anon cookie is retained for a retry.
     expect(response.headers.get("set-cookie")).toBeNull();
     // The anonymous data is untouched.
     expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");
@@ -669,10 +855,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-46: coordinator outage during SSO first login fails 503 instead of skipping migration and overwriting the cookie", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
     const env = createEnv({
@@ -707,10 +890,7 @@ describe("authMiddleware anonymous-data migration", () => {
   it("SS-46: migration failure before the pending marker exists fails 503 rather than being swallowed", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
+    seedLegacySession(bucket, "anon-cookie-1", ANON);
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
     // Writes to the migration claim/marker keys fail (pre-marker outage window);
@@ -741,102 +921,4 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");
   });
 
-  it("SS-46: KV outage on the pure anonymous path fails 503 instead of minting a fresh identity", async () => {
-    const kvPut = vi.fn(async () => undefined);
-    const env = createEnv({
-      CAIL_IDENTITY_JWKS: identityJwks,
-      SESSION_KV: {
-        get: vi.fn(async () => {
-          throw new Error("KV transport failure");
-        }),
-        put: kvPut
-      } as unknown as KVNamespace
-    });
-
-    const response = await buildApp().request(
-      "http://site-studio.test/api/test",
-      { headers: { Cookie: "site-studio-session=anon-cookie-1" } },
-      env
-    );
-
-    // Old behavior: 200 with a FRESH user_/session cookie, orphaning the
-    // previous workspace. New behavior: loud, retryable failure.
-    expect(response.status).toBe(503);
-    const body = (await response.json()) as Record<string, unknown>;
-    expect(body.error).toBe("session_store_unavailable");
-    expect(response.headers.get("set-cookie")).toBeNull();
-    expect(kvPut).not.toHaveBeenCalled();
-  });
-
-  it("SS-46: an invalid stored KV session (not an outage) still falls through to a fresh anonymous session", async () => {
-    const kv = createLiveKV();
-    kv.store.set("session:anon-cookie-1", "{corrupt json");
-
-    const env = createEnv({ SESSION_KV: kv });
-    const response = await buildApp().request(
-      "http://site-studio.test/api/test",
-      { headers: { Cookie: "site-studio-session=anon-cookie-1" } },
-      env
-    );
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string } };
-    expect(body.user.id).toMatch(/^user_/);
-    expect(response.headers.get("set-cookie")).toContain("site-studio-session=");
-  });
-
-  it("keeps a new anonymous identity when the next colo cannot see its KV write", async () => {
-    const kv = createLiveKV();
-    const bucket = createLiveBucket();
-    const testEnv = createEnv({ SESSION_KV: kv, SITE_STUDIO_BUCKET: bucket });
-
-    const first = await buildApp().request("http://site-studio.test/api/test", {}, testEnv);
-    expect(first.status).toBe(200);
-    const original = (await first.json()) as { user: { id: string } };
-    const cookie = first.headers.get("set-cookie")?.match(/site-studio-session=([^;]+)/)?.[1];
-    expect(cookie).toBeTruthy();
-
-    // Simulate a read in a colo where the just-written KV value has not arrived.
-    kv.store.delete(`session:${cookie}`);
-    const second = await buildApp().request(
-      "http://site-studio.test/api/test",
-      { headers: { Cookie: `site-studio-session=${cookie}` } },
-      testEnv
-    );
-
-    expect(second.status).toBe(200);
-    expect(((await second.json()) as { user: { id: string } }).user.id).toBe(original.user.id);
-    expect(second.headers.get("set-cookie")).toBeNull();
-  });
-
-  it("pure anonymous flow is untouched: no migration traces, data stays put", async () => {
-    const kv = createLiveKV();
-    const bucket = createLiveBucket();
-    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
-    kv.store.set(
-      "session:anon-cookie-1",
-      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" })
-    );
-
-    const env = createEnv({
-      CAIL_IDENTITY_JWKS: identityJwks,
-      SESSION_KV: kv,
-      SITE_STUDIO_BUCKET: bucket
-    });
-
-    const response = await buildApp().request(
-      "http://site-studio.test/api/test",
-      { headers: { Cookie: "site-studio-session=anon-cookie-1" } },
-      env
-    );
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string } };
-    expect(body.user.id).toBe(ANON); // same anonymous identity as before
-
-    // No claim, no pointer, nothing moved or deleted.
-    expect([...kv.store.keys()].filter((k) => k.startsWith("migration"))).toEqual([]);
-    expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");
-    expect([...bucket.store.keys()].some((k) => k.includes("cail-"))).toBe(false);
-  });
 });
