@@ -55,14 +55,16 @@ prevents two subjects from absorbing the same namespace. Conditional writes,
 stable imported-project stamps, and the owner mutation coordinator make retries
 converge without duplicates. Only after the copy and source retirement finish
 does the app write the empty subject-keyed completion object
-`imports/:subject` and replace the legacy cookie. If the first login has no
+`imports/:subject` and delete the legacy cookie. If the first login has no
 resolvable legacy source, the same empty record closes the import without
 guessing a mapping.
 
 An error returns a private retryable 503 and does not write completion or
-replace the legacy cookie. A later login retries. After completion, the new
-subject store is authoritative: there is no dual-read, fallback, sync,
-migration window, bulk job, forwarding pointer, or legacy public route.
+clear the legacy cookie. A later login retries. Verified identity remains the
+sole authentication source; there is no subject session cookie or subject
+session KV record. After completion, the new subject store is authoritative:
+there is no dual-read, fallback, sync, migration window, bulk job, forwarding
+pointer, or legacy public route.
 
 This mechanism can import only a namespace whose legacy R2 session record is
 still resolvable. Historical anonymous namespaces without that mapping cannot
@@ -82,7 +84,9 @@ an arbitrary lookup table.
 
 Publishing returns `409 handle_required` until the owner claims a handle.
 Slashless public roots redirect to the trailing-slash form so relative assets
-resolve beneath the site root.
+resolve beneath the site root. When public ingress mounts the Worker under the
+path in `PUBLISHED_BASE_URL`, redirects and styled 404 home links retain that
+path; loopback development remains rooted at `/`.
 
 ## Local development
 

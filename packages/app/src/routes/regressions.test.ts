@@ -721,6 +721,48 @@ describe("route regressions", () => {
     expect(response.headers.get("Location")).toBe("/u/janedoe/slashroot/?ref=x");
   });
 
+  it("retains the configured ingress prefix in slashless redirects", async () => {
+    await storage.createProject(userId, "prefixed-root", "Prefixed Root");
+    await storage.writeFile(userId, "prefixed-root", "index.html", "<h1>Prefixed</h1>");
+    await storage.updateProjectMetadata(userId, "prefixed-root", {
+      published: true,
+      slug: "prefixed-root"
+    });
+
+    const response = await app.request(
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-root?ref=x",
+      { redirect: "manual" },
+      {
+        ...createEnv(bucket),
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+      }
+    );
+
+    expect(response.status).toBe(301);
+    expect(response.headers.get("Location")).toBe("/site-studio/u/janedoe/prefixed-root/?ref=x");
+  });
+
+  it("retains the configured ingress prefix in styled 404 home links", async () => {
+    await storage.createProject(userId, "prefixed-404", "Prefixed 404");
+    await storage.writeFile(userId, "prefixed-404", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "prefixed-404", {
+      published: true,
+      slug: "prefixed-404"
+    });
+
+    const response = await app.request(
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-404/missing",
+      { headers: { Accept: "text/html" } },
+      {
+        ...createEnv(bucket),
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+      }
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toContain('href="/site-studio/u/janedoe/prefixed-404/"');
+  });
+
   it("SS-14: resolves an extensionless path to {path}.html", async () => {
     await storage.createProject(userId, "flat", "Flat");
     await storage.writeFile(userId, "flat", "index.html", "<h1>Home</h1>");

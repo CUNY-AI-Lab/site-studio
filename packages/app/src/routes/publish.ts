@@ -147,6 +147,16 @@ function getPublishedBaseUrl(c: AppContext): string {
   return normalizeBaseUrl(requestOrigin);
 }
 
+/**
+ * The public ingress strips its mount before forwarding to the Worker. Keep
+ * redirects and styled 404 home links rooted at the configured public prefix;
+ * loopback development remains mounted at the origin root.
+ */
+function getPublishedPathPrefix(c: AppContext): string {
+  const pathname = new URL(getPublishedBaseUrl(c)).pathname.replace(/\/+$/, "");
+  return pathname === "/" ? "" : pathname;
+}
+
 type AppContext = Context<{
   Bindings: Env;
   Variables: RequireProjectVariables & LoggingVariables;
@@ -452,7 +462,7 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return publishedNotFound(c, rawPath);
   }
 
-  const siteRootPath = `/u/${handle}/${slug}/`;
+  const siteRootPath = `${getPublishedPathPrefix(c)}/u/${handle}/${slug}/`;
 
   const ownerId = await resolveHandleOwner(c.env.SITE_STUDIO_BUCKET, handle);
   if (!ownerId) {
@@ -466,7 +476,7 @@ async function serveByHandle(c: AppContext, rawPath: string) {
 
   const url = new URL(c.req.url);
   if (url.pathname === `/u/${handle}/${slug}`) {
-    return c.redirect(`${url.pathname}/${url.search}`, 301);
+    return c.redirect(`${getPublishedPathPrefix(c)}${url.pathname}/${url.search}`, 301);
   }
 
   return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);

@@ -76,15 +76,6 @@ function createEnv(): Env {
   };
 }
 
-function sessionCookie(res: Response): string {
-  const setCookie = res.headers.get("set-cookie") || "";
-  const match = /site-studio-session=([^;]+)/.exec(setCookie);
-  if (!match) {
-    throw new Error(`No session cookie in: ${setCookie}`);
-  }
-  return `site-studio-session=${match[1]}`;
-}
-
 /** The CSRF token now delivered via the cail_csrf_sitestudio Set-Cookie. */
 function csrfCookieToken(res: Response): string {
   const setCookie = res.headers.get("set-cookie") || "";
@@ -175,16 +166,13 @@ describe("retired public routes", () => {
   });
 });
 
-describe("session cookie posture (rule 7)", () => {
-  it("pins HttpOnly + Secure + SameSite=Strict on the session cookie", async () => {
+describe("subject session retirement", () => {
+  it("does not mint a subject session cookie after identity auth", async () => {
     const res = await app.request(`${BASE}/api/csrf`, { headers: await identityHeaders() }, createEnv());
     expect(res.status).toBe(204);
 
     const setCookie = res.headers.get("set-cookie") || "";
-    expect(setCookie).toContain("site-studio-session=");
-    expect(setCookie).toContain("HttpOnly");
-    expect(setCookie).toContain("Secure");
-    expect(setCookie).toContain("SameSite=Strict");
+    expect(setCookie).not.toContain("site-studio-session=");
   });
 });
 
@@ -207,18 +195,18 @@ describe("GET /api/csrf (rule 3 cookie delivery)", () => {
     expect(csrfCookieToken(res)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("delivers a stable token for the same session", async () => {
+  it("delivers a stable token for the same verified identity", async () => {
     const headers = await identityHeaders();
-    const first = await app.request(`${BASE}/api/csrf`, { headers }, createEnv());
+    const env = createEnv();
+    const first = await app.request(`${BASE}/api/csrf`, { headers }, env);
     const token = csrfCookieToken(first);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
 
-    const cookie = sessionCookie(first);
-    const second = await app.request(`${BASE}/api/csrf`, { headers: { ...headers, Cookie: cookie } }, createEnv());
+    const second = await app.request(`${BASE}/api/csrf`, { headers }, env);
     expect(csrfCookieToken(second)).toBe(token);
   });
 
-  it("delivers different tokens for different sessions", async () => {
+  it("delivers different tokens for different verified identities", async () => {
     const a = await app.request(`${BASE}/api/csrf`, { headers: await identityHeaders("csrf-a") }, createEnv());
     const b = await app.request(`${BASE}/api/csrf`, { headers: await identityHeaders("csrf-b") }, createEnv());
     expect(csrfCookieToken(a)).not.toBe(csrfCookieToken(b));
@@ -227,21 +215,21 @@ describe("GET /api/csrf (rule 3 cookie delivery)", () => {
 
 describe("full-chain CSRF enforcement through the real middleware stack", () => {
   it("403s an identity-authenticated mutation without the token, accepts it with token + same-origin", async () => {
-    // Establish a session and its token exactly as the frontend does: read the
+    // Establish an identity's token exactly as the frontend does: read the
     // token out of the delivery cookie, not a response body.
     const identity = await identityHeaders();
-    const bootstrap = await app.request(`${BASE}/api/csrf`, { headers: identity }, createEnv());
-    const cookie = sessionCookie(bootstrap);
+    const env = createEnv();
+    const bootstrap = await app.request(`${BASE}/api/csrf`, { headers: identity }, env);
     const token = csrfCookieToken(bootstrap);
 
     const blocked = await app.request(
       `${BASE}/api/projects`,
       {
         method: "POST",
-        headers: { ...identity, Cookie: cookie, "Content-Type": "application/json" },
+        headers: { ...identity, "Content-Type": "application/json" },
         body: JSON.stringify({ name: "my site" })
       },
-      createEnv()
+      env
     );
     expect(blocked.status).toBe(403);
     await expect(blocked.json()).resolves.toEqual(CSRF_ERROR_BODY);
@@ -251,7 +239,6 @@ describe("full-chain CSRF enforcement through the real middleware stack", () => 
       {
         method: "POST",
         headers: {
-          Cookie: cookie,
           ...identity,
           "Content-Type": "application/json",
           [CSRF_HEADER_NAME]: token,
@@ -259,7 +246,7 @@ describe("full-chain CSRF enforcement through the real middleware stack", () => 
         },
         body: JSON.stringify({ name: "my site" })
       },
-      createEnv()
+      env
     );
     expect(allowed.status).toBe(200);
     await expect(allowed.json()).resolves.toMatchObject({ id: "my-site", name: "my site" });
@@ -267,13 +254,13 @@ describe("full-chain CSRF enforcement through the real middleware stack", () => 
 
   it("403s a WebSocket upgrade without a valid token before any project resolution", async () => {
     const identity = await identityHeaders();
-    const bootstrap = await app.request(`${BASE}/api/csrf`, { headers: identity }, createEnv());
-    const cookie = sessionCookie(bootstrap);
+    const env = createEnv();
+    await app.request(`${BASE}/api/csrf`, { headers: identity }, env);
 
     const res = await app.request(
       `${BASE}/api/agents/site-builder/some-project`,
-      { headers: { ...identity, Cookie: cookie, Upgrade: "websocket", Origin: BASE } },
-      createEnv()
+      { headers: { ...identity, Upgrade: "websocket", Origin: BASE } },
+      env
     );
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);

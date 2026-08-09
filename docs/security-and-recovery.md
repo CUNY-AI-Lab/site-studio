@@ -9,8 +9,9 @@ Product routes accept only a verified `X-CAIL-Identity-JWT`: RS256, required
 `kid`, configured public JWKS, one exact deployment issuer, and scalar audience
 `cail:site-studio`. Missing or invalid identity returns the CAIL
 `authentication_required` envelope. The JWT subject is the durable owner key;
-email and profile names are display data only. A session cookie is a browser
-continuity affordance, never authentication or ownership proof.
+email and profile names are display data only. The legacy session cookie is an
+import source only, never authentication or ownership proof. The app does not
+issue or consult a subject session cookie or subject session KV record.
 
 The CAIL Gateway credential is a separate verified JWT with gateway audience,
 bound to the same subject. The Worker removes caller authority and routing
@@ -41,8 +42,9 @@ The app records the empty marker `imports/:subject` only after a successful
 import, or after the first verified login establishes that no resolvable source
 exists. A failure returns a
 private 503, leaves completion absent, and preserves a source cookie or pending
-resume marker for the next login. Successful import retires the legacy session;
-the subject store then becomes the sole read and write authority. There is no
+resume marker for the next login. Successful import retires the legacy session
+and clears its cookie; the subject store then becomes the sole read and write
+authority. Verified identity is the sole authentication source. There is no
 time window, dual-read, forwarding pointer, compatibility API, background job,
 or legacy `/sites` route.
 
@@ -55,7 +57,8 @@ independent authoritative identity mapping is recovered.
 Unsafe API requests require same-origin posture plus the R2-backed
 `X-CAIL-CSRF` value. WebSocket upgrades pass the same token and origin checks.
 The script-readable CSRF cookie is scoped to `/site-studio` outside loopback;
-the HttpOnly identity-continuity cookie is Secure and SameSite=Strict.
+the HttpOnly legacy import cookie is Secure and SameSite=Strict until the app
+deletes it after import closes. No subject continuity cookie is minted.
 
 Preview and published responses use an opaque sandbox origin
 (`Content-Security-Policy: sandbox allow-scripts` without

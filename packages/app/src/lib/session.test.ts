@@ -138,8 +138,49 @@ describe("authMiddleware", () => {
     expect(body.user.id).toBe(subject);
     expect(body.user.cail).toBe(true);
     expect(body.user.email).toBe("u@gc.cuny.edu");
-    // Session is bound to the subject, not a random cookie id.
-    expect(response.headers.get("set-cookie")).toContain(`site-studio-session=${subject}`);
+    // The verified subject is request authority; no subject session cookie or
+    // KV record is minted. A first-login request without a legacy cookie emits
+    // no continuity cookie at all.
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(kvPut).not.toHaveBeenCalled();
+  });
+
+  it("does not consult a subject session cookie or cail KV record for auth", async () => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const subject = TEST_SUBJECTS.alice;
+    const token = await mintIdentityJwt(subject);
+    const bucketGet = vi.fn(async (..._args: unknown[]) => null);
+    const kvGet = vi.fn(async (..._args: unknown[]) => null);
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SITE_STUDIO_BUCKET: {
+        get: bucketGet,
+        put: vi.fn(async () => undefined)
+      } as unknown as R2Bucket,
+      SESSION_KV: {
+        get: kvGet,
+        put: vi.fn(async () => undefined)
+      } as unknown as KVNamespace
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      {
+        headers: {
+          "X-CAIL-Identity-JWT": token,
+          Cookie: `site-studio-session=${subject}`
+        }
+      },
+      env
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ user: { id: subject } });
+    expect(bucketGet.mock.calls.some(([key]) => key === `sessions/${subject}.json`)).toBe(false);
+    expect(kvGet.mock.calls.some(([key]) => key === `cail:${subject}`)).toBe(false);
   });
 
   it("returns the authentication_required envelope when identity is required but absent", async () => {
@@ -314,6 +355,7 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { user: { id: string } };
     expect(body.user.id).toBe(SUBJECT);
+    expect(response.headers.get("set-cookie")).toMatch(/site-studio-session=;[^\r\n]*Max-Age=0/);
 
     // Data re-homed to the subject; originals gone; claim recorded complete.
     expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
@@ -385,10 +427,11 @@ describe("authMiddleware anonymous-data migration", () => {
 
     const first = await buildApp().request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Identity-JWT": token } },
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=unresolvable" } },
       env
     );
     expect(first.status).toBe(200);
+    expect(first.headers.get("set-cookie")).toMatch(/site-studio-session=;[^\r\n]*Max-Age=0/);
     expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
 
     // A later caller cannot turn an unrelated legacy cookie into a second
@@ -518,6 +561,7 @@ describe("authMiddleware anonymous-data migration", () => {
       env
     );
     expect(first.status).toBe(503);
+    expect(first.headers.get("set-cookie")).toBeNull();
     expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
     expect(bucket.store.has("sessions/anon-cookie-retire.json")).toBe(true);
 
@@ -701,9 +745,11 @@ describe("authMiddleware anonymous-data migration", () => {
       env
     );
 
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string } };
-    expect(body.user.id).toBe(SUBJECT);
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "session_store_unavailable"
+    });
+    expect(response.headers.get("set-cookie")).toBeNull();
 
     // Nothing re-homed into SUBJECT; the DO claim still owned by OTHER_SUBJECT.
     expect(bucket.store.has(`projects/${SUBJECT}/blog/index.html`)).toBe(false);
@@ -711,6 +757,7 @@ describe("authMiddleware anonymous-data migration", () => {
     // No KV claim or pending marker was written for SUBJECT (we bailed at the gate).
     expect(kv.store.has(`migration:${ANON}`)).toBe(false);
     expect(kv.store.has(`migration-pending:${SUBJECT}`)).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
   });
 
   // SS-3: two DIFFERENT subjects presenting the SAME anon cookie — the classic
@@ -760,19 +807,21 @@ describe("authMiddleware anonymous-data migration", () => {
       { headers: { "X-CAIL-Identity-JWT": tokenB, Cookie: "site-studio-session=anon-cookie-1" } },
       env
     );
-    expect(respB.status).toBe(200);
+    expect(respB.status).toBe(503);
+    expect(respB.headers.get("set-cookie")).toBeNull();
 
     // B was refused — nothing landed under SUBJECT_B; the anon namespace stays
     // bound to SUBJECT_A. No split brain.
     expect(bucket.store.has(`projects/${SUBJECT_B}/blog/index.html`)).toBe(false);
     expect(coordinator.records.get(ANON)?.subject).toBe(SUBJECT_A);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT_B)}`)).toBe(false);
   });
 
   // ---- SS-46: storage outage must never read as "record absent" ----
   // An outage while resolving the anon cookie (or while establishing migration
   // resumability) must fail loud with a 503 and leave the anon cookie intact.
-  // The old behavior swallowed the outage, skipped migration, and overwrote the
-  // anon cookie with the subject cookie — permanently orphaning the pre-SSO
+  // The old behavior swallowed the outage, skipped migration, and cleared the
+  // anon cookie — permanently orphaning the pre-SSO
   // namespace in R2.
 
   it("SS-46: R2 outage during SSO first login fails 503 and does not orphan the anon namespace", async () => {
@@ -793,11 +842,11 @@ describe("authMiddleware anonymous-data migration", () => {
       env
     );
 
-    // Fail loud and retryable — NOT a 200 that overwrites the anon cookie.
+    // Fail loud and retryable — NOT a 200 that clears the anon cookie.
     expect(response.status).toBe(503);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body.error).toBe("session_store_unavailable");
-    // The anon cookie is NOT replaced by the subject cookie.
+    // The anon cookie is retained for a retry.
     expect(response.headers.get("set-cookie")).toBeNull();
     // The anonymous data is untouched.
     expect(bucket.store.get(`projects/${ANON}/blog/index.html`)).toBe("<h1>anon blog</h1>");

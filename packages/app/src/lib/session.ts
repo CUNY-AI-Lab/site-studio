@@ -1,8 +1,8 @@
 import { createMiddleware } from "hono/factory";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie } from "hono/cookie";
 import type { Context } from "hono";
 import type { Env, LegacySessionRecord, User } from "../types";
-import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
+import { SESSION_COOKIE_NAME } from "./constants";
 import {
   cailAuthRequiredResponse,
   resolveKeyringGatewayJwt,
@@ -30,11 +30,6 @@ type SessionVariables = {
   cailIdentityJwt?: string;
   cailGatewayJwt?: string;
 };
-
-/** KV session key for a verified CAIL subject. */
-function cailSessionKey(subject: string): string {
-  return `cail:${subject}`;
-}
 
 function userFromIdentity(identity: CailIdentity, createdAt: string): User {
   return {
@@ -176,13 +171,25 @@ async function retireLegacySession(
   }
 }
 
+/** Expire only the old root-scoped import cookie after a completed first login. */
+function clearLegacyImportCookie(
+  c: Context<{ Bindings: Env; Variables: SessionVariables & LoggingVariables }>,
+): void {
+  deleteCookie(c, SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    path: "/",
+    sameSite: "Strict",
+    secure: new URL(c.req.url).protocol === "https:",
+  });
+}
+
 /**
  * First-login migration trigger. On an authenticated request that still
  * carries the pre-SSO anonymous session cookie, claim that anonymous
  * namespace for the subject and re-home its data. Independently, resume any
- * interrupted migration recorded under the subject (the anonymous cookie is
- * replaced by the subject cookie after the first request, so resumption must
- * not depend on it). Pure anonymous requests never reach this function.
+ * interrupted migration recorded under the subject (the legacy import cookie
+ * is cleared after the first successful request, so resumption must not depend
+ * on it). Pure anonymous requests never reach this function.
  *
  * SS-3 / SS-19 — atomic mutual exclusion on the claim:
  * The "who may migrate this anon namespace" decision is settled by the
@@ -208,9 +215,9 @@ async function migrateAnonymousSessionIfPresent(
   c: Context<{ Bindings: Env; Variables: SessionVariables & LoggingVariables }>,
   subject: string,
   logging?: SiteStudioLoggingContext,
-): Promise<boolean> {
+): Promise<"imported" | "closed"> {
   if (await hasCompletedImport(c.env, subject)) {
-    return false;
+    return "closed";
   }
 
   const cookieValue = getCookie(c, SESSION_COOKIE_NAME) || "";
@@ -251,8 +258,8 @@ async function migrateAnonymousSessionIfPresent(
         // SS-46 (fail CLOSED, loud): if the coordinator is unreachable we cannot
         // establish resumability for this still-unmigrated anon namespace, and we
         // never fall back to the racy KV-only path. Silently skipping here would
-        // let the middleware overwrite the anon cookie with the subject cookie
-        // and permanently orphan the data (no cookie, no pending marker), so
+        // let the middleware clear the anon cookie without a pending marker
+        // and permanently orphan the data (no cookie, no resume record), so
         // propagate as a storage outage: the request 503s and the user retries
         // with the anon cookie intact.
         throw new SessionStoreUnavailableError(
@@ -262,9 +269,10 @@ async function migrateAnonymousSessionIfPresent(
       }
 
       if (!decision.granted) {
-        // Another subject already owns this anon namespace. Do not absorb.
-        await recordCompletedImport(c.env, subject);
-        return false;
+        // Another subject already owns this anonymous namespace. Keep the
+        // source cookie and import opportunity intact, and surface the same
+        // private retryable path as every other failed first-login import.
+        throw new SessionStoreUnavailableError("Import ownership claim was refused");
       }
 
       try {
@@ -301,7 +309,7 @@ async function migrateAnonymousSessionIfPresent(
       } catch (error) {
         emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
       }
-      return true;
+      return "imported";
     }
   }
 
@@ -343,14 +351,14 @@ async function migrateAnonymousSessionIfPresent(
     } catch (error) {
       emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
     }
-    return true;
+    return "imported";
   }
 
   // This was the subject's first successful login and no resolvable legacy
   // source exists. Record that fact once so later requests do not keep probing
   // migration state or treat an unrelated old cookie as a new import source.
   await recordCompletedImport(c.env, subject);
-  return false;
+  return "closed";
 }
 
 /**
@@ -360,13 +368,14 @@ async function migrateAnonymousSessionIfPresent(
  *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
  *      `CAIL_IDENTITY_JWKS`; `CAIL_IDENTITY_PROFILE` selects a source-owned
  *      issuer and `CAIL_IDENTITY_ISSUER` must match it exactly for audience
- *      `cail:site-studio`. The durable owner
- *      key becomes the CAIL subject; the KV session is bound to that subject so
- *      the browser cookie remains a convenience affordance but never the source
- *      of ownership. Other bare X-CAIL-* headers are ignored — this worker is
+ *      `cail:site-studio`. The durable owner key becomes the CAIL subject.
+ *      The legacy cookie is an import source only; no subject-keyed session
+ *      cookie or KV record is issued or consulted for authentication. Other
+ *      bare X-CAIL-* headers are ignored — this worker is
  *      reachable on workers.dev, where anyone can set them.
- *   2. No identity → 401 `authentication_required`. Legacy sessions are data
- *      import sources only; they never authenticate a request.
+ *   2. No identity → 401 `authentication_required`. The one preceding
+ *      exception is the validated, read-only preview capability. Legacy
+ *      sessions are data import sources only; they never authenticate a request.
  */
 export const authMiddleware = createMiddleware<{
   Bindings: Env;
@@ -376,7 +385,9 @@ export const authMiddleware = createMiddleware<{
   const existingSessionId = c.get("sessionId") as string | undefined;
   const existingUser = c.get("user") as User | undefined;
 
-  if (existingSessionId && existingUser) {
+  // Preview assets have a separate, short-lived project capability. No other
+  // session state may bypass verified identity authentication.
+  if (existingSessionId === "preview-token" && existingUser) {
     await next();
     return;
   }
@@ -411,14 +422,15 @@ export const authMiddleware = createMiddleware<{
 
     const subject = identity.subject;
     const identityLogging = withOperationalSubject(logging, identity.operationalSubject);
+    const hadLegacyCookie = Boolean(getCookie(c, SESSION_COOKIE_NAME));
 
     // First-login migration: if this authenticated request still carries the
     // pre-SSO anonymous session cookie, claim that anonymous namespace for
     // this subject and re-home its data (lib/migration.ts). Also resume a
     // previously interrupted migration recorded under the subject.
     try {
-      const imported = await migrateAnonymousSessionIfPresent(c, subject, identityLogging);
-      if (imported) {
+      const importOutcome = await migrateAnonymousSessionIfPresent(c, subject, identityLogging);
+      if (importOutcome === "imported") {
         emitDiagnostic("info", "account_import_completed", {}, identityLogging);
       }
     } catch (error) {
@@ -429,40 +441,12 @@ export const authMiddleware = createMiddleware<{
       return sessionStoreUnavailableResponse();
     }
 
-    const kvKey = cailSessionKey(subject);
-    // Safe to swallow: this read only recovers the original createdAt for the
-    // refreshed session record. On a KV blip we fall back to now() — a cosmetic
-    // timestamp reset, never an auth or identity decision.
-    const stored = await c.env.SESSION_KV.get(kvKey, "json").catch(() => null);
-    const createdAt =
-      stored && typeof stored === "object" && typeof (stored as Record<string, unknown>).createdAt === "string"
-        ? (stored as User).createdAt
-        : new Date().toISOString();
-    const user = userFromIdentity(identity, createdAt);
+    // The legacy cookie is only an import source. Clear it after a successful
+    // import or the no-source first-login close; the failure branch above returns
+    // before this point so retries retain the cookie.
+    if (hadLegacyCookie) clearLegacyImportCookie(c);
 
-    // Refresh the subject-keyed session record (profile attrs may change).
-    await c.env.SESSION_KV.put(kvKey, JSON.stringify(user), {
-      expirationTtl: SESSION_TTL_SECONDS,
-    });
-
-    // The session id is the subject itself: ownership follows identity, not a
-    // random cookie. We still set a cookie so same-browser requests that briefly
-    // lack the gate-injected header stay bound to the same subject.
-    //
-    // Cookie posture (INTEGRATION.md §3¾ rule 7): HttpOnly + Secure +
-    // SameSite=Strict, pinned by test. Path stays "/" because this worker owns
-    // its whole origin on the Workers deployment; a tools.ailab path-prefix
-    // deployment (siblings sharing the host) would want Path scoped under the
-    // tool's prefix so sibling tools can't read or clobber it.
-    setCookie(c, SESSION_COOKIE_NAME, subject, {
-      httpOnly: true,
-      maxAge: SESSION_TTL_SECONDS,
-      path: "/",
-      sameSite: "Strict",
-      secure: new URL(c.req.url).protocol === "https:",
-    });
-
-    c.set("sessionId", subject);
+    const user = userFromIdentity(identity, new Date().toISOString());
     c.set("user", user);
     await next();
     return;

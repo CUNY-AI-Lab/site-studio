@@ -20,10 +20,10 @@ import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
  *
  * No Authorization / sk-cail exemption exists here on purpose: the contract's
  * "pure API clients authenticating with `Authorization: Bearer sk-cail-…`"
- * carve-out does not apply to Site Studio, because Site Studio's session
- * routes never authenticate by API key — identity comes only from the
- * gate-injected JWT or the session cookie, both of which are ambient
- * browser credentials, so every mutation must pass the token check.
+ * carve-out does not apply to Site Studio, because Site Studio's routes never
+ * authenticate by API key — identity comes only from the gate-injected JWT.
+ * The legacy import cookie is not an authentication credential, so every
+ * mutation must pass the token check.
  */
 
 export const CSRF_HEADER_NAME = "X-CAIL-CSRF";
@@ -86,8 +86,8 @@ export async function getCsrfToken(bucket: R2Bucket, userId: string): Promise<st
 }
 
 /**
- * Lazily mint the session's CSRF token, persisting it in strongly consistent R2
- * across requests for the session's life (same TTL as the session record).
+ * Lazily mint the identity's CSRF token, persisting it in strongly consistent
+ * R2 across requests for the identity's active owner namespace.
  *
  * SS-53: R2 conditional puts are strongly consistent. Exactly one parallel
  * first request can create the object; losers read and return the winner.
@@ -112,8 +112,8 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
 /**
  * Deliver the R2 token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
  * "Delivery"). The token must NEVER appear in a response body — a same-origin
- * sibling or user-authored published script could fetch GET /api/csrf with the
- * ambient session cookie and read a JSON token straight out of the body,
+ * sibling or user-authored published script could fetch GET /api/csrf with
+ * ambient browser credentials and read a JSON token straight out of the body,
  * defeating rule 3. A path-scoped cookie is the one same-origin-proof channel:
  * browsers only expose a cookie to pages under its Path.
  *
@@ -124,7 +124,7 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
  *    expose the token to sibling pages. Loopback development uses Path=/ because
  *    the local SPA and Vite API proxy are mounted at the origin root.
  *  - Secure (dev-aware, matching lib/session.ts: only over https), SameSite=Lax
- *    (per contract — Lax here, not the session cookie's Strict, so a top-level
+ *    (per contract — Lax here, not the legacy import cookie's Strict, so a top-level
  *    navigation into the SPA still carries it), and NOT HttpOnly so page JS can
  *    read it via document.cookie. This is stateful double-submit: the server
  *    still verifies the request header against the R2 token, so a readable

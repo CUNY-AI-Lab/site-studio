@@ -80,7 +80,7 @@ export function migrationClaimKey(anonUserId: string): string {
 /**
  * Subject-keyed resume marker. Written at claim time and cleared on
  * completion, so a later authenticated request can resume a partial migration
- * even after the anonymous cookie has been replaced by the subject cookie.
+ * even after the legacy import cookie has been cleared.
  */
 export function migrationPendingKey(subject: string): string {
   return `migration-pending:${subject}`;
