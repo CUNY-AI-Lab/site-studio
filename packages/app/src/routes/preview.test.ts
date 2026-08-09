@@ -330,12 +330,11 @@ describe("preview token authentication", () => {
 
 /**
  * Preview-vs-publish extensionless PARITY. Post-alignment the two routes share
- * one resolver (packages/serving-core/src/extensionless.ts), so they must resolve
- * the same extensionless request to the same body. This test is the anti-drift
- * guard that STAYS after the dedup: it drives the SAME seeded project through
- * both /preview/ and the published /u/{handle}/{slug}/ path and asserts the
- * served bytes match, across all three resolution cases (flat sibling wins,
- * flat-preferred-over-nested, nested fallback).
+ * one app-local resolver, so they must resolve the same extensionless request
+ * to the same body. This test is the anti-drift guard: it drives the SAME
+ * seeded project through both /preview/ and the published /u/{handle}/{slug}/
+ * path and asserts the served bytes match, across all three resolution cases
+ * (flat sibling wins, flat-preferred-over-nested, nested fallback).
  */
 describe("preview ↔ publish extensionless parity", () => {
   const userId = "user_test123";

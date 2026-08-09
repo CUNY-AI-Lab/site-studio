@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --cwd packages/frontend build && bun run --cwd packages/app build && bun run --cwd packages/worker build",
+    "build": "bun run --cwd packages/frontend build && bun run --cwd packages/app build",
     "dev:app": "bun run --cwd packages/app dev",
     "dev:frontend": "bun run --cwd packages/frontend dev",
     "dev": "bun run --parallel --filter @site-studio/app --filter @site-studio/frontend dev",
@@ -20,7 +20,7 @@
     "test:dependencies": "node --test scripts/dependency-resolution-gate.test.mjs",
     "lint": "biome lint .",
     "verify:repository": "node ./scripts/verify-repository.mjs",
-    "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/worker check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
+    "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
   },
   "license": "MIT",
   "devDependencies": {

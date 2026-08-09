@@ -3,11 +3,11 @@ import type { Env } from "../types";
 import { addCacheBusterToHtml, collectPreviewResourcePaths } from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
-import { renderNotFoundPage } from "../../../serving-core/src/not-found-page";
-import { servedContentHeaders } from "../../../serving-core/src/serving-headers";
-import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
-import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
-import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
+import { renderNotFoundPage } from "../lib/not-found-page";
+import { servedContentHeaders } from "../lib/serving-headers";
+import { looksLikePageNavigation } from "../lib/page-navigation";
+import { resolveExtensionlessFile } from "../lib/extensionless";
+import { isProtectedServedPath } from "../lib/protected-files";
 import { getUser } from "../lib/session";
 import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
@@ -72,8 +72,8 @@ async function servePreviewFile(
   }
 
   // SS-14 extensionless resolution via the shared helper (try `{path}.html`
-  // then `{path}/index.html`). This ALIGNS preview to publish/publisher (the
-  // sanctioned S3 behavior change): preview previously only tried
+  // then `{path}/index.html`). This aligns preview to publish (the sanctioned
+  // S3 behavior change): preview previously only tried
   // `{path}/index.html` and never the flat `{path}.html`. Adapt the
   // throw-on-miss readFileBuffer into a null-returning probe the helper wants.
   const readOrNull = async (candidate: string): Promise<Uint8Array | null> => {
@@ -101,8 +101,8 @@ async function servePreviewFile(
   const resolvedPath = resolved.filePath;
 
   // SS-8: the served content-type (with `; charset=utf-8` on text types) comes
-  // from the same authoritative table both workers use, so a given extension
-  // renders identically in the preview and on the published origins.
+  // from the authoritative app table, so a given extension renders identically
+  // in preview and on the published route.
   const contentType = getServedContentType(resolvedPath);
 
   c.header("Content-Type", contentType);
@@ -135,7 +135,7 @@ async function servePreviewFile(
   // nested fonts/background images still need a future CSS-aware pass.
 
   // §3¾: the preview renders agent/student-authored HTML on our origin. The
-  // opaque-origin CSP (see serving-core/serving-headers.ts) makes document.cookie /
+  // opaque-origin CSP (see lib/serving-headers.ts) makes document.cookie /
   // session / same-origin /api unreachable even on a direct top-level open.
   return new Response(binaryBody(content), {
     headers: {

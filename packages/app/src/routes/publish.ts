@@ -10,11 +10,11 @@ import {
 import { binaryBody, jsonError } from "../lib/http";
 import { loadMigrationPointer } from "../lib/migration";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
-import { renderNotFoundPage } from "../../../serving-core/src/not-found-page";
-import { servedContentHeaders } from "../../../serving-core/src/serving-headers";
-import { looksLikePageNavigation } from "../../../serving-core/src/page-navigation";
-import { resolveExtensionlessFile } from "../../../serving-core/src/extensionless";
-import { isProtectedServedPath } from "../../../serving-core/src/protected-files";
+import { renderNotFoundPage } from "../lib/not-found-page";
+import { servedContentHeaders } from "../lib/serving-headers";
+import { looksLikePageNavigation } from "../lib/page-navigation";
+import { resolveExtensionlessFile } from "../lib/extensionless";
+import { isProtectedServedPath } from "../lib/protected-files";
 import { sniffImageType } from "../lib/image-validation";
 import { getUser } from "../lib/session";
 import { lintProject, type A11yFinding } from "../lib/a11y-lint";
@@ -106,7 +106,7 @@ async function missingPublishedFile(
     const custom = await storage.readObject(userId, projectId, "404.html");
     if (custom) {
       // Project-supplied 404.html is agent/student-authored active content served
-      // on our origin — §3¾ containment applies (see serving-core/serving-headers.ts). It
+      // on our origin — §3¾ containment applies (see lib/serving-headers.ts). It
       // goes through the same header builder as a 200 so the content-type,
       // caching validators, and CSP match the publisher's notFoundResponse.
       return new Response(binaryBody(new Uint8Array(await custom.arrayBuffer())), {
@@ -564,9 +564,8 @@ async function servePublishedFile(
     return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
   }
 
-  // SS-14 extensionless resolution — one shared helper for all three serving
-  // paths (preview, publish, publisher worker): try `{path}.html`, then
-  // `{path}/index.html`. See packages/serving-core/src/extensionless.ts.
+  // SS-14 extensionless resolution — one shared helper for preview and publish:
+  // try `{path}.html`, then `{path}/index.html`.
   const resolved = await resolveExtensionlessFile(rawPath || "index.html", (candidate) =>
     storage.readObject(userId, projectId, candidate)
   );
@@ -586,10 +585,8 @@ async function servePublishedFile(
 
 /**
  * Build the Content-Type, caching validators, and §3¾ containment headers for
- * a served published byte. Deliberately mirrors the publisher worker's
- * responseHeaders() (packages/worker/src/index.ts) so both origins emit the
- * SAME header set for the same file — SS-8 (content type), SS-15 (ETag /
- * Last-Modified / mandatory revalidation), and the CSP sandbox composed on top.
+ * a served published byte — SS-8 (content type), SS-15 (ETag / Last-Modified /
+ * mandatory revalidation), and the CSP sandbox composed on top.
  */
 export function publishedResponseHeaders(filePath: string, object: R2ObjectBody): Headers {
   const contentType = getServedContentType(filePath);

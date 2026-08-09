@@ -25,11 +25,8 @@ describe("observability source contract", () => {
     }
   });
 
-  it.each([
-    ["app", new URL("../wrangler.jsonc", import.meta.url)],
-    ["publisher", new URL("../../worker/wrangler.jsonc", import.meta.url)],
-  ] as const)("keeps %s custom logs complete and raw-URL invocation logs off", (_service, url) => {
-    const source = readFileSync(url, "utf8");
+  it("keeps app custom logs complete and raw-URL invocation logs off", () => {
+    const source = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"enabled"\s*:\s*true/);
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"persist"\s*:\s*true/);
     expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"head_sampling_rate"\s*:\s*1/);
@@ -47,7 +44,6 @@ describe("observability source contract", () => {
 
   it.each([
     new URL("../package.json", import.meta.url),
-    new URL("../../worker/package.json", import.meta.url),
     new URL("../../observability-core/package.json", import.meta.url),
   ])("pins the reviewed fleet projection dependency in %s", (url) => {
     expect(readFileSync(url, "utf8")).toContain(

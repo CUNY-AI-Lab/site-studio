@@ -57,7 +57,7 @@ export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
  * would grow R2 storage forever for active projects.
  */
 export const SNAPSHOT_KEEP_COUNT = 50;
-export { PROTECTED_FILE_NAMES } from "../../../serving-core/src/protected-files";
+export { PROTECTED_FILE_NAMES } from "./protected-files";
 
 export const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -92,16 +92,13 @@ export const CONTENT_TYPES: Record<string, string> = {
 };
 
 /**
- * The AUTHORITATIVE served content-type table + resolver (SS-8) now live once in
- * packages/serving-core and are shared with the standalone publisher worker.
- * Re-exported here so in-app callers keep importing from lib/constants.
- *
- * `SERVED_CONTENT_TYPES` differs from CONTENT_TYPES above (which stays bare for
- * the editor's file tree / isText classification and document.ts's exact-match
- * probes): text types carry `; charset=utf-8` and `.mjs` pins the served
- * charset. See packages/serving-core/src/content-types.ts for the rationale.
+ * `SERVED_CONTENT_TYPES` differs from `CONTENT_TYPES` above (which stays bare
+ * for the editor's file tree / isText classification and document.ts's
+ * exact-match probes): text types carry `; charset=utf-8` and `.mjs` pins the
+ * served charset. Keep this re-export so existing app callers can continue to
+ * import served types from lib/constants.
  */
 export {
   SERVED_CONTENT_TYPES,
   getServedContentType
-} from "../../../serving-core/src/content-types";
+} from "./content-types";

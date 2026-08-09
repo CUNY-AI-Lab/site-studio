@@ -30,5 +30,3 @@ jobs:
       - run: bun run check
       - name: Validate app Worker bundle and migrations
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
-      - name: Validate publisher Worker bundle
-        run: packages/worker/node_modules/.bin/wrangler deploy --dry-run --config packages/worker/wrangler.jsonc --outdir .wrangler-dry-run/publisher
