@@ -113,9 +113,9 @@ describe('Toaster + toast store', () => {
 		expect(remaining[0]).toHaveTextContent('Second');
 	});
 
-	// SS-23: error toasts persist, so repeated identical failures must not stack
-	// unboundedly. Identical messages de-dupe; the total stack is capped.
-	describe('SS-23: de-dupe + cap', () => {
+	// SS-23: repeated identical failures de-dupe while distinct notifications
+	// remain visible until their own dismissal or timeout.
+	describe('SS-23: de-dupe without eviction', () => {
 		it('pushing the same error twice yields a single toast and the same id', () => {
 			render(Toaster);
 			const first = emit(() => toast.error('Save failed'));
@@ -131,15 +131,21 @@ describe('Toaster + toast store', () => {
 			expect(screen.getAllByRole('alert')).toHaveLength(2);
 		});
 
-		it('caps the stack at 4, dropping the oldest', () => {
+		it('keeps distinct persistent toasts instead of evicting the oldest', () => {
 			render(Toaster);
 			for (let i = 1; i <= 6; i++) {
 				emit(() => toast.error(`err ${i}`));
 			}
 			const alerts = screen.getAllByRole('alert');
-			expect(alerts).toHaveLength(4);
-			// The two oldest ("err 1", "err 2") were dropped.
-			expect(toasts.map((t) => t.message)).toEqual(['err 3', 'err 4', 'err 5', 'err 6']);
+			expect(alerts).toHaveLength(6);
+			expect(toasts.map((t) => t.message)).toEqual([
+				'err 1',
+				'err 2',
+				'err 3',
+				'err 4',
+				'err 5',
+				'err 6'
+			]);
 		});
 	});
 

@@ -101,46 +101,6 @@
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
 	let csrfRefreshedThisCycle = false;
-	interface Quota {
-		object: 'quota';
-		managed_by: 'cloudflare';
-		state: 'estimated';
-		unit: 'microdollar';
-		currency: 'USD';
-		limit: number;
-		estimated_used: number;
-		estimated_remaining: number;
-		used_percent: number;
-		remaining_percent: number;
-		window_seconds: number;
-		window_technique: 'fixed' | 'sliding';
-		calculated_at: number;
-	}
-
-	let quota = $state<Quota | null>(null);
-
-	async function refreshQuota() {
-		// Hiding the pill when the quota read fails is deliberate degradation,
-		// but it must be observable — otherwise a broken quota route is
-		// indistinguishable from "no quota configured".
-		try {
-			const response = await apiResponseFetch(resolvePath('/api/quota'), {
-				credentials: 'include',
-				redirectOnAuthenticationRequired: false
-			});
-			if (!response.ok) {
-				console.warn(`Quota refresh failed (HTTP ${response.status}); hiding the quota pill`);
-				quota = null;
-				return;
-			}
-			quota = await response.json();
-		} catch (error) {
-			console.warn('Quota refresh failed; hiding the quota pill', error);
-			quota = null;
-		}
-	}
-
-	const MAX_DISPLAYED_MESSAGES = 10;
 	const MUTATING_TOOLS = new Set([
 		'codemode',
 		'write_file',
@@ -257,15 +217,6 @@
 		const minutes = Math.floor(totalSeconds / 60);
 		const seconds = totalSeconds % 60;
 		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-	}
-
-	function quotaEstimateDetails(currentQuota: Quota): string {
-		const calculatedLabel = new Date(currentQuota.calculated_at * 1000).toLocaleString();
-		return `Cloudflare usage estimate; may be delayed. Calculated ${calculatedLabel}.`;
-	}
-
-	function quotaAccessibleLabel(currentQuota: Quota): string {
-		return `~${currentQuota.remaining_percent}% AI budget left. ${quotaEstimateDetails(currentQuota)}`;
 	}
 
 	function trackToolStart(toolCallId: string) {
@@ -551,7 +502,6 @@
 	}
 
 	let reconnectAttempts = 0;
-	const MAX_RECONNECT_ATTEMPTS = 5;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	// Bumped by closeSocket() (project switch / unmount). A reconnect attempt
 	// that fails AFTER teardown compares its captured epoch and stops instead of
@@ -563,7 +513,7 @@
 	let projectContextEpoch = 0;
 	// SS-10: true while a silent reconnect is pending after a mid-request drop, so
 	// we show a transient "reconnecting" state instead of a permanent dead-end
-	// error bubble. Cleared on a successful reconnect or when attempts are exhausted.
+	// error bubble. Cleared when a connection succeeds or the component tears down.
 	let isReconnecting = $state(false);
 
 	function closeSocket() {
@@ -623,12 +573,12 @@
 			return;
 		}
 
-		scheduleReconnectOrGiveUp();
+		scheduleReconnect();
 	}
 
 	/**
-	 * Shared "connection is gone" tail: decide the SS-10 presentation and either
-	 * schedule the next backoff attempt or surface exhaustion.
+	 * Shared "connection is gone" tail: keep the SS-10 presentation and schedule
+	 * the next bounded-backoff attempt while this project remains mounted.
 	 *
 	 * Called from handleSocketClose AND from a reconnect attempt whose
 	 * ensureSocket() promise rejected without a usable close event. The old code
@@ -639,8 +589,8 @@
 	 * One such failure silently killed the loop — no further attempts, no
 	 * surfaced error, isReconnecting stuck true forever.
 	 */
-	function scheduleReconnectOrGiveUp() {
-		const willReconnect = reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !!projectId;
+	function scheduleReconnect() {
+		const willReconnect = !!projectId;
 
 		if (isLoading) {
 			if (willReconnect) {
@@ -649,7 +599,7 @@
 				// keep the request "live" so the UI doesn't contradict itself.
 				isReconnecting = true;
 			} else {
-				// Reconnect attempts exhausted — surface the permanent error.
+				// No project is active, so there is no connection to recover.
 				resetRequestState();
 				isReconnecting = false;
 				uiMessages = [
@@ -685,7 +635,7 @@
 					// down in the meantime (project switch/unmount), in which case
 					// retrying would leak a socket into the next context.
 					if (epoch === connectionEpoch) {
-						scheduleReconnectOrGiveUp();
+						scheduleReconnect();
 					}
 				});
 			}, delay);
@@ -1117,7 +1067,6 @@
 						flushActiveStreamToMessages(activeStream);
 					}
 					resetRequestState();
-					void refreshQuota();
 				}
 				break;
 			}
@@ -1125,7 +1074,6 @@
 	}
 
 	let messages = $derived(toDisplayMessages(uiMessages, toolStartTimes, clockNow));
-	let displayedMessages = $derived(messages.slice(-MAX_DISPLAYED_MESSAGES));
 	let pendingToolInteraction = $derived(getPendingToolInteraction(uiMessages));
 	let requestElapsedMs = $derived(requestStartedAt ? Math.max(0, clockNow - requestStartedAt) : 0);
 	let requestElapsedLabel = $derived(formatElapsedTime(requestElapsedMs));
@@ -1171,7 +1119,6 @@
 		closeSocket();
 
 		void (async () => {
-			await refreshQuota();
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
 			}
@@ -1484,7 +1431,7 @@
 				</button>
 			</div>
 		{/if}
-		{#if displayedMessages.length === 0}
+		{#if messages.length === 0}
 			{#if !historyLoadFailed}
 				<div class="welcome">
 					<h3>Let's Build Your Site</h3>
@@ -1492,12 +1439,7 @@
 				</div>
 			{/if}
 		{:else}
-			{#if messages.length > MAX_DISPLAYED_MESSAGES}
-				<div class="conversation-notice">
-					Showing last {MAX_DISPLAYED_MESSAGES} messages ({messages.length - MAX_DISPLAYED_MESSAGES} older messages hidden)
-				</div>
-			{/if}
-			{#each displayedMessages as message}
+			{#each messages as message}
 				<div class="message {message.role}">
 					{#if message.blocks && message.blocks.length > 0}
 						{#each message.blocks as block}
@@ -1505,8 +1447,8 @@
 								<MessageContent content={block.text} role={message.role} />
 							{:else if block.type === 'tools' && block.tools}
 								<div class="tools-section">
-									{#each block.tools as tool, i}
-										<ToolExecutionCard {tool} index={i} {projectId} onRevert={onUpdate} />
+									{#each block.tools as tool}
+										<ToolExecutionCard {tool} />
 									{/each}
 								</div>
 							{/if}
@@ -1602,16 +1544,6 @@
 		{/if}
 
 		<div class="action-buttons">
-			{#if quota && quota.limit > 0}
-				<span
-					class="quota-meter"
-					role="status"
-					aria-label={quotaAccessibleLabel(quota)}
-					title={quotaEstimateDetails(quota)}
-				>
-					~{quota.remaining_percent}% AI budget left
-				</span>
-			{/if}
 			<input
 				type="file"
 				bind:this={fileInput}
@@ -1701,17 +1633,6 @@
 		color: var(--color-text-secondary);
 		margin-bottom: 0;
 		font-size: 0.9375rem;
-	}
-
-	.conversation-notice {
-		text-align: center;
-		padding: 0.625rem 0.875rem;
-		margin-bottom: 0.75rem;
-		background: var(--color-bg-tertiary);
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-md);
-		font-size: 0.75rem;
-		color: var(--color-text-tertiary);
 	}
 
 	.message {
@@ -2003,12 +1924,6 @@
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-	}
-
-	.quota-meter {
-		font-size: 0.72rem;
-		color: var(--color-text-muted);
-		white-space: nowrap;
 	}
 
 	.icon-btn {

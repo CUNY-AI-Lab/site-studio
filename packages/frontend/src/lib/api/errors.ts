@@ -54,17 +54,6 @@ export class ApiError extends Error {
 }
 
 /**
- * Options for a raw-response API request.
- *
- * Authentication redirects remain enabled by default for protected calls. An
- * explicitly optional probe (such as the quota snapshot) may disable only that
- * redirect while retaining the normal response/error handling.
- */
-export interface ApiResponseFetchOptions extends RequestInit {
-	redirectOnAuthenticationRequired?: boolean;
-}
-
-/**
  * Redirect the browser to the CAIL SSO login, preserving where to return.
  *
  * The SSO gate serves `/login?rt=<same-origin-path>` (docs/INTEGRATION.md §2).
@@ -148,15 +137,13 @@ export async function handleApiError(response: Response): Promise<never> {
 
 /**
  * Wrapper for fetch callers that need the raw Response (blob downloads, 415
- * branching) while still honoring the shared 401 authentication redirect by
- * default. Optional probes may set `redirectOnAuthenticationRequired: false`.
+ * branching) while still honoring the shared 401 authentication redirect.
  */
 export async function apiResponseFetch(
 	input: RequestInfo | URL,
-	init?: ApiResponseFetchOptions
+	init?: RequestInit
 ): Promise<Response> {
-	const { redirectOnAuthenticationRequired, ...requestInit } = init ?? {};
-	const response = await csrfFetch(input, requestInit);
+	const response = await csrfFetch(input, init);
 
 	if (response.status !== 401) {
 		return response;
@@ -173,9 +160,7 @@ export async function apiResponseFetch(
 		return response;
 	}
 
-	if (redirectOnAuthenticationRequired !== false) {
-		maybeRedirectToLogin(response.status, errorData);
-	}
+	maybeRedirectToLogin(response.status, errorData);
 	throw toApiError(response, errorData);
 }
 
