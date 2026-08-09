@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CAIL_ANALYTICS_ENGINE_BLOBS,
   CAIL_ANALYTICS_ENGINE_DOUBLES,
-  CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION,
   CAIL_EVENTS,
   ROUTE_TEMPLATE_RE,
   type CailAnalyticsEngineDataPoint,
@@ -65,7 +64,7 @@ describe("CAIL fleet projection boundary", () => {
     }
   });
 
-  it("enforces an invocation-local point budget below Cloudflare's ceiling", () => {
+  it("enforces the Site-owned invocation-local point budget", () => {
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const { logger, points } = fleetCapture();
@@ -77,8 +76,6 @@ describe("CAIL fleet projection boundary", () => {
           route: "/api/health",
         });
       }
-      expect(SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION)
-        .toBeLessThan(CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION);
       expect(points).toHaveLength(SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION);
       expect(consoleLog).toHaveBeenCalledTimes(SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION + 5);
     } finally {

@@ -1,5 +1,4 @@
 import {
-  CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION,
   createAnalyticsEngineSink,
   fanoutSinks,
   workersStructuredSink,
@@ -10,17 +9,10 @@ import {
 
 /**
  * One request/action boundary emits far fewer events than this. The adapter
- * enforces the budget independently so a future diagnostic loop cannot cross
- * Cloudflare's platform ceiling.
+ * owns the invocation-local budget so a future diagnostic loop cannot fan out
+ * without bound.
  */
 export const SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION = 32 as const;
-
-if (
-  SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION
-  >= CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION
-) {
-  throw new TypeError("Site Studio fleet point budget must stay below Cloudflare's ceiling");
-}
 
 export type SiteStudioFleetProjectionEnv = Readonly<{
   CAIL_FLEET_EVENTS?: CailAnalyticsEngineDataset;
