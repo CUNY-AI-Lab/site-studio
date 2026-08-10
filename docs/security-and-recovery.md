@@ -16,7 +16,11 @@ issue or consult a subject session cookie or subject session KV record.
 The CAIL Gateway credential is a separate verified JWT with gateway audience,
 bound to the same subject. The Worker removes caller authority and routing
 headers before forwarding that bearer and `X-CAIL-App: site-studio`. The
-repository contains no model-provider keys.
+repository contains no model-provider keys. Before each new or continued model
+turn, the CSRF-protected refresh route verifies the app and Gateway legs and
+replaces the existing owner/project socket's connection-local credential. It
+returns an empty `Cache-Control: no-store` response; the browser never receives
+the Gateway JWT.
 
 There is no membership, invitation, role, or cross-owner collaboration model.
 A `SiteBuilderAgent` is keyed by `ownerId:projectId`. An owner-keyed

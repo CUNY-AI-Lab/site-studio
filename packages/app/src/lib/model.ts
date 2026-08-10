@@ -50,7 +50,7 @@ export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtl
       atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
     ) as { exp?: unknown };
     if (typeof decoded.exp === "number" && decoded.exp * 1000 <= nowMs + minimumTtlSeconds * 1000) {
-      throw new Error("CAIL identity expired during this turn. Reconnect and retry.");
+      throw new Error("CAIL identity expired during this turn.");
     }
   } catch (error) {
     if (error instanceof Error && error.message.includes("identity expired")) throw error;

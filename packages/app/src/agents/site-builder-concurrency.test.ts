@@ -276,8 +276,13 @@ describe("Site Builder connection logging concurrency", () => {
       get state() {
         return current;
       },
-      setState(next: SiteStudioConnectionLoggingState | null) {
-        current = next;
+      setState(
+        next:
+          | SiteStudioConnectionLoggingState
+          | null
+          | ((prev: Readonly<SiteStudioConnectionLoggingState> | null) => SiteStudioConnectionLoggingState)
+      ) {
+        current = typeof next === "function" ? next(current) : next;
         return current;
       },
     } as unknown as Parameters<SiteBuilderAgent["onConnect"]>[0];
@@ -379,6 +384,89 @@ describe("Site Builder connection logging concurrency", () => {
     expect(serialized?.correlation).not.toBe(snapshot);
     expect(Object.isFrozen(serialized?.correlation)).toBe(true);
     expect(Object.isFrozen((serialized?.correlation as SiteStudioCorrelation).trace)).toBe(true);
+  });
+
+  it("updates every live connection's credential while preserving its correlation", async () => {
+    const oldJwt = "verified-jwt-old";
+    const freshJwt = "verified-jwt-fresh";
+    const request = new Request("https://site-studio.example/agent", {
+      headers: {
+        traceparent: `00-${"4".repeat(32)}-dddddddddddddddd-01`,
+        "x-cail-request-id": "44444444-4444-4444-8444-444444444444",
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: oldJwt }),
+      },
+    });
+    const refresh = new Request("https://site-studio.example/api/refresh-credential", {
+      method: "POST",
+      headers: {
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: freshJwt }),
+      },
+    });
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const connection = fakeConnection();
+    agent.onConnect(connection, { request });
+    const retainedCorrelation = connection.state?.correlation;
+    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+
+    const response = await agent.onRequest(refresh);
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.text()).toBe("");
+    expect(connection.state?.identityJwt).toBe(freshJwt);
+    expect(connection.state?.correlation).toBe(retainedCorrelation);
+  });
+
+  it("rejects a refresh without the verified Gateway token", async () => {
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const connection = fakeConnection();
+    agent.onConnect(connection, { request: new Request("https://site-studio.example/agent") });
+    const before = connection.state;
+    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+
+    const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
+      method: "POST",
+    }));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(connection.state).toEqual(before);
+  });
+
+  it("rejects non-POST refresh requests without changing connection state", async () => {
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const connection = fakeConnection();
+    agent.onConnect(connection, { request: new Request("https://site-studio.example/agent") });
+    const before = connection.state;
+    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+
+    const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
+      method: "GET",
+      headers: {
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: "verified-jwt-fresh" }),
+      },
+    }));
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("POST");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(connection.state).toEqual(before);
+  });
+
+  it("fails honestly when the agent has no active connections", async () => {
+    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    (agent as unknown as { getConnections: () => Iterable<never> }).getConnections = () => [];
+
+    const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
+      method: "POST",
+      headers: {
+        [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: "verified-jwt-fresh" }),
+      },
+    }));
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({ error: "agent_connection_not_found" });
   });
 });
 

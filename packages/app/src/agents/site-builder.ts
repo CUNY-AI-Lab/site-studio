@@ -142,6 +142,16 @@ const MAX_SNAPSHOT_LABEL_CHARS = 120;
 const MAX_OBSERVABILITY_EVENTS = 400;
 const MAX_OBSERVABILITY_REQUESTS = 20;
 const OBSERVABILITY_STALL_MS = 15_000;
+
+function noStoreJson(body: Record<string, string>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
 /**
  * Action and call IDs are event identities, not transport request
  * correlations. cail-log's request validator intentionally accepts UUIDv4
@@ -1209,6 +1219,67 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
     connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt));
 
+  }
+
+  override onRequest(request: Request): Response | Promise<Response> {
+    const pathname = new URL(request.url).pathname;
+    if (pathname.split("/").pop() !== "refresh-credential") {
+      return super.onRequest(request);
+    }
+
+    if (request.method !== "POST") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: {
+          Allow: "POST",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const identityJwt = getAgentConnectionIdentityJwt(request);
+    if (!identityJwt) {
+      return noStoreJson({ error: "authentication_required" }, 401);
+    }
+
+    // The route has already enforced the verified app identity, project
+    // ownership, and CSRF token. Updating every live connection in this one
+    // owner/project DO keeps the socket open while replacing only its
+    // connection-local (hibernation-safe) model credential; the token is never
+    // sent back to the browser.
+    const connections = Array.from(this.getConnections());
+    if (connections.length === 0) {
+      return noStoreJson({ error: "agent_connection_not_found" }, 409);
+    }
+
+    // Use the framework's updater form rather than replacing raw attachment
+    // state. Agents wraps hibernated connections to keep internal `_cf_` flags
+    // out of application state; setState's updater preserves those flags while
+    // retaining the connection's existing correlation and other fields.
+    if (connections.some((connection) => !connection.state || typeof connection.state !== "object")) {
+      return noStoreJson({ error: "agent_connection_state_unavailable" }, 409);
+    }
+
+    for (const connection of connections) {
+      const typedConnection = connection as Connection<SiteStudioConnectionLoggingState>;
+      typedConnection.setState((state: Readonly<SiteStudioConnectionLoggingState> | null) => {
+        if (!state || typeof state !== "object") {
+          // The preflight above makes this unreachable for a live connection;
+          // fail closed if a connection disappears between enumeration and the
+          // synchronous state update.
+          throw new Error("Agent connection state unavailable");
+        }
+        return {
+          ...state,
+          identityJwt,
+        };
+      });
+    }
+
+    return new Response(null, {
+      status: 204,
+      headers: { "Cache-Control": "no-store" },
+    });
   }
 
   async getObservability(): Promise<SiteBuilderObservabilitySnapshot> {

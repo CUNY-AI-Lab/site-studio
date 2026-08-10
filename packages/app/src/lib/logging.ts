@@ -106,7 +106,7 @@ export type SiteStudioLoggingContextData = Readonly<{
 export type SiteStudioConnectionLoggingState = Readonly<{
   correlation: SiteStudioCorrelation;
   operationalSubject?: string;
-  /** Current connection's server-verified JWT; never retained on the DO. */
+  /** Current connection's server-verified JWT; persisted only on that socket's attachment. */
   identityJwt?: string;
 }>;
 

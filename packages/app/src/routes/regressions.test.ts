@@ -1587,7 +1587,7 @@ describe("csrf protection on all mutation routes", () => {
   });
   const form = (): Pick<RequestInit, "body"> => ({ body: new FormData() });
 
-  // The 13 state-changing routes (POST/PUT/PATCH/DELETE — rule 1 keeps
+  // The 14 state-changing routes (POST/PUT/PATCH/DELETE — rule 1 keeps
   // GET/HEAD side-effect free, so nothing else needs the token).
   const mutations: Array<{
     method: string;
@@ -1595,6 +1595,7 @@ describe("csrf protection on all mutation routes", () => {
     init?: () => Pick<RequestInit, "body" | "headers">;
   }> = [
     { method: "POST", path: "/api/handle", init: () => json({ handle: "table-check" }) },
+    { method: "POST", path: "/api/agents/site-builder/proj-x/refresh-credential" },
     { method: "POST", path: "/api/projects/proj-x/file", init: () => json({ path: "a.html", content: "hi" }) },
     { method: "DELETE", path: "/api/projects/proj-x/files?path=a.html" },
     { method: "PUT", path: "/api/projects/proj-x/files/rename", init: () => json({ oldPath: "a.html", newPath: "b.html" }) },

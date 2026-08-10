@@ -20,7 +20,6 @@
 		type UIMessagePart,
 		type UIStreamChunk
 	} from '$lib/agents/chat';
-	import { shouldRefreshSocket } from '$lib/agents/socket-freshness';
 
 	interface ContentBlock {
 		type: 'text' | 'tools';
@@ -86,7 +85,6 @@
 	let socketProjectId: string | null = null;
 	let socketPromise: Promise<WebSocket> | null = null;
 	let socketPromiseProjectId: string | null = null;
-	let socketOpenedAt: number | null = null;
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
 	let expectingContinuation = $state(false);
@@ -538,7 +536,6 @@
 		socketProjectId = null;
 		socketPromise = null;
 		socketPromiseProjectId = null;
-		socketOpenedAt = null;
 	}
 
 	function handleSocketClose(event: Event) {
@@ -559,7 +556,6 @@
 		socketProjectId = null;
 		socketPromise = null;
 		socketPromiseProjectId = null;
-		socketOpenedAt = null;
 
 		// Clean up listeners on the closed socket
 		if (closedSocket) {
@@ -745,7 +741,6 @@
 					reject(new Error('Project changed while connecting to the agent'));
 					return;
 				}
-				socketOpenedAt = Date.now();
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
@@ -841,26 +836,41 @@
 		socket.send(JSON.stringify(payload));
 	}
 
-	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
-		const targetProjectId = projectId;
-		const targetEpoch = projectContextEpoch;
-		// Gate-injected identity JWTs expire after about five minutes, so reconnect
-		// before a new turn while there is still time to capture a fresh token.
-		if (
-			socket?.readyState === WebSocket.OPEN &&
-			shouldRefreshSocket(socketOpenedAt, Date.now())
-		) {
-			closeSocket();
+	async function refreshAgentCredential(targetProjectId: string, targetEpoch: number): Promise<void> {
+		const response = await apiResponseFetch(
+			resolvePath(`/api/agents/site-builder/${targetProjectId}/refresh-credential`),
+			{ method: 'POST' }
+		);
+		if (!response.ok) {
+			throw new Error(`Unable to refresh the agent connection (${response.status})`);
 		}
+		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			throw new Error('Project changed while refreshing the agent connection');
+		}
+	}
 
+	async function prepareSocketForModelTurn(
+		targetProjectId: string,
+		targetEpoch: number
+	): Promise<WebSocket> {
 		const ws = await ensureSocket(targetProjectId, targetEpoch);
+		await refreshAgentCredential(targetProjectId, targetEpoch);
 		if (
 			!isCurrentProjectContext(targetProjectId, targetEpoch) ||
 			socket !== ws ||
-			socketProjectId !== targetProjectId
+			socketProjectId !== targetProjectId ||
+			ws.readyState !== WebSocket.OPEN
 		) {
-			throw new Error('Project changed before the agent request was sent');
+			throw new Error('Agent connection closed before the request was sent');
 		}
+		return ws;
+	}
+
+	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
+		const targetProjectId = projectId;
+		const targetEpoch = projectContextEpoch;
+
+		const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 		const requestId = generateId();
 		const startedAt = Date.now();
 
@@ -898,9 +908,6 @@
 		if (chunk.type === 'error') {
 			activeStream.parts.push({ type: 'text', text: chunk.errorText, state: 'done' });
 			flushActiveStreamToMessages(activeStream);
-			if (chunk.errorText.includes('identity expired')) {
-				closeSocket();
-			}
 			return;
 		}
 
@@ -1249,9 +1256,6 @@
 		} catch (error: any) {
 			console.error('Error sending message:', error);
 			const message = getErrorMessage(error);
-			if (message.includes('identity expired')) {
-				closeSocket();
-			}
 			resetRequestState();
 			uiMessages = [
 				...uiMessages,
@@ -1283,19 +1287,21 @@
 		if (!ready) return;
 
 		try {
-			await ensureSocket();
+			const targetProjectId = projectId;
+			const targetEpoch = projectContextEpoch;
+			const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 			const output = {
 				answer: '',
 				declined: true
 			};
 			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
-			sendSocketMessage({
+			ws.send(JSON.stringify({
 				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
 				toolCallId: interaction.toolCallId,
 				toolName: interaction.toolName,
 				output,
 				autoContinue: true
-			});
+			}));
 
 			const startedAt = Date.now();
 			expectingContinuation = true;
@@ -1361,15 +1367,17 @@
 				...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
 			};
 
-			await ensureSocket();
+			const targetProjectId = projectId;
+			const targetEpoch = projectContextEpoch;
+			const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
-			sendSocketMessage({
+			ws.send(JSON.stringify({
 				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
 				toolCallId: interaction.toolCallId,
 				toolName: interaction.toolName,
 				output,
 				autoContinue: true
-			});
+			}));
 			const startedAt = Date.now();
 			expectingContinuation = true;
 			isLoading = true;

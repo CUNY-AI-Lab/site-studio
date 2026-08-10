@@ -537,6 +537,142 @@ describe('AgentChat', () => {
 		expect(ws.sent.length).toBe(sentAfterFirst);
 	});
 
+	it('waits for the credential refresh before sending a new chat frame', async () => {
+		let resolveRefresh!: (response: Response) => void;
+		let refreshRequested = false;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/refresh-credential')) {
+				expect(init?.method).toBe('POST');
+				refreshRequested = true;
+				return new Promise<Response>((resolve) => {
+					resolveRefresh = resolve;
+				});
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		const pending = component.sendPrompt('hello');
+		await waitFor(() => expect(refreshRequested).toBe(true));
+		expect(ws.sent).toHaveLength(0);
+
+		resolveRefresh(new Response(null, { status: 204 }));
+		await pending;
+		await settle();
+		expect(ws.sent.map((raw) => JSON.parse(raw).type)).toContain(
+			AgentMessageType.CF_AGENT_USE_CHAT_REQUEST
+		);
+	});
+
+	it('sends no model frame when the credential refresh fails', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/refresh-credential')) {
+				return new Response(JSON.stringify({ error: 'agent_connection_not_found' }), {
+					status: 409,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		await component.sendPrompt('hello');
+		await settle();
+		expect(ws.sent).toHaveLength(0);
+		expect(screen.getByText('Unable to refresh the agent connection (409)')).toBeInTheDocument();
+	});
+
+	it('refreshes before both auto-continue tool-result frames on the same socket', async () => {
+		const events: string[] = [];
+		let refreshCount = 0;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = typeof input === 'string' ? input : input.toString();
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/refresh-credential')) {
+				refreshCount += 1;
+				events.push(`refresh-${refreshCount}`);
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		const originalSend = ws.send.bind(ws);
+		ws.send = (raw: string) => {
+			events.push(`ws-${JSON.parse(raw).type}`);
+			originalSend(raw);
+		};
+		ws.open();
+
+		await component.sendPrompt('hello');
+		await settle();
+		expect(refreshCount).toBe(1);
+		expect(events.indexOf('refresh-1')).toBeLessThan(events.indexOf(`ws-${AgentMessageType.CF_AGENT_USE_CHAT_REQUEST}`));
+
+		function questionFrame(id: string, toolCallId: string) {
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+				id,
+				body: JSON.stringify({
+					type: 'tool-input-available',
+					toolCallId,
+					toolName: 'ask_user_question',
+					input: { question: 'Pick a direction', options: [{ label: 'A' }] }
+				})
+			});
+		}
+
+		questionFrame('stream-1', 'tool-1');
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Skip' }).click();
+		await waitFor(() => expect(refreshCount).toBe(2));
+		await settle();
+
+		questionFrame('stream-2', 'tool-2');
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'A' }).click();
+		await settle();
+		screen.getByRole('button', { name: 'Reply' }).click();
+		await waitFor(() => expect(refreshCount).toBe(3));
+		await settle();
+
+		expect(FakeWebSocket.instances).toHaveLength(1);
+		expect(ws.sent.map((raw) => JSON.parse(raw).type)).toEqual([
+			AgentMessageType.CF_AGENT_USE_CHAT_REQUEST,
+			AgentMessageType.CF_AGENT_TOOL_RESULT,
+			AgentMessageType.CF_AGENT_TOOL_RESULT
+		]);
+		const toolResultEvents = events
+			.map((event, index) => (event === `ws-${AgentMessageType.CF_AGENT_TOOL_RESULT}` ? index : -1))
+			.filter((index) => index >= 0);
+		expect(events.indexOf('refresh-2')).toBeLessThan(toolResultEvents[0]);
+		expect(events.indexOf('refresh-3')).toBeLessThan(toolResultEvents[1]);
+		expect(events.indexOf('refresh-3')).toBeGreaterThan(events.indexOf('refresh-2'));
+	});
+
 	// SS-9: after the user hits Stop, a late CF_AGENT_USE_CHAT_RESPONSE frame for the
 	// cancelled request id must be dropped — it must not recreate the active stream
 	// and resume appending text, and isLoading must stay false.

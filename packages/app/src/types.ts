@@ -86,8 +86,10 @@ export interface User {
  * Props passed to the SiteBuilderAgent Durable Object at connection time
  * (see routes/agents.ts). `identityJwt` is the verified caller JWT captured on
  * the request that established the connection; the agent forwards it to the CAIL
- * model proxy. The browser refreshes old sockets and the model adapter checks
- * token expiry before every gateway POST.
+ * model proxy. Before each user-driven model frame, the authenticated HTTP
+ * refresh route replaces this connection-local value without exposing it to
+ * the browser. The model adapter still checks token expiry before each
+ * gateway POST.
  */
 export interface SiteBuilderAgentProps {
   userId: string;

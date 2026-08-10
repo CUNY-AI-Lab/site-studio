@@ -59,6 +59,16 @@ function withCorrelationHeaders(
   return forwarded;
 }
 
+function noStoreResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export function createAgentRouter() {
   const app = new Hono<{ Bindings: Env; Variables: AgentRouterVariables }>();
 
@@ -80,9 +90,10 @@ export function createAgentRouter() {
       return jsonError("Project not found", 404);
     }
 
-    // Forward the verified caller JWT into the Durable Object so the model call
-    // can present it to the CAIL model proxy. The browser refreshes old sockets,
-    // and the model adapter checks expiry again before each outbound POST.
+    // Forward the verified caller JWT into the Durable Object so a new socket's
+    // connection-local state can present it to the CAIL model proxy. Later
+    // user-driven turns use the authenticated refresh route below to replace
+    // that state on the same socket.
     const props: SiteBuilderAgentProps = {
       userId: user.id,
       projectId,
@@ -103,8 +114,8 @@ export function createAgentRouter() {
     const user = getUser(c);
     // Rule 4 (docs/INTEGRATION.md §3¾): origin-check + token-gate WebSocket
     // upgrades BEFORE accepting. The browser enforces no same-origin policy on
-    // WS handshakes, and the identity JWT is captured once at accept with no
-    // second chance, so this boundary is the only place the check can live.
+    // WS handshakes. The identity JWT is captured on connect, then replaced by
+    // the authenticated refresh route immediately before each model frame.
     //
     // Judgment call on "gate the first state-changing WS message on your CSRF
     // token": the WS message protocol is owned by @cloudflare/ai-chat, so we
@@ -161,6 +172,34 @@ export function createAgentRouter() {
     );
   }
 
+  async function refreshAgentCredential(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
+    const gatewayJwt = getCailGatewayJwt(c);
+    if (!gatewayJwt) {
+      return new Response(JSON.stringify({ error: "authentication_required" }), {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
+    const user = getUser(c);
+    const stub = await loadAgentStub(c);
+    if (stub instanceof Response) {
+      return noStoreResponse(stub);
+    }
+
+    // The Gateway leg is selected by verified Doorway middleware on this
+    // ordinary HTTP request and forwarded through the server-owned props
+    // channel. The browser receives only the empty success response.
+    const request = new Request(c.req.raw);
+    const response = await stub.fetch(
+      withCorrelationHeaders(request, c, user.operationalSubject, gatewayJwt),
+    );
+    return noStoreResponse(response);
+  }
+
   app.get("/api/projects/:projectId/observability", async (c) => {
     const stub = await loadAgentStub(c);
     if (stub instanceof Response) {
@@ -170,6 +209,7 @@ export function createAgentRouter() {
     return c.json(await stub.getObservability());
   });
 
+  app.post("/api/agents/site-builder/:projectId/refresh-credential", refreshAgentCredential);
   app.all("/api/agents/site-builder/:projectId", handleAgentRequest);
   app.all("/api/agents/site-builder/:projectId/*", handleAgentRequest);
 

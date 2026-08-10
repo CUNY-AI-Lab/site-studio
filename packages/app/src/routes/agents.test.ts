@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { CSRF_ERROR_BODY } from "../lib/csrf";
+import { CSRF_ERROR_BODY, csrfProtect } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession } from "../lib/test-utils";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import { SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER } from "../lib/logging";
 import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
+
+const agentFetch = vi.hoisted(() => ({ lastRequest: null as Request | null }));
 
 // The real `agents` package imports `cloudflare:`-scheme modules that only
 // exist in the Workers runtime; stub getAgentByName with a DO stub that echoes
@@ -13,15 +15,23 @@ import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
 // stays observable.
 vi.mock("agents", () => ({
   getAgentByName: vi.fn(async () => ({
-      fetch: async (req: Request) =>
-      new Response(JSON.stringify({
-        forwardedUrl: req.url,
-        forwardedOperationalSubject: req.headers.get("x-site-studio-verified-operational-subject"),
-        forwardedIdentityJwt: req.headers.get(SITE_STUDIO_AGENT_PROPS_HEADER),
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      }),
+      fetch: async (req: Request) => {
+        agentFetch.lastRequest = req;
+        if (new URL(req.url).pathname.endsWith("/refresh-credential")) {
+          return new Response(null, {
+            status: 204,
+            headers: { "Cache-Control": "no-store" },
+          });
+        }
+        return new Response(JSON.stringify({
+          forwardedUrl: req.url,
+          forwardedOperationalSubject: req.headers.get("x-site-studio-verified-operational-subject"),
+          forwardedIdentityJwt: req.headers.get(SITE_STUDIO_AGENT_PROPS_HEADER),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      },
     getObservability: async () => ({ calls: [] })
   }))
 }));
@@ -85,7 +95,9 @@ describe("agent route WebSocket gate (rule 4)", () => {
       c.set("cailGatewayJwt", "verified-token");
       await next();
     });
+    app.use("/api/*", csrfProtect);
     app.route("/", createAgentRouter());
+    agentFetch.lastRequest = null;
   });
 
   const upgrade = (query: string, headers: Record<string, string>) =>
@@ -186,5 +198,36 @@ describe("agent route WebSocket gate (rule 4)", () => {
         },
       }
     );
+  });
+
+  it("refreshes the same agent through a CSRF-protected POST without returning props", async () => {
+    const res = await app.request(
+      `${OWN_ORIGIN}/api/agents/site-builder/${PROJECT_ID}/refresh-credential`,
+      {
+        method: "POST",
+        headers: {
+          ...csrf.headers,
+          [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: "caller-chosen-token" }),
+        },
+      },
+      env()
+    );
+    expect(res.status).toBe(204);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(await res.text()).toBe("");
+    expect(agentFetch.lastRequest?.headers.get(SITE_STUDIO_AGENT_PROPS_HEADER)).toBe(
+      JSON.stringify({ identityJwt: "verified-token" })
+    );
+  });
+
+  it("rejects the refresh POST before the agent when CSRF is missing", async () => {
+    const res = await app.request(
+      `${OWN_ORIGIN}/api/agents/site-builder/${PROJECT_ID}/refresh-credential`,
+      { method: "POST" },
+      env()
+    );
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
+    expect(agentFetch.lastRequest).toBeNull();
   });
 });

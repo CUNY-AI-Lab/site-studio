@@ -63,6 +63,10 @@ site-studio/
 - Chat transport is the Cloudflare Agents WebSocket protocol
 - Agent route: `/api/agents/site-builder/:projectId`
 - Persisted messages route: `/api/agents/site-builder/:projectId/get-messages`
+- Before every new or continued model turn, the client POSTs
+  `/api/agents/site-builder/:projectId/refresh-credential`; the authenticated
+  route replaces the existing socket's connection-local Gateway credential and
+  returns an empty, `no-store` response.
 - Client tool results / clarification answers: `cf_agent_tool_result`
 
 ## Key Technologies
