@@ -50,7 +50,12 @@
 			<aside class="file-panel">
 				<div class="panel-header">
 					<span class="label">Files</span>
-					<button onclick={onRefreshFiles} class="icon-button" title="Refresh files">
+					<button
+						onclick={onRefreshFiles}
+						class="icon-button"
+						title="Refresh files"
+						aria-label="Refresh files"
+					>
 						<RefreshCw size={16} />
 					</button>
 				</div>

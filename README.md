@@ -34,10 +34,15 @@ the configured JWKS with the exact issuer and scalar audience
 owner key. Email, display names, cookies, and caller-supplied identity headers
 never select ownership.
 
+When a browser session needs to sign in, Site Studio sends it to the protected
+Site Studio page on the standalone CAIL Doorway at
+`https://cail-doorway.ailab-452.workers.dev/site-studio/`; Doorway starts CUNY
+sign-in and returns the browser to the current Site Studio page.
+
 Model traffic goes directly from the app Worker to the CAIL Gateway through
 `@cuny-ai-lab/cail-client` and `@ai-sdk/openai-compatible` at
 `{CAIL_API_BASE}/v1`. The app forwards only the separately verified,
-subject-bound gateway bearer and stamps `X-CAIL-App: site-studio`. Site Studio
+subject-bound gateway identity and stamps `X-CAIL-App: site-studio`. Site Studio
 has no provider keys and does not impose an output-token or model-step cap.
 Billed model POSTs use `maxRetries: 0` because an uncertain automatic retry can
 duplicate a paid execution.
@@ -115,11 +120,12 @@ real Worker/resource boundary.
 app and Gateway identity JWTs supplied through the environment. It requires an
 admitted identity that already owns a public handle, creates one random project,
 runs an uncapped paid authoring turn, verifies persisted chat, preview, publish,
-and direct public serving, then deletes the project through the product API and
-recreates it once to prove its chat history was cleared. It neither manages
-Cloudflare storage directly nor changes the identity's handle. This proves the
-signed-identity Worker-to-Gateway product path; it is not a CUNY browser login or
-Doorway acceptance test.
+and direct public serving (including linked CSS and JavaScript through both the
+standalone Worker and configured Doorway), then deletes the project through the
+product API and recreates it once to prove its chat history was cleared. It
+neither manages Cloudflare storage directly nor changes the identity's handle.
+This proves the signed-identity Worker-to-Gateway product path and the
+configured public serving path; it is not a CUNY browser login test.
 
 The required environment variables are `SITE_STUDIO_URL` (set to
 `https://site-studio-app.ailab-452.workers.dev/site-studio/`),
@@ -133,8 +139,7 @@ name so the same identity can remove it after obtaining fresh tokens.
 `packages/app/.dev.vars` is gitignored. Required deployment configuration is
 declared in `packages/app/wrangler.jsonc`, including:
 
-- `CAIL_IDENTITY_JWKS` (secret), `CAIL_IDENTITY_PROFILE`, and
-  `CAIL_IDENTITY_ISSUER`
+- `CAIL_IDENTITY_JWKS` (secret) and the canonical `CAIL_IDENTITY_ISSUER`
 - `CAIL_API_BASE`, `CAIL_MODEL`, `CAIL_IMAGE_MODEL`, and
   `CAIL_IMAGE_CLASSIFIER`
 - `PUBLISHED_BASE_URL`
@@ -143,7 +148,7 @@ declared in `packages/app/wrangler.jsonc`, including:
 - R2, KV, Worker Loader, and Durable Object bindings
 
 The production frontend build uses `PUBLIC_BASE_PATH=/site-studio`, and the
-configured public base is `https://tools.ailab.gc.cuny.edu/site-studio`.
+configured public base is `https://cail-doorway.ailab-452.workers.dev/site-studio`.
 
 See [docs/security-and-recovery.md](docs/security-and-recovery.md) for the
 remaining trust and recovery boundaries.

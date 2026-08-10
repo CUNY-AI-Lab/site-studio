@@ -31,7 +31,7 @@
 	--color-text-primary: #1F2937;
 	--color-text-secondary: #4B5563;
 	--color-text-tertiary: #6B7280;
-	--color-text-muted: #9CA3AF;
+	--color-text-muted: #6B7280;
 
 	/* Primary accent - deep teal (trustworthy, calm, educational) */
 	--color-primary: #0D7377;
@@ -58,6 +58,11 @@
 	--color-error-light: #FEE2E2;
 	--color-info: #0D7377;
 	--color-info-light: #E6F4F5;
+	--color-badge-primary: #0D7377;
+	--color-badge-secondary: #9A3412;
+	--color-badge-success: #166534;
+	--color-badge-warning: #92400E;
+	--color-badge-error: #991B1B;
 
 	/* === Spacing System === */
 	--spacing-xs: 0.25rem;
@@ -175,7 +180,7 @@
 		--color-text-primary: #F9FAFB;
 		--color-text-secondary: #D1D5DB;
 		--color-text-tertiary: #9CA3AF;
-		--color-text-muted: #6B7280;
+		--color-text-muted: #9CA3AF;
 
 		/* Primary accent - brighter teal */
 		--color-primary: #14B8A6;
@@ -202,6 +207,11 @@
 		--color-error-light: rgba(239, 68, 68, 0.15);
 		--color-info: #14B8A6;
 		--color-info-light: rgba(20, 184, 166, 0.15);
+		--color-badge-primary: #5EEAD4;
+		--color-badge-secondary: #FCA5A5;
+		--color-badge-success: #6EE7B7;
+		--color-badge-warning: #FCD34D;
+		--color-badge-error: #FCA5A5;
 
 		/* Shadows for dark mode */
 		--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -219,7 +229,7 @@
 		--background: 224 47% 7%;
 		--foreground: 210 40% 98%;
 		--muted: 220 14% 16%;
-		--muted-foreground: 215 16% 57%;
+		--muted-foreground: 215 16% 70%;
 		--popover: 220 14% 12%;
 		--popover-foreground: 210 40% 98%;
 		--card: 220 14% 12%;
@@ -604,27 +614,27 @@ pre code {
 
 .badge-primary {
 	background: var(--color-primary-light);
-	color: var(--color-primary);
+	color: var(--color-badge-primary);
 }
 
 .badge-secondary {
 	background: var(--color-secondary-light);
-	color: var(--color-secondary);
+	color: var(--color-badge-secondary);
 }
 
 .badge-success {
 	background: var(--color-success-light);
-	color: var(--color-success);
+	color: var(--color-badge-success);
 }
 
 .badge-warning {
 	background: var(--color-warning-light);
-	color: var(--color-warning);
+	color: var(--color-badge-warning);
 }
 
 .badge-error {
 	background: var(--color-error-light);
-	color: var(--color-error);
+	color: var(--color-badge-error);
 }
 
 /* === Button Base Styles === */

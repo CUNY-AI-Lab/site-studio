@@ -183,7 +183,7 @@
 		</div>
 
 		{#if errorMessage}
-			<p class="history-error">{errorMessage}</p>
+			<p class="history-error" role="alert">{errorMessage}</p>
 		{/if}
 
 		<div class="history-list">

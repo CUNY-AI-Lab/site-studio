@@ -28,6 +28,7 @@
 	} = $props();
 
 	let expanded = $state(false);
+	let outputId = $derived(`tool-output-${tool.id ?? tool.name.replace(/[^a-z0-9_-]/gi, '-')}`);
 
 	const toolIcons: Record<string, any> = {
 		codemode: Blocks,
@@ -152,6 +153,12 @@
 		return 'status-running';
 	}
 
+	function getStatusLabel() {
+		if (tool.status === 'success') return 'Finished';
+		if (tool.status === 'error') return 'Needs attention';
+		return 'Working';
+	}
+
 	function formatElapsedTime(elapsedSeconds: number): string {
 		const totalSeconds = Math.max(0, Math.floor(elapsedSeconds));
 		if (totalSeconds < 60) {
@@ -188,9 +195,16 @@
 	let ChevronIcon = $derived(expanded ? ChevronDown : ChevronRight);
 </script>
 
-<button class="tool-card {getStatusClass()}" class:expanded={expanded} onclick={() => {
+
+<button
+	class="tool-card {getStatusClass()}"
+	class:expanded={expanded}
+	aria-expanded={expanded}
+	aria-controls={hasDiff || parsedOutput.cleanOutput ? outputId : undefined}
+	onclick={() => {
 		expanded = !expanded;
-	}}>
+	}}
+>
 	<div class="tool-header">
 		<div class="tool-info">
 			<div class="tool-icon-wrapper">
@@ -209,14 +223,15 @@
 				size={14}
 				class={`status-icon ${tool.status === 'running' ? 'spinning' : ''}`.trim()}
 			/>
+			<span class="status-label" aria-live="polite">{getStatusLabel()}</span>
 			{#if tool.output}
 				<ChevronIcon size={14} class="chevron-icon" />
 			{/if}
 		</div>
 	</div>
 
-	{#if expanded && (hasDiff || parsedOutput.cleanOutput)}
-		<div class="tool-output">
+	{#if hasDiff || parsedOutput.cleanOutput}
+		<div id={outputId} class="tool-output" hidden={!expanded}>
 			{#if hasDiff && parsedOutput.diffData}
 				<DiffDisplay diffData={parsedOutput.diffData} />
 			{/if}
@@ -368,6 +383,11 @@
 		background: var(--color-bg-secondary);
 		border-radius: var(--radius-sm);
 		animation: pulse 1.5s ease-in-out infinite;
+	}
+
+	.status-label {
+		font-size: 0.6875rem;
+		color: var(--indicator-color);
 	}
 
 	@keyframes pulse {

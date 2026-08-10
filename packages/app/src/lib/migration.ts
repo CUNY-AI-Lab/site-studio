@@ -103,12 +103,14 @@ function isAnonymousUserId(id: string): boolean {
 }
 
 /**
- * Rewrite a stored published URL to the canonical /u/{handle}/{slug}/ form,
- * preserving the origin. The import accepts the old owner-addressed value only
- * while copying it into the new authoritative metadata.
+ * Build the published URL from the current production base. Imported metadata
+ * may contain a host and mount from an older deployment, but that value is not
+ * authoritative and must never survive into the subject-owned record.
  */
-function rewritePublishedUrl(publishedUrl: string, handle: string, slug: string): string {
-  return publishedUrl.replace(/\/(?:sites|u)\/[^/]+\/[^/]+/, `/u/${handle}/${slug}`);
+function canonicalPublishedUrl(publishedBaseUrl: string, handle: string, slug: string): string {
+  const base = new URL(publishedBaseUrl);
+  const mountPath = base.pathname.replace(/\/+$/, "");
+  return `${base.origin}${mountPath}/u/${handle}/${slug}/`;
 }
 
 async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
@@ -277,6 +279,7 @@ async function copyAnonymousNamespace(options: {
   anonUserId: string;
   subject: string;
   subjectHandle: string | null;
+  publishedBaseUrl: string;
   porter?: ChatHistoryPorter;
   /** old anonymous projectId -> subject projectId from an earlier sweep */
   knownProjects?: Record<string, string>;
@@ -287,7 +290,7 @@ async function copyAnonymousNamespace(options: {
   projectMap: Record<string, string>;
   slugMap: Record<string, string>;
 }> {
-  const { bucket, anonUserId, subject, subjectHandle, porter, logging } = options;
+  const { bucket, anonUserId, subject, subjectHandle, publishedBaseUrl, porter, logging } = options;
   const projectMap: Record<string, string> = { ...options.knownProjects };
   const slugMap: Record<string, string> = { ...options.knownSlugs };
 
@@ -340,17 +343,14 @@ async function copyAnonymousNamespace(options: {
         ...(plan.newSlug ? { slug: plan.newSlug } : {}),
         ...(plan.metadata.publishedUrl && plan.newSlug
           ? {
-              // Never let the subject id into a client-visible URL. When the
-              // subject has a handle, rewrite to the canonical /u/{handle}/
-              // form; otherwise drop the stored URL (it will be regenerated on
-              // the next publish once a handle exists).
+              // Never let the subject id or an old host enter a client-visible
+              // URL. When the subject has a handle, build the canonical
+              // configured-base /u/{handle}/ form; otherwise drop the stored
+              // URL (it will be regenerated on the next publish once a handle
+              // exists).
               ...(subjectHandle
                 ? {
-                    publishedUrl: rewritePublishedUrl(
-                      plan.metadata.publishedUrl,
-                      subjectHandle,
-                      plan.newSlug
-                    )
+                    publishedUrl: canonicalPublishedUrl(publishedBaseUrl, subjectHandle, plan.newSlug)
                   }
                 : { publishedUrl: undefined })
             }
@@ -418,6 +418,8 @@ export async function migrateAnonymousData(options: {
   kv: KVNamespace;
   anonUserId: string;
   subject: string;
+  /** Current production public base used to canonicalize imported published URLs. */
+  publishedBaseUrl: string;
   /** The anonymous KV session id (cookie value), deleted on completion. */
   anonSessionId?: string;
   /** Durable Object chat-history porter; failures retain the source for retry. */
@@ -425,7 +427,7 @@ export async function migrateAnonymousData(options: {
   logging?: SiteStudioLoggingContext;
   now?: () => string;
 }): Promise<MigrationResult> {
-  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } = options;
+  const { bucket, kv, anonUserId, subject, publishedBaseUrl, anonSessionId, porter, logging } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
   if (!isAnonymousUserId(anonUserId) || anonUserId === subject) {
@@ -500,6 +502,7 @@ export async function migrateAnonymousData(options: {
     anonUserId,
     subject,
     subjectHandle,
+    publishedBaseUrl,
     porter,
     knownProjects: {},
     knownSlugs: {},
@@ -516,6 +519,7 @@ export async function migrateAnonymousData(options: {
     anonUserId,
     subject,
     subjectHandle,
+    publishedBaseUrl,
     porter,
     knownProjects: firstSweep.projectMap,
     knownSlugs: firstSweep.slugMap,

@@ -12,10 +12,14 @@ Product routes accept only a verified `X-CAIL-Identity-JWT`: RS256, required
 email and profile names are display data only. The legacy session cookie is an
 import source only, never authentication or ownership proof. The app does not
 issue or consult a subject session cookie or subject session KV record.
+The browser handles that envelope by sending the user to Doorway's protected
+Site Studio path at `https://cail-doorway.ailab-452.workers.dev/site-studio/`.
+Doorway starts CUNY sign-in and returns the browser to the current Site Studio
+path.
 
 The CAIL Gateway credential is a separate verified JWT with gateway audience,
 bound to the same subject. The Worker removes caller authority and routing
-headers before forwarding that bearer and `X-CAIL-App: site-studio`. The
+headers before forwarding the verified gateway identity and `X-CAIL-App: site-studio`. The
 repository contains no model-provider keys. Before each new or continued model
 turn, the CSRF-protected refresh route verifies the app and Gateway legs and
 replaces the existing owner/project socket's connection-local credential. It

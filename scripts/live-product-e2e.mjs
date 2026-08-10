@@ -1,7 +1,8 @@
 import WebSocket from 'ws';
 
 const PRODUCTION_SITE_URL = 'https://site-studio-app.ailab-452.workers.dev/site-studio/';
-const PRODUCTION_PUBLIC_ORIGIN = 'https://tools.ailab.gc.cuny.edu';
+const PRODUCTION_PUBLIC_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
+const PRODUCTION_PUBLIC_PATH = '/site-studio';
 const PRODUCTION_IDENTITY_ISSUER = `${PRODUCTION_PUBLIC_ORIGIN}/cail-sso`;
 const CHAT_REQUEST = 'cf_agent_use_chat_request';
 const CHAT_RESPONSE = 'cf_agent_use_chat_response';
@@ -46,6 +47,44 @@ function textFromChunk(chunk) {
 	if (typeof chunk?.delta === 'string') return chunk.delta;
 	if (typeof chunk?.text === 'string') return chunk.text;
 	return '';
+}
+
+function linkedResource(html, attribute, filename, documentUrl) {
+	const escapedFilename = filename.replace('.', '\\.');
+	const pattern = new RegExp(`${attribute}=["']([^"']*${escapedFilename}[^"']*)["']`, 'i');
+	const match = pattern.exec(html);
+	if (!match) throw new Error(`${filename} is not linked from ${documentUrl.pathname}`);
+	return new URL(match[1], documentUrl);
+}
+
+async function assertPublicResource(resourceUrl, expectedType, marker, context) {
+	const response = await fetch(resourceUrl, { redirect: 'manual' });
+	const body = await response.text();
+	if (!response.ok) throw new Error(`${context} returned ${response.status}`);
+	if (!response.headers.get('content-type')?.toLowerCase().startsWith(expectedType)) {
+		throw new Error(`${context} returned an unexpected content type`);
+	}
+	if (!body.includes(marker)) throw new Error(`${context} did not contain the required marker`);
+	if (response.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
+		throw new Error(`${context} did not include the app content security policy`);
+	}
+	return { response, body };
+}
+
+async function assertPublishedDocument(documentUrl, marker, context) {
+	const response = await fetch(documentUrl, { redirect: 'manual' });
+	const body = await response.text();
+	if (!response.ok || !body.includes(marker)) {
+		throw new Error(`${context} returned ${response.status}`);
+	}
+	if (response.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
+		throw new Error(`${context} did not include the app content security policy`);
+	}
+	const stylesUrl = linkedResource(body, 'href', 'styles.css', documentUrl);
+	const scriptUrl = linkedResource(body, 'src', 'script.js', documentUrl);
+	await assertPublicResource(stylesUrl, 'text/css', marker, `${context} stylesheet`);
+	await assertPublicResource(scriptUrl, 'application/javascript', marker, `${context} script`);
+	return response;
 }
 
 let interrupted = false;
@@ -199,6 +238,21 @@ function url(path) {
 	return new URL(path.replace(/^\/+/, ''), baseUrl);
 }
 
+function mountedWorkerPath(target) {
+	const targetUrl = target instanceof URL ? target : new URL(target, baseUrl);
+	if (targetUrl.origin !== baseUrl.origin) {
+		throw new Error(`worker resource resolved outside the standalone Worker: ${targetUrl.href}`);
+	}
+	const mountPath = baseUrl.pathname.replace(/\/+$/, '');
+	if (mountPath && !targetUrl.pathname.startsWith(`${mountPath}/`)) {
+		throw new Error(`worker resource escaped the configured mount path: ${targetUrl.pathname}`);
+	}
+	const relativePath = mountPath
+		? targetUrl.pathname.slice(mountPath.length + 1)
+		: targetUrl.pathname.replace(/^\/+/, '');
+	return `${relativePath}${targetUrl.search}`;
+}
+
 async function request(path, init = {}) {
 	if (!cleaningUp) requireNotInterrupted();
 	const headers = new Headers(appHeaders);
@@ -241,6 +295,7 @@ async function persistedAssistantMessages() {
 
 let projectAttempted = false;
 let directPublicUrl = null;
+let doorwayPublicUrl = null;
 
 async function deleteProject() {
 	const response = await request(`api/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' });
@@ -264,6 +319,12 @@ async function cleanupProject() {
 		const publicAfterDelete = await fetch(directPublicUrl, { redirect: 'manual' });
 		if (publicAfterDelete.status !== 404) {
 			throw new Error(`deleted public project returned ${publicAfterDelete.status}, expected 404`);
+		}
+	}
+	if (doorwayPublicUrl) {
+		const doorwayAfterDelete = await fetch(doorwayPublicUrl, { redirect: 'manual' });
+		if (doorwayAfterDelete.status !== 404) {
+			throw new Error(`deleted Doorway project returned ${doorwayAfterDelete.status}, expected 404`);
 		}
 	}
 
@@ -320,10 +381,10 @@ try {
 	if (initialMessages.length !== 0) throw new Error('proof project started with stale agent history');
 
 	const prompt = [
-		'Build a complete, polished one-page academic project site in this project.',
+		'Build a complete, polished one-page academic project site in this project using exactly three local files: index.html, styles.css, and script.js.',
 		`The visible page must contain the exact text ${JSON.stringify(marker)}.`,
-		'Use inline HTML and CSS only: no images, scripts, local resources, or external resources.',
-		'Use the project tools to write the files, then briefly state what you built.',
+		'index.html must link to styles.css with a relative stylesheet link and script.js with a relative deferred script tag; styles.css and script.js must each include the exact marker in their contents.',
+		'Do not use inline styles or scripts, images, or external resources. Use the project tools to write all three files, then briefly state what you built.',
 		'Do not ask a follow-up question.'
 	].join(' ');
 	const chat = await runChat({
@@ -339,23 +400,57 @@ try {
 
 	const file = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=index.html`);
 	if (!file.content.includes(marker)) throw new Error('paid authoring completed without the required page marker');
+	const stylesFile = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=styles.css`);
+	const scriptFile = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=script.js`);
+	if (!stylesFile.content.includes(marker) || !scriptFile.content.includes(marker)) {
+		throw new Error('paid authoring completed without the required linked asset markers');
+	}
+	const authoredIndex = String(file.content);
+	if (!/href=["'](?:\.\/)?styles\.css(?:["']|\?)/i.test(authoredIndex)) {
+		throw new Error('index.html does not link the local stylesheet');
+	}
+	if (!/src=["'](?:\.\/)?script\.js(?:["']|\?)/i.test(authoredIndex)) {
+		throw new Error('index.html does not link the local script');
+	}
 	const preview = await request(`preview/${encodeURIComponent(projectId)}/`, { headers: { accept: 'text/html' } });
 	const previewBody = await preview.text();
+	const previewUrl = url(`preview/${encodeURIComponent(projectId)}/`);
 	if (!preview.ok || !previewBody.includes(marker)) throw new Error(`preview failed with ${preview.status}`);
+	if (preview.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
+		throw new Error('preview did not include the app content security policy');
+	}
+	const previewStylesUrl = linkedResource(previewBody, 'href', 'styles.css', previewUrl);
+	const previewScriptUrl = linkedResource(previewBody, 'src', 'script.js', previewUrl);
+	const previewResourcePrefix = `preview/${encodeURIComponent(projectId)}/`;
+	const previewStylesPath = mountedWorkerPath(previewStylesUrl);
+	const previewScriptPath = mountedWorkerPath(previewScriptUrl);
+	if (!previewStylesPath.startsWith(`${previewResourcePrefix}styles.css`) ||
+		!previewScriptPath.startsWith(`${previewResourcePrefix}script.js`)) {
+		throw new Error('preview linked resources did not resolve beneath the project preview path');
+	}
+	const previewStyles = await request(previewStylesPath);
+	const previewScript = await request(previewScriptPath);
+	if (!previewStyles.ok || !previewStyles.headers.get('content-type')?.toLowerCase().startsWith('text/css')) {
+		throw new Error(`preview stylesheet failed with ${previewStyles.status}`);
+	}
+	if (!previewScript.ok || !previewScript.headers.get('content-type')?.toLowerCase().startsWith('application/javascript')) {
+		throw new Error(`preview script failed with ${previewScript.status}`);
+	}
+	if (!(await previewStyles.text()).includes(marker) || !(await previewScript.text()).includes(marker)) {
+		throw new Error('preview linked assets did not contain the required marker');
+	}
 
 	const published = await json(`api/projects/${encodeURIComponent(projectId)}/publish`, { method: 'POST' });
 	if (published.success !== true) throw new Error('publish did not report success');
 	const publishedUrl = new URL(published.url);
 	if (
 		publishedUrl.origin !== PRODUCTION_PUBLIC_ORIGIN ||
-		!publishedUrl.pathname.startsWith(`/site-studio/u/${handle}/`)
+		!publishedUrl.pathname.startsWith(`${PRODUCTION_PUBLIC_PATH}/u/${handle}/`)
 	) throw new Error('publish returned an unexpected configured public URL');
 	directPublicUrl = new URL(`${publishedUrl.pathname}${publishedUrl.search}`, baseUrl.origin);
-	const publicResponse = await fetch(directPublicUrl, { redirect: 'manual' });
-	const publicBody = await publicResponse.text();
-	if (!publicResponse.ok || !publicBody.includes(marker)) {
-		throw new Error(`direct Worker public fetch failed with ${publicResponse.status}`);
-	}
+	doorwayPublicUrl = publishedUrl;
+	const publicResponse = await assertPublishedDocument(directPublicUrl, marker, 'direct Worker public fetch');
+	await assertPublishedDocument(doorwayPublicUrl, marker, 'Doorway public fetch');
 
 	summary = {
 		boundary: 'direct signed-identity standalone Worker to production Gateway; not CUNY browser login',

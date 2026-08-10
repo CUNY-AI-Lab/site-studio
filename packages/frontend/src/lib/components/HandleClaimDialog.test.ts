@@ -86,6 +86,23 @@ describe('HandleClaimDialog', () => {
 		}
 	});
 
+	it('explains how to recover when the availability check fails', async () => {
+		vi.useFakeTimers();
+		try {
+			const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+			mockCheck.mockRejectedValue(new TypeError('network down'));
+			open();
+			await user.type(screen.getByLabelText('Address'), 'jane');
+			await vi.advanceTimersByTimeAsync(400);
+			expect(
+				screen.getByText("Couldn't check that address. Check your connection and try again.")
+			).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: /claim and publish/i })).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('shows "Available" and enables the claim button when valid + available', async () => {
 		vi.useFakeTimers();
 		try {

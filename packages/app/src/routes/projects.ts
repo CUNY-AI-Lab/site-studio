@@ -8,9 +8,7 @@ import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 import type { RequireProjectVariables } from "../lib/require-project";
-import { clearProjectAgentHistory, moveProjectAgentHistory } from "../lib/agent-porter";
 import {
-  emitDiagnostic,
   getLoggingContext,
   serializeSiteStudioLoggingContext,
   type LoggingVariables,
@@ -127,14 +125,6 @@ export function createProjectRouter() {
         throw error;
       }
 
-      // SS-41: the project id is part of the Durable Object name. Move the
-      // conversation after storage succeeds so a rename neither strands the
-      // old history nor exposes it if the old name is later reused.
-      try {
-        await moveProjectAgentHistory(c.env, user.id, currentId, nextId);
-      } catch (error) {
-        emitDiagnostic("warning", "agent_history_move_failed", {}, getLoggingContext(c, user.operationalSubject));
-      }
     }
 
     // SS-51: a concurrent DELETE can remove the project between the
@@ -172,14 +162,6 @@ export function createProjectRouter() {
       serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)),
     );
 
-    // SS-41: R2 deletion does not remove the project-named agent Durable
-    // Object. Clear its persisted messages best-effort so recreating the same
-    // normalized project id cannot resurface the deleted conversation.
-    try {
-      await clearProjectAgentHistory(c.env, user.id, projectId);
-    } catch (error) {
-      emitDiagnostic("warning", "agent_history_clear_failed", {}, getLoggingContext(c, user.operationalSubject));
-    }
     return c.json({ success: true, message: "Project deleted successfully" });
   });
 

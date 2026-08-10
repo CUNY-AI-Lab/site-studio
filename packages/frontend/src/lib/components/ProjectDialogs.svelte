@@ -5,6 +5,7 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { toast } from '$lib/toast.svelte';
+	import { getErrorMessage } from '$lib/api/errors';
 
 	interface Props {
 		showRenameDialog: boolean;
@@ -52,9 +53,10 @@
 			const renamedProject = await renameProject(selectedProject.id, newName.trim());
 			onRenameOpenChange(false);
 			await onRenameSuccess(renamedProject);
+			toast.success('Project renamed.');
 		} catch (error) {
 			console.error('Error renaming project:', error);
-			toast.error('Failed to rename project. Please try again.');
+			toast.error(`Couldn't rename project. ${getErrorMessage(error)}`);
 		} finally {
 			isRenaming = false;
 		}
@@ -72,9 +74,10 @@
 			await deleteProject(selectedProject.id);
 			onDeleteOpenChange(false);
 			await onDeleteSuccess(deletedProjectId);
+			toast.success('Project deleted.');
 		} catch (error) {
 			console.error('Error deleting project:', error);
-			toast.error('Failed to delete project. Please try again.');
+			toast.error(`Couldn't delete project. ${getErrorMessage(error)}`);
 		} finally {
 			isDeleting = false;
 		}
@@ -119,7 +122,11 @@
 		<Dialog.Header>
 			<Dialog.Title>Delete Project</Dialog.Title>
 			<Dialog.Description>
-				Are you sure you want to delete "{selectedProject?.name}"? This action cannot be undone.
+				{#if selectedProject?.published}
+					Deleting "{selectedProject.name}" will remove its public site. This action cannot be undone.
+				{:else}
+					Are you sure you want to delete "{selectedProject?.name}"? This action cannot be undone.
+				{/if}
 			</Dialog.Description>
 		</Dialog.Header>
 

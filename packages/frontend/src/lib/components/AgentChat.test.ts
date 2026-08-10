@@ -280,7 +280,7 @@ describe('AgentChat', () => {
 		mount();
 
 		await waitFor(() =>
-			expect(assignSpy).toHaveBeenCalledWith('http://localhost:3000/login?rt=%2F')
+				expect(assignSpy).toHaveBeenCalledWith('https://cail-doorway.ailab-452.workers.dev/site-studio/')
 		);
 	});
 

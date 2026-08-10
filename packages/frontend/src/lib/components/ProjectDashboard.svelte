@@ -69,7 +69,7 @@
 			error = null;
 			projects = await fetchProjects();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load projects';
+			error = "We couldn't load your projects. Check your connection and try again.";
 			console.error('Error loading projects:', e);
 		} finally {
 			loading = false;
@@ -114,6 +114,7 @@
 					? { ...p, published: true, publishedUrl: result.url }
 					: p
 			);
+			toast.success('Site published. It is now live.');
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
@@ -131,6 +132,7 @@
 	}
 
 	async function handleUnpublishProject(project: Project) {
+		if (!window.confirm(`Make "${project.name}" private? Its public URL will stop working.`)) return;
 		try {
 			publishingProjectId = project.id;
 			await unpublishProject(project.id);
@@ -141,8 +143,9 @@
 					? { ...p, published: false, publishedUrl: undefined }
 					: p
 			);
+			toast.success('Site is private. Its public URL no longer works.');
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to unpublish project.');
+			toast.error(e instanceof Error ? e.message : "Couldn't make the site private.");
 		} finally {
 			publishingProjectId = null;
 		}
@@ -179,7 +182,7 @@
 	onDeleteSuccess={loadProjects}
 />
 
-<div class="project-dashboard">
+<main class="project-dashboard">
 	<div class="dashboard-header">
 		<div>
 			<h1 class="dashboard-title">Site Studio</h1>
@@ -192,12 +195,12 @@
 	</div>
 
 	{#if loading}
-		<div class="loading-state">
+		<div class="loading-state" role="status" aria-live="polite">
 			<p>Loading projects...</p>
 		</div>
 	{:else if error}
-		<div class="error-state">
-			<p>Error: {error}</p>
+		<div class="error-state" role="alert">
+			<p>{error}</p>
 			<Button onclick={loadProjects}>Retry</Button>
 		</div>
 	{:else if projects.length === 0}
@@ -214,7 +217,11 @@
 		<div class="projects-grid">
 			{#each projects as project (project.id)}
 				<div class="project-card">
-					<button class="project-card-button" onclick={() => openProject(project.id)}>
+					<button
+						class="project-card-button"
+						onclick={() => openProject(project.id)}
+						aria-label={`Open ${project.name}`}
+					>
 						{#if project.thumbnailUrl}
 							<div class="project-thumbnail">
 								<img src={resolvePath(project.thumbnailUrl)} alt={project.name} />
@@ -235,6 +242,7 @@
 											size="icon-sm"
 											class="project-menu-button"
 											onclick={(e: MouseEvent) => e.stopPropagation()}
+											aria-label={`Project actions for ${project.name}`}
 										>
 											<MoreVertical size={16} />
 										</Button>
@@ -252,7 +260,7 @@
 									disabled={publishingProjectId === project.id}
 								>
 									<GlobeLock size={14} />
-									<span>{publishingProjectId === project.id ? 'Unpublishing...' : 'Unpublish'}</span>
+									<span>{publishingProjectId === project.id ? 'Making private...' : 'Make site private'}</span>
 								</DropdownMenu.Item>
 							{:else}
 								<DropdownMenu.Item
@@ -287,7 +295,7 @@
 			{/each}
 		</div>
 	{/if}
-</div>
+</main>
 
 <style>
 	.project-dashboard {

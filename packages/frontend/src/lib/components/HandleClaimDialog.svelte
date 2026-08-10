@@ -67,6 +67,10 @@
 				if (seq === checkSeq) {
 					result = res;
 				}
+			} catch {
+				if (seq === checkSeq) {
+					claimError = "Couldn't check that address. Check your connection and try again.";
+				}
 			} finally {
 				if (seq === checkSeq) checking = false;
 			}

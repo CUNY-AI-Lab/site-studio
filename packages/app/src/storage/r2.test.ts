@@ -1438,6 +1438,74 @@ describe("OwnerMutationService recovery journal", () => {
     expect(await storage.fileExists("user-a", "site", "index.html")).toBe(false);
   });
 
+  it("does not report deletion complete until private chat history is cleared", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    let clearFails = true;
+    const history = {
+      clear: vi.fn(async () => {
+        if (clearFails) throw new Error("injected history failure");
+      }),
+      move: vi.fn(async () => undefined)
+    };
+    const service = new OwnerMutationService(bucket, journal, undefined, history);
+    await storage.createProject("user-a", "site", "Site");
+
+    await expect(service.execute("user-a", {
+      type: "delete-project",
+      projectId: "site"
+    })).rejects.toThrow("injected history failure");
+
+    expect(await storage.projectExists("user-a", "site")).toBe(true);
+    expect(journal.values.get("owner-mutation")).toEqual({
+      type: "delete",
+      projectId: "site"
+    });
+
+    clearFails = false;
+    await service.recover("user-a");
+    expect(await storage.projectExists("user-a", "site")).toBe(false);
+    expect(history.clear).toHaveBeenCalledTimes(2);
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("moves private chat history before committing a project rename", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    let moveFails = true;
+    const history = {
+      clear: vi.fn(async () => undefined),
+      move: vi.fn(async () => {
+        expect(await storage.projectExists("user-a", "source")).toBe(true);
+        expect(await storage.projectExists("user-a", "target")).toBe(true);
+        if (moveFails) throw new Error("injected history move failure");
+      })
+    };
+    const service = new OwnerMutationService(bucket, journal, undefined, history);
+    await storage.createProject("user-a", "source", "Site");
+    await storage.writeFile("user-a", "source", "index.html", "complete");
+
+    await expect(service.execute("user-a", {
+      type: "rename-project",
+      projectId: "source",
+      nextProjectId: "target",
+      name: "Renamed"
+    })).rejects.toThrow("injected history move failure");
+
+    expect(journal.values.get("owner-mutation")).toMatchObject({
+      type: "rename-project",
+      stage: "committing"
+    });
+    moveFails = false;
+    await service.recover("user-a");
+    expect(await storage.projectExists("user-a", "source")).toBe(false);
+    expect(await storage.projectExists("user-a", "target")).toBe(true);
+    expect(history.move).toHaveBeenCalledTimes(3);
+    expect(journal.values.size).toBe(0);
+  });
+
   it("fences a published project before deleting any of its files", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);

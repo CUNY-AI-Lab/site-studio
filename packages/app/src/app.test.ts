@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CAIL_CANONICAL_ISSUER } from "@cuny-ai-lab/cail-identity";
 import {
   canonicalTestSubject,
   createTestIdentityIssuer,
@@ -20,7 +21,7 @@ vi.mock("agents", () => ({
 import app from "./app";
 
 const BASE = "https://site-studio.example";
-const ALLOWED_ORIGIN = "https://tools.ailab.gc.cuny.edu";
+const ALLOWED_ORIGIN = "https://cail-doorway.ailab-452.workers.dev";
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();
@@ -47,7 +48,10 @@ let bucket: R2Bucket;
 let identityIssuer: TestIdentityIssuer;
 
 beforeAll(async () => {
-  identityIssuer = await createTestIdentityIssuer({ kid: "app-test" });
+  identityIssuer = await createTestIdentityIssuer({
+    kid: "app-test",
+    issuer: CAIL_CANONICAL_ISSUER,
+  });
 });
 
 async function identityHeaders(label = "app-test-user"): Promise<Record<string, string>> {
@@ -63,8 +67,7 @@ function createEnv(): Env {
   return {
     CAIL_LOG_ENV: "test",
     CAIL_IDENTITY_JWKS: identityIssuer.jwksJson,
-    CAIL_IDENTITY_ISSUER: "https://tools.ailab.gc.cuny.edu/cail-sso",
-    CAIL_IDENTITY_PROFILE: "production",
+    CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],

@@ -13,7 +13,7 @@
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import { csrfFetch } from '$lib/api/csrf';
-	import { apiResponseFetch } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage, handleApiError } from '$lib/api/errors';
 	import { toast } from '$lib/toast.svelte';
 
 	let {
@@ -47,7 +47,7 @@
 				body: formData
 			});
 
-			if (!response.ok) throw new Error('Upload failed');
+			if (!response.ok) await handleApiError(response);
 
 			// Refresh file list
 			onRefresh();
@@ -56,7 +56,7 @@
 			input.value = '';
 		} catch (error) {
 			console.error('Error uploading file:', error);
-			toast.error('Failed to upload file. Please try again.');
+			toast.error(`Couldn't upload file. ${getErrorMessage(error)}`);
 		} finally {
 			isUploading = false;
 		}
@@ -95,15 +95,14 @@
 			});
 
 			if (!response.ok) {
-				const error = await response.json();
-				throw new Error(error.error || 'Delete failed');
+				await handleApiError(response);
 			}
 
 			// Refresh file list
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error deleting file:', error);
-			toast.error("Couldn't delete that file. Try again.");
+			toast.error(`Couldn't delete that file. ${getErrorMessage(error)}`);
 		}
 	}
 
@@ -126,15 +125,14 @@
 			});
 
 			if (!response.ok) {
-				const error = await response.json();
-				throw new Error(error.error || 'Rename failed');
+				await handleApiError(response);
 			}
 
 			// Refresh file list
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error renaming file:', error);
-			toast.error("Couldn't rename that file. Try again.");
+			toast.error(`Couldn't rename that file. ${getErrorMessage(error)}`);
 		}
 	}
 </script>
@@ -152,6 +150,7 @@
 			disabled={isUploading}
 			class="upload-button"
 			title="Upload file"
+			aria-label={isUploading ? 'Uploading file' : 'Upload file'}
 		>
 			<Upload size={14} />
 			<span>{isUploading ? 'Uploading...' : 'Upload'}</span>
@@ -201,6 +200,7 @@
 						}}
 						type="button"
 						title="Rename file"
+						aria-label={`Rename ${file.name}`}
 					>
 						<Edit3 size={14} />
 					</button>
@@ -212,6 +212,7 @@
 						}}
 						type="button"
 						title="Download file"
+						aria-label={`Download ${file.name}`}
 					>
 						<Download size={14} />
 					</button>
@@ -223,6 +224,7 @@
 						}}
 						type="button"
 						title="Delete file"
+						aria-label={`Delete ${file.name}`}
 					>
 						<Trash2 size={14} />
 					</button>
@@ -347,6 +349,10 @@
 		opacity: 1;
 	}
 
+	.file-row:focus-within .file-actions {
+		opacity: 1;
+	}
+
 	.action-button {
 		display: flex;
 		align-items: center;
@@ -363,6 +369,11 @@
 	.action-button:hover {
 		background: var(--color-bg-tertiary);
 		color: var(--color-accent);
+	}
+
+	.action-button:focus-visible {
+		outline: 2px solid var(--color-primary, var(--color-accent));
+		outline-offset: 2px;
 	}
 
 	.action-button.delete-button:hover {

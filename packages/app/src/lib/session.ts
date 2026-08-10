@@ -366,9 +366,9 @@ async function migrateAnonymousSessionIfPresent(
  *
  * Identity contract (docs/INTEGRATION.md §3):
  *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
- *      `CAIL_IDENTITY_JWKS`; `CAIL_IDENTITY_PROFILE` selects a source-owned
- *      issuer and `CAIL_IDENTITY_ISSUER` must match it exactly for audience
- *      `cail:site-studio`. The durable owner key becomes the CAIL subject.
+ *      `CAIL_IDENTITY_JWKS`; `CAIL_IDENTITY_ISSUER` must match CAIL's
+ *      canonical issuer exactly for audience `cail:site-studio`. The durable
+ *      owner key becomes the CAIL subject.
  *      The legacy cookie is an import source only; no subject-keyed session
  *      cookie or KV record is issued or consulted for authentication. Other
  *      bare X-CAIL-* headers are ignored — this worker is

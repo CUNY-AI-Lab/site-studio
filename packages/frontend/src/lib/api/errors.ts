@@ -54,34 +54,31 @@ export class ApiError extends Error {
 }
 
 /**
- * Redirect the browser to the CAIL SSO login, preserving where to return.
+ * Redirect the browser to the standalone CAIL Doorway login, preserving where
+ * to return.
  *
- * The SSO gate serves `/login?rt=<same-origin-path>` (docs/INTEGRATION.md §2).
- * Only same-origin paths are used as the return target to avoid open-redirects.
+ * Site Studio is served directly by its Worker, so `/login` on either service
+ * is not a login page. Doorway owns the protected `/site-studio/` route; send
+ * the browser there and let Doorway's route policy start CUNY sign-in.
  */
-function redirectToLogin(loginUrl: string): void {
+const CAIL_DOORWAY_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
+const SITE_STUDIO_DOORWAY_PATH = '/site-studio';
+
+function redirectToLogin(): void {
 	if (typeof window === 'undefined') return;
-	const rt = window.location.pathname + window.location.search;
-	let target = new URL('/login', window.location.origin);
-	try {
-		const candidate = new URL(loginUrl, window.location.origin);
-		// A leading slash is part of the CAIL contract. URL parsing additionally
-		// rejects protocol-relative and backslash-normalized cross-origin forms.
-		if (
-			loginUrl.startsWith('/') &&
-			candidate.origin === window.location.origin &&
-			!candidate.pathname.startsWith('//')
-		) {
-			target = candidate;
-		}
-	} catch {
-		// Malformed or non-URL values fall back to the fixed same-origin login path.
-	}
+	const currentPath = window.location.pathname;
+	const safeCurrentPath = currentPath.startsWith('/') && !currentPath.startsWith('//')
+		? currentPath
+		: '/';
+	const doorwayPath = safeCurrentPath === SITE_STUDIO_DOORWAY_PATH ||
+		safeCurrentPath.startsWith(`${SITE_STUDIO_DOORWAY_PATH}/`)
+		? safeCurrentPath
+		: `${SITE_STUDIO_DOORWAY_PATH}${safeCurrentPath}`;
+	const target = new URL(doorwayPath, CAIL_DOORWAY_ORIGIN);
+	// Doorway stores this classified protected path as the login return target;
+	// its route policy keeps the path on Site Studio and forwards it after auth.
+	target.search = window.location.search;
 	target.hash = '';
-	target.searchParams.set('rt', rt);
-	// Navigate with the already-validated absolute serialization. Re-emitting a
-	// normalized pathname that begins `//` would make Location reparse it as a
-	// scheme-relative cross-origin URL.
 	window.location.assign(target.href);
 }
 
@@ -94,7 +91,7 @@ function maybeRedirectToLogin(status: number, errorData: any): void {
 		return;
 	}
 
-	redirectToLogin(typeof errorData.login_url === 'string' ? errorData.login_url : '/login');
+	redirectToLogin();
 }
 
 function toApiError(response: Response, errorData: any): ApiError {

@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
+import { CAIL_CANONICAL_ISSUER } from "@cuny-ai-lab/cail-identity";
 import {
   TEST_SUBJECTS,
   canonicalTestSubject,
@@ -12,10 +13,14 @@ import { migrateAnonymousData } from "./migration";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
+const PUBLISHED_BASE_URL = "https://cail-doorway.ailab-452.workers.dev/site-studio";
 
 beforeAll(async () => {
-  // Kit default issuer is the canonical production issuer this suite configures.
-  identityIssuer = await createTestIdentityIssuer({ kid: "session-test" });
+  // Mint the exact production Doorway issuer configured by this suite.
+  identityIssuer = await createTestIdentityIssuer({
+    kid: "session-test",
+    issuer: CAIL_CANONICAL_ISSUER,
+  });
   identityJwks = identityIssuer.jwksJson;
 });
 
@@ -75,11 +80,11 @@ function createCoordinatorNamespace(): MockCoordinator {
 function createEnv(overrides?: Partial<Env>): Env {
   const env: Env = {
     CAIL_LOG_ENV: "test",
-    APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
+    APP_PUBLIC_DOMAIN: "https://cail-doorway.ailab-452.workers.dev",
+    PUBLISHED_BASE_URL,
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
-    CAIL_IDENTITY_ISSUER: "https://tools.ailab.gc.cuny.edu/cail-sso",
-    CAIL_IDENTITY_PROFILE: "production",
+    CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     CAIL_MODEL: "test-model",
     SESSION_KV: {
       get: vi.fn(async () => null),
@@ -103,6 +108,7 @@ function createEnv(overrides?: Partial<Env>): Env {
           kv: env.SESSION_KV,
           anonUserId,
           subject,
+          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId
         })
     })
@@ -383,6 +389,7 @@ describe("authMiddleware anonymous-data migration", () => {
           kv,
           anonUserId,
           subject,
+          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId,
         })
     );
@@ -470,7 +477,14 @@ describe("authMiddleware anonymous-data migration", () => {
         migrateAnonymous: async (anonUserId: string, subject: string, anonSessionId?: string) => {
           attempts += 1;
           if (attempts === 1) throw new Error("injected import failure");
-          return migrateAnonymousData({ bucket, kv, anonUserId, subject, anonSessionId });
+          return migrateAnonymousData({
+            bucket,
+            kv,
+            anonUserId,
+            subject,
+            publishedBaseUrl: env.PUBLISHED_BASE_URL!,
+            anonSessionId,
+          });
         },
       }),
     } as unknown as Env["MUTATION_COORDINATOR"];

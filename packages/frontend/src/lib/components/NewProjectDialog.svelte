@@ -200,7 +200,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
-				Choose a starting template — you can customize it to create anything you want using the AI assistant.
+				Choose a starting template. Customize the static website with the AI assistant. Prompts and attached files are sent to CAIL and saved with this project; AI use is subject to your CAIL usage limit.
 			</Dialog.Description>
 		</Dialog.Header>
 

@@ -29,7 +29,7 @@ describe('apiResponseFetch', () => {
 		['absolute', 'https://evil.example/login'],
 		['non-path relative', 'login'],
 		['non-URL scheme', 'javascript:alert(1)']
-	])('rejects a %s login URL in favor of the fixed same-origin path', async (_label, loginUrl) => {
+	])('ignores a %s login URL and uses the protected Site Studio path', async (_label, loginUrl) => {
 		fetchMock.mockResolvedValue(
 			new Response(JSON.stringify({ error: 'authentication_required', login_url: loginUrl }), {
 				status: 401,
@@ -40,16 +40,16 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://studio.example.edu/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
 		);
 	});
 
-	it('preserves a same-origin login path and its existing query parameters', async () => {
+	it('preserves the current Site Studio path and query instead of trusting envelope URLs', async () => {
 		fetchMock.mockResolvedValue(
 			new Response(
 				JSON.stringify({
 					error: 'authentication_required',
-					login_url: '/login?profile=production#ignored'
+					login_url: '/site-studio/?profile=production#ignored'
 				}),
 				{ status: 401, headers: { 'Content-Type': 'application/json' } }
 			)
@@ -58,7 +58,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://studio.example.edu/login?profile=production&rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
 		);
 	});
 
@@ -80,7 +80,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://studio.example.edu/login?rt=%2Feditor%2Fproject-1%3Fpanel%3Dcode'
+			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
 		);
 	});
 

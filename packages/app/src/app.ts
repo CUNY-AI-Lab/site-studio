@@ -63,9 +63,9 @@ app.use("*", requestLogging());
 // Rule 5 (docs/INTEGRATION.md §3¾): credentialed CORS must use a strict
 // allowlist — never a wildcard or reflected origin. Pinned by test.
 const allowedOrigins = new Set([
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "https://tools.ailab.gc.cuny.edu"
+	"http://localhost:5173",
+	"http://127.0.0.1:5173",
+	"https://cail-doorway.ailab-452.workers.dev"
 ]);
 
 app.use("/api/*", cors({

@@ -1,27 +1,23 @@
 /**
  * CAIL gateway identity (CUNYLogin SSO) for the site-studio-app worker.
  *
- * The OpenResty SSO gate on tools.ailab.gc.cuny.edu authenticates the browser
- * and injects identity JWT headers on each request it forwards
- * (see the cail-gateway repo: docs/INTEGRATION.md §3, gateway/README.md
- * "Identity contract"). This worker is ALSO directly reachable on its
+ * CAIL Doorway authenticates the browser and injects identity JWT headers on
+ * each request it forwards. This worker is also directly reachable on its
  * workers.dev URL, so bare `X-CAIL-*` headers prove nothing — anyone can set
- * them. Identity is accepted ONLY from the verified JWT.
+ * them. Identity is accepted only from the verified JWT.
  *
  * JWT verification is delegated to the shared `@cuny-ai-lab/cail-identity`
  * primitive. Site Studio accepts one contract: RS256, a public key selected
  * from `CAIL_IDENTITY_JWKS`, and the service-specific `cail:site-studio`
- * audience. A source-owned deployment profile selects the exact issuer;
- * `CAIL_IDENTITY_ISSUER` must match it and cannot define a new trust root.
- * Production and staging trust are never combined. The stable
- * pseudonymous CAIL subject (`sub`) is the only durable key for workspace
+ * audience. The deployment issuer must match CAIL's one canonical standalone
+ * Doorway issuer and cannot define a new trust root.
+ * The stable pseudonymous CAIL subject (`sub`) is the only durable key for workspace
  * ownership. Never key anything by email.
  */
 
 import {
   CAIL_CANONICAL_ISSUER,
   CAIL_GATEWAY_AUDIENCE,
-  CAIL_STAGING_ISSUER,
   readIdentityKeyring,
   verifyKeyringGatewayJwt,
   type CailIdentity,
@@ -35,7 +31,6 @@ export type { CailIdentity };
 export interface IdentityVerificationEnv {
   CAIL_IDENTITY_JWKS?: string;
   CAIL_IDENTITY_ISSUER?: string;
-  CAIL_IDENTITY_PROFILE?: string;
 }
 
 export type RequestIdentityResolution =
@@ -47,24 +42,11 @@ export type RequestIdentityResolution =
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
 export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
 
-const CAIL_IDENTITY_ISSUER_BY_PROFILE = Object.freeze({
-  production: CAIL_CANONICAL_ISSUER,
-  staging: CAIL_STAGING_ISSUER,
-});
-
-function sourceOwnedIssuer(env: IdentityVerificationEnv): string | null {
-  const profile = env.CAIL_IDENTITY_PROFILE;
-  if (profile !== "production" && profile !== "staging") return null;
-  const issuer = CAIL_IDENTITY_ISSUER_BY_PROFILE[profile];
-  return env.CAIL_IDENTITY_ISSUER === issuer ? issuer : null;
-}
-
 /**
- * cail-identity 5.0.0 replaced per-call jwks + options with a loader that
- * validates issuer, audience, and every JWKS key once and returns a frozen
- * snapshot. The snapshot is cached per (jwks, issuer) so a request does not
- * re-import keys; a configuration failure yields `null` here and an "invalid"
- * resolution, never a silently anonymous request.
+ * cail-identity 5.2.2 validates the canonical issuer, audience, and every JWKS key
+ * once and returns a frozen snapshot. The snapshot is cached per (jwks, issuer)
+ * so a request does not re-import keys; a configuration failure yields `null`
+ * here and an "invalid" resolution, never a silently anonymous request.
  */
 // Bounded: each entry strongly retains imported CryptoKeys for a whole JWKS,
 // and an isolate can survive repeated key rotations, so an unbounded map would
@@ -78,8 +60,8 @@ async function loadVerifier(
   audience: string = CAIL_IDENTITY_AUDIENCE
 ): Promise<IdentityVerifierConfig | null> {
   const jwks = env.CAIL_IDENTITY_JWKS;
-  const issuer = sourceOwnedIssuer(env);
-  if (!jwks || !issuer) return null;
+  if (!jwks || env.CAIL_IDENTITY_ISSUER !== CAIL_CANONICAL_ISSUER) return null;
+  const issuer = CAIL_CANONICAL_ISSUER;
   const key = `${audience}\u0000${issuer}\u0000${jwks}`;
   const cached = verifierCache.get(key);
   if (cached) return cached;
@@ -87,7 +69,6 @@ async function loadVerifier(
     jwks,
     issuer,
     expectedAudience: audience,
-    supportedIssuers: [issuer],
   });
   if (!loaded.ok) return null;
   if (verifierCache.size >= VERIFIER_CACHE_MAX) {
@@ -135,7 +116,7 @@ export async function getRequestIdentity(
 /**
  * The CAIL `authentication_required` envelope (docs/INTEGRATION.md §2), returned
  * verbatim so the frontend treats worker-issued and gate-issued 401s alike and
- * redirects to `/login?rt=<current-path>`.
+ * redirects to the protected Doorway Site Studio path.
  */
 export function cailAuthRequiredResponse(): Response {
   return new Response(
@@ -143,7 +124,7 @@ export function cailAuthRequiredResponse(): Response {
       error: "authentication_required",
       message:
         "Sign in with CUNY Login to use Site Studio.",
-      login_url: "/login",
+      login_url: "/site-studio/",
     }),
     {
       status: 401,

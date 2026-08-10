@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../types";
 import { OwnerMutationService, type OwnerMutation, type OwnerMutationResult } from "../lib/owner-mutations";
 import { migrateAnonymousData, type MigrationResult } from "../lib/migration";
-import { createAgentHistoryPorter } from "../lib/agent-porter";
+import { createAgentHistoryPorter, createProjectHistoryLifecycle } from "../lib/agent-porter";
 import {
   createSiteStudioBoundaryContext,
   type SiteStudioLoggingContextData,
@@ -41,6 +41,7 @@ export class MutationCoordinator extends DurableObject<Env> {
         this.env.SITE_STUDIO_BUCKET,
         this.ctx.storage,
         logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
+        createProjectHistoryLifecycle(this.env),
       ).execute(ownerId, operation)
     );
   }
@@ -59,12 +60,17 @@ export class MutationCoordinator extends DurableObject<Env> {
         this.env.SITE_STUDIO_BUCKET,
         this.ctx.storage,
         logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
+        createProjectHistoryLifecycle(this.env),
       ).recover(anonUserId);
+      if (!this.env.PUBLISHED_BASE_URL) {
+        throw new Error("PUBLISHED_BASE_URL is not configured");
+      }
       return migrateAnonymousData({
         bucket: this.env.SITE_STUDIO_BUCKET,
         kv: this.env.SESSION_KV,
         anonUserId,
         subject,
+        publishedBaseUrl: this.env.PUBLISHED_BASE_URL,
         anonSessionId,
         porter: createAgentHistoryPorter(this.env),
         logging: logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,

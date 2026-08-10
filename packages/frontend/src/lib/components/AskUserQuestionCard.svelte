@@ -156,7 +156,7 @@
 	{#each questions as question, index}
 		<div class="question-section">
 			<div class="question-row">
-				<span class="q-icon">
+				<span class="q-icon" aria-hidden="true">
 					<MessageCircleQuestion size={16} />
 				</span>
 				<div class="q-text">
@@ -178,6 +178,7 @@
 							class="option-chip"
 							class:selected={isSelected(index, option.label)}
 							aria-pressed={isSelected(index, option.label)}
+							aria-describedby={validationMessage ? 'question-validation' : undefined}
 							onclick={() => chooseOption(index, question, option.label)}
 							title={option.description || ''}
 						>
@@ -192,6 +193,8 @@
 						type="button"
 						class="option-chip other-chip"
 						class:selected={showCustomInput[index]}
+						aria-pressed={showCustomInput[index]}
+						aria-describedby={validationMessage ? 'question-validation' : undefined}
 						onclick={() => toggleCustom(index, question)}
 					>
 						<Pencil size={11} />
@@ -204,6 +207,8 @@
 						id={`custom-${index}`}
 						type="text"
 						class="custom-input"
+						aria-label={`${question.question} answer`}
+						aria-describedby={validationMessage ? 'question-validation' : undefined}
 						placeholder={question.placeholder || 'Type your answer…'}
 						value={customAnswers[index] || ''}
 						oninput={(e) => updateCustomAnswer(index, question, (e.currentTarget as HTMLInputElement).value)}
@@ -213,6 +218,8 @@
 				<textarea
 					id={`freeform-${index}`}
 					class="freeform-input"
+					aria-label={`${question.question} answer`}
+					aria-describedby={validationMessage ? 'question-validation' : undefined}
 					rows="2"
 					placeholder={question.placeholder || 'Type your answer…'}
 					value={customAnswers[index] || ''}
@@ -223,7 +230,7 @@
 	{/each}
 
 	{#if validationMessage}
-		<p class="validation">{validationMessage}</p>
+		<p id="question-validation" class="validation" role="alert" aria-live="assertive">{validationMessage}</p>
 	{/if}
 
 	<div class="card-actions">

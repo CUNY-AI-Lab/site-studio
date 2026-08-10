@@ -117,6 +117,7 @@ function createMockKV() {
 
 const ANON = "user_anon123";
 const SUBJECT = canonicalTestSubject("migration-owner");
+const PUBLISHED_BASE_URL = "https://cail-doorway.ailab-452.workers.dev/site-studio";
 
 /** Copied objects are stored as ArrayBuffers by the mock; decode for asserts. */
 function textOf(entry: { data: ArrayBuffer | string } | undefined): string | undefined {
@@ -173,6 +174,7 @@ describe("migrateAnonymousData", () => {
       kv,
       anonUserId: ANON,
       subject: SUBJECT,
+      publishedBaseUrl: PUBLISHED_BASE_URL,
       anonSessionId: "anon-session-id",
       ...overrides
     });
@@ -618,7 +620,7 @@ describe("handle re-homing through migration", () => {
     bucket.store.set(`userhandles/${ownerId}.json`, { data: JSON.stringify({ handle, claimedAt }) });
   }
 
-  it("moves the anon handle to a subject with none, and rewrites publishedUrl to /u/", async () => {
+  it("moves the anon handle to a subject with none, and canonicalizes publishedUrl", async () => {
     seedHandle(ANON, "jane-rivera");
     seedAnonProject(
       bucket,
@@ -632,7 +634,13 @@ describe("handle re-homing through migration", () => {
       "<h1>site</h1>"
     );
 
-    await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
+    await migrateAnonymousData({
+      bucket,
+      kv,
+      anonUserId: ANON,
+      subject: SUBJECT,
+      publishedBaseUrl: PUBLISHED_BASE_URL,
+    });
 
     // Handle re-homed: record points at subject, reverse record moved.
     expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
@@ -644,7 +652,7 @@ describe("handle re-homing through migration", () => {
 
     // Migrated project's publishedUrl uses the handle, never the subject id.
     const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
-    expect(meta.publishedUrl).toBe("https://tools.cuny.qzz.io/u/jane-rivera/portfolio/");
+    expect(meta.publishedUrl).toBe(`${PUBLISHED_BASE_URL}/u/jane-rivera/portfolio/`);
     expect(meta.publishedUrl).not.toContain(SUBJECT);
   });
 
@@ -653,7 +661,13 @@ describe("handle re-homing through migration", () => {
     seedHandle(ANON, "anon-alias");
     seedAnonProject(bucket, "portfolio", { published: true, slug: "portfolio" });
 
-    await migrateAnonymousData({ bucket, kv, anonUserId: ANON, subject: SUBJECT });
+    await migrateAnonymousData({
+      bucket,
+      kv,
+      anonUserId: ANON,
+      subject: SUBJECT,
+      publishedBaseUrl: PUBLISHED_BASE_URL,
+    });
 
     // Subject keeps its own primary.
     expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("primary");

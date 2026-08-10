@@ -422,7 +422,7 @@ export function createPublishRouter() {
     return new Response(binaryBody(thumbnail), {
       headers: {
         "Content-Type": "image/png",
-        "Cache-Control": "public, max-age=60",
+        "Cache-Control": "private, no-store",
         "X-Content-Type-Options": "nosniff"
       }
     });
@@ -509,9 +509,32 @@ async function servePublishedFile(
     return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
   }
 
+  const headers = publishedResponseHeaders(resolved.filePath, resolved.object);
+  if (publishedObjectNotModified(c.req.raw, resolved.object)) {
+    return new Response(null, { status: 304, headers });
+  }
+
   return new Response(binaryBody(new Uint8Array(await resolved.object.arrayBuffer())), {
-    headers: publishedResponseHeaders(resolved.filePath, resolved.object)
+    headers
   });
+}
+
+function publishedObjectNotModified(request: Request, object: R2ObjectBody): boolean {
+  const ifNoneMatch = request.headers.get("If-None-Match");
+  if (ifNoneMatch !== null) {
+    if (ifNoneMatch.trim() === "*") return true;
+    if (!object.etag) return false;
+    const current = object.etag.replace(/^W\//, "").replace(/^"|"$/g, "");
+    return ifNoneMatch.split(",").some((candidate) =>
+      candidate.trim().replace(/^W\//, "").replace(/^"|"$/g, "") === current
+    );
+  }
+
+  const ifModifiedSince = request.headers.get("If-Modified-Since");
+  if (!ifModifiedSince || !object.uploaded) return false;
+  const since = Date.parse(ifModifiedSince);
+  if (!Number.isFinite(since)) return false;
+  return Math.floor(object.uploaded.getTime() / 1000) <= Math.floor(since / 1000);
 }
 
 /**

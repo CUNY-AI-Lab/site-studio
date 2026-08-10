@@ -54,8 +54,8 @@
   ],
   "vars": {
     "CAIL_LOG_ENV": "production",
-    "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
-    "PUBLISHED_BASE_URL": "https://tools.ailab.gc.cuny.edu/site-studio",
+    "APP_PUBLIC_DOMAIN": "https://cail-doorway.ailab-452.workers.dev",
+    "PUBLISHED_BASE_URL": "https://cail-doorway.ailab-452.workers.dev/site-studio",
     // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----
     // CAIL_API_BASE: the one public base URL of the CAIL Model API (serves
     // /v1/... model calls and /keys) in the institutional Cloudflare account.
@@ -77,10 +77,7 @@
     // from the gateway's curated catalog;
     // `@cf/meta/llama-4-scout-17b-16e-instruct` is the other vision model.
     "CAIL_IMAGE_CLASSIFIER": "@cf/moonshotai/kimi-k2.6",
-    // The source-owned profile selects exactly one issuer. Staging must
-    // override both values rather than widening production's trust boundary.
-    "CAIL_IDENTITY_PROFILE": "production",
-    "CAIL_IDENTITY_ISSUER": "https://tools.ailab.gc.cuny.edu/cail-sso",
+    "CAIL_IDENTITY_ISSUER": "https://cail-doorway.ailab-452.workers.dev/cail-sso",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted published content, so runtime
     // validation requires this exact path and rejects a root-scoped cookie.

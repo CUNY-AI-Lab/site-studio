@@ -59,6 +59,11 @@ export interface MutationJournalStore {
   delete(key: string): Promise<boolean>;
 }
 
+export interface ProjectHistoryLifecycle {
+  clear(ownerId: string, projectId: string): Promise<void>;
+  move(ownerId: string, fromProjectId: string, toProjectId: string): Promise<void>;
+}
+
 const JOURNAL_KEY = "owner-mutation";
 const UPLOAD_ADMISSIONS_KEY = "upload-admissions";
 
@@ -90,6 +95,7 @@ export class OwnerMutationService {
     private readonly bucket: R2Bucket,
     private readonly journalStore: MutationJournalStore,
     private readonly logging?: SiteStudioLoggingContext,
+    private readonly projectHistory?: ProjectHistoryLifecycle,
   ) {
     this.storage = new R2ProjectStorage(bucket, logging);
   }
@@ -204,6 +210,7 @@ export class OwnerMutationService {
         // before resuming file deletion so a failed delete cannot leave a
         // progressively torn published site exposed.
         await this.hideProjectFromPublic(ownerId, journal.projectId);
+        await this.projectHistory?.clear(ownerId, journal.projectId);
         await this.storage.deleteProject(ownerId, journal.projectId);
         break;
       case "rename-project":
@@ -235,6 +242,7 @@ export class OwnerMutationService {
             await this.hideProjectFromPublic(ownerId, journal.projectId);
           }
           await this.putJournal({ ...journal, stage: "committing" });
+          await this.projectHistory?.move(ownerId, journal.projectId, journal.nextProjectId);
           await this.storage.deleteProject(ownerId, journal.projectId);
           await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
             name: journal.name
@@ -246,6 +254,7 @@ export class OwnerMutationService {
           if (journal.published || journal.slug) {
             await this.hideProjectFromPublic(ownerId, journal.projectId);
           }
+          await this.projectHistory?.move(ownerId, journal.projectId, journal.nextProjectId);
           await this.storage.deleteProject(ownerId, journal.projectId);
           await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, { name: journal.name });
         }
@@ -343,6 +352,11 @@ export class OwnerMutationService {
                 await this.hideProjectFromPublic(ownerId, operation.projectId);
               }
               await this.putJournal({ ...journal, stage: "committing" });
+              await this.projectHistory?.move(
+                ownerId,
+                operation.projectId,
+                operation.nextProjectId,
+              );
             }
           });
         } catch (error) {
@@ -360,6 +374,7 @@ export class OwnerMutationService {
       case "delete-project":
         await this.putJournal({ type: "delete", projectId: operation.projectId });
         await this.hideProjectFromPublic(ownerId, operation.projectId);
+        await this.projectHistory?.clear(ownerId, operation.projectId);
         await this.storage.deleteProject(ownerId, operation.projectId);
         await this.clearJournal();
         return { ok: true };

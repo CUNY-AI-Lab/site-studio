@@ -28,9 +28,9 @@
 
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
-	let previewComponent: Preview;
-	let chatComponent: AgentChat;
-	let chatPane: ReturnType<typeof Pane>;
+	let previewComponent = $state<Preview>();
+	let chatComponent = $state<AgentChat>();
+	let chatPane = $state<ReturnType<typeof Pane>>();
 	let projectLoadVersion = 0;
 	let previousProjectId = $state<string | null>(null);
 	let stableProjectId = $state<string | null>(null);
@@ -52,6 +52,7 @@
 	// project. Rendering `files = []` on an API failure made "the API is down"
 	// indistinguishable from "you have no files".
 	let filesLoadError = $state<string | null>(null);
+	let projectMissing = $state(false);
 	let allProjects = $state<Project[]>([]);
 	let currentProject = $state<Project | null>(null);
 	let draftSecret = '';
@@ -395,6 +396,7 @@
 
 	async function refreshProjectState(targetProjectId: string) {
 		const loadVersion = ++projectLoadVersion;
+		projectMissing = false;
 		let loadedFiles: ProjectFile[];
 		let loadedProjects: Project[];
 		try {
@@ -410,6 +412,7 @@
 			// SS-48: surface the failure instead of rendering an empty project. The
 			// file panel shows the error with a retry, mirroring ProjectDashboard.
 			filesLoadError = error instanceof Error ? error.message : 'Failed to load project files';
+			projectMissing = filesLoadError.toLowerCase().includes('project not found');
 			toast.error('Could not load the project. Check your connection and retry.');
 			return;
 		}
@@ -422,6 +425,7 @@
 		files = loadedFiles;
 		allProjects = loadedProjects;
 		currentProject = loadedProjects.find((project) => project.id === targetProjectId) || null;
+		projectMissing = currentProject === null;
 		stableProjectId = targetProjectId;
 	}
 
@@ -464,6 +468,7 @@
 		currentFileOpenStatus = 'idle';
 		files = [];
 		filesLoadError = null;
+		projectMissing = false;
 		currentProject = null;
 
 		await refreshProjectState(targetProjectId);
@@ -668,6 +673,7 @@
 
 	async function handleUnpublishProject() {
 		if (!currentProject) return;
+		if (!window.confirm(`Make "${currentProject.name}" private? Its public URL will stop working.`)) return;
 		try {
 			publishingProjectId = currentProject.id;
 			await unpublishProject(currentProject.id);
@@ -679,8 +685,9 @@
 			allProjects = allProjects.map(p =>
 				p.id === updated.id ? updated : p
 			);
+			toast.success('Site is private. Its public URL no longer works.');
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : 'Failed to unpublish project.');
+			toast.error(e instanceof Error ? e.message : "Couldn't make the site private.");
 		} finally {
 			publishingProjectId = null;
 		}
@@ -771,14 +778,33 @@
 />
 
 <div class="app">
+	{#if projectMissing}
+		<main class="missing-project" aria-labelledby="missing-project-title">
+			<div class="missing-project-card">
+				<h1 id="missing-project-title">This project is no longer here</h1>
+				<p>It may have been deleted or its address may have changed.</p>
+				<Button href={base || '/'}>Back to your projects</Button>
+			</div>
+		</main>
+	{:else}
 	<!-- Toggle buttons for collapsed panels -->
 	{#if isChatCollapsed}
-		<button class="panel-toggle panel-toggle-left" onclick={toggleChatPane} title="Show Chat">
+		<button
+			class="panel-toggle panel-toggle-left"
+			onclick={toggleChatPane}
+			title="Show chat"
+			aria-label="Show chat"
+		>
 			<PanelLeftClose size={20} />
 		</button>
 	{/if}
 	{#if isCodeCollapsed}
-		<button class="panel-toggle panel-toggle-right" onclick={toggleCodePane} title="Show Code Editor">
+		<button
+			class="panel-toggle panel-toggle-right"
+			onclick={toggleCodePane}
+			title="Show code editor"
+			aria-label="Show code editor"
+		>
 			<Code2 size={20} />
 		</button>
 	{/if}
@@ -798,7 +824,7 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<a href={base || '/'} class="logo">Site Studio</a>
-	                    <Button variant="ghost" size="sm" href={base || '/'}>
+					<Button variant="ghost" size="sm" href={base || '/'} aria-label="Back to dashboard">
                         <LayoutDashboard size={18} />
                     </Button>
                 </div>
@@ -807,7 +833,7 @@
 							<DropdownMenu.Trigger>
 								{#snippet child({ props })}
 									<button {...props} class="project-selector">
-										<span class="project-name">{projectId}</span>
+										<span class="project-name">{currentProject?.name || 'Current project'}</span>
 										<ChevronDown size={16} class="chevron" />
 									</button>
 								{/snippet}
@@ -885,6 +911,7 @@
 											variant="ghost"
 											size="icon-sm"
 											class="project-options-button"
+										aria-label={`Project options for ${currentProject?.name || 'current project'}`}
 										>
 											<MoreVertical size={16} />
 										</Button>
@@ -901,7 +928,7 @@
 											disabled={publishingProjectId === currentProject.id}
 										>
 											<GlobeLock size={14} />
-											<span>{publishingProjectId === currentProject.id ? 'Unpublishing...' : 'Unpublish'}</span>
+									<span>{publishingProjectId === currentProject.id ? 'Making private...' : 'Make site private'}</span>
 										</DropdownMenu.Item>
 										<DropdownMenu.Separator />
 									{/if}
@@ -960,7 +987,12 @@
 				maxSize={80}
 			>
 				<aside class="code-panel">
-					<button class="close-editor-button" onclick={toggleCodePane} title="Close Editor">
+					<button
+						class="close-editor-button"
+						onclick={toggleCodePane}
+						title="Close code editor"
+						aria-label="Close code editor"
+					>
 						<PanelRightClose size={20} />
 					</button>
 					<CodeView
@@ -982,6 +1014,7 @@
 			</Resizable.Pane>
 		</Resizable.PaneGroup>
 	</div>
+	{/if}
 </div>
 
 <style>
@@ -991,6 +1024,27 @@
 		height: 100vh;
 		position: relative;
 		background: var(--color-bg-primary);
+	}
+
+	.missing-project {
+		display: grid;
+		min-height: 100vh;
+		place-items: center;
+		padding: 2rem;
+	}
+
+	.missing-project-card {
+		max-width: 30rem;
+		text-align: center;
+	}
+
+	.missing-project-card h1 {
+		margin: 0 0 0.75rem;
+	}
+
+	.missing-project-card p {
+		margin: 0 0 1.5rem;
+		color: var(--color-text-secondary);
 	}
 
 	:global(.main-layout) {

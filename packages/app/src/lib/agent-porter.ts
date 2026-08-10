@@ -7,12 +7,13 @@
  * `${subject}:${newProjectId}` instance. Account import fails closed when a
  * conversation cannot be copied: the migration caller retains the anonymous
  * namespace so a later request can retry instead of retiring the only
- * recoverable copy. Standalone rename and delete helpers remain best-effort
- * because they are outside account import.
+ * recoverable copy. Project rename and delete run these operations inside the
+ * owner's mutation journal so a failed history operation remains retryable.
  */
 
 import type { Env } from "../types";
 import type { ChatHistoryPorter } from "./migration";
+import type { ProjectHistoryLifecycle } from "./owner-mutations";
 
 export async function clearProjectAgentHistory(
   env: Pick<Env, "SITE_BUILDER_AGENT">,
@@ -88,5 +89,15 @@ export function createAgentHistoryPorter(
         throw new Error("Destination chat history differs from the legacy source");
       }
     }
+  };
+}
+
+export function createProjectHistoryLifecycle(
+  env: Pick<Env, "SITE_BUILDER_AGENT">
+): ProjectHistoryLifecycle {
+  return {
+    clear: (ownerId, projectId) => clearProjectAgentHistory(env, ownerId, projectId),
+    move: (ownerId, fromProjectId, toProjectId) =>
+      moveProjectAgentHistory(env, ownerId, fromProjectId, toProjectId),
   };
 }

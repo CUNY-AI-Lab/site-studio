@@ -227,6 +227,9 @@
 									class:active={activePath === image.path}
 									onclick={() => selectImage(image.path)}
 									title={replaceTarget ? 'Use this image for the replacement' : 'Insert this image'}
+									aria-label={replaceTarget
+										? `Use this image for the replacement: ${image.path}`
+										: `Insert this image: ${image.path}`}
 								>
 									<img src={thumbUrl(image.path)} alt="" loading="lazy" />
 								</button>
@@ -289,7 +292,13 @@
 								Add this image to your site
 							{/if}
 						</h3>
-						<button type="button" class="close-form" onclick={resetForm} title="Cancel">
+						<button
+							type="button"
+							class="close-form"
+							onclick={resetForm}
+							title="Cancel"
+							aria-label="Cancel image placement"
+						>
 							<X size={15} />
 						</button>
 					</div>

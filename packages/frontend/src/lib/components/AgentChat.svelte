@@ -3,7 +3,7 @@
 	import { Send, Loader2, X, Paperclip, Square } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { apiResponseFetch, getErrorMessage, isApiError } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError } from '$lib/api/errors';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
@@ -204,6 +204,28 @@
 		return name
 			.replace(/^mcp[\s_-]+[\w-]+[\s_-]+/, '')
 			.replace(/-/g, '_');
+	}
+
+	function getToolStatusLabel(name: string): string {
+		switch (normalizeToolName(name)) {
+			case 'extract_document_text':
+				return 'Reading your document...';
+			case 'ask_user_question':
+				return 'Waiting for your input...';
+			case 'read_file':
+			case 'search_files':
+			case 'list_files':
+				return 'Reviewing your site files...';
+			case 'write_file':
+			case 'edit_file':
+			case 'rename_file':
+			case 'delete_file':
+			case 'add_page':
+			case 'scaffold_template':
+				return 'Updating your site files...';
+			default:
+				return 'Working on your site...';
+		}
 	}
 
 	function formatElapsedTime(milliseconds: number): string {
@@ -936,15 +958,7 @@
 			case 'tool-input-start':
 			case 'tool-input-available':
 				trackToolStart(chunk.toolCallId);
-				if (chunk.toolName === 'codemode') {
-					currentStatus = 'Working on your site...';
-				} else if (chunk.toolName === 'extract_document_text') {
-					currentStatus = 'Reading your document...';
-				} else if (chunk.toolName === 'ask_user_question') {
-					currentStatus = 'Waiting for your input...';
-				} else {
-					currentStatus = `Using ${chunk.toolName.replace(/_/g, ' ')}...`;
-				}
+				currentStatus = getToolStatusLabel(chunk.toolName);
 				break;
 			case 'tool-output-available': {
 				const toolPart = activeStream.parts.find(
@@ -1174,7 +1188,7 @@
 		});
 
 		if (!response.ok) {
-			throw new Error('File upload failed');
+			await handleApiError(response);
 		}
 
 		const data = await response.json();
@@ -1223,7 +1237,7 @@
 					{
 						id: generateId(),
 						role: 'assistant',
-						parts: [{ type: 'text', text: 'Sorry, the file upload failed. Please try again.' }]
+						parts: [{ type: 'text', text: `Sorry, the file upload failed. ${getErrorMessage(error)}` }]
 					}
 				];
 				isLoading = false;
@@ -1516,16 +1530,28 @@
 					target.style.height = Math.min(target.scrollHeight, 200) + 'px';
 				}}
 				placeholder={messages.length > 0 ? "Ask a follow-up..." : "Describe what you'd like to build..."}
+				aria-label="Message to the assistant"
 				disabled={isLoading}
 				class="input-field"
 				rows="1"
 			></textarea>
 			{#if isLoading}
-				<button onclick={stopRequest} class="stop-button" title="Stop request">
+				<button
+					onclick={stopRequest}
+					class="stop-button"
+					title="Stop request"
+					aria-label="Stop request"
+				>
 					<Square size={16} />
 				</button>
 			{:else}
-				<button onclick={() => sendMessage()} disabled={!input.trim()} class="send-button">
+				<button
+					onclick={() => sendMessage()}
+					disabled={!input.trim()}
+					class="send-button"
+					title="Send message"
+					aria-label="Send message"
+				>
 					<Send size={18} />
 				</button>
 			{/if}
@@ -1537,7 +1563,12 @@
 				<Paperclip size={14} />
 				<span class="filename">{attachedFile.name}</span>
 				<span class="filesize">({(attachedFile.size / 1024).toFixed(1)}KB)</span>
-				<button class="remove-btn" onclick={removeAttachment} title="Remove attachment">
+				<button
+					class="remove-btn"
+					onclick={removeAttachment}
+					title="Remove attachment"
+					aria-label={`Remove ${attachedFile.name}`}
+				>
 					<X size={14} />
 				</button>
 			</div>
@@ -1558,7 +1589,12 @@
 				style="display: none;"
 				accept="image/*,.pdf,.txt,.md,.json,.csv"
 			/>
-			<button class="icon-btn" title="Attach file" onclick={handleFileUpload}>
+			<button
+				class="icon-btn"
+				title="Attach file"
+				aria-label="Attach file"
+				onclick={handleFileUpload}
+			>
 				<span class="plus-icon">+</span>
 			</button>
 		</div>

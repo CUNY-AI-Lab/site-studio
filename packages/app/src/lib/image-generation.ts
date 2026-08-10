@@ -180,7 +180,7 @@ export interface GenerateImageInput {
 /**
  * Generate an image via the gateway's native `/v1/run` endpoint.
  *
- * The verified Doorway JWT is sent as the standard bearer credential. The
+ * The verified Doorway JWT is sent through the shared client's JWT credential path. The
  * retained client owns the bounded native request and makes one attempt.
  *
  * On a gateway/provider error the client throws a typed `CailError` whose

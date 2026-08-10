@@ -730,11 +730,11 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-root?ref=x",
+      "https://cail-doorway.ailab-452.workers.dev/u/janedoe/prefixed-root?ref=x",
       { redirect: "manual" },
       {
         ...createEnv(bucket),
-        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+        PUBLISHED_BASE_URL: "https://cail-doorway.ailab-452.workers.dev/site-studio"
       }
     );
 
@@ -751,11 +751,11 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-404/missing",
+      "https://cail-doorway.ailab-452.workers.dev/u/janedoe/prefixed-404/missing",
       { headers: { Accept: "text/html" } },
       {
         ...createEnv(bucket),
-        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+        PUBLISHED_BASE_URL: "https://cail-doorway.ailab-452.workers.dev/site-studio"
       }
     );
 
@@ -809,6 +809,31 @@ describe("route regressions", () => {
     // The §3¾ containment coexists with the caching validators.
     expect(response.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
     expect(response.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+  });
+
+  it("returns 304 when a published file validator still matches", async () => {
+    await storage.createProject(userId, "cache-304", "Cache 304");
+    await storage.writeFile(userId, "cache-304", "index.html", "<h1>Home</h1>");
+    await storage.updateProjectMetadata(userId, "cache-304", { published: true, slug: "cache-304" });
+
+    const first = await app.request(
+      "http://site-studio.test/u/janedoe/cache-304/",
+      undefined,
+      createEnv(bucket)
+    );
+    const etag = first.headers.get("ETag");
+    expect(first.status).toBe(200);
+    expect(etag).toBeTruthy();
+
+    const revalidated = await app.request(
+      "http://site-studio.test/u/janedoe/cache-304/",
+      { headers: { "If-None-Match": `W/\"${etag}\"` } },
+      createEnv(bucket)
+    );
+    expect(revalidated.status).toBe(304);
+    expect(await revalidated.text()).toBe("");
+    expect(revalidated.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
+    expect(revalidated.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts");
   });
 
   it("SS-27: a missing published ASSET does not download the project 404.html", async () => {
@@ -956,6 +981,7 @@ describe("served-bytes security headers (§3¾)", () => {
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(response.headers.get("Content-Security-Policy")).toBeNull();
   });
 

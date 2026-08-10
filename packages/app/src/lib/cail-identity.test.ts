@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { CAIL_CANONICAL_ISSUER } from "@cuny-ai-lab/cail-identity";
 import {
   TEST_SUBJECTS,
   canonicalTestSubject,
@@ -12,24 +13,20 @@ import {
   resolveRequestIdentity,
 } from "./cail-identity";
 
-const PRODUCTION_ISSUER = "https://tools.ailab.gc.cuny.edu/cail-sso";
-const STAGING_ISSUER = "https://tools.cuny.qzz.io/cail-sso";
 const AUDIENCE = "cail:site-studio";
 
 let issuer: TestIdentityIssuer;
 let currentEnv: {
   CAIL_IDENTITY_JWKS: string;
   CAIL_IDENTITY_ISSUER: string;
-  CAIL_IDENTITY_PROFILE: string;
 };
 
 beforeAll(async () => {
-  // The kit's default issuer IS the canonical production issuer.
-  issuer = await createTestIdentityIssuer({ kid: "current" });
+  // Mint the exact production Doorway issuer used by the app.
+  issuer = await createTestIdentityIssuer({ kid: "current", issuer: CAIL_CANONICAL_ISSUER });
   currentEnv = {
     CAIL_IDENTITY_JWKS: issuer.jwksJson,
-    CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
-    CAIL_IDENTITY_PROFILE: "production",
+    CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
   };
 });
 
@@ -54,7 +51,7 @@ function requestWithToken(token: string): Request {
 // Hand-rolled negative-path fixture for the one shape the testing kit cannot
 // express: mintIdentityJwt only signs RS256, so the alg-tampering contract
 // violation needs a local signer. (The array-audience negative moved onto the
-// kit in cail-identity 5.1.2.)
+// kit in cail-identity 5.2.2.)
 // ---------------------------------------------------------------------------
 
 function base64url(bytes: Uint8Array): string {
@@ -91,7 +88,7 @@ async function generateLocalKey(kid: string): Promise<LocalKey> {
 function validLocalClaims(overrides: Record<string, unknown> = {}) {
   const now = Math.floor(Date.now() / 1000);
   return {
-    iss: PRODUCTION_ISSUER,
+    iss: CAIL_CANONICAL_ISSUER,
     aud: AUDIENCE,
     sub: TEST_SUBJECTS.alice,
     email: "someone@gc.cuny.edu",
@@ -120,15 +117,13 @@ let localKey: LocalKey;
 let localEnv: {
   CAIL_IDENTITY_JWKS: string;
   CAIL_IDENTITY_ISSUER: string;
-  CAIL_IDENTITY_PROFILE: string;
 };
 
 beforeAll(async () => {
   localKey = await generateLocalKey("local");
   localEnv = {
     CAIL_IDENTITY_JWKS: JSON.stringify({ keys: [localKey.jwk] }),
-    CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
-    CAIL_IDENTITY_PROFILE: "production",
+    CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
   };
 });
 
@@ -142,17 +137,6 @@ describe("getRequestIdentity", () => {
       name: "Some One",
       entitlements: ["site-studio"],
     });
-  });
-
-  it("accepts the staging issuer only in an explicitly staging-scoped deployment", async () => {
-    const token = await mintJwt({ issuer: STAGING_ISSUER });
-    await expect(getRequestIdentity(requestWithToken(token), {
-      ...currentEnv,
-      CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
-      CAIL_IDENTITY_PROFILE: "staging",
-    }))
-      .resolves.toMatchObject({ subject: TEST_SUBJECTS.alice });
-    await expect(getRequestIdentity(requestWithToken(token), currentEnv)).resolves.toBeNull();
   });
 
   it("rejects a token signed by a key outside the configured JWKS", async () => {
@@ -227,27 +211,19 @@ describe("getRequestIdentity", () => {
     await expect(getRequestIdentity(requestWithToken(token), {
       CAIL_IDENTITY_JWKS: attacker.jwksJson,
       CAIL_IDENTITY_ISSUER: attackerIssuer,
-      CAIL_IDENTITY_PROFILE: "production",
     })).resolves.toBeNull();
   });
 
-  it("fails closed when profile and source-owned issuer authority disagree", async () => {
+  it("fails closed when the configured issuer is not CAIL's canonical issuer", async () => {
     const productionToken = await mintJwt();
-    const stagingToken = await mintJwt({ issuer: STAGING_ISSUER });
 
     for (const env of [
-      { ...currentEnv, CAIL_IDENTITY_PROFILE: undefined },
-      { ...currentEnv, CAIL_IDENTITY_PROFILE: "unknown" },
-      { ...currentEnv, CAIL_IDENTITY_PROFILE: "staging" },
+      { ...currentEnv, CAIL_IDENTITY_ISSUER: undefined },
+      { ...currentEnv, CAIL_IDENTITY_ISSUER: "https://evil.example/cail-sso" },
     ]) {
       await expect(getRequestIdentity(requestWithToken(productionToken), env))
         .resolves.toBeNull();
     }
-    await expect(getRequestIdentity(requestWithToken(stagingToken), {
-      ...currentEnv,
-      CAIL_IDENTITY_ISSUER: STAGING_ISSUER,
-      CAIL_IDENTITY_PROFILE: "production",
-    })).resolves.toBeNull();
   });
 
   it("rejects an empty subject", async () => {
@@ -274,14 +250,13 @@ describe("resolveRequestIdentity", () => {
   });
 
   it("accepts every unambiguous key in a rotating JWKS", async () => {
-    const oldIssuer = await createTestIdentityIssuer({ kid: "old" });
-    const newIssuer = await createTestIdentityIssuer({ kid: "new" });
+    const oldIssuer = await createTestIdentityIssuer({ kid: "old", issuer: CAIL_CANONICAL_ISSUER });
+    const newIssuer = await createTestIdentityIssuer({ kid: "new", issuer: CAIL_CANONICAL_ISSUER });
     const env = {
       CAIL_IDENTITY_JWKS: JSON.stringify({
         keys: [...oldIssuer.jwks.keys, ...newIssuer.jwks.keys],
       }),
-      CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
-      CAIL_IDENTITY_PROFILE: "production",
+      CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     };
 
     await expect(resolveRequestIdentity(
@@ -308,20 +283,18 @@ describe("resolveRequestIdentity", () => {
     const token = await mintJwt();
     await expect(resolveRequestIdentity(requestWithToken(token), {
       CAIL_IDENTITY_JWKS: jwks,
-      CAIL_IDENTITY_ISSUER: PRODUCTION_ISSUER,
-      CAIL_IDENTITY_PROFILE: "production",
+      CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     }))
       .resolves.toEqual({ status: "invalid" });
   });
 
-  it.each([undefined, "", ` ${PRODUCTION_ISSUER}`])(
+  it.each([undefined, "", ` ${CAIL_CANONICAL_ISSUER}`])(
     "fails closed when the deployment issuer is missing or malformed (%s)",
     async (issuerValue) => {
       const token = await mintJwt();
       await expect(resolveRequestIdentity(requestWithToken(token), {
         CAIL_IDENTITY_JWKS: currentEnv.CAIL_IDENTITY_JWKS,
         CAIL_IDENTITY_ISSUER: issuerValue,
-        CAIL_IDENTITY_PROFILE: "production",
       })).resolves.toEqual({ status: "invalid" });
     },
   );
@@ -340,7 +313,7 @@ describe("cailAuthRequiredResponse", () => {
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toMatchObject({
       error: "authentication_required",
-      login_url: "/login",
+      login_url: "/site-studio/",
     });
   });
 });
