@@ -375,11 +375,11 @@ describe("createCailModel wire contract", () => {
       expect(call.headers.get("content-type")).toBe("application/json");
       expect(call.headers.get("accept")).toBe("text/plain");
       expect(call.init.credentials).toBe("omit");
-      expect(call.init.redirect).toBe("error");
+      expect(call.init.redirect).toBe("manual");
     }
   });
 
-  it.each([429, 503])("makes exactly one attempt for a %s gateway response", async (status) => {
+  it.each([302, 429, 503])("makes exactly one attempt for a %s gateway response", async (status) => {
     let calls = 0;
     const stub = (async () => {
       calls += 1;

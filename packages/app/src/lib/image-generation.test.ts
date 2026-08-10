@@ -247,7 +247,7 @@ describe("screenImage moderation gate (fail closed)", () => {
     expect(cap.headers.get("x-cail-identity-jwt")).toBeNull();
     expect(cap.headers.get("x-cail-metadata")).toBeNull();
     expect(cap.init.credentials).toBe("omit");
-    expect(cap.init.redirect).toBe("error");
+    expect(cap.init.redirect).toBe("manual");
 
     // The image travels as a data-URI image_url content part, plus the strict
     // system instruction.

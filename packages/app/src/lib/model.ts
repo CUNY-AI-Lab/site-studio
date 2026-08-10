@@ -143,7 +143,11 @@ export function createCailAuthorityFetch(
       ...init,
       headers: safeHeaders,
       credentials: "omit",
-      redirect: "error",
+      // Cloudflare recommends manual redirect handling when a subrequest
+      // carries Authorization: the 3xx response is returned without forwarding
+      // the bearer to another origin, and the provider treats it as one failed
+      // upstream response.
+      redirect: "manual",
     });
   }) as typeof fetch;
 }
