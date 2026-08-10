@@ -123,7 +123,7 @@
 		</Dialog.Header>
 
 		<div class="field">
-			<label class="field-label" for="handle-input">Handle</label>
+			<label class="field-label" for="handle-input">Address</label>
 			<div class="input-wrap" class:ok={status?.tone === 'ok'} class:bad={status?.tone === 'bad'}>
 				<span class="input-icon" aria-hidden="true"><AtSign size={15} /></span>
 				<input

@@ -317,7 +317,7 @@
 				detail:
 					elapsedMs > 20000
 						? 'Still working through the next step. Larger requests can take a bit.'
-						: 'Staying connected while the next step finishes.'
+						: 'Still working on the next step.'
 			};
 		}
 
@@ -603,7 +603,7 @@
 					{
 						id: generateId(),
 						role: 'assistant',
-						parts: [{ type: 'text', text: 'Connection lost while the agent was responding.' }]
+						parts: [{ type: 'text', text: 'The response was interrupted. Send your message again.' }]
 					}
 				];
 			}
@@ -1442,7 +1442,7 @@
 		{#if messages.length === 0}
 			{#if !historyLoadFailed}
 				<div class="welcome">
-					<h3>Let's Build Your Site</h3>
+					<h3>Your site</h3>
 					<p>Describe what you'd like to create or change.</p>
 				</div>
 			{/if}
@@ -1493,12 +1493,11 @@
 					</div>
 					<span class="active-status-time">{requestElapsedLabel}</span>
 				</div>
-				<div class="active-status-meta">
-					<span class="status-pill">{isReconnecting ? 'Reconnecting…' : 'Live activity'}</span>
-					{#if activeToolTarget}
+				{#if activeToolTarget}
+					<div class="active-status-meta">
 						<span class="status-pill muted">{activeToolTarget}</span>
-					{/if}
-				</div>
+					</div>
+				{/if}
 				<div class="active-status-bar" aria-hidden="true">
 					<span class="active-status-bar-fill"></span>
 				</div>

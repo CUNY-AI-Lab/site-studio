@@ -194,12 +194,12 @@ export async function generateImage(
   fetchImpl: typeof fetch = fetch
 ): Promise<GenerateImageResult> {
   if (!env.CAIL_API_BASE) {
-    return { ok: false, message: "CAIL_API_BASE is not configured" };
+    return { ok: false, message: "Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu." };
   }
   if (!jwt) {
     // The gateway is JWT-first/strict; without a verified identity the call
     // could only ever earn its authentication_required envelope.
-    return { ok: false, message: "Image generation requires an authenticated caller" };
+    return { ok: false, message: "Sign in to make images." };
   }
   assertCailJwtFresh(jwt);
 

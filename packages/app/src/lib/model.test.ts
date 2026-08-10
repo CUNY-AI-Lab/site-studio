@@ -54,13 +54,15 @@ describe("resolveModelId", () => {
 
 describe("createCailModel", () => {
   it("throws when CAIL_API_BASE is not configured (no key fallback)", () => {
-    expect(() => createCailModel({}, "jwt")).toThrow(/CAIL_API_BASE/);
+    expect(() => createCailModel({}, "jwt")).toThrow(
+      "Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu."
+    );
   });
 
   it("throws when the caller has no identity JWT (gateway is JWT-first/strict)", () => {
     expect(() =>
       createCailModel({ CAIL_API_BASE: "https://cail.example/proxy" }, null)
-    ).toThrow(/identity JWT/i);
+    ).toThrow("Sign in to continue.");
   });
 
   it("builds a language model bound to the gateway chat endpoint", () => {

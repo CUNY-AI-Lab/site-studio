@@ -66,7 +66,7 @@ describe("quota route", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({
       error: "network_error",
-      message: "The network request to the CAIL backbone failed."
+      message: "Couldn't check your remaining AI time."
     });
   });
 });

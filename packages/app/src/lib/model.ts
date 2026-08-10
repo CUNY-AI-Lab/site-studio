@@ -181,10 +181,10 @@ export function createCailModel(
   options: CailModelOptions = {},
 ): LanguageModel {
   if (!env.CAIL_API_BASE) {
-    throw new Error("CAIL_API_BASE is not configured");
+    throw new Error("Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu.");
   }
   if (!identityJwt) {
-    throw new Error("CAIL identity JWT is missing — model access requires an authenticated caller");
+    throw new Error("Sign in to continue.");
   }
 
   const baseUrl = canonicalCailApiBase(env.CAIL_API_BASE);

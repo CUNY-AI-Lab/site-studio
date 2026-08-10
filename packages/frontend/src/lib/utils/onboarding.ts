@@ -18,9 +18,9 @@ export function createDashboardTour() {
 	const steps: DriveStep[] = [
 		{
 			popover: {
-				title: 'Welcome to Site Studio! 🎨',
+				title: 'Site Studio',
 				description:
-					'Build professional academic websites using AI.\n\nThis quick tour will show you the key features. Click "Continue" below to proceed through each step.',
+					'Make a website for your course, project, or research.\n\nThis short tour shows the main parts. Click "Continue" to move through each step.',
 				side: 'bottom',
 				align: 'center'
 			}
@@ -28,27 +28,26 @@ export function createDashboardTour() {
 		{
 			element: '[data-tour="new-project"]',
 			popover: {
-				title: 'Create Your First Project',
+				title: 'Create a project',
 				description:
-					'This button lets you create a new project. You can choose from pre-built templates or start with a blank canvas.',
+					'This button creates a new project. You can start from a template or from a blank page.',
 				side: 'bottom',
 				align: 'start'
 			}
 		},
 		{
 			popover: {
-				title: 'What Happens Next?',
+				title: 'What happens next',
 				description:
-					'After creating a project, you\'ll enter the editor where you can:\n\n• Chat with AI to build your site\n• Preview changes in real-time\n• Edit code manually if needed',
+					'After creating a project, you\'ll enter the editor where you can:\n\n• Describe what you want and the assistant builds it\n• Preview changes as they are made\n• Edit code by hand if you want',
 				side: 'bottom' as const,
 				align: 'center'
 			}
 		},
 		{
 			popover: {
-				title: 'Ready to Start! 🚀',
-				description:
-					'That\'s it! Create your first project and describe what you want to build. The AI will guide you through the process.\n\nClick "Get Started" to begin!',
+				title: 'Next steps',
+				description: 'Create a project and describe what you want to build.',
 				side: 'bottom' as const,
 				align: 'center'
 			}
@@ -61,7 +60,7 @@ export function createDashboardTour() {
 		progressText: '{{current}} of {{total}}',
 		nextBtnText: 'Continue',
 		prevBtnText: 'Back',
-		doneBtnText: 'Get Started',
+		doneBtnText: 'Done',
 		disableActiveInteraction: true,
 		onDestroyed: () => {
 			markOnboardingComplete();
@@ -77,9 +76,9 @@ export function createEditorTour() {
 		{
 			element: '.agent-chat',
 			popover: {
-				title: 'AI Chat Assistant',
+				title: 'Assistant',
 				description:
-					'This is your AI assistant panel. Here you can describe what you want to build in plain English.',
+					'Describe what you want to build in plain English, and the assistant makes the changes.',
 				side: 'right',
 				align: 'start'
 			}
@@ -87,9 +86,9 @@ export function createEditorTour() {
 		{
 			element: '.input-field',
 			popover: {
-				title: 'Chat Input',
+				title: 'Message box',
 				description:
-					'Type your requests here! For example:\n• "Create a hero section with a large title"\n• "Add a contact form"\n• "Make the background blue"',
+					'Type your request here. For example:\n• "Create a hero section with a large title"\n• "Add a contact form"\n• "Make the background blue"',
 				side: 'top',
 				align: 'center'
 			}
@@ -97,9 +96,9 @@ export function createEditorTour() {
 		{
 			element: '.input-container .icon-btn',
 			popover: {
-				title: 'Upload Files',
+				title: 'Attach files',
 				description:
-					'Click the + button to attach images or documents. You can reference them in your chat messages.\n\nSupported: images, PDFs, text files, and more.',
+					'Click the + button to attach images or documents, then refer to them in your message.\n\nImages, PDFs, and text files are supported.',
 				side: 'top',
 				align: 'start'
 			}
@@ -107,8 +106,8 @@ export function createEditorTour() {
 		{
 			element: '.preview-area',
 			popover: {
-				title: 'Live Preview',
-				description: 'Your site appears here and updates in real-time as the AI makes changes. What you see is what you get!',
+				title: 'Preview',
+				description: 'Your site appears here and updates as changes are made.',
 				side: 'left',
 				align: 'center'
 			}
@@ -116,9 +115,8 @@ export function createEditorTour() {
 		{
 			element: '.panel-toggle-right, .code-panel',
 			popover: {
-				title: 'Code Editor (Optional)',
-				description:
-					'Want to tweak the code yourself? You can open the code editor here to make manual adjustments.\n\nYou\'re all set! Click "Got It!" to start building.',
+				title: 'Code editor',
+				description: 'Open the code editor if you want to edit by hand.',
 				side: 'left',
 				align: 'end'
 			}
@@ -131,7 +129,7 @@ export function createEditorTour() {
 		progressText: '{{current}} of {{total}}',
 		nextBtnText: 'Continue',
 		prevBtnText: 'Back',
-		doneBtnText: 'Got It!',
+		doneBtnText: 'Done',
 		disableActiveInteraction: true,
 		onDestroyed: () => {
 			markOnboardingComplete();

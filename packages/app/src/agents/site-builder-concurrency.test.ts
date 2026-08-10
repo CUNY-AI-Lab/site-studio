@@ -493,14 +493,14 @@ describe("describeModelStreamError", () => {
       cause: { statusCode: 429, responseBody: "quota_exceeded" }
     })).toEqual({
       quota: false,
-      message: "Site Studio hit an internal error while streaming this response."
+      message: "The response stopped partway. Send your message again."
     });
   });
 
   it("SS-44: keeps the generic response for an unrelated error", () => {
     expect(describeModelStreamError(new Error("boom"))).toEqual({
       quota: false,
-      message: "Site Studio hit an internal error while streaming this response."
+      message: "The response stopped partway. Send your message again."
     });
   });
 });

@@ -34,7 +34,7 @@ describe('HandleClaimDialog', () => {
 		const status = document.getElementById('handle-status');
 		expect(status).not.toBeNull();
 		expect(status).toHaveAttribute('aria-live', 'polite');
-		const input = screen.getByLabelText('Handle');
+		const input = screen.getByLabelText('Address');
 		expect(input).toHaveAttribute('aria-describedby', expect.stringContaining('handle-status'));
 	});
 
@@ -42,7 +42,7 @@ describe('HandleClaimDialog', () => {
 		const user = userEvent.setup({ delay: null });
 		mockCheck.mockResolvedValue({ handle: 'jane', valid: true, available: true });
 		open();
-		const input = screen.getByLabelText('Handle') as HTMLInputElement;
+		const input = screen.getByLabelText('Address') as HTMLInputElement;
 		await user.type(input, 'JaNe');
 		expect(input.value).toBe('jane');
 	});
@@ -58,7 +58,7 @@ describe('HandleClaimDialog', () => {
 				reason: 'Only letters, numbers and dashes are allowed.'
 			});
 			open();
-			const input = screen.getByLabelText('Handle');
+			const input = screen.getByLabelText('Address');
 			await user.type(input, 'no');
 			await vi.advanceTimersByTimeAsync(400);
 			expect(screen.getByText('Only letters, numbers and dashes are allowed.')).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe('HandleClaimDialog', () => {
 				reason: 'That handle is taken.'
 			});
 			open();
-			await user.type(screen.getByLabelText('Handle'), 'taken');
+			await user.type(screen.getByLabelText('Address'), 'taken');
 			await vi.advanceTimersByTimeAsync(400);
 			expect(screen.getByText('That handle is taken.')).toBeInTheDocument();
 		} finally {
@@ -92,7 +92,7 @@ describe('HandleClaimDialog', () => {
 			const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 			mockCheck.mockResolvedValue({ handle: 'open', valid: true, available: true });
 			open();
-			await user.type(screen.getByLabelText('Handle'), 'open');
+			await user.type(screen.getByLabelText('Address'), 'open');
 			await vi.advanceTimersByTimeAsync(400);
 			expect(screen.getByText('Available')).toBeInTheDocument();
 			expect(screen.getByRole('button', { name: /claim and publish/i })).toBeEnabled();
@@ -108,7 +108,7 @@ describe('HandleClaimDialog', () => {
 			mockCheck.mockResolvedValue({ handle: 'jane', valid: true, available: true });
 			mockClaim.mockResolvedValue({ ok: true, handle: 'jane', alreadyOwned: false });
 			const { onClaimed } = open();
-			await user.type(screen.getByLabelText('Handle'), 'jane');
+			await user.type(screen.getByLabelText('Address'), 'jane');
 			await vi.advanceTimersByTimeAsync(400);
 			await user.click(screen.getByRole('button', { name: /claim and publish/i }));
 			await vi.waitFor(() => expect(onClaimed).toHaveBeenCalledWith('jane'));
@@ -124,7 +124,7 @@ describe('HandleClaimDialog', () => {
 			mockCheck.mockResolvedValue({ handle: 'jane', valid: true, available: true });
 			mockClaim.mockResolvedValue({ ok: false, message: 'Someone grabbed it first.' });
 			const { onClaimed } = open();
-			await user.type(screen.getByLabelText('Handle'), 'jane');
+			await user.type(screen.getByLabelText('Address'), 'jane');
 			await vi.advanceTimersByTimeAsync(400);
 			await user.click(screen.getByRole('button', { name: /claim and publish/i }));
 			await vi.waitFor(() => expect(screen.getByText('Someone grabbed it first.')).toBeInTheDocument());

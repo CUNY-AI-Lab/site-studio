@@ -98,7 +98,7 @@ function maybeRedirectToLogin(status: number, errorData: any): void {
 }
 
 function toApiError(response: Response, errorData: any): ApiError {
-	const message = errorData.message || errorData.error || 'An error occurred';
+	const message = errorData.message || errorData.error || 'Something went wrong. Try again.';
 	const code = errorData.code || errorData.error;
 	const details = errorData.details;
 
@@ -123,7 +123,7 @@ export async function handleApiError(response: Response): Promise<never> {
 		// Response doesn't contain JSON, throw generic error
 		throw new ApiError(
 			response.status,
-			`Request failed with status ${response.status}`,
+			"That didn't work. Try again.",
 			'NETWORK_ERROR'
 		);
 	}
@@ -201,5 +201,5 @@ export function getErrorMessage(error: unknown): string {
 	if (error instanceof Error) {
 		return error.message;
 	}
-	return 'An unexpected error occurred';
+	return 'Something went wrong. Try again.';
 }

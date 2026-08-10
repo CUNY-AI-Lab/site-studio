@@ -12,7 +12,7 @@ export function createQuotaRouter() {
     c.header("Cache-Control", "private, no-store");
     const jwt = getCailGatewayJwt(c);
     if (!jwt) jsonError("authentication_required", 401);
-    if (!c.env.CAIL_API_BASE) jsonError("CAIL_API_BASE is not configured", 503);
+    if (!c.env.CAIL_API_BASE) jsonError("Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu.", 503);
 
     try {
       const quota = await createCailClient({
@@ -24,7 +24,13 @@ export function createQuotaRouter() {
     } catch (error) {
       if (error instanceof CailError) {
         const status = error.status >= 400 && error.status <= 599 ? error.status : 503;
-        return c.json({ error: error.code, message: error.message }, status as any);
+        // The client's network_error message names transport internals; show a
+        // plain sentence instead. Other envelope messages pass through as-is.
+        const message =
+          error.code === "network_error"
+            ? "Couldn't check your remaining AI time."
+            : error.message;
+        return c.json({ error: error.code, message }, status as any);
       }
       throw error;
     }

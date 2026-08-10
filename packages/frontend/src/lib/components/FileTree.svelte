@@ -103,7 +103,7 @@
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error deleting file:', error);
-			toast.error(`Failed to delete file: ${error.message}`);
+			toast.error("Couldn't delete that file. Try again.");
 		}
 	}
 
@@ -134,7 +134,7 @@
 			onRefresh();
 		} catch (error: any) {
 			console.error('Error renaming file:', error);
-			toast.error(`Failed to rename file: ${error.message}`);
+			toast.error("Couldn't rename that file. Try again.");
 		}
 	}
 </script>

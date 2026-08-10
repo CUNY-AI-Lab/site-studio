@@ -213,7 +213,7 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 				ok: false,
 				reason: 'handle_required',
 				message:
-					(data as { message?: string }).message || 'Choose a public handle before publishing.',
+					(data as { message?: string }).message || 'Choose your public address before publishing.',
 			};
 		}
 	}

@@ -1439,7 +1439,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     if (!this.env.CAIL_API_BASE) {
       emitDiagnostic("error", "cail_api_base_missing", { status: 500 }, logging);
-      return new Response(JSON.stringify({ error: "CAIL_API_BASE is not configured" }), {
+      return new Response(JSON.stringify({ error: "Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu." }), {
         status: 500,
         headers: { "Content-Type": "application/json" }
       });

@@ -38,6 +38,6 @@ export function describeModelStreamError(error: unknown): { message: string; quo
 
   return {
     quota: false,
-    message: "Site Studio hit an internal error while streaming this response.",
+    message: "The response stopped partway. Send your message again.",
   };
 }

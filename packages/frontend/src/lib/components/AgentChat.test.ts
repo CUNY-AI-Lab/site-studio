@@ -317,7 +317,7 @@ describe('AgentChat', () => {
 			expect(screen.getByText(/chat history could not be loaded/i)).toBeInTheDocument()
 		);
 		// ...and NOT presented as a fresh, empty conversation.
-		expect(screen.queryByText("Let's Build Your Site")).not.toBeInTheDocument();
+		expect(screen.queryByText('Your site')).not.toBeInTheDocument();
 
 		// Retrying recovers the real history and clears the error state.
 		screen.getByRole('button', { name: /retry loading history/i }).click();
@@ -327,13 +327,13 @@ describe('AgentChat', () => {
 
 	it('shows the welcome empty state (no error) for genuinely empty history (SS-49)', async () => {
 		mount(); // default fetch stub returns [] for /get-messages
-		await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText('Your site')).toBeInTheDocument());
 		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
 	});
 
 	it('does not probe the optional quota endpoint', async () => {
 		mount();
-		await waitFor(() => expect(screen.getByText("Let's Build Your Site")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText('Your site')).toBeInTheDocument());
 		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/quota'))).toBe(false);
 	});
 
@@ -354,7 +354,7 @@ describe('AgentChat', () => {
 		await waitFor(() =>
 			expect(screen.getByText(/chat history could not be loaded/i)).toBeInTheDocument()
 		);
-		expect(screen.queryByText("Let's Build Your Site")).not.toBeInTheDocument();
+		expect(screen.queryByText('Your site')).not.toBeInTheDocument();
 	});
 
 	it('populates history from an incoming CF_AGENT_CHAT_MESSAGES message', async () => {
@@ -809,7 +809,7 @@ describe('AgentChat', () => {
 				flushSync();
 			}
 			expect(FakeWebSocket.instances.length).toBe(9);
-			expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
+			expect(screen.queryByText(/The response was interrupted/)).not.toBeInTheDocument();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -923,7 +923,7 @@ describe('AgentChat', () => {
 			// Socket drops mid-request. A reconnect is pending → no permanent error.
 			ws.serverClose();
 			flushSync();
-			expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
+			expect(screen.queryByText(/The response was interrupted/)).not.toBeInTheDocument();
 
 			// Each new socket also drops pre-OPEN. The reconnect loop continues without
 			// surfacing a terminal error.
@@ -945,7 +945,7 @@ describe('AgentChat', () => {
 		await settle();
 
 		// There is no retry budget to exhaust while this project remains active.
-		expect(screen.queryByText(/Connection lost while the agent was responding/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/The response was interrupted/)).not.toBeInTheDocument();
 	});
 
 	it('schedules a reconnect with backoff after an unexpected socket close', async () => {

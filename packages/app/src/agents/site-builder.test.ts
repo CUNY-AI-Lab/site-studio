@@ -101,7 +101,7 @@ describe("describeModelStreamError", () => {
     });
 
     expect(described.quota).toBe(false);
-    expect(described.message).toBe("Site Studio hit an internal error while streaming this response.");
+    expect(described.message).toBe("The response stopped partway. Send your message again.");
   });
 
   it("surfaces a thrown CailError's verbatim quota message", () => {

@@ -260,7 +260,7 @@
 			if (draft && draft.content !== data.content) {
 				fileContent = draft.content;
 				currentFileEtag = draft.baseEtag;
-				toast.error('Recovered an unsaved local draft. It will not overwrite a newer server version.');
+				toast.error("We restored your unsaved changes. They won't replace a newer saved copy.");
 			} else {
 				fileContent = data.content;
 				currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
@@ -379,7 +379,7 @@
 					console.error('Could not persist encrypted local draft:', error);
 					if (!draftStorageWarningShown) {
 						draftStorageWarningShown = true;
-						toast.error('Local draft recovery is unavailable in this browser. Keep this tab open until saving finishes.');
+						toast.error("This browser can't hold unsaved changes. Keep this tab open until it saves.");
 					}
 				});
 		}

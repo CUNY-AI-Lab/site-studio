@@ -187,7 +187,7 @@ export function createPublishRouter() {
       return c.json(
         {
           error: "handle_required",
-          message: "Choose your public handle before publishing."
+          message: "Choose your public address before publishing."
         },
         409
       );

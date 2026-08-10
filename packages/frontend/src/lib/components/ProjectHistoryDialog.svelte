@@ -163,7 +163,7 @@
 
 		<div class="history-actions">
 			<div class="snapshot-field">
-				<Label for="snapshot-label">Snapshot label</Label>
+				<Label for="snapshot-label">Name this version</Label>
 				<Input
 					id="snapshot-label"
 					bind:value={snapshotLabel}
@@ -177,7 +177,7 @@
 					Creating...
 				{:else}
 					<Save size={14} />
-					Create Snapshot
+					Save version
 				{/if}
 			</Button>
 		</div>
@@ -190,12 +190,12 @@
 			{#if isLoading}
 				<div class="history-empty">
 					<Loader2 size={16} class="animate-spin" />
-					<span>Loading snapshots...</span>
+					<span>Loading versions…</span>
 				</div>
 			{:else if snapshots.length === 0}
 				<div class="history-empty">
 					<History size={16} />
-					<span>No snapshots yet.</span>
+					<span>No saved versions yet.</span>
 				</div>
 			{:else}
 				{#each snapshots as snapshot (snapshot.id)}

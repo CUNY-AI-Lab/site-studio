@@ -80,7 +80,7 @@ function sessionStoreUnavailableResponse(): Response {
   return new Response(
     JSON.stringify({
       error: "session_store_unavailable",
-      message: "Site Studio cannot reach its session store right now. Please retry in a moment.",
+      message: "Site Studio is having trouble right now. Try again in a moment.",
     }),
     {
       status: 503,
