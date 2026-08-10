@@ -128,6 +128,9 @@ Local ports:
 - Preserve the exact two-leg CAIL identity and direct CAIL Gateway model path
 - Do not impose arbitrary model token, step, timeout, or message caps
 - Call tests E2E only when they cross real process and resource boundaries
+- Use `bun run e2e:live` for the direct signed-identity production product
+  path; it owns only its random project and is not evidence of a CUNY/Doorway
+  browser login
 - Preserve same-origin assumptions for preview and thumbnail capture unless deliberately redesigned
 - Use Svelte 5 runes patterns in frontend code
 - Default to execute-plus-clarify, not approval-first UX

@@ -111,6 +111,25 @@ The test suite contains unit, component, and in-process route tests. It is not
 labelled E2E. Acceptance of authoring or publishing requires a real browser and
 real Worker/resource boundary.
 
+`bun run e2e:live` exercises the standalone production Worker with short-lived
+app and Gateway identity JWTs supplied through the environment. It requires an
+admitted identity that already owns a public handle, creates one random project,
+runs an uncapped paid authoring turn, verifies persisted chat, preview, publish,
+and direct public serving, then deletes the project through the product API and
+recreates it once to prove its chat history was cleared. It neither manages
+Cloudflare storage directly nor changes the identity's handle. This proves the
+signed-identity Worker-to-Gateway product path; it is not a CUNY browser login or
+Doorway acceptance test.
+
+The required environment variables are `SITE_STUDIO_URL` (set to
+`https://site-studio-app.ailab-452.workers.dev/site-studio/`),
+`SITE_STUDIO_APP_IDENTITY_JWT`, and
+`SITE_STUDIO_GATEWAY_IDENTITY_JWT`. The two short-lived JWTs must have the same
+subject and their respective production audiences. Keep them in the invoking
+process; do not put them in files or command arguments. They must remain valid
+through the cleanup requests; a cleanup failure prints the random proof-project
+name so the same identity can remove it after obtaining fresh tokens.
+
 `packages/app/.dev.vars` is gitignored. Required deployment configuration is
 declared in `packages/app/wrangler.jsonc`, including:
 
