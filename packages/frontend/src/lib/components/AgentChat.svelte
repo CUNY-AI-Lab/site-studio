@@ -76,6 +76,8 @@
 	let historyLoadFailed = $state(false);
 	let input = $state('');
 	let isLoading = $state(false);
+	let isPreparingRequest = $state(false);
+	let requestPreparationSequence = 0;
 	let messagesContainer: HTMLDivElement;
 	let fileInput: HTMLInputElement;
 	let currentStatus = $state<string>('');
@@ -888,10 +890,11 @@
 		return ws;
 	}
 
-	async function sendChatRequest(messagesForRequest: UIChatMessage[]) {
-		const targetProjectId = projectId;
-		const targetEpoch = projectContextEpoch;
-
+	async function sendChatRequest(
+		messagesForRequest: UIChatMessage[],
+		targetProjectId: string,
+		targetEpoch: number
+	) {
 		const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 		const requestId = generateId();
 		const startedAt = Date.now();
@@ -1131,6 +1134,8 @@
 
 		const targetProjectId = projectId;
 		projectContextEpoch += 1;
+		requestPreparationSequence += 1;
+		isPreparingRequest = false;
 		const targetEpoch = projectContextEpoch;
 		previousProjectId = targetProjectId;
 		input = '';
@@ -1161,6 +1166,8 @@
 		if (!currentRequestId) {
 			return;
 		}
+		requestPreparationSequence += 1;
+		isPreparingRequest = false;
 
 		// SS-9: remember the cancelled id so a late CF_AGENT_USE_CHAT_RESPONSE frame
 		// for it can't recreate activeStream and resume appending after the stop.
@@ -1178,11 +1185,11 @@
 		resetRequestState();
 	}
 
-	async function uploadFile(file: File): Promise<string> {
+	async function uploadFile(file: File, targetProjectId: string): Promise<string> {
 		const formData = new FormData();
 		formData.append('file', file);
 
-		const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/upload`), {
+		const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/upload`), {
 			method: 'POST',
 			body: formData
 		});
@@ -1195,7 +1202,7 @@
 		return data.filename;
 	}
 
-	async function ensureReadyForRequest(): Promise<boolean> {
+	async function ensureReadyForRequest(preparation?: RequestPreparation): Promise<boolean> {
 		if (!onBeforeSend) {
 			return true;
 		}
@@ -1204,70 +1211,94 @@
 			return await onBeforeSend();
 		} catch (error) {
 			console.error('Error preparing agent request:', error);
-			currentStatus = 'Unable to prepare request.';
+			if (!preparation || isCurrentRequestPreparation(preparation)) {
+				currentStatus = 'Unable to prepare request.';
+			}
 			return false;
 		}
 	}
 
+	interface RequestPreparation {
+		id: number;
+		projectId: string;
+		projectEpoch: number;
+	}
+
+	function beginRequestPreparation(allowWhileLoading = false): RequestPreparation | null {
+		if ((!allowWhileLoading && isLoading) || isPreparingRequest) return null;
+
+		const preparation = {
+			id: ++requestPreparationSequence,
+			projectId,
+			projectEpoch: projectContextEpoch
+		};
+		isPreparingRequest = true;
+		return preparation;
+	}
+
+	function isCurrentRequestPreparation(preparation: RequestPreparation): boolean {
+		return (
+			preparation.id === requestPreparationSequence &&
+			isCurrentProjectContext(preparation.projectId, preparation.projectEpoch)
+		);
+	}
+
+	function finishRequestPreparation(preparation: RequestPreparation) {
+		if (preparation.id === requestPreparationSequence) {
+			isPreparingRequest = false;
+		}
+	}
+
 	async function sendMessage() {
-		if (!input.trim() || isLoading) return;
-
-		const ready = await ensureReadyForRequest();
-		if (!ready) return;
-
 		const userMessage = input.trim();
-		const fileToUpload = attachedFile;
-		input = '';
-		attachedFile = null;
-		if (fileInput) fileInput.value = '';
-		isLoading = true;
+		if (!userMessage) return;
 
-		// Upload file FIRST if attached (skip on retry - already uploaded)
-		// This ensures we don't show user message if upload fails
-		let uploadedFilename: string | undefined;
-		if (fileToUpload) {
-			try {
+		const preparation = beginRequestPreparation();
+		if (!preparation) return;
+
+		const fileToUpload = attachedFile;
+		try {
+			const ready = await ensureReadyForRequest(preparation);
+			if (!ready || !isCurrentRequestPreparation(preparation)) return;
+
+			input = '';
+			attachedFile = null;
+			if (fileInput) fileInput.value = '';
+
+			// Upload file FIRST if attached (skip on retry - already uploaded)
+			// This ensures we don't show user message if upload fails
+			let uploadedFilename: string | undefined;
+			if (fileToUpload) {
 				isUploading = true;
-				uploadedFilename = await uploadFile(fileToUpload);
+				uploadedFilename = await uploadFile(fileToUpload, preparation.projectId);
+				if (!isCurrentRequestPreparation(preparation)) return;
 				onUpdate(); // Refresh preview - uploaded file may be referenced
-			} catch (error) {
-				console.error('File upload failed:', error);
-				uiMessages = [
-					...uiMessages,
-					{
-						id: generateId(),
-						role: 'assistant',
-						parts: [{ type: 'text', text: `Sorry, the file upload failed. ${getErrorMessage(error)}` }]
-					}
-				];
-				isLoading = false;
-				isUploading = false;
-				return;
-			} finally {
 				isUploading = false;
 			}
-		}
 
-		// Add user message AFTER successful upload so failed uploads don't create a chat turn
-		let messageContent = userMessage;
-		if (fileToUpload) {
-			messageContent += ` [Attached: ${fileToUpload.name}]`;
-		}
-		if (uploadedFilename) {
-			messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
-		}
-		const nextUserMessage: UIChatMessage = {
-			id: generateId(),
-			role: 'user',
-			parts: [{ type: 'text', text: messageContent }]
-		};
-		uiMessages = [...uiMessages, nextUserMessage];
+			// Add user message AFTER successful upload so failed uploads don't create a chat turn
+			let messageContent = userMessage;
+			if (fileToUpload) {
+				messageContent += ` [Attached: ${fileToUpload.name}]`;
+			}
+			if (uploadedFilename) {
+				messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
+			}
+			const nextUserMessage: UIChatMessage = {
+				id: generateId(),
+				role: 'user',
+				parts: [{ type: 'text', text: messageContent }]
+			};
+			uiMessages = [...uiMessages, nextUserMessage];
 
-		scrollToBottom();
-
-		try {
-			await sendChatRequest(getCurrentMessagesForRequest(nextUserMessage));
+			scrollToBottom();
+			await sendChatRequest(
+				getCurrentMessagesForRequest(nextUserMessage),
+				preparation.projectId,
+				preparation.projectEpoch
+			);
 		} catch (error: any) {
+			if (!isCurrentRequestPreparation(preparation)) return;
 			console.error('Error sending message:', error);
 			const message = getErrorMessage(error);
 			resetRequestState();
@@ -1279,6 +1310,9 @@
 					parts: [{ type: 'text', text: message }]
 				}
 			];
+		} finally {
+			isUploading = false;
+			finishRequestPreparation(preparation);
 		}
 	}
 
@@ -1288,7 +1322,7 @@
 	 * accessibility findings. No-ops while a request is already in flight.
 	 */
 	export async function sendPrompt(text: string) {
-		if (isLoading) return;
+		if (isLoading || isPreparingRequest) return;
 		input = text;
 		await sendMessage();
 	}
@@ -1297,13 +1331,14 @@
 		const interaction = pendingToolInteraction;
 		if (!interaction) return;
 
-		const ready = await ensureReadyForRequest();
-		if (!ready) return;
+		const preparation = beginRequestPreparation(true);
+		if (!preparation) return;
 
 		try {
-			const targetProjectId = projectId;
-			const targetEpoch = projectContextEpoch;
-			const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
+			const ready = await ensureReadyForRequest(preparation);
+			if (!ready || !isCurrentRequestPreparation(preparation)) return;
+			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
+			if (!isCurrentRequestPreparation(preparation)) return;
 			const output = {
 				answer: '',
 				declined: true
@@ -1325,8 +1360,12 @@
 			toolStartTimes = {};
 			currentStatus = 'Continuing...';
 		} catch (error) {
-			console.error('Error denying tool:', error);
-			currentStatus = 'Unable to send response.';
+			if (isCurrentRequestPreparation(preparation)) {
+				console.error('Error denying tool:', error);
+				currentStatus = 'Unable to send response.';
+			}
+		} finally {
+			finishRequestPreparation(preparation);
 		}
 	}
 
@@ -1365,10 +1404,12 @@
 		const interaction = pendingToolInteraction;
 		if (!interaction || !interaction.toolCallId) return;
 
-		const ready = await ensureReadyForRequest();
-		if (!ready) return;
+		const preparation = beginRequestPreparation(true);
+		if (!preparation) return;
 
 		try {
+			const ready = await ensureReadyForRequest(preparation);
+			if (!ready || !isCurrentRequestPreparation(preparation)) return;
 			const questions = getPendingQuestions(interaction.input || {});
 			const primaryQuestion = questions[0]?.question;
 			const answer =
@@ -1381,9 +1422,8 @@
 				...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
 			};
 
-			const targetProjectId = projectId;
-			const targetEpoch = projectContextEpoch;
-			const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
+			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
+			if (!isCurrentRequestPreparation(preparation)) return;
 			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
 			ws.send(JSON.stringify({
 				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
@@ -1400,8 +1440,12 @@
 			toolStartTimes = {};
 			currentStatus = 'Continuing...';
 		} catch (error) {
-			console.error('Error answering question:', error);
-			currentStatus = 'Unable to send your answer.';
+			if (isCurrentRequestPreparation(preparation)) {
+				console.error('Error answering question:', error);
+				currentStatus = 'Unable to send your answer.';
+			}
+		} finally {
+			finishRequestPreparation(preparation);
 		}
 	}
 
@@ -1433,6 +1477,7 @@
 	}
 
 	function removeAttachment() {
+		if (isLoading || isPreparingRequest) return;
 		attachedFile = null;
 		if (fileInput) {
 			fileInput.value = '';
@@ -1489,6 +1534,7 @@
 			{#if pendingToolInteraction}
 				<AskUserQuestionCard
 					questions={getPendingQuestions(pendingToolInteraction.input || {})}
+					busy={isPreparingRequest}
 					onSubmit={submitUserQuestionAnswers}
 					onReject={rejectUserQuestion}
 				/>
@@ -1531,7 +1577,7 @@
 				}}
 				placeholder={messages.length > 0 ? "Ask a follow-up..." : "Describe what you'd like to build..."}
 				aria-label="Message to the assistant"
-				disabled={isLoading}
+				disabled={isLoading || isPreparingRequest}
 				class="input-field"
 				rows="1"
 			></textarea>
@@ -1547,7 +1593,7 @@
 			{:else}
 				<button
 					onclick={() => sendMessage()}
-					disabled={!input.trim()}
+					disabled={!input.trim() || isPreparingRequest}
 					class="send-button"
 					title="Send message"
 					aria-label="Send message"
@@ -1565,6 +1611,7 @@
 				<span class="filesize">({(attachedFile.size / 1024).toFixed(1)}KB)</span>
 				<button
 					class="remove-btn"
+					disabled={isLoading || isPreparingRequest}
 					onclick={removeAttachment}
 					title="Remove attachment"
 					aria-label={`Remove ${attachedFile.name}`}
@@ -1591,6 +1638,7 @@
 			/>
 			<button
 				class="icon-btn"
+				disabled={isLoading || isPreparingRequest}
 				title="Attach file"
 				aria-label="Attach file"
 				onclick={handleFileUpload}

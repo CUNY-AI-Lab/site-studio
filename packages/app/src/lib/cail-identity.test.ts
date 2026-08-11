@@ -311,6 +311,7 @@ describe("cailAuthRequiredResponse", () => {
   it("returns the CAIL authentication_required envelope", async () => {
     const response = cailAuthRequiredResponse();
     expect(response.status).toBe(401);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
     await expect(response.json()).resolves.toMatchObject({
       error: "authentication_required",
       login_url: "/site-studio/",

@@ -3,7 +3,7 @@ import {
   SERVED_CONTENT_TYPES,
   getServedContentType
 } from "./content-types";
-import { servedContentHeaders } from "./serving-headers";
+import { servedContentHeaders, servedNotFoundHeaders } from "./serving-headers";
 import { renderNotFoundPage } from "./not-found-page";
 import { looksLikePageNavigation } from "./page-navigation";
 
@@ -72,6 +72,15 @@ describe("app serving security headers", () => {
     expect(headers["Referrer-Policy"]).toBe("no-referrer");
     expect(headers).not.toHaveProperty("Content-Disposition");
     expect(headers["Content-Security-Policy"]).not.toContain("default-src");
+  });
+
+  it("keeps generated public 404s revalidated and non-embeddable", () => {
+    const headers = servedNotFoundHeaders("public, max-age=0, must-revalidate");
+    expect(headers["Cache-Control"]).toBe("public, max-age=0, must-revalidate");
+    expect(headers["Content-Security-Policy"]).toContain("default-src 'none'");
+    expect(headers["Content-Security-Policy"]).not.toContain("sandbox");
+    expect(headers.Vary).toBe("Accept");
+    expect(headers["X-Frame-Options"]).toBe("DENY");
   });
 });
 

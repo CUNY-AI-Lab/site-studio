@@ -972,7 +972,7 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(response.headers.get("Content-Security-Policy")).toBeNull();
   });
 
-  it("does NOT sandbox the styled fallback 404 (our own trusted markup)", async () => {
+  it("hardens the styled fallback 404 without sandboxing our own trusted markup", async () => {
     await storage.createProject(userId, "fb", "Fb");
     await storage.writeFile(userId, "fb", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "fb", { published: true, slug: "fb" });
@@ -984,7 +984,8 @@ describe("served-bytes security headers (§3¾)", () => {
     );
     expect(response.status).toBe(404);
     expect(await response.text()).toContain("Page not found");
-    expect(response.headers.get("Content-Security-Policy")).toBeNull();
+    expect(response.headers.get("Content-Security-Policy")).toContain("default-src 'none'");
+    expect(response.headers.get("Content-Security-Policy")).not.toContain("sandbox");
   });
 
   it("adds nosniff but does NOT sandbox the owner thumbnail PNG", async () => {

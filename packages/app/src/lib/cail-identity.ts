@@ -131,6 +131,7 @@ export function cailAuthRequiredResponse(): Response {
       headers: {
         "Content-Type": "application/json",
         "WWW-Authenticate": 'Bearer realm="CAIL"',
+        "Cache-Control": "no-store",
       },
     }
   );
