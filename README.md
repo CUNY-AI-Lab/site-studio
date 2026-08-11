@@ -150,6 +150,12 @@ declared in `packages/app/wrangler.jsonc`, including:
 The production frontend build uses `PUBLIC_BASE_PATH=/site-studio`, and the
 configured public base is `https://cail-doorway.ailab-452.workers.dev/site-studio`.
 
+## CI and production deploy
+
+Merges to `main` release after the repository checks and a live health check.
+Site Studio has no separate checked-in staging Worker; local checks are not a
+production preview.
+
 See [docs/security-and-recovery.md](docs/security-and-recovery.md) for the
 remaining trust and recovery boundaries.
 
