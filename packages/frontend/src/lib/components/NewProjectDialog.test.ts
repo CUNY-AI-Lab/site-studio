@@ -146,3 +146,19 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		expect(input.value).toBe('alpha-5');
 	});
 });
+
+describe('NewProjectDialog data disclosure', () => {
+	beforeEach(() => {
+		mockFetchProjects.mockReset();
+		mockFetchTemplateCategories.mockReset();
+		mockFetchTemplateCategories.mockResolvedValue(categories);
+	});
+
+	it('distinguishes project storage, model-provider retention, and publishing', () => {
+		openDialog();
+
+		expect(screen.getByText(/Site Studio saves prompts and attached files with your private project/)).toBeInTheDocument();
+		expect(screen.getByText(/Model-provider routes are configured not to retain prompts or outputs/)).toBeInTheDocument();
+		expect(screen.getByText(/Publishing separately makes the site files public/)).toBeInTheDocument();
+	});
+});

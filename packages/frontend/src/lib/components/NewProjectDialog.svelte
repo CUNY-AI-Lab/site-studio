@@ -200,7 +200,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
-				Choose a starting template. Customize the static website with the AI assistant. Prompts and attached files are sent to CAIL and saved with this project; AI use is subject to your CAIL usage limit.
+				Choose a starting template and customize the static website with the AI assistant. Site Studio saves prompts and attached files with your private project. Model-provider routes are configured not to retain prompts or outputs; that setting does not cover Site Studio storage. Publishing separately makes the site files public. AI use is subject to your CAIL usage limit.
 			</Dialog.Description>
 		</Dialog.Header>
 
