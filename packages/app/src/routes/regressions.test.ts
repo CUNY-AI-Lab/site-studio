@@ -276,6 +276,23 @@ describe("route regressions", () => {
     expect(body).toContain('href="/u/janedoe/pub/"');
   });
 
+  it("links an unknown public site to the canonical Lab tools index", async () => {
+    const env = createEnv(bucket);
+    env.APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
+
+    const response = await app.request(
+      "https://site-studio-app.ailab-452.workers.dev/u/unknown/missing/",
+      { headers: { Accept: "text/html" } },
+      env
+    );
+
+    expect(response.status).toBe(404);
+    const body = await response.text();
+    expect(body).toContain("Explore CUNY AI Lab tools");
+    expect(body).toContain('href="https://cail-doorway.ailab-452.workers.dev/"');
+    expect(body).not.toContain("Go to site home");
+  });
+
   it("honors a project 404.html for missing published navigations", async () => {
     await storage.createProject(userId, "pub2", "Pub2");
     await storage.writeFile(userId, "pub2", "index.html", "<h1>Home</h1>");

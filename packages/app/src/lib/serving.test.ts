@@ -76,17 +76,27 @@ describe("app serving security headers", () => {
 });
 
 describe("app not-found page", () => {
-  it("renders a home link only when a site root path is supplied", () => {
+  it("links to the site home when known and the Lab tools index otherwise", () => {
     const withLink = renderNotFoundPage("/u/example/blog/");
     expect(withLink).toContain('href="/u/example/blog/"');
     expect(withLink).toContain("Go to site home");
 
+    const fallbackLink = renderNotFoundPage(undefined, "https://tools.example.test/");
+    expect(fallbackLink).toContain('href="https://tools.example.test/"');
+    expect(fallbackLink).toContain("Explore CUNY AI Lab tools");
+
     const withoutLink = renderNotFoundPage();
-    expect(withoutLink).not.toContain("Go to site home");
+    expect(withoutLink).not.toContain("Explore CUNY AI Lab tools");
   });
 
   it("escapes the site root path into the href attribute", () => {
     const html = renderNotFoundPage('/u/example/"><script>/');
+    expect(html).not.toContain('"><script>');
+    expect(html).toContain("&quot;&gt;&lt;script&gt;");
+  });
+
+  it("escapes the Lab tools fallback into the href attribute", () => {
+    const html = renderNotFoundPage(undefined, 'https://tools.example.test/"><script>/');
     expect(html).not.toContain('"><script>');
     expect(html).toContain("&quot;&gt;&lt;script&gt;");
   });

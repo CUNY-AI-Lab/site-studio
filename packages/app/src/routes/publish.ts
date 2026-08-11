@@ -83,7 +83,7 @@ async function collectPublishA11yFindings(
  */
 function publishedNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
   if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
-    return c.html(renderNotFoundPage(siteRootPath), 404);
+    return c.html(renderNotFoundPage(siteRootPath, getAppPublicRoot(c)), 404);
   }
   return c.text("Not found", 404);
 }
@@ -128,6 +128,16 @@ function slugify(value: string): string {
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function getAppPublicRoot(c: AppContext): string {
+  const requestOrigin = new URL(c.req.url).origin;
+  if (isLoopbackOrigin(requestOrigin)) {
+    return `${requestOrigin}/`;
+  }
+
+  const configuredOrigin = c.env.APP_PUBLIC_DOMAIN?.trim();
+  return `${normalizeBaseUrl(configuredOrigin || requestOrigin)}/`;
 }
 
 function getPublishedBaseUrl(c: AppContext): string {

@@ -2,10 +2,12 @@
  * Render the neutral fallback document used by preview and published-site
  * routes when a requested page is missing and the project has no `404.html`.
  */
-export function renderNotFoundPage(siteRootPath?: string): string {
+export function renderNotFoundPage(siteRootPath?: string, appRootPath?: string): string {
   const homeLink = siteRootPath
     ? `\n        <p class="actions"><a href="${escapeHtmlAttribute(siteRootPath)}">Go to site home</a></p>`
-    : "";
+    : appRootPath
+      ? `\n        <p class="actions"><a href="${escapeHtmlAttribute(appRootPath)}">Explore CUNY AI Lab tools</a></p>`
+      : "";
 
   return `<!doctype html>
 <html lang="en">
