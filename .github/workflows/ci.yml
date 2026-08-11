@@ -25,6 +25,8 @@ jobs:
         run: bun install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.CAIL_PACKAGES_TOKEN }}
+      - name: Audit high-severity dependencies
+        run: bun audit --audit-level=high
       - run: bun run check
       - name: Validate Worker bundle and config
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app

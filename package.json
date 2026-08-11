@@ -27,7 +27,6 @@
     "@hono/node-server": "2.0.12",
     "cookie": "0.7.2",
     "fast-uri": "3.1.5",
-    "postcss": "8.5.25",
     "sharp": "0.35.2",
     "vite": "8.1.4"
   }
