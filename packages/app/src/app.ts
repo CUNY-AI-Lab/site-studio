@@ -156,7 +156,17 @@ app.notFound(async (c) => {
     return c.env.ASSETS.fetch(assetRequest(c));
   }
 
-  return c.json({ error: "Not found" }, 404);
+  return c.json(
+    { error: "Not found" },
+    404,
+    {
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    }
+  );
 });
 
 export default app;

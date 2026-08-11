@@ -537,6 +537,62 @@ describe('AgentChat', () => {
 		expect(ws.sent.length).toBe(sentAfterFirst);
 	});
 
+	it('admits only one turn while an asynchronous pre-send save is pending', async () => {
+		let resolvePreparation!: (ready: boolean) => void;
+		const onBeforeSend = vi.fn(
+			() => new Promise<boolean>((resolve) => {
+				resolvePreparation = resolve;
+			})
+		);
+		const { component } = renderExposed({ onBeforeSend });
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		const first = component.sendPrompt('first');
+		const duplicate = component.sendPrompt('second');
+		expect(onBeforeSend).toHaveBeenCalledOnce();
+		resolvePreparation(true);
+		await Promise.all([first, duplicate]);
+		await settle();
+
+		const requests = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.filter((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(requests).toHaveLength(1);
+		expect(requests[0].init.body).toContain('first');
+		expect(requests[0].init.body).not.toContain('second');
+	});
+
+	it('drops a prepared turn when its project changes before the save finishes', async () => {
+		let resolvePreparation!: (ready: boolean) => void;
+		const onBeforeSend = vi.fn(
+			() => new Promise<boolean>((resolve) => {
+				resolvePreparation = resolve;
+			})
+		);
+		const result = renderExposed({ projectId: 'proj-a', onBeforeSend });
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const projectASocket = FakeWebSocket.last();
+		projectASocket.open();
+		await settle();
+
+		const pending = result.component.sendPrompt('change the old project');
+		expect(onBeforeSend).toHaveBeenCalledOnce();
+		await result.rerender({ projectId: 'proj-b', onUpdate: result.onUpdate, onBeforeSend });
+		resolvePreparation(true);
+		await pending;
+		await settle();
+
+		expect(
+			projectASocket.sent.some(
+				(raw) => JSON.parse(raw).type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST
+			)
+		).toBe(false);
+		expect(screen.queryByText('change the old project')).not.toBeInTheDocument();
+	});
+
 	it('waits for the credential refresh before sending a new chat frame', async () => {
 		let resolveRefresh!: (response: Response) => void;
 		let refreshRequested = false;
@@ -647,7 +703,9 @@ describe('AgentChat', () => {
 
 		questionFrame('stream-1', 'tool-1');
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
-		screen.getByRole('button', { name: 'Skip' }).click();
+		const skipButton = screen.getByRole('button', { name: 'Skip' });
+		skipButton.click();
+		skipButton.click();
 		await waitFor(() => expect(refreshCount).toBe(2));
 		await settle();
 
@@ -655,7 +713,9 @@ describe('AgentChat', () => {
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument());
 		screen.getByRole('button', { name: 'A' }).click();
 		await settle();
-		screen.getByRole('button', { name: 'Reply' }).click();
+		const replyButton = screen.getByRole('button', { name: 'Reply' });
+		replyButton.click();
+		replyButton.click();
 		await waitFor(() => expect(refreshCount).toBe(3));
 		await settle();
 

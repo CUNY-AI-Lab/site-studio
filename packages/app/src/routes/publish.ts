@@ -10,7 +10,7 @@ import {
 import { binaryBody, jsonError } from "../lib/http";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
-import { servedContentHeaders } from "../lib/serving-headers";
+import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";
 import { looksLikePageNavigation } from "../lib/page-navigation";
 import { resolveExtensionlessFile } from "../lib/extensionless";
 import { isProtectedServedPath } from "../lib/protected-files";
@@ -82,10 +82,11 @@ async function collectPublishA11yFindings(
  * plain-text 404.
  */
 function publishedNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
+  const headers = servedNotFoundHeaders("public, max-age=0, must-revalidate");
   if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
-    return c.html(renderNotFoundPage(siteRootPath, getAppPublicRoot(c)), 404);
+    return c.html(renderNotFoundPage(siteRootPath, getAppPublicRoot(c)), 404, headers);
   }
-  return c.text("Not found", 404);
+  return c.text("Not found", 404, headers);
 }
 
 /**

@@ -4,7 +4,7 @@ import { addCacheBusterToHtml, collectPreviewResourcePaths } from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
-import { servedContentHeaders } from "../lib/serving-headers";
+import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";
 import { looksLikePageNavigation } from "../lib/page-navigation";
 import { resolveExtensionlessFile } from "../lib/extensionless";
 import { isProtectedServedPath } from "../lib/protected-files";
@@ -19,10 +19,11 @@ type AppContext = Context<{
 }>;
 
 function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string): Response {
+  const headers = servedNotFoundHeaders("no-store");
   if (looksLikePageNavigation(c.req.header("Accept"), filePath)) {
-    return c.html(renderNotFoundPage(siteRootPath), 404);
+    return c.html(renderNotFoundPage(siteRootPath), 404, headers);
   }
-  return c.text("Not found", 404);
+  return c.text("Not found", 404, headers);
 }
 
 export function createPreviewRouter() {

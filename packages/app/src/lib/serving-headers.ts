@@ -14,3 +14,15 @@ export function servedContentHeaders(): Record<string, string> {
     "Referrer-Policy": "no-referrer"
   };
 }
+
+/** Headers for the app-generated 404 document or plain-text missing asset. */
+export function servedNotFoundHeaders(cacheControl: string): Record<string, string> {
+  return {
+    "Cache-Control": cacheControl,
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "Vary": "Accept",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  };
+}

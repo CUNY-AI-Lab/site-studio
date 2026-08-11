@@ -27,10 +27,12 @@
 
 	let {
 		questions = [],
+		busy = false,
 		onSubmit,
 		onReject
 	}: {
 		questions: UserQuestionPrompt[];
+		busy?: boolean;
 		onSubmit: (submission: UserQuestionSubmission) => void;
 		onReject: () => void;
 	} = $props();
@@ -49,6 +51,7 @@
 	}
 
 	function chooseOption(index: number, question: UserQuestionPrompt, label: string) {
+		if (busy) return;
 		if (question.multiSelect) {
 			const current = getSelectedAnswers(index);
 			selectedAnswers[index] = current.includes(label)
@@ -63,6 +66,7 @@
 	}
 
 	function toggleCustom(index: number, question: UserQuestionPrompt) {
+		if (busy) return;
 		showCustomInput[index] = !showCustomInput[index];
 		if (showCustomInput[index]) {
 			if (!question.multiSelect) {
@@ -80,6 +84,7 @@
 	}
 
 	function updateCustomAnswer(index: number, question: UserQuestionPrompt, value: string) {
+		if (busy) return;
 		customAnswers[index] = value;
 		if (!question.multiSelect && value.trim()) {
 			selectedAnswers[index] = [];
@@ -121,6 +126,7 @@
 	);
 
 	function submitAnswers() {
+		if (busy) return;
 		if (!canSubmit) {
 			validationMessage = 'Answer each question to continue.';
 			return;
@@ -144,7 +150,7 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey && canSubmit) {
+		if (event.key === 'Enter' && !event.shiftKey && canSubmit && !busy) {
 			event.preventDefault();
 			submitAnswers();
 		}
@@ -179,6 +185,7 @@
 							class:selected={isSelected(index, option.label)}
 							aria-pressed={isSelected(index, option.label)}
 							aria-describedby={validationMessage ? 'question-validation' : undefined}
+							disabled={busy}
 							onclick={() => chooseOption(index, question, option.label)}
 							title={option.description || ''}
 						>
@@ -195,6 +202,7 @@
 						class:selected={showCustomInput[index]}
 						aria-pressed={showCustomInput[index]}
 						aria-describedby={validationMessage ? 'question-validation' : undefined}
+						disabled={busy}
 						onclick={() => toggleCustom(index, question)}
 					>
 						<Pencil size={11} />
@@ -209,6 +217,7 @@
 						class="custom-input"
 						aria-label={`${question.question} answer`}
 						aria-describedby={validationMessage ? 'question-validation' : undefined}
+						disabled={busy}
 						placeholder={question.placeholder || 'Type your answer…'}
 						value={customAnswers[index] || ''}
 						oninput={(e) => updateCustomAnswer(index, question, (e.currentTarget as HTMLInputElement).value)}
@@ -220,6 +229,7 @@
 					class="freeform-input"
 					aria-label={`${question.question} answer`}
 					aria-describedby={validationMessage ? 'question-validation' : undefined}
+					disabled={busy}
 					rows="2"
 					placeholder={question.placeholder || 'Type your answer…'}
 					value={customAnswers[index] || ''}
@@ -234,11 +244,11 @@
 	{/if}
 
 	<div class="card-actions">
-		<button type="button" class="action-btn reject" onclick={onReject}>
+		<button type="button" class="action-btn reject" disabled={busy} onclick={onReject}>
 			<X size={15} />
 			<span>Skip</span>
 		</button>
-		<button type="button" class="action-btn submit" disabled={!canSubmit} onclick={submitAnswers}>
+		<button type="button" class="action-btn submit" disabled={!canSubmit || busy} onclick={submitAnswers}>
 			<Send size={14} />
 			<span>Reply</span>
 		</button>
@@ -360,6 +370,14 @@
 	.option-chip:hover {
 		background: rgba(255, 255, 255, 0.08);
 		border-color: rgba(255, 255, 255, 0.16);
+	}
+
+	.option-chip:disabled,
+	.custom-input:disabled,
+	.freeform-input:disabled,
+	.action-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 
 	.option-chip.selected {
