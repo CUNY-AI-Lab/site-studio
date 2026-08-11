@@ -131,6 +131,11 @@ Local ports:
 - Use `bun run e2e:live` for the direct signed-identity production product
   path; it owns only its random project and is not evidence of a CUNY/Doorway
   browser login
+- Production release is CI-only: `.github/workflows/ci.yml` verifies PRs and
+  main, then serializes the main build/deploy. Exact-SHA readback and health,
+  root, and unauthenticated no-store-401 probes are release gates. There is no
+  checked-in staging Worker/storage topology, so there is no PR production
+  preview.
 - Preserve same-origin assumptions for preview and thumbnail capture unless deliberately redesigned
 - Use Svelte 5 runes patterns in frontend code
 - Default to execute-plus-clarify, not approval-first UX
