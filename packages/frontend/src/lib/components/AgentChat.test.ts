@@ -433,6 +433,44 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Hello, world')).toBeInTheDocument();
 	});
 
+	it('refreshes the editor after a generated image is saved', async () => {
+		const { component, onUpdate } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('Add a hero image');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: 'image-call',
+				toolName: 'generate_image',
+				input: { prompt: 'A hero image' }
+			})
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({
+				type: 'tool-output-available',
+				toolCallId: 'image-call',
+				output: { ok: true, path: 'images/hero.png' }
+			})
+		});
+		await settle();
+
+		expect(onUpdate).toHaveBeenCalledTimes(1);
+	});
+
 	it('parses SSE-framed stream chunks', async () => {
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));

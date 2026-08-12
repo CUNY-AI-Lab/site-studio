@@ -108,7 +108,8 @@
 		'rename_file',
 		'delete_file',
 		'scaffold_template',
-		'add_page'
+		'add_page',
+		'generate_image'
 	]);
 
 	function generateId(): string {
