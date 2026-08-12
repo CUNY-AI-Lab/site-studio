@@ -80,6 +80,7 @@
 
 	// Handle-claim dialog, shown when publishing requires a public handle
 	let showHandleDialog = $state(false);
+	let pendingHandleProjectId = $state<string | null>(null);
 
 	// Images dialog: upload photos, replace placeholders, hand insertion to chat
 	let showImagesDialog = $state(false);
@@ -594,33 +595,50 @@
 	}
 
 	async function handlePublishProject() {
-		if (!currentProject) return;
+		if (!currentProject || publishingProjectId !== null || showHandleDialog) return;
+		const targetProjectId = currentProject.id;
 		try {
-			publishingProjectId = currentProject.id;
-			const result = await publishProject(currentProject.id);
+			publishingProjectId = targetProjectId;
+			const result = await publishProject(targetProjectId);
 
 			if (!result.ok) {
 				// The user has no public handle yet — collect one, then retry the
 				// publish automatically once it's claimed.
 				if (result.reason === 'handle_required') {
+					pendingHandleProjectId = targetProjectId;
 					showHandleDialog = true;
 				}
 				return;
 			}
 
-			applyPublishResult(result.url, result.a11yFindings ?? []);
+			applyPublishResult(targetProjectId, result.url, result.a11yFindings ?? []);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
-			publishingProjectId = null;
+			if (publishingProjectId === targetProjectId) {
+				publishingProjectId = null;
+			}
 		}
 	}
 
-	function applyPublishResult(url: string, findings: A11yFinding[]) {
-		if (!currentProject) return;
-		const updated = { ...currentProject, published: true, publishedUrl: url };
-		currentProject = updated;
-		allProjects = allProjects.map((p) => (p.id === updated.id ? updated : p));
+	function applyPublishResult(targetProjectId: string, url: string, findings: A11yFinding[]) {
+		const target = allProjects.find((project) => project.id === targetProjectId)
+			?? (currentProject?.id === targetProjectId ? currentProject : null);
+		if (!target) return;
+		const updated = { ...target, published: true, publishedUrl: url };
+		allProjects = allProjects.map((project) => (project.id === targetProjectId ? updated : project));
+		const isCurrentProject = currentProject?.id === targetProjectId;
+		if (isCurrentProject) {
+			currentProject = updated;
+		}
+
+		// Accessibility notes belong to the project that was published. Do not
+		// open a dialog against a different project if the user switched while the
+		// publish request was in flight.
+		if (!isCurrentProject) {
+			toast.success('Site published. It is now live.');
+			return;
+		}
 
 		if (findings.length > 0) {
 			a11yFindings = findings;
@@ -635,19 +653,23 @@
 	async function handleClaimed(_handle: string) {
 		// Handle claimed — close the dialog and complete the original publish.
 		showHandleDialog = false;
-		if (!currentProject) return;
+		const targetProjectId = pendingHandleProjectId;
+		pendingHandleProjectId = null;
+		if (!targetProjectId || publishingProjectId !== null) return;
 		try {
-			publishingProjectId = currentProject.id;
-			const result = await publishProject(currentProject.id);
+			publishingProjectId = targetProjectId;
+			const result = await publishProject(targetProjectId);
 			if (result.ok) {
-				applyPublishResult(result.url, result.a11yFindings ?? []);
+				applyPublishResult(targetProjectId, result.url, result.a11yFindings ?? []);
 			} else {
 				toast.error('Publishing failed after claiming your handle. Please try again.');
 			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
-			publishingProjectId = null;
+			if (publishingProjectId === targetProjectId) {
+				publishingProjectId = null;
+			}
 		}
 	}
 
@@ -672,24 +694,32 @@
 	}
 
 	async function handleUnpublishProject() {
-		if (!currentProject) return;
-		if (!window.confirm(`Make "${currentProject.name}" private? Its public URL will stop working.`)) return;
+		if (!currentProject || publishingProjectId !== null || showHandleDialog) return;
+		const targetProjectId = currentProject.id;
+		const targetProjectName = currentProject.name;
+		if (!window.confirm(`Make "${targetProjectName}" private? Its public URL will stop working.`)) return;
 		try {
-			publishingProjectId = currentProject.id;
-			await unpublishProject(currentProject.id);
+			publishingProjectId = targetProjectId;
+			await unpublishProject(targetProjectId);
 
-			// Update the current project
-			const updated = { ...currentProject, published: false, publishedUrl: undefined };
-			currentProject = updated;
-			// Update in allProjects list too
-			allProjects = allProjects.map(p =>
-				p.id === updated.id ? updated : p
-			);
+			const target = allProjects.find((project) => project.id === targetProjectId)
+				?? (currentProject?.id === targetProjectId ? currentProject : null);
+			if (target) {
+				const updated = { ...target, published: false, publishedUrl: undefined };
+				allProjects = allProjects.map((project) =>
+					project.id === targetProjectId ? updated : project
+				);
+				if (currentProject?.id === targetProjectId) {
+					currentProject = updated;
+				}
+			}
 			toast.success('Site is private. Its public URL no longer works.');
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : "Couldn't make the site private.");
 		} finally {
-			publishingProjectId = null;
+			if (publishingProjectId === targetProjectId) {
+				publishingProjectId = null;
+			}
 		}
 	}
 
@@ -773,7 +803,10 @@
 
 <HandleClaimDialog
 	open={showHandleDialog}
-	onOpenChange={(open) => (showHandleDialog = open)}
+	onOpenChange={(open) => {
+		showHandleDialog = open;
+		if (!open) pendingHandleProjectId = null;
+	}}
 	onClaimed={handleClaimed}
 />
 
