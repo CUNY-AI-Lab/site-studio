@@ -63,8 +63,8 @@
 					{#if filesLoadError}
 						<!-- SS-48: an unloadable file list is an error, not an empty project. -->
 						<div class="files-error" role="alert">
-							<p class="files-error-title">Files could not be loaded.</p>
-							<p class="files-error-detail">Your files are still there; this is a loading problem, not a deletion.</p>
+							<p class="files-error-title">We couldn't load your files.</p>
+							<p class="files-error-detail">Nothing was deleted. Try again in a moment.</p>
 							<button class="files-error-retry" type="button" onclick={onRefreshFiles}>Retry</button>
 						</div>
 					{:else}
@@ -92,7 +92,7 @@
 						<div class="binary-body">
 							<p class="binary-title">This file could not be loaded.</p>
 							<p class="binary-description">
-								The file itself was not changed. Editing is disabled so stale content cannot be saved over it.
+								Editing is off for this file until it loads.
 							</p>
 							<button class="download-current-file" type="button" onclick={() => onFileSelect(currentFile)}>
 								Try again

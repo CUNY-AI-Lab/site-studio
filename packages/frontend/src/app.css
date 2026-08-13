@@ -17,32 +17,32 @@
 	/* Warm, welcoming, and clear */
 
 	/* Background colors - soft warm whites */
-	--color-bg-primary: #FAFAF8;
-	--color-bg-secondary: #F5F4F1;
-	--color-bg-tertiary: #EFEEE9;
+	--color-bg-primary: #FAFCF8;
+	--color-bg-secondary: #F4F7F2;
+	--color-bg-tertiary: #EDF1EC;
 	--color-bg-elevated: #FFFFFF;
 
 	/* Border colors - soft warm grays */
-	--color-border: #E2E0DB;
-	--color-border-hover: #C9C6BE;
-	--color-border-focus: #3B7C8C;
+	--color-border: #E6E9EF;
+	--color-border-hover: #CBD2DC;
+	--color-border-focus: #2A6FB8;
 
 	/* Text colors - warm and readable */
-	--color-text-primary: #1F2937;
+	--color-text-primary: #333333;
 	--color-text-secondary: #4B5563;
 	--color-text-tertiary: #6B7280;
 	--color-text-muted: #6B7280;
 
 	/* Primary accent - deep teal (trustworthy, calm, educational) */
-	--color-primary: #0D7377;
-	--color-primary-hover: #0A5C5F;
-	--color-primary-light: #E6F4F5;
-	--color-primary-lighter: #B8E0E2;
+	--color-primary: #2A6FB8;
+	--color-primary-hover: #1D3A83;
+	--color-primary-light: #E8F4FC;
+	--color-primary-lighter: #D1E9F9;
 
 	/* Secondary accent - warm coral (friendly, inviting) */
-	--color-secondary: #E07A5F;
-	--color-secondary-hover: #C96A51;
-	--color-secondary-light: #FDF0ED;
+	--color-secondary: #2FB8D6;
+	--color-secondary-hover: #279DB6;
+	--color-secondary-light: #E8F8FB;
 
 	/* Tertiary accent - warm amber (highlights, attention) */
 	--color-tertiary: #D4A356;
@@ -56,9 +56,9 @@
 	--color-warning-light: #FEF3C7;
 	--color-error: #DC2626;
 	--color-error-light: #FEE2E2;
-	--color-info: #0D7377;
-	--color-info-light: #E6F4F5;
-	--color-badge-primary: #0D7377;
+	--color-info: #2A6FB8;
+	--color-info-light: #E8F4FC;
+	--color-badge-primary: #2A6FB8;
 	--color-badge-secondary: #9A3412;
 	--color-badge-success: #166534;
 	--color-badge-warning: #92400E;
@@ -74,9 +74,9 @@
 	--spacing-3xl: 4rem;
 
 	/* === Typography === */
-	/* Native stacks avoid third-party font requests from authenticated pages. */
-	--font-display: ui-serif, Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
-	--font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	/* The Lab's brand faces (ailab.gc.cuny.edu), loaded in app.html. */
+	--font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+	--font-sans: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	--font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
 
 	/* Font sizes */
@@ -150,15 +150,15 @@
 	--card-foreground: 217 19% 17%;
 	--border: 40 10% 88%;
 	--input: 40 10% 88%;
-	--primary: 180 79% 26%;
+	--primary: 211 63% 44%;
 	--primary-foreground: 0 0% 100%;
-	--secondary: 12 62% 63%;
+	--secondary: 191 67% 51%;
 	--secondary-foreground: 0 0% 100%;
-	--accent: 40 60% 58%;
-	--accent-foreground: 217 19% 17%;
+	--accent: 204 77% 90%;
+	--accent-foreground: 223 64% 31%;
 	--destructive: 0 72% 51%;
 	--destructive-foreground: 0 0% 100%;
-	--ring: 180 79% 26%;
+	--ring: 211 63% 44%;
 	--radius: 0.5rem;
 }
 
@@ -174,7 +174,7 @@
 		/* Border colors */
 		--color-border: #374151;
 		--color-border-hover: #4B5563;
-		--color-border-focus: #14B8A6;
+		--color-border-focus: #5AB8E8;
 
 		/* Text colors */
 		--color-text-primary: #F9FAFB;
@@ -183,15 +183,15 @@
 		--color-text-muted: #9CA3AF;
 
 		/* Primary accent - brighter teal */
-		--color-primary: #14B8A6;
-		--color-primary-hover: #2DD4BF;
-		--color-primary-light: rgba(20, 184, 166, 0.15);
-		--color-primary-lighter: rgba(20, 184, 166, 0.1);
+		--color-primary: #5AB8E8;
+		--color-primary-hover: #7CC7EE;
+		--color-primary-light: rgba(90, 184, 232, 0.15);
+		--color-primary-lighter: rgba(90, 184, 232, 0.1);
 
 		/* Secondary accent - brighter coral */
-		--color-secondary: #F97068;
-		--color-secondary-hover: #FB8F87;
-		--color-secondary-light: rgba(249, 112, 104, 0.15);
+		--color-secondary: #4FC9E4;
+		--color-secondary-hover: #74D4EA;
+		--color-secondary-light: rgba(79, 201, 228, 0.15);
 
 		/* Tertiary accent - brighter amber */
 		--color-tertiary: #FBBF24;
@@ -205,9 +205,9 @@
 		--color-warning-light: rgba(245, 158, 11, 0.15);
 		--color-error: #EF4444;
 		--color-error-light: rgba(239, 68, 68, 0.15);
-		--color-info: #14B8A6;
-		--color-info-light: rgba(20, 184, 166, 0.15);
-		--color-badge-primary: #5EEAD4;
+		--color-info: #5AB8E8;
+		--color-info-light: rgba(90, 184, 232, 0.15);
+		--color-badge-primary: #A3D3F3;
 		--color-badge-secondary: #FCA5A5;
 		--color-badge-success: #6EE7B7;
 		--color-badge-warning: #FCD34D;
@@ -221,7 +221,7 @@
 		--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
 
 		/* Glow shadows */
-		--shadow-glow-primary: 0 0 0 3px rgba(20, 184, 166, 0.25);
+		--shadow-glow-primary: 0 0 0 3px rgba(90, 184, 232, 0.25);
 		--shadow-glow-error: 0 0 0 3px rgba(239, 68, 68, 0.25);
 		--shadow-glow-success: 0 0 0 3px rgba(16, 185, 129, 0.25);
 
@@ -236,15 +236,15 @@
 		--card-foreground: 210 40% 98%;
 		--border: 220 14% 22%;
 		--input: 220 14% 22%;
-		--primary: 172 66% 40%;
+		--primary: 203 66% 63%;
 		--primary-foreground: 224 47% 7%;
-		--secondary: 6 85% 67%;
+		--secondary: 191 63% 60%;
 		--secondary-foreground: 224 47% 7%;
-		--accent: 43 96% 56%;
-		--accent-foreground: 224 47% 7%;
+		--accent: 213 34% 25%;
+		--accent-foreground: 210 40% 98%;
 		--destructive: 0 84% 60%;
 		--destructive-foreground: 210 40% 98%;
-		--ring: 172 66% 40%;
+		--ring: 203 66% 63%;
 	}
 }
 

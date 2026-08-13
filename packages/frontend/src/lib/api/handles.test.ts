@@ -45,7 +45,7 @@ describe('claimHandle response parsing (tri-state)', () => {
 		const result = await claimHandle('jane');
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.message).toBe('Could not claim that handle.');
+			expect(result.message).toBe("We couldn't save that address.");
 		}
 	});
 
@@ -56,14 +56,14 @@ describe('claimHandle response parsing (tri-state)', () => {
 		const result = await claimHandle('jane');
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.message).toBe('Could not claim that handle.');
+			expect(result.message).toBe("We couldn't save that address.");
 		}
 	});
 
 	it('surfaces the server message on a 409', async () => {
-		csrfFetch.mockResolvedValue(jsonResponse({ message: 'That handle is taken.' }, 409));
+		csrfFetch.mockResolvedValue(jsonResponse({ message: 'That address is already taken.' }, 409));
 		const result = await claimHandle('jane');
-		expect(result).toEqual({ ok: false, message: 'That handle is taken.' });
+		expect(result).toEqual({ ok: false, message: 'That address is already taken.' });
 	});
 
 	it('falls back to the error field then a default on failures', async () => {
@@ -73,7 +73,7 @@ describe('claimHandle response parsing (tri-state)', () => {
 		csrfFetch.mockResolvedValue(htmlResponse(500));
 		expect(await claimHandle('jane')).toEqual({
 			ok: false,
-			message: 'Could not claim that handle.'
+			message: "We couldn't save that address."
 		});
 	});
 });
