@@ -92,7 +92,7 @@
 				claimError = res.message;
 			}
 		} catch (e) {
-			claimError = e instanceof Error ? e.message : "We couldn't save that address.";
+			claimError = e instanceof Error ? e.message : 'Could not claim that handle.';
 		} finally {
 			claiming = false;
 		}
@@ -110,8 +110,8 @@
 		if (claimError) return { tone: 'bad', text: claimError };
 		if (checking) return { tone: 'muted', text: 'Checking availability…' };
 		if (!result || value.trim().length === 0) return null;
-		if (!result.valid) return { tone: 'bad', text: result.reason ?? "That address isn't available." };
-		if (!result.available) return { tone: 'bad', text: result.reason ?? 'That address is already taken.' };
+		if (!result.valid) return { tone: 'bad', text: result.reason ?? 'That handle is not allowed.' };
+		if (!result.available) return { tone: 'bad', text: result.reason ?? 'That handle is taken.' };
 		return { tone: 'ok', text: 'Available' };
 	});
 </script>
@@ -121,7 +121,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Choose your public address</Dialog.Title>
 			<Dialog.Description>
-				Every site you publish will live under this address, and it can't be changed later. Pick
+				All your published sites will live under it. It can't be changed right now, so pick
 				something you'll be happy to share.
 			</Dialog.Description>
 		</Dialog.Header>
@@ -173,7 +173,7 @@
 					<Loader2 size={15} class="spin" />
 					Claiming…
 				{:else}
-					Save and publish
+					Claim and publish
 				{/if}
 			</Button>
 		</Dialog.Footer>

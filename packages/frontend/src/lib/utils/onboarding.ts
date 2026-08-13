@@ -20,7 +20,7 @@ export function createDashboardTour() {
 			popover: {
 				title: 'Site Studio',
 				description:
-					'Make a website for your course, project, or research.\n\nThis short tour shows the main parts.',
+					'Make a website for your course, project, or research.\n\nThis short tour shows the main parts. Click "Continue" to move through each step.',
 				side: 'bottom',
 				align: 'center'
 			}
@@ -78,7 +78,7 @@ export function createEditorTour() {
 			popover: {
 				title: 'Assistant',
 				description:
-					'Describe what you want to build, and the assistant makes the changes.',
+					'Describe what you want to build in plain English, and the assistant makes the changes.',
 				side: 'right',
 				align: 'start'
 			}

@@ -527,7 +527,7 @@ describe('AgentChat', () => {
 		// and no "Failed to parse stream chunk" console noise for this known shape.
 		expect(screen.getAllByText(quotaText)).toHaveLength(1);
 		expect(
-			screen.queryByText('Something went wrong while writing this response. Send your message again.')
+			screen.queryByText('Something went wrong while generating this response.')
 		).not.toBeInTheDocument();
 		expect(warn).not.toHaveBeenCalled();
 		warn.mockRestore();
@@ -551,7 +551,7 @@ describe('AgentChat', () => {
 
 		expect(warn).toHaveBeenCalled();
 		expect(
-			screen.getByText('Something went wrong while writing this response. Send your message again.')
+			screen.getByText('Something went wrong while generating this response.')
 		).toBeInTheDocument();
 		warn.mockRestore();
 	});
@@ -691,7 +691,7 @@ describe('AgentChat', () => {
 		await component.sendPrompt('hello');
 		await settle();
 		expect(ws.sent).toHaveLength(0);
-		expect(screen.getByText('The connection to the assistant expired. Send your message again.')).toBeInTheDocument();
+		expect(screen.getByText('Unable to refresh the agent connection (409)')).toBeInTheDocument();
 	});
 
 	it('refreshes before both auto-continue tool-result frames on the same socket', async () => {

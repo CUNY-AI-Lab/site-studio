@@ -59,7 +59,7 @@ function thumbnail(index: number): HTMLElement {
 // a still-disabled button and submit() no-ops (the callback never fires) — an
 // intermittent race. Wait for the button to be enabled, THEN click.
 async function clickSubmit(user: ReturnType<typeof userEvent.setup>) {
-	const btn = screen.getByRole('button', { name: /ask the assistant to (add|replace) it/i });
+	const btn = screen.getByRole('button', { name: /(insert|replace) with the assistant/i });
 	await waitFor(() => expect(btn).toBeEnabled());
 	await user.click(btn);
 }
@@ -85,7 +85,7 @@ describe('ImageManagerDialog', () => {
 			// Open the insert form by selecting a thumbnail.
 			await user.click(thumbnail(0));
 
-			const insertBtn = screen.getByRole('button', { name: /ask the assistant to add it/i });
+			const insertBtn = screen.getByRole('button', { name: /insert with the assistant/i });
 			expect(insertBtn).toBeDisabled();
 
 			await user.type(screen.getByLabelText(/describe this image/i), 'A photo');
@@ -105,7 +105,7 @@ describe('ImageManagerDialog', () => {
 			await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
 			expect(altInput.value).toBe('');
 			expect(altInput).toBeDisabled();
-			expect(screen.getByRole('button', { name: /ask the assistant to add it/i })).toBeEnabled();
+			expect(screen.getByRole('button', { name: /insert with the assistant/i })).toBeEnabled();
 		});
 	});
 

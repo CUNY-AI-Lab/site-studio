@@ -154,10 +154,11 @@ describe('NewProjectDialog data disclosure', () => {
 		mockFetchTemplateCategories.mockResolvedValue(categories);
 	});
 
-	it('states the privacy boundary in plain words', () => {
+	it('distinguishes project storage, model-provider retention, and publishing', () => {
 		openDialog();
 
-		expect(screen.getByText(/Your project stays private until you publish it/)).toBeInTheDocument();
-		expect(screen.getByText(/AI use counts toward your Lab usage limit/)).toBeInTheDocument();
+		expect(screen.getByText(/Site Studio saves prompts and attached files with your private project/)).toBeInTheDocument();
+		expect(screen.getByText(/Model-provider routes are configured not to retain prompts or outputs/)).toBeInTheDocument();
+		expect(screen.getByText(/Publishing separately makes the site files public/)).toBeInTheDocument();
 	});
 });

@@ -41,9 +41,9 @@
 	let lastLoadedProjectId = $state<string | null>(null);
 
 	const TRIGGER_LABELS: Record<ProjectSnapshot['trigger'], string> = {
-		agent: 'Assistant change',
+		agent: 'AI run',
 		manual: 'Manual',
-		restore: 'Before restore'
+		restore: 'Restore point'
 	};
 
 	function formatCreatedAt(value: string): string {
@@ -155,9 +155,9 @@
 <Dialog.Root {open} onOpenChange={onOpenChange}>
 	<Dialog.Content class="history-dialog !bg-white dark:!bg-gray-900">
 		<Dialog.Header>
-			<Dialog.Title>Version history</Dialog.Title>
+			<Dialog.Title>Version History</Dialog.Title>
 			<Dialog.Description>
-				Go back to an earlier version of {projectName || projectId}.
+				Restore earlier project states for {projectName || projectId}.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -167,7 +167,7 @@
 				<Input
 					id="snapshot-label"
 					bind:value={snapshotLabel}
-					placeholder="Optional note, e.g. before the redesign"
+					placeholder="Optional note for this checkpoint"
 					disabled={isCreating}
 				/>
 			</div>

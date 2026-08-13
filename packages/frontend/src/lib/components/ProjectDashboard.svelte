@@ -190,7 +190,7 @@
 		</div>
 		<Button onclick={handleNewProject} data-tour="new-project">
 			<Plus size={18} />
-			New project
+			New Project
 		</Button>
 	</div>
 
@@ -210,7 +210,7 @@
 			<p>Create your first project to get started</p>
 			<Button onclick={handleNewProject} data-tour="new-project">
 				<Plus size={20} />
-				Create project
+				Create Project
 			</Button>
 		</div>
 	{:else}
@@ -253,7 +253,7 @@
 							{#if project.published && project.publishedUrl}
 								<DropdownMenu.Item onclick={() => openPublishedSite(project.publishedUrl!)}>
 									<ExternalLink size={14} />
-									<span>View published site</span>
+									<span>View Published Site</span>
 								</DropdownMenu.Item>
 								<DropdownMenu.Item
 									onclick={() => handleUnpublishProject(project)}

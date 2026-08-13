@@ -165,7 +165,7 @@
 			} else if (isApiError(error)) {
 				toast.error(error.getUserMessage());
 			} else {
-				toast.error("We couldn't create the project. Try again in a moment.");
+				toast.error('Failed to create project. Please try again.');
 			}
 		} finally {
 			isCreating = false;
@@ -200,7 +200,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
-				Choose a starting template and customize the static website with the AI assistant. Your project stays private until you publish it. AI use counts toward your Lab usage limit.
+				Choose a starting template and customize the static website with the AI assistant. Site Studio saves prompts and attached files with your private project. Model-provider routes are configured not to retain prompts or outputs; that setting does not cover Site Studio storage. Publishing separately makes the site files public. AI use is subject to your CAIL usage limit.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -211,7 +211,7 @@
 				</div>
 			{:else if templateLoadError}
 				<div class="loading-container">
-					<p>We couldn't load the templates. Check your connection and try again.</p>
+					<p>Failed to load templates.</p>
 					<Button variant="outline" size="sm" onclick={loadTemplates}>Retry</Button>
 				</div>
 			{:else}
@@ -285,7 +285,7 @@
 						placeholder="my-awesome-project"
 						disabled={isCreating}
 					/>
-					<p class="field-hint">Leave blank and we'll name it for you</p>
+					<p class="field-hint">Leave blank to auto-generate a name</p>
 				</div>
 			</div>
 

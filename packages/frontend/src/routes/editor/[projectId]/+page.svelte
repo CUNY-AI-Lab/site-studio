@@ -278,7 +278,7 @@
 				fileContent = '';
 				currentFileEtag = null;
 				currentFileOpenStatus = 'failed';
-				toast.error(`We couldn't open ${filePath}. Select it again to retry.`);
+				toast.error(`Could not load ${filePath}. The file was not changed - select it again to retry.`);
 			}
 		}
 	}
@@ -352,7 +352,7 @@
 			return true;
 		} catch (error) {
 			console.error('Error saving file:', error);
-			toast.error("We couldn't save this file. Your changes are still in the editor — try again.");
+			toast.error('Failed to save file. Your latest changes were not saved.');
 			return false;
 		}
 	}
@@ -613,7 +613,7 @@
 
 			applyPublishResult(targetProjectId, result.url, result.a11yFindings ?? []);
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "We couldn't publish your site. Try again in a moment.");
+			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
 			if (publishingProjectId === targetProjectId) {
 				publishingProjectId = null;
@@ -662,10 +662,10 @@
 			if (result.ok) {
 				applyPublishResult(targetProjectId, result.url, result.a11yFindings ?? []);
 			} else {
-				toast.error("Your address is saved, but publishing didn't finish. Try Publish again.");
+				toast.error('Publishing failed after claiming your handle. Please try again.');
 			}
 		} catch (e) {
-			toast.error(e instanceof Error ? e.message : "We couldn't publish your site. Try again in a moment.");
+			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
 		} finally {
 			if (publishingProjectId === targetProjectId) {
 				publishingProjectId = null;
@@ -680,7 +680,7 @@
 			chatPane.expand();
 		}
 		void chatComponent?.sendPrompt(
-			'Check this site for accessibility problems and fix what you find.'
+			'Run project.audit_accessibility and fix the issues it reports.'
 		);
 	}
 
@@ -814,7 +814,7 @@
 	{#if projectMissing}
 		<main class="missing-project" aria-labelledby="missing-project-title">
 			<div class="missing-project-card">
-				<h1 id="missing-project-title">We couldn't find this project</h1>
+				<h1 id="missing-project-title">This project is no longer here</h1>
 				<p>It may have been deleted or its address may have changed.</p>
 				<Button href={base || '/'}>Back to your projects</Button>
 			</div>
@@ -971,7 +971,7 @@
 									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleOpenHistory}>
 										<RotateCcw size={14} />
-										<span>Version history</span>
+										<span>Version History</span>
 									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleRenameProject}>
 										Rename

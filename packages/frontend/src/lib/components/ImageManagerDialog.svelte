@@ -270,9 +270,9 @@
 										variant="outline"
 										size="sm"
 										onclick={() => fileInput?.click()}
-										title="Upload an image"
+										title="Upload an image first"
 									>
-										Upload an image
+										Upload an image first
 									</Button>
 								{/if}
 							</li>
@@ -346,9 +346,9 @@
 						<Button onclick={submit} disabled={!canSubmit}>
 							<Sparkles size={15} />
 							{#if replaceTarget}
-								Ask the assistant to replace it
+								Replace with the assistant
 							{:else}
-								Ask the assistant to add it
+								Insert with the assistant
 							{/if}
 						</Button>
 					</div>

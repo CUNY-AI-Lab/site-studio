@@ -81,7 +81,7 @@
 			window.URL.revokeObjectURL(url);
 		} catch (error) {
 			console.error('Error downloading file:', error);
-			toast.error("We couldn't download that file. Try again in a moment.");
+			toast.error('Failed to download file. Please try again.');
 		}
 	}
 
@@ -158,7 +158,7 @@
 	</div>
 
 	{#if files.length === 0}
-		<p class="empty-state">No files yet. Describe what you want in chat and the assistant will create them.</p>
+		<p class="empty-state">No files yet. Ask the agent to create some!</p>
 	{:else}
 		{#each files as file}
 			{@render FileTreeNode({ file, onSelect, onDownload: handleDownload, onRename: handleRename, onDelete: handleDelete })}

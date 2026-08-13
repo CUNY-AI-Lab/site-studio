@@ -333,7 +333,7 @@
 			if (headline === 'Responding...') {
 				return {
 					headline,
-					detail: 'Writing the response.'
+					detail: 'Writing the response back into the chat.'
 				};
 			}
 
@@ -360,7 +360,7 @@
 			case 'extract_document_text':
 				return {
 					headline,
-					detail: 'Reading your document.'
+					detail: 'Reading the uploaded document so the agent can use that content in the site.'
 				};
 			case 'list_files':
 			case 'search_files':
@@ -386,7 +386,7 @@
 			case 'ask_user_question':
 				return {
 					headline,
-					detail: 'Waiting for your answer.'
+					detail: 'The agent is waiting for your answer before it can continue.'
 				};
 			default:
 				return {
@@ -677,11 +677,11 @@
 		targetEpoch = projectContextEpoch
 	): Promise<WebSocket> {
 		if (!targetProjectId) {
-			throw new Error('No project is open.');
+			throw new Error('Missing project id');
 		}
 
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
-			throw new Error('You switched projects, so this request was cancelled.');
+			throw new Error('Project changed while connecting to the agent');
 		}
 
 		if (socket && socketProjectId === targetProjectId && socket.readyState === WebSocket.OPEN) {
@@ -720,7 +720,7 @@
 		}
 
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
-			throw new Error('You switched projects, so this request was cancelled.');
+			throw new Error('Project changed while connecting to the agent');
 		}
 
 		// Awaiting the token yields the event loop, so a concurrent ensureSocket()
@@ -763,7 +763,7 @@
 						socketProjectId = null;
 					}
 					nextSocket.close();
-					reject(new Error('You switched projects, so this request was cancelled.'));
+					reject(new Error('Project changed while connecting to the agent'));
 					return;
 				}
 				reconnectAttempts = 0; // Reset on successful connection
@@ -789,7 +789,7 @@
 					socket = null;
 					socketProjectId = null;
 				}
-				reject(new Error("We couldn't reach the assistant. Check your connection and send your message again."));
+				reject(new Error('Unable to connect to the agent'));
 			};
 
 			nextSocket.addEventListener('open', onOpen, { once: true });
@@ -855,7 +855,7 @@
 
 	function sendSocketMessage(payload: Record<string, unknown>) {
 		if (!socket || socketProjectId !== projectId || socket.readyState !== WebSocket.OPEN) {
-			throw new Error("The assistant isn't connected right now. Send your message again.");
+			throw new Error('Agent connection is not open');
 		}
 
 		socket.send(JSON.stringify(payload));
@@ -867,7 +867,7 @@
 			{ method: 'POST' }
 		);
 		if (!response.ok) {
-			throw new Error('The connection to the assistant expired. Send your message again.');
+			throw new Error(`Unable to refresh the agent connection (${response.status})`);
 		}
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			throw new Error('Project changed while refreshing the agent connection');
@@ -886,7 +886,7 @@
 			socketProjectId !== targetProjectId ||
 			ws.readyState !== WebSocket.OPEN
 		) {
-			throw new Error('The connection dropped before your message was sent. Send it again.');
+			throw new Error('Agent connection closed before the request was sent');
 		}
 		return ws;
 	}
@@ -1079,7 +1079,7 @@
 							if (data.error && activeStream) {
 								activeStream.parts.push({
 									type: 'text',
-									text: 'Something went wrong while writing this response. Send your message again.',
+									text: 'Something went wrong while generating this response.',
 									state: 'done'
 								});
 							}
@@ -1213,7 +1213,7 @@
 		} catch (error) {
 			console.error('Error preparing agent request:', error);
 			if (!preparation || isCurrentRequestPreparation(preparation)) {
-				currentStatus = "We couldn't send that. Try again.";
+				currentStatus = 'Unable to prepare request.';
 			}
 			return false;
 		}
@@ -1363,7 +1363,7 @@
 		} catch (error) {
 			if (isCurrentRequestPreparation(preparation)) {
 				console.error('Error denying tool:', error);
-				currentStatus = "We couldn't send your answer. Try again.";
+				currentStatus = 'Unable to send response.';
 			}
 		} finally {
 			finishRequestPreparation(preparation);
@@ -1443,7 +1443,7 @@
 		} catch (error) {
 			if (isCurrentRequestPreparation(preparation)) {
 				console.error('Error answering question:', error);
-				currentStatus = "We couldn't send your answer. Try again.";
+				currentStatus = 'Unable to send your answer.';
 			}
 		} finally {
 			finishRequestPreparation(preparation);
@@ -1493,7 +1493,7 @@
 			     transcript for a transient error. -->
 			<div class="history-error" role="alert">
 				<p class="history-error-title">Your chat history could not be loaded.</p>
-				<p class="history-error-detail">Nothing was deleted. Try again in a moment.</p>
+				<p class="history-error-detail">The conversation is still saved; this is a loading problem.</p>
 				<button class="history-error-retry" type="button" onclick={retryLoadChatHistory}>
 					Retry loading history
 				</button>
