@@ -155,9 +155,9 @@
 <Dialog.Root {open} onOpenChange={onOpenChange}>
 	<Dialog.Content class="history-dialog !bg-white dark:!bg-gray-900">
 		<Dialog.Header>
-			<Dialog.Title>Version History</Dialog.Title>
+			<Dialog.Title>Version history</Dialog.Title>
 			<Dialog.Description>
-				Restore earlier project states for {projectName || projectId}.
+				Go back to an earlier version of {projectName || projectId}.
 			</Dialog.Description>
 		</Dialog.Header>
 

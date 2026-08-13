@@ -867,7 +867,7 @@
 			{ method: 'POST' }
 		);
 		if (!response.ok) {
-			throw new Error(`Unable to refresh the agent connection (${response.status})`);
+			throw new Error('The connection to the assistant expired. Send your message again.');
 		}
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			throw new Error('Project changed while refreshing the agent connection');

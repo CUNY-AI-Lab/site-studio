@@ -97,7 +97,7 @@ describe('HandleClaimDialog', () => {
 			expect(
 				screen.getByText("Couldn't check that address. Check your connection and try again.")
 			).toBeInTheDocument();
-			expect(screen.getByRole('button', { name: /claim and publish/i })).toBeDisabled();
+			expect(screen.getByRole('button', { name: /save and publish/i })).toBeDisabled();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -112,7 +112,7 @@ describe('HandleClaimDialog', () => {
 			await user.type(screen.getByLabelText('Address'), 'open');
 			await vi.advanceTimersByTimeAsync(400);
 			expect(screen.getByText('Available')).toBeInTheDocument();
-			expect(screen.getByRole('button', { name: /claim and publish/i })).toBeEnabled();
+			expect(screen.getByRole('button', { name: /save and publish/i })).toBeEnabled();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -127,7 +127,7 @@ describe('HandleClaimDialog', () => {
 			const { onClaimed } = open();
 			await user.type(screen.getByLabelText('Address'), 'jane');
 			await vi.advanceTimersByTimeAsync(400);
-			await user.click(screen.getByRole('button', { name: /claim and publish/i }));
+			await user.click(screen.getByRole('button', { name: /save and publish/i }));
 			await vi.waitFor(() => expect(onClaimed).toHaveBeenCalledWith('jane'));
 		} finally {
 			vi.useRealTimers();
@@ -143,7 +143,7 @@ describe('HandleClaimDialog', () => {
 			const { onClaimed } = open();
 			await user.type(screen.getByLabelText('Address'), 'jane');
 			await vi.advanceTimersByTimeAsync(400);
-			await user.click(screen.getByRole('button', { name: /claim and publish/i }));
+			await user.click(screen.getByRole('button', { name: /save and publish/i }));
 			await vi.waitFor(() => expect(screen.getByText('Someone grabbed it first.')).toBeInTheDocument());
 			expect(onClaimed).not.toHaveBeenCalled();
 		} finally {
@@ -153,6 +153,6 @@ describe('HandleClaimDialog', () => {
 
 	it('leaves the claim button disabled until a check confirms availability', () => {
 		open();
-		expect(screen.getByRole('button', { name: /claim and publish/i })).toBeDisabled();
+		expect(screen.getByRole('button', { name: /save and publish/i })).toBeDisabled();
 	});
 });

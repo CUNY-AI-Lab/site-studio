@@ -352,7 +352,7 @@
 			return true;
 		} catch (error) {
 			console.error('Error saving file:', error);
-			toast.error('Failed to save file. Your latest changes were not saved.');
+			toast.error("We couldn't save this file. Your changes are still in the editor. Try again.");
 			return false;
 		}
 	}
@@ -662,7 +662,7 @@
 			if (result.ok) {
 				applyPublishResult(targetProjectId, result.url, result.a11yFindings ?? []);
 			} else {
-				toast.error('Publishing failed after claiming your handle. Please try again.');
+				toast.error("Your address is saved, but publishing didn't finish. Try Publish again.");
 			}
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to publish project.');
@@ -971,7 +971,7 @@
 									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleOpenHistory}>
 										<RotateCcw size={14} />
-										<span>Version History</span>
+										<span>Version history</span>
 									</DropdownMenu.Item>
 									<DropdownMenu.Item onclick={handleRenameProject}>
 										Rename
