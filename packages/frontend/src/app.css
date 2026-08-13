@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 /* === Site Studio Design System === */
-/* A warm, approachable interface for CUNY students and academics */
-/* First-time friendly, clear affordances, educational warmth */
+/* CUNY AI Lab fleet chassis: flat public-institution surfaces. */
+/* Sharp corners, no shadows, navy top rules, gold focus. */
 
 /* NOTE: no universal margin/padding-zero reset on the star selector here.
    Tailwind v4's preflight (from the tailwindcss import above) already applies
@@ -38,6 +38,12 @@
 	--color-primary-hover: #1D3A83;
 	--color-primary-light: #E8F4FC;
 	--color-primary-lighter: #D1E9F9;
+
+	/* Fleet structure - navy rules, bright-blue accent slots, gold focus */
+	--color-navy: #1D3A83;
+	--color-accent-slot: #3B73E6;
+	--color-focus: #FFB81C;
+	--rule-top: linear-gradient(90deg, var(--color-accent-slot) 0 44px, var(--color-navy) 44px);
 
 	/* Secondary accent - logo cyan (friendly, inviting) */
 	--color-secondary: #2FB8D6;
@@ -102,26 +108,26 @@
 	--line-height-relaxed: 1.625;
 	--line-height-loose: 1.75;
 
-	/* === Soft Shadows (Approachable) === */
-	--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
-	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-	--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-	--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
-	--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
-	--shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.04);
+	/* === Flat chassis: no shadows === */
+	--shadow-xs: none;
+	--shadow-sm: none;
+	--shadow-md: none;
+	--shadow-lg: none;
+	--shadow-xl: none;
+	--shadow-inner: none;
 
-	/* Glow shadows for interactive elements */
-	--shadow-glow-primary: 0 0 0 3px rgba(13, 115, 119, 0.15);
-	--shadow-glow-error: 0 0 0 3px rgba(220, 38, 38, 0.15);
-	--shadow-glow-success: 0 0 0 3px rgba(5, 150, 105, 0.15);
+	/* Glow shadows retired; focus is the gold outline */
+	--shadow-glow-primary: none;
+	--shadow-glow-error: none;
+	--shadow-glow-success: none;
 
-	/* === Border Radius (Rounded, Approachable) === */
+	/* === Border Radius (Sharp; only status dots and icon buttons stay round) === */
 	--radius-none: 0;
-	--radius-sm: 0.25rem;
-	--radius-md: 0.5rem;
-	--radius-lg: 0.75rem;
-	--radius-xl: 1rem;
-	--radius-2xl: 1.5rem;
+	--radius-sm: 0;
+	--radius-md: 0;
+	--radius-lg: 0;
+	--radius-xl: 0;
+	--radius-2xl: 0;
 	--radius-full: 9999px;
 
 	/* === Transitions === */
@@ -159,7 +165,7 @@
 	--destructive: 0 72% 51%;
 	--destructive-foreground: 0 0% 100%;
 	--ring: 211 63% 44%;
-	--radius: 0.5rem;
+	--radius: 0;
 }
 
 /* === Dark Mode === */
@@ -213,17 +219,22 @@
 		--color-badge-warning: #FCD34D;
 		--color-badge-error: #FCA5A5;
 
-		/* Shadows for dark mode */
-		--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-		--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.2);
-		--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
-		--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.35), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
-		--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+		/* Flat chassis in dark mode too: no shadows */
+		--shadow-xs: none;
+		--shadow-sm: none;
+		--shadow-md: none;
+		--shadow-lg: none;
+		--shadow-xl: none;
 
-		/* Glow shadows */
-		--shadow-glow-primary: 0 0 0 3px rgba(90, 184, 232, 0.25);
-		--shadow-glow-error: 0 0 0 3px rgba(239, 68, 68, 0.25);
-		--shadow-glow-success: 0 0 0 3px rgba(16, 185, 129, 0.25);
+		/* Glow shadows retired; focus is the gold outline */
+		--shadow-glow-primary: none;
+		--shadow-glow-error: none;
+		--shadow-glow-success: none;
+
+		/* Fleet structure - rules stay legible on the dark ground */
+		--color-navy: #43507A;
+		--color-accent-slot: #5A8DF0;
+		--rule-top: linear-gradient(90deg, var(--color-accent-slot) 0 44px, var(--color-navy) 44px);
 
 		/* === shadcn-svelte dark theme === */
 		--background: 224 47% 7%;
@@ -261,26 +272,12 @@ body {
 	-moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle texture for warmth */
-body::before {
-	content: '';
-	position: fixed;
-	top: 0;
-	left: 0;
-	width: 100%;
-	height: 100%;
-	opacity: 0.015;
-	z-index: var(--z-base);
-	pointer-events: none;
-	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-}
-
 /* === Interactive Elements === */
 button {
 	font-family: inherit;
 	cursor: pointer;
 	transition: all var(--transition-base);
-	border-radius: var(--radius-md);
+	border-radius: 0;
 }
 
 button:disabled {
@@ -290,26 +287,27 @@ button:disabled {
 
 input, textarea, select {
 	font-family: inherit;
-	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-	border-radius: var(--radius-md);
+	transition: border-color var(--transition-fast);
+	border-radius: 0;
 }
 
 a {
 	color: var(--color-primary);
-	text-decoration: none;
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 2px;
 	transition: color var(--transition-fast);
 }
 
 a:hover {
 	color: var(--color-primary-hover);
-	text-decoration: underline;
+	text-decoration-thickness: 3px;
 }
 
-/* === Focus States (Clear and Accessible) === */
+/* === Focus States (CUNY gold, everywhere) === */
 *:focus-visible {
-	outline: 2px solid var(--color-primary);
-	outline-offset: 2px;
-	border-radius: var(--radius-sm);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 /* === Selection === */
@@ -318,7 +316,7 @@ a:hover {
 	color: var(--color-text-primary);
 }
 
-/* === Scrollbar Styling (Subtle, Rounded) === */
+/* === Scrollbar Styling (Flat, Sharp) === */
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
@@ -330,7 +328,6 @@ a:hover {
 
 ::-webkit-scrollbar-thumb {
 	background: var(--color-border);
-	border-radius: var(--radius-full);
 	border: 2px solid transparent;
 	background-clip: padding-box;
 }
@@ -393,13 +390,11 @@ code, pre {
 code {
 	background: var(--color-bg-tertiary);
 	padding: 0.125em 0.375em;
-	border-radius: var(--radius-sm);
 }
 
 pre {
 	background: var(--color-bg-secondary);
 	padding: var(--spacing-md);
-	border-radius: var(--radius-md);
 	overflow-x: auto;
 }
 
@@ -551,15 +546,8 @@ pre code {
 
 /* === Loading States === */
 .skeleton {
-	background: linear-gradient(
-		90deg,
-		var(--color-bg-tertiary) 0%,
-		var(--color-bg-secondary) 50%,
-		var(--color-bg-tertiary) 100%
-	);
-	background-size: 200% 100%;
-	animation: shimmer 1.5s ease-in-out infinite;
-	border-radius: var(--radius-md);
+	background: var(--color-bg-tertiary);
+	animation: pulse 1.5s ease-in-out infinite;
 }
 
 /* === Utility Classes for Layout === */
@@ -583,32 +571,31 @@ pre code {
 }
 
 /* === Card Component Base === */
+/* Flat white surface with a navy top rule instead of a shadowed card. */
 .card {
 	background: var(--color-bg-elevated);
 	border: 1px solid var(--color-border);
-	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-sm);
-	transition: all var(--transition-base);
+	border-top: 4px solid var(--color-navy);
+	transition: border-color var(--transition-base);
 }
 
 .card:hover {
-	box-shadow: var(--shadow-md);
 	border-color: var(--color-border-hover);
+	border-top-color: var(--color-navy);
 }
 
 .card-interactive:hover {
-	transform: translateY(-2px);
-	box-shadow: var(--shadow-lg);
+	border-color: var(--color-primary);
+	border-top-color: var(--color-navy);
 }
 
-/* === Badge Component === */
+/* === Badge Component (sharp chip, not a pill) === */
 .badge {
 	display: inline-flex;
 	align-items: center;
 	padding: 0.125rem 0.5rem;
 	font-size: var(--font-size-xs);
 	font-weight: var(--font-weight-medium);
-	border-radius: var(--radius-full);
 	line-height: var(--line-height-normal);
 }
 
@@ -646,7 +633,6 @@ pre code {
 	padding: 0.625rem 1.25rem;
 	font-size: var(--font-size-sm);
 	font-weight: var(--font-weight-medium);
-	border-radius: var(--radius-md);
 	border: 1px solid transparent;
 	cursor: pointer;
 	transition: all var(--transition-base);
@@ -654,7 +640,8 @@ pre code {
 }
 
 .btn:focus-visible {
-	box-shadow: var(--shadow-glow-primary);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 .btn-primary {
@@ -710,26 +697,25 @@ pre code {
 	font-size: var(--font-size-base);
 }
 
-/* === Input Base Styles === */
+/* === Input Base Styles (2px dark border, sharp) === */
 .input {
 	width: 100%;
 	padding: 0.625rem 0.875rem;
 	font-size: var(--font-size-base);
 	background: var(--color-bg-elevated);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-md);
+	border: 2px solid var(--color-text-secondary);
 	color: var(--color-text-primary);
-	transition: all var(--transition-fast);
+	transition: border-color var(--transition-fast);
 }
 
 .input:hover:not(:disabled):not(:focus) {
-	border-color: var(--color-border-hover);
+	border-color: var(--color-text-primary);
 }
 
 .input:focus {
-	border-color: var(--color-primary);
-	box-shadow: var(--shadow-glow-primary);
-	outline: none;
+	border-color: var(--color-text-primary);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 .input::placeholder {
@@ -756,7 +742,6 @@ pre code {
 	background: var(--color-text-primary);
 	color: var(--color-bg-primary);
 	font-size: var(--font-size-xs);
-	border-radius: var(--radius-md);
 	white-space: nowrap;
 	opacity: 0;
 	visibility: hidden;

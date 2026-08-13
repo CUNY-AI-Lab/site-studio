@@ -30,10 +30,9 @@
 	:global(.dropdown-menu-content) {
 		background: var(--color-bg-elevated, #ffffff);
 		color: var(--color-text-primary, #1f2937);
-		border: 1px solid var(--color-border, #e2e0db);
-		border-radius: var(--radius-lg, 0.75rem);
+		border: 1px solid var(--color-border-hover, #cbd2dc);
+		border-top: 3px solid var(--color-navy, #1d3a83);
 		padding: 0.375rem;
-		box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.1));
 		max-height: var(--bits-dropdown-menu-content-available-height, 300px);
 	}
 </style>

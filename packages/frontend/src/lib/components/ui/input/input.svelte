@@ -25,9 +25,9 @@
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			"font-sans selection:bg-primary/20 selection:text-foreground border-input placeholder:text-muted-foreground flex h-10 w-full min-w-0 rounded-md border bg-background px-3.5 pt-2 text-sm font-normal outline-none transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-			"focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/15",
-			"aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+			"font-sans selection:bg-primary/20 selection:text-foreground border-[var(--color-text-secondary)] placeholder:text-muted-foreground flex h-10 w-full min-w-0 rounded-none border-2 bg-background px-3.5 pt-2 text-sm font-normal transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+			"focus-visible:outline-[3px] focus-visible:outline-solid focus-visible:outline-offset-0 focus-visible:outline-[var(--color-focus)]",
+			"aria-invalid:border-destructive",
 			className
 		)}
 		type="file"
@@ -40,9 +40,9 @@
 		bind:this={ref}
 		data-slot={dataSlot}
 		class={cn(
-			"font-sans border-input bg-background selection:bg-primary/20 selection:text-foreground placeholder:text-muted-foreground flex h-10 w-full min-w-0 rounded-md border px-3.5 py-2 text-base outline-none transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
-			"focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/15",
-			"aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+			"font-sans border-[var(--color-text-secondary)] bg-background selection:bg-primary/20 selection:text-foreground placeholder:text-muted-foreground flex h-10 w-full min-w-0 rounded-none border-2 px-3.5 py-2 text-base transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+			"focus-visible:outline-[3px] focus-visible:outline-solid focus-visible:outline-offset-0 focus-visible:outline-[var(--color-focus)]",
+			"aria-invalid:border-destructive",
 			className
 		)}
 		{type}
