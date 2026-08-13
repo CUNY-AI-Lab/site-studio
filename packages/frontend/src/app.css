@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* === Open Studio Design System === */
+/* === Site Studio Design System === */
 /* A warm, approachable interface for CUNY students and academics */
 /* First-time friendly, clear affordances, educational warmth */
 
@@ -13,10 +13,10 @@
    padding and their footer buttons clipped at the dialog edge. */
 
 :root {
-	/* === Open Studio Color System === */
+	/* === CUNY AI Lab Color System === */
 	/* Warm, welcoming, and clear */
 
-	/* Background colors - soft warm whites */
+	/* Background colors - pale cream ground */
 	--color-bg-primary: #FAFCF8;
 	--color-bg-secondary: #F4F7F2;
 	--color-bg-tertiary: #EDF1EC;
@@ -33,13 +33,13 @@
 	--color-text-tertiary: #6B7280;
 	--color-text-muted: #6B7280;
 
-	/* Primary accent - deep teal (trustworthy, calm, educational) */
+	/* Primary accent - action blue (clear, confident, accessible) */
 	--color-primary: #2A6FB8;
 	--color-primary-hover: #1D3A83;
 	--color-primary-light: #E8F4FC;
 	--color-primary-lighter: #D1E9F9;
 
-	/* Secondary accent - warm coral (friendly, inviting) */
+	/* Secondary accent - logo cyan (friendly, inviting) */
 	--color-secondary: #2FB8D6;
 	--color-secondary-hover: #279DB6;
 	--color-secondary-light: #E8F8FB;
@@ -182,13 +182,13 @@
 		--color-text-tertiary: #9CA3AF;
 		--color-text-muted: #9CA3AF;
 
-		/* Primary accent - brighter teal */
+		/* Primary accent - bright blue */
 		--color-primary: #5AB8E8;
 		--color-primary-hover: #7CC7EE;
 		--color-primary-light: rgba(90, 184, 232, 0.15);
 		--color-primary-lighter: rgba(90, 184, 232, 0.1);
 
-		/* Secondary accent - brighter coral */
+		/* Secondary accent - bright cyan */
 		--color-secondary: #4FC9E4;
 		--color-secondary-hover: #74D4EA;
 		--color-secondary-light: rgba(79, 201, 228, 0.15);
