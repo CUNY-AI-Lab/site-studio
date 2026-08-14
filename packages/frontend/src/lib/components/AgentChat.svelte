@@ -867,7 +867,7 @@
 			{ method: 'POST' }
 		);
 		if (!response.ok) {
-			throw new Error(`Unable to refresh the agent connection (${response.status})`);
+			throw new Error('The connection to the assistant expired. Send your message again.');
 		}
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			throw new Error('Project changed while refreshing the agent connection');
@@ -1739,13 +1739,12 @@
 		max-width: 85%;
 	}
 
+	/* User messages: flat tinted blocks with a navy left rule, no bubbles */
 	.message.user :global(.message-content) {
-		background: var(--color-primary-light, #e6f4f4);
+		background: var(--color-primary-light, #e8f4fc);
 		color: var(--color-text-primary, #1f2937);
 		padding: 0.625rem 0.875rem;
-		border-radius: var(--radius-lg);
-		border-bottom-right-radius: var(--radius-sm);
-		border-left: 3px solid var(--color-primary, #0d7377);
+		border-left: 3px solid var(--color-navy, #1d3a83);
 		font-size: 0.9375rem;
 	}
 
@@ -1774,12 +1773,9 @@
 		flex-direction: column;
 		gap: 0.75rem;
 		padding: 0.875rem 1rem;
-		background:
-			linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 8%, transparent), transparent 55%),
-			var(--color-bg-elevated);
-		border: 1px solid color-mix(in srgb, var(--color-primary) 20%, var(--color-border));
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-sm);
+		background: var(--color-bg-elevated);
+		border: 1px solid var(--color-border);
+		border-left: 3px solid var(--color-navy);
 	}
 
 	.active-status-header {
@@ -1823,7 +1819,6 @@
 		font-size: 0.75rem;
 		color: var(--color-text-secondary);
 		padding: 0.25rem 0.5rem;
-		border-radius: var(--radius-full);
 		background: var(--color-bg-secondary);
 		border: 1px solid var(--color-border);
 		flex-shrink: 0;
@@ -1839,8 +1834,7 @@
 		display: inline-flex;
 		align-items: center;
 		padding: 0.25rem 0.625rem;
-		border-radius: var(--radius-full);
-		background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+		background: var(--color-primary-light);
 		color: var(--color-primary);
 		font-size: 0.75rem;
 		font-weight: 500;
@@ -1855,7 +1849,6 @@
 	.active-status-bar {
 		height: 0.375rem;
 		background: var(--color-bg-secondary);
-		border-radius: var(--radius-full);
 		overflow: hidden;
 	}
 
@@ -1863,18 +1856,36 @@
 		display: block;
 		width: 32%;
 		height: 100%;
-		border-radius: inherit;
-		background: linear-gradient(90deg, var(--color-primary), color-mix(in srgb, var(--color-primary) 45%, white));
+		background: var(--color-primary);
 		animation: status-slide 1.4s ease-in-out infinite;
 	}
 
+	/* The composer: strongest object on screen. 2px navy border, sharp,
+	   bright-blue lead bar on the top edge, gold outline on focus. */
 	.input-container {
-		padding: 1rem;
-		border-top: 1px solid var(--color-border);
+		position: relative;
+		margin: 0.75rem 1rem 1rem;
+		padding: 0.75rem;
+		border: 2px solid var(--color-navy);
 		background: var(--color-bg-elevated);
 		display: flex;
 		flex-direction: column;
 		gap: 0.625rem;
+	}
+
+	.input-container::before {
+		content: '';
+		position: absolute;
+		top: -2px;
+		left: -2px;
+		width: 44px;
+		height: 4px;
+		background: var(--color-accent-slot);
+	}
+
+	.input-container:focus-within {
+		outline: 3px solid var(--color-focus);
+		outline-offset: 0;
 	}
 
 	.input-row {
@@ -1885,14 +1896,12 @@
 
 	.input-field {
 		flex: 1;
-		padding: 0.75rem 1rem;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-lg);
-		background: var(--color-bg-primary);
+		padding: 0.5rem 0.5rem;
+		border: none;
+		background: transparent;
 		color: var(--color-text-primary);
 		font-size: 0.9375rem;
 		font-family: var(--font-sans);
-		transition: all 0.15s ease;
 		resize: none;
 		overflow-y: auto;
 		min-height: 42px;
@@ -1900,10 +1909,10 @@
 		line-height: 1.5;
 	}
 
-	.input-field:focus {
+	/* The composer frame carries the gold focus outline */
+	.input-field:focus,
+	.input-field:focus-visible {
 		outline: none;
-		border-color: var(--color-primary);
-		box-shadow: var(--shadow-glow-primary);
 	}
 
 	.input-field:disabled {
@@ -1918,21 +1927,19 @@
 	.send-button {
 		width: 42px;
 		height: 42px;
-		border-radius: var(--radius-lg);
 		border: none;
 		background: var(--color-primary);
 		color: white;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.15s ease;
+		transition: background 0.15s ease;
 		flex-shrink: 0;
 		cursor: pointer;
 	}
 
 	.send-button:hover:not(:disabled) {
 		background: var(--color-primary-hover);
-		transform: scale(1.02);
 	}
 
 	.send-button:disabled {
@@ -1943,21 +1950,19 @@
 	.stop-button {
 		width: 42px;
 		height: 42px;
-		border-radius: var(--radius-lg);
 		border: none;
 		background: var(--color-error);
 		color: white;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		transition: all 0.15s ease;
+		transition: background 0.15s ease;
 		flex-shrink: 0;
 		cursor: pointer;
 	}
 
 	.stop-button:hover {
 		background: var(--color-error-hover, #c53030);
-		transform: scale(1.02);
 	}
 
 	.attachment-indicator {

@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
-/* === Open Studio Design System === */
-/* A warm, approachable interface for CUNY students and academics */
-/* First-time friendly, clear affordances, educational warmth */
+/* === Site Studio Design System === */
+/* CUNY AI Lab fleet chassis: flat public-institution surfaces. */
+/* Sharp corners, no shadows, navy top rules, gold focus. */
 
 /* NOTE: no universal margin/padding-zero reset on the star selector here.
    Tailwind v4's preflight (from the tailwindcss import above) already applies
@@ -13,36 +13,42 @@
    padding and their footer buttons clipped at the dialog edge. */
 
 :root {
-	/* === Open Studio Color System === */
+	/* === CUNY AI Lab Color System === */
 	/* Warm, welcoming, and clear */
 
-	/* Background colors - soft warm whites */
-	--color-bg-primary: #FAFAF8;
-	--color-bg-secondary: #F5F4F1;
-	--color-bg-tertiary: #EFEEE9;
+	/* Background colors - pale cream ground */
+	--color-bg-primary: #FAFCF8;
+	--color-bg-secondary: #F4F7F2;
+	--color-bg-tertiary: #EDF1EC;
 	--color-bg-elevated: #FFFFFF;
 
 	/* Border colors - soft warm grays */
-	--color-border: #E2E0DB;
-	--color-border-hover: #C9C6BE;
-	--color-border-focus: #3B7C8C;
+	--color-border: #E6E9EF;
+	--color-border-hover: #CBD2DC;
+	--color-border-focus: #2A6FB8;
 
 	/* Text colors - warm and readable */
-	--color-text-primary: #1F2937;
+	--color-text-primary: #333333;
 	--color-text-secondary: #4B5563;
 	--color-text-tertiary: #6B7280;
 	--color-text-muted: #6B7280;
 
-	/* Primary accent - deep teal (trustworthy, calm, educational) */
-	--color-primary: #0D7377;
-	--color-primary-hover: #0A5C5F;
-	--color-primary-light: #E6F4F5;
-	--color-primary-lighter: #B8E0E2;
+	/* Primary accent - action blue (clear, confident, accessible) */
+	--color-primary: #2A6FB8;
+	--color-primary-hover: #1D3A83;
+	--color-primary-light: #E8F4FC;
+	--color-primary-lighter: #D1E9F9;
 
-	/* Secondary accent - warm coral (friendly, inviting) */
-	--color-secondary: #E07A5F;
-	--color-secondary-hover: #C96A51;
-	--color-secondary-light: #FDF0ED;
+	/* Fleet structure - navy rules, bright-blue accent slots, gold focus */
+	--color-navy: #1D3A83;
+	--color-accent-slot: #3B73E6;
+	--color-focus: #7A5300;
+	--rule-top: linear-gradient(90deg, var(--color-accent-slot) 0 44px, var(--color-navy) 44px);
+
+	/* Secondary accent - logo cyan (friendly, inviting) */
+	--color-secondary: #2FB8D6;
+	--color-secondary-hover: #279DB6;
+	--color-secondary-light: #E8F8FB;
 
 	/* Tertiary accent - warm amber (highlights, attention) */
 	--color-tertiary: #D4A356;
@@ -56,9 +62,9 @@
 	--color-warning-light: #FEF3C7;
 	--color-error: #DC2626;
 	--color-error-light: #FEE2E2;
-	--color-info: #0D7377;
-	--color-info-light: #E6F4F5;
-	--color-badge-primary: #0D7377;
+	--color-info: #2A6FB8;
+	--color-info-light: #E8F4FC;
+	--color-badge-primary: #2A6FB8;
 	--color-badge-secondary: #9A3412;
 	--color-badge-success: #166534;
 	--color-badge-warning: #92400E;
@@ -74,9 +80,9 @@
 	--spacing-3xl: 4rem;
 
 	/* === Typography === */
-	/* Native stacks avoid third-party font requests from authenticated pages. */
-	--font-display: ui-serif, Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
-	--font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	/* The Lab's brand faces (ailab.gc.cuny.edu), loaded in app.html. */
+	--font-display: 'Outfit', ui-sans-serif, system-ui, sans-serif;
+	--font-sans: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 	--font-mono: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
 
 	/* Font sizes */
@@ -102,26 +108,26 @@
 	--line-height-relaxed: 1.625;
 	--line-height-loose: 1.75;
 
-	/* === Soft Shadows (Approachable) === */
-	--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
-	--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-	--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
-	--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
-	--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
-	--shadow-inner: inset 0 2px 4px rgba(0, 0, 0, 0.04);
+	/* === Flat chassis: no shadows === */
+	--shadow-xs: none;
+	--shadow-sm: none;
+	--shadow-md: none;
+	--shadow-lg: none;
+	--shadow-xl: none;
+	--shadow-inner: none;
 
-	/* Glow shadows for interactive elements */
-	--shadow-glow-primary: 0 0 0 3px rgba(13, 115, 119, 0.15);
-	--shadow-glow-error: 0 0 0 3px rgba(220, 38, 38, 0.15);
-	--shadow-glow-success: 0 0 0 3px rgba(5, 150, 105, 0.15);
+	/* Glow shadows retired; focus is the gold outline */
+	--shadow-glow-primary: none;
+	--shadow-glow-error: none;
+	--shadow-glow-success: none;
 
-	/* === Border Radius (Rounded, Approachable) === */
+	/* === Border Radius (Sharp; only status dots and icon buttons stay round) === */
 	--radius-none: 0;
-	--radius-sm: 0.25rem;
-	--radius-md: 0.5rem;
-	--radius-lg: 0.75rem;
-	--radius-xl: 1rem;
-	--radius-2xl: 1.5rem;
+	--radius-sm: 0;
+	--radius-md: 0;
+	--radius-lg: 0;
+	--radius-xl: 0;
+	--radius-2xl: 0;
 	--radius-full: 9999px;
 
 	/* === Transitions === */
@@ -150,16 +156,16 @@
 	--card-foreground: 217 19% 17%;
 	--border: 40 10% 88%;
 	--input: 40 10% 88%;
-	--primary: 180 79% 26%;
+	--primary: 211 63% 44%;
 	--primary-foreground: 0 0% 100%;
-	--secondary: 12 62% 63%;
+	--secondary: 191 67% 51%;
 	--secondary-foreground: 0 0% 100%;
-	--accent: 40 60% 58%;
-	--accent-foreground: 217 19% 17%;
+	--accent: 204 77% 90%;
+	--accent-foreground: 223 64% 31%;
 	--destructive: 0 72% 51%;
 	--destructive-foreground: 0 0% 100%;
-	--ring: 180 79% 26%;
-	--radius: 0.5rem;
+	--ring: 211 63% 44%;
+	--radius: 0;
 }
 
 /* === Dark Mode === */
@@ -174,7 +180,8 @@
 		/* Border colors */
 		--color-border: #374151;
 		--color-border-hover: #4B5563;
-		--color-border-focus: #14B8A6;
+		--color-border-focus: #5AB8E8;
+		--color-focus: #FFB81C;
 
 		/* Text colors */
 		--color-text-primary: #F9FAFB;
@@ -182,16 +189,16 @@
 		--color-text-tertiary: #9CA3AF;
 		--color-text-muted: #9CA3AF;
 
-		/* Primary accent - brighter teal */
-		--color-primary: #14B8A6;
-		--color-primary-hover: #2DD4BF;
-		--color-primary-light: rgba(20, 184, 166, 0.15);
-		--color-primary-lighter: rgba(20, 184, 166, 0.1);
+		/* Primary accent - bright blue */
+		--color-primary: #5AB8E8;
+		--color-primary-hover: #7CC7EE;
+		--color-primary-light: rgba(90, 184, 232, 0.15);
+		--color-primary-lighter: rgba(90, 184, 232, 0.1);
 
-		/* Secondary accent - brighter coral */
-		--color-secondary: #F97068;
-		--color-secondary-hover: #FB8F87;
-		--color-secondary-light: rgba(249, 112, 104, 0.15);
+		/* Secondary accent - bright cyan */
+		--color-secondary: #4FC9E4;
+		--color-secondary-hover: #74D4EA;
+		--color-secondary-light: rgba(79, 201, 228, 0.15);
 
 		/* Tertiary accent - brighter amber */
 		--color-tertiary: #FBBF24;
@@ -205,25 +212,30 @@
 		--color-warning-light: rgba(245, 158, 11, 0.15);
 		--color-error: #EF4444;
 		--color-error-light: rgba(239, 68, 68, 0.15);
-		--color-info: #14B8A6;
-		--color-info-light: rgba(20, 184, 166, 0.15);
-		--color-badge-primary: #5EEAD4;
+		--color-info: #5AB8E8;
+		--color-info-light: rgba(90, 184, 232, 0.15);
+		--color-badge-primary: #A3D3F3;
 		--color-badge-secondary: #FCA5A5;
 		--color-badge-success: #6EE7B7;
 		--color-badge-warning: #FCD34D;
 		--color-badge-error: #FCA5A5;
 
-		/* Shadows for dark mode */
-		--shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-		--shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.2);
-		--shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
-		--shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.35), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
-		--shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 10px 10px -5px rgba(0, 0, 0, 0.2);
+		/* Flat chassis in dark mode too: no shadows */
+		--shadow-xs: none;
+		--shadow-sm: none;
+		--shadow-md: none;
+		--shadow-lg: none;
+		--shadow-xl: none;
 
-		/* Glow shadows */
-		--shadow-glow-primary: 0 0 0 3px rgba(20, 184, 166, 0.25);
-		--shadow-glow-error: 0 0 0 3px rgba(239, 68, 68, 0.25);
-		--shadow-glow-success: 0 0 0 3px rgba(16, 185, 129, 0.25);
+		/* Glow shadows retired; focus is the gold outline */
+		--shadow-glow-primary: none;
+		--shadow-glow-error: none;
+		--shadow-glow-success: none;
+
+		/* Fleet structure - rules stay legible on the dark ground */
+		--color-navy: #43507A;
+		--color-accent-slot: #5A8DF0;
+		--rule-top: linear-gradient(90deg, var(--color-accent-slot) 0 44px, var(--color-navy) 44px);
 
 		/* === shadcn-svelte dark theme === */
 		--background: 224 47% 7%;
@@ -236,15 +248,15 @@
 		--card-foreground: 210 40% 98%;
 		--border: 220 14% 22%;
 		--input: 220 14% 22%;
-		--primary: 172 66% 40%;
+		--primary: 203 66% 63%;
 		--primary-foreground: 224 47% 7%;
-		--secondary: 6 85% 67%;
+		--secondary: 191 63% 60%;
 		--secondary-foreground: 224 47% 7%;
-		--accent: 43 96% 56%;
-		--accent-foreground: 224 47% 7%;
+		--accent: 213 34% 25%;
+		--accent-foreground: 210 40% 98%;
 		--destructive: 0 84% 60%;
 		--destructive-foreground: 210 40% 98%;
-		--ring: 172 66% 40%;
+		--ring: 203 66% 63%;
 	}
 }
 
@@ -261,26 +273,12 @@ body {
 	-moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle texture for warmth */
-body::before {
-	content: '';
-	position: fixed;
-	top: 0;
-	left: 0;
-	width: 100%;
-	height: 100%;
-	opacity: 0.015;
-	z-index: var(--z-base);
-	pointer-events: none;
-	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-}
-
 /* === Interactive Elements === */
 button {
 	font-family: inherit;
 	cursor: pointer;
 	transition: all var(--transition-base);
-	border-radius: var(--radius-md);
+	border-radius: 0;
 }
 
 button:disabled {
@@ -290,26 +288,27 @@ button:disabled {
 
 input, textarea, select {
 	font-family: inherit;
-	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-	border-radius: var(--radius-md);
+	transition: border-color var(--transition-fast);
+	border-radius: 0;
 }
 
 a {
 	color: var(--color-primary);
-	text-decoration: none;
+	text-decoration: underline;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 2px;
 	transition: color var(--transition-fast);
 }
 
 a:hover {
 	color: var(--color-primary-hover);
-	text-decoration: underline;
+	text-decoration-thickness: 3px;
 }
 
-/* === Focus States (Clear and Accessible) === */
+/* === Focus States (CUNY gold, everywhere) === */
 *:focus-visible {
-	outline: 2px solid var(--color-primary);
-	outline-offset: 2px;
-	border-radius: var(--radius-sm);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 /* === Selection === */
@@ -318,7 +317,7 @@ a:hover {
 	color: var(--color-text-primary);
 }
 
-/* === Scrollbar Styling (Subtle, Rounded) === */
+/* === Scrollbar Styling (Flat, Sharp) === */
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
@@ -330,7 +329,6 @@ a:hover {
 
 ::-webkit-scrollbar-thumb {
 	background: var(--color-border);
-	border-radius: var(--radius-full);
 	border: 2px solid transparent;
 	background-clip: padding-box;
 }
@@ -393,13 +391,11 @@ code, pre {
 code {
 	background: var(--color-bg-tertiary);
 	padding: 0.125em 0.375em;
-	border-radius: var(--radius-sm);
 }
 
 pre {
 	background: var(--color-bg-secondary);
 	padding: var(--spacing-md);
-	border-radius: var(--radius-md);
 	overflow-x: auto;
 }
 
@@ -551,15 +547,8 @@ pre code {
 
 /* === Loading States === */
 .skeleton {
-	background: linear-gradient(
-		90deg,
-		var(--color-bg-tertiary) 0%,
-		var(--color-bg-secondary) 50%,
-		var(--color-bg-tertiary) 100%
-	);
-	background-size: 200% 100%;
-	animation: shimmer 1.5s ease-in-out infinite;
-	border-radius: var(--radius-md);
+	background: var(--color-bg-tertiary);
+	animation: pulse 1.5s ease-in-out infinite;
 }
 
 /* === Utility Classes for Layout === */
@@ -583,32 +572,31 @@ pre code {
 }
 
 /* === Card Component Base === */
+/* Flat white surface with a navy top rule instead of a shadowed card. */
 .card {
 	background: var(--color-bg-elevated);
 	border: 1px solid var(--color-border);
-	border-radius: var(--radius-lg);
-	box-shadow: var(--shadow-sm);
-	transition: all var(--transition-base);
+	border-top: 4px solid var(--color-navy);
+	transition: border-color var(--transition-base);
 }
 
 .card:hover {
-	box-shadow: var(--shadow-md);
 	border-color: var(--color-border-hover);
+	border-top-color: var(--color-navy);
 }
 
 .card-interactive:hover {
-	transform: translateY(-2px);
-	box-shadow: var(--shadow-lg);
+	border-color: var(--color-primary);
+	border-top-color: var(--color-navy);
 }
 
-/* === Badge Component === */
+/* === Badge Component (sharp chip, not a pill) === */
 .badge {
 	display: inline-flex;
 	align-items: center;
 	padding: 0.125rem 0.5rem;
 	font-size: var(--font-size-xs);
 	font-weight: var(--font-weight-medium);
-	border-radius: var(--radius-full);
 	line-height: var(--line-height-normal);
 }
 
@@ -646,7 +634,6 @@ pre code {
 	padding: 0.625rem 1.25rem;
 	font-size: var(--font-size-sm);
 	font-weight: var(--font-weight-medium);
-	border-radius: var(--radius-md);
 	border: 1px solid transparent;
 	cursor: pointer;
 	transition: all var(--transition-base);
@@ -654,7 +641,8 @@ pre code {
 }
 
 .btn:focus-visible {
-	box-shadow: var(--shadow-glow-primary);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 .btn-primary {
@@ -710,26 +698,25 @@ pre code {
 	font-size: var(--font-size-base);
 }
 
-/* === Input Base Styles === */
+/* === Input Base Styles (2px dark border, sharp) === */
 .input {
 	width: 100%;
 	padding: 0.625rem 0.875rem;
 	font-size: var(--font-size-base);
 	background: var(--color-bg-elevated);
-	border: 1px solid var(--color-border);
-	border-radius: var(--radius-md);
+	border: 2px solid var(--color-text-secondary);
 	color: var(--color-text-primary);
-	transition: all var(--transition-fast);
+	transition: border-color var(--transition-fast);
 }
 
 .input:hover:not(:disabled):not(:focus) {
-	border-color: var(--color-border-hover);
+	border-color: var(--color-text-primary);
 }
 
 .input:focus {
-	border-color: var(--color-primary);
-	box-shadow: var(--shadow-glow-primary);
-	outline: none;
+	border-color: var(--color-text-primary);
+	outline: 3px solid var(--color-focus);
+	outline-offset: 0;
 }
 
 .input::placeholder {
@@ -756,7 +743,6 @@ pre code {
 	background: var(--color-text-primary);
 	color: var(--color-bg-primary);
 	font-size: var(--font-size-xs);
-	border-radius: var(--radius-md);
 	white-space: nowrap;
 	opacity: 0;
 	visibility: hidden;

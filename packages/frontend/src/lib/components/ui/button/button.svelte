@@ -2,14 +2,14 @@
 	import { cn, type WithElementRef } from "$lib/utils.js";
 	import type { HTMLAnchorAttributes, HTMLButtonAttributes } from "svelte/elements";
 
-	const baseClasses = "focus-visible:ring-ring/30 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium font-sans outline-none transition-all duration-200 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 border border-transparent cursor-pointer";
+	const baseClasses = "aria-invalid:border-destructive inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-none no-underline text-sm font-medium font-sans transition-colors duration-200 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0 border border-transparent cursor-pointer";
 	const variantClasses = {
-		default: "bg-primary text-primary-foreground shadow-sm hover:shadow-md hover:brightness-110 active:shadow-none active:brightness-95",
-		destructive: "bg-destructive shadow-sm hover:shadow-md hover:brightness-110 active:shadow-none active:brightness-95 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-destructive-foreground",
-		outline: "bg-background shadow-xs hover:shadow-sm hover:bg-muted hover:border-border/80 border-border active:shadow-none",
-		secondary: "bg-secondary text-secondary-foreground shadow-sm hover:shadow-md hover:brightness-110 active:shadow-none active:brightness-95",
-		ghost: "hover:bg-muted hover:text-foreground shadow-none border-transparent",
-		link: "text-primary underline-offset-4 hover:underline shadow-none",
+		default: "bg-primary text-primary-foreground hover:bg-[var(--color-primary-hover)]",
+		destructive: "bg-destructive text-destructive-foreground hover:brightness-90",
+		outline: "bg-background hover:bg-muted border-border",
+		secondary: "bg-secondary text-secondary-foreground hover:bg-[var(--color-secondary-hover)]",
+		ghost: "hover:bg-muted hover:text-foreground border-transparent",
+		link: "text-primary underline decoration-2 underline-offset-2 hover:decoration-[3px]",
 	} as const;
 	const sizeClasses = {
 		default: "h-10 px-5 py-2.5 has-[>svg]:px-4",

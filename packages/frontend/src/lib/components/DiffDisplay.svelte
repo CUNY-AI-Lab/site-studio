@@ -72,7 +72,7 @@
 
 	<div class="diff-note">
 		<History size={14} />
-		<span>Use Version History from the project menu to restore earlier states.</span>
+		<span>Use Version history from the project menu to go back to an earlier version.</span>
 	</div>
 
 	<div class="diff-content">

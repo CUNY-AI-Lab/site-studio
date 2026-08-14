@@ -45,7 +45,7 @@ describe('claimHandle response parsing (tri-state)', () => {
 		const result = await claimHandle('jane');
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.message).toBe('Could not claim that handle.');
+			expect(result.message).toBe("We couldn't save that address.");
 		}
 	});
 
@@ -56,7 +56,7 @@ describe('claimHandle response parsing (tri-state)', () => {
 		const result = await claimHandle('jane');
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.message).toBe('Could not claim that handle.');
+			expect(result.message).toBe("We couldn't save that address.");
 		}
 	});
 
@@ -73,7 +73,7 @@ describe('claimHandle response parsing (tri-state)', () => {
 		csrfFetch.mockResolvedValue(htmlResponse(500));
 		expect(await claimHandle('jane')).toEqual({
 			ok: false,
-			message: 'Could not claim that handle.'
+			message: "We couldn't save that address."
 		});
 	});
 });

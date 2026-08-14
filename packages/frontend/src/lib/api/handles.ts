@@ -56,12 +56,12 @@ export async function claimHandle(handle: string): Promise<ClaimHandleResult> {
 				alreadyOwned: Boolean((data as { alreadyOwned?: boolean }).alreadyOwned)
 			};
 		}
-		return { ok: false, message: 'Could not claim that handle.' };
+		return { ok: false, message: "We couldn't save that address." };
 	}
 
 	const message =
 		(data && typeof data.message === 'string' && data.message) ||
 		(data && typeof data.error === 'string' && data.error) ||
-		'Could not claim that handle.';
+		"We couldn't save that address.";
 	return { ok: false, message };
 }

@@ -691,7 +691,9 @@ describe('AgentChat', () => {
 		await component.sendPrompt('hello');
 		await settle();
 		expect(ws.sent).toHaveLength(0);
-		expect(screen.getByText('Unable to refresh the agent connection (409)')).toBeInTheDocument();
+		expect(
+			screen.getByText('The connection to the assistant expired. Send your message again.')
+		).toBeInTheDocument();
 	});
 
 	it('refreshes before both auto-continue tool-result frames on the same socket', async () => {

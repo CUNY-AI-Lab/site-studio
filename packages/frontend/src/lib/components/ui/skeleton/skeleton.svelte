@@ -19,48 +19,17 @@
 	.skeleton {
 		position: relative;
 		overflow: hidden;
-		background: var(--color-bg-secondary);
-		border-radius: var(--radius-md);
+		background: var(--color-bg-tertiary);
+		animation: skeleton-pulse 1.5s ease-in-out infinite;
 	}
 
-	.skeleton::before {
-		content: '';
-		position: absolute;
-		top: 0;
-		left: -100%;
-		width: 100%;
-		height: 100%;
-		background: linear-gradient(
-			90deg,
-			transparent 0%,
-			var(--color-bg-tertiary) 50%,
-			transparent 100%
-		);
-		animation: shimmer 2s infinite;
-	}
-
-	@keyframes shimmer {
-		0% {
-			left: -100%;
-		}
+	@keyframes skeleton-pulse {
+		0%,
 		100% {
-			left: 100%;
+			opacity: 1;
 		}
-	}
-
-	/* Dark mode enhancements */
-	@media (prefers-color-scheme: dark) {
-		.skeleton {
-			background: var(--color-bg-secondary);
-		}
-
-		.skeleton::before {
-			background: linear-gradient(
-				90deg,
-				transparent 0%,
-				var(--color-bg-tertiary) 50%,
-				transparent 100%
-			);
+		50% {
+			opacity: 0.5;
 		}
 	}
 </style>
