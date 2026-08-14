@@ -42,7 +42,7 @@
 	/* Fleet structure - navy rules, bright-blue accent slots, gold focus */
 	--color-navy: #1D3A83;
 	--color-accent-slot: #3B73E6;
-	--color-focus: #FFB81C;
+	--color-focus: #7A5300;
 	--rule-top: linear-gradient(90deg, var(--color-accent-slot) 0 44px, var(--color-navy) 44px);
 
 	/* Secondary accent - logo cyan (friendly, inviting) */
@@ -181,6 +181,7 @@
 		--color-border: #374151;
 		--color-border-hover: #4B5563;
 		--color-border-focus: #5AB8E8;
+		--color-focus: #FFB81C;
 
 		/* Text colors */
 		--color-text-primary: #F9FAFB;
