@@ -21,6 +21,8 @@
   "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
+    "@oxlint/plugins": "1.79.0",
+    "oxlint": "1.79.0",
     "ws": "8.21.0"
   },
   "overrides": {
