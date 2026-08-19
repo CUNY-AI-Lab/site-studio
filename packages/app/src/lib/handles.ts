@@ -46,6 +46,7 @@
  */
 
 import { readR2Json } from "./r2-json";
+import { z } from "zod";
 
 export interface HandleRecord {
   /** Durable owner key (CAIL subject or anonymous `user_…` id). */
@@ -68,8 +69,18 @@ export const HANDLE_MAX_LENGTH = 32;
  */
 export const HANDLE_CLAIM_SETTLE_MS = 2 * 60 * 1000;
 
-/** Shape: lowercase alphanumerics and hyphens, no leading/trailing hyphen. */
-const HANDLE_SHAPE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+/** Pattern: lowercase alphanumerics and hyphens, no leading/trailing hyphen. */
+const HANDLE_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+const handleRecordSchema = z.object({
+  ownerId: z.string(),
+  claimedAt: z.string(),
+});
+
+const userHandleRecordSchema = z.object({
+  handle: z.string(),
+  claimedAt: z.string(),
+});
 
 /**
  * Reserved handles. Kept broad on purpose: route prefixes (`u`, `api`, `sites`,
@@ -138,7 +149,7 @@ export function validateHandle(candidate: string): HandleValidation {
   if (handle.includes("--")) {
     return { valid: false, reason: "Handles cannot contain consecutive hyphens." };
   }
-  if (!HANDLE_SHAPE.test(handle)) {
+  if (!HANDLE_PATTERN.test(handle)) {
     return {
       valid: false,
       reason: "Use lowercase letters, numbers, and hyphens; no leading or trailing hyphen."
@@ -172,7 +183,7 @@ export function userHandleRecordKey(ownerId: string): string {
 async function putJsonObjectIfAbsent(
   bucket: R2Bucket,
   key: string,
-  value: unknown
+  value: HandleRecord | UserHandleRecord,
 ): Promise<R2Object | null> {
   return bucket.put(key, JSON.stringify(value), {
     onlyIf: { etagDoesNotMatch: "*" },
@@ -180,7 +191,11 @@ async function putJsonObjectIfAbsent(
   });
 }
 
-async function putJsonIfAbsent(bucket: R2Bucket, key: string, value: unknown): Promise<boolean> {
+async function putJsonIfAbsent(
+  bucket: R2Bucket,
+  key: string,
+  value: HandleRecord | UserHandleRecord,
+): Promise<boolean> {
   return (await putJsonObjectIfAbsent(bucket, key, value)) !== null;
 }
 
@@ -216,11 +231,8 @@ async function retireReverseClaim(
 
 /** The handle a candidate resolves to, if any (handle -> owner lookup). */
 export async function resolveHandleOwner(bucket: R2Bucket, handle: string): Promise<string | null> {
-  const record = await readR2Json<HandleRecord>(bucket, handleRecordKey(handle));
-  if (!record || typeof record.ownerId !== "string" || !record.ownerId) {
-    return null;
-  }
-  return record.ownerId;
+  const record = await readR2Json(bucket, handleRecordKey(handle), handleRecordSchema);
+  return record?.ownerId || null;
 }
 
 /** Read the reverse mapping without treating it as proof of ownership. */
@@ -230,20 +242,18 @@ async function readRecordedUserHandle(
 ): Promise<{ record: UserHandleRecord; etag?: string } | null> {
   const object = await bucket.get(userHandleRecordKey(ownerId));
   if (!object) return null;
+  const text = await object.text();
 
-  let record: UserHandleRecord;
   try {
-    record = JSON.parse(await object.text()) as UserHandleRecord;
+    const parsed = userHandleRecordSchema.safeParse(JSON.parse(text));
+    if (!parsed.success) return null;
+    return {
+      record: parsed.data,
+      etag: object.etag || undefined,
+    };
   } catch {
     return null;
   }
-  if (!record || typeof record.handle !== "string" || !record.handle) {
-    return null;
-  }
-  return {
-    record,
-    etag: typeof object.etag === "string" && object.etag ? object.etag : undefined,
-  };
 }
 
 async function getRecordedUserHandle(bucket: R2Bucket, ownerId: string): Promise<string | null> {
@@ -396,11 +406,12 @@ export async function claimHandle(
     //  C) Healthy pair (forward exists and points at owner): NOT an orphan. Keep
     //     the original contract — same handle → idempotent success; different
     //     handle → 409 "you already have a handle".
-    const existingRecord = await readR2Json<UserHandleRecord>(bucket, userHandleRecordKey(ownerId));
-    const existingOwn =
-      existingRecord && typeof existingRecord.handle === "string" && existingRecord.handle
-        ? existingRecord.handle
-        : null;
+    const existingRecord = await readR2Json(
+      bucket,
+      userHandleRecordKey(ownerId),
+      userHandleRecordSchema,
+    );
+    const existingOwn = existingRecord?.handle || null;
     if (existingOwn) {
       const forwardOwner = await resolveHandleOwner(bucket, existingOwn);
       if (forwardOwner === ownerId) {
@@ -443,8 +454,10 @@ export async function claimHandle(
         };
       }
       let latest: UserHandleRecord | null = null;
+      const latestText = await latestObject.text();
       try {
-        latest = JSON.parse(await latestObject.text()) as UserHandleRecord;
+        const parsed = userHandleRecordSchema.safeParse(JSON.parse(latestText));
+        latest = parsed.success ? parsed.data : null;
       } catch {
         // Malformed ownership state is not safe to replace automatically.
       }
@@ -593,8 +606,13 @@ export async function migrateHandle(options: {
     throw new Error("Handle migration stopped because forward ownership changed.");
   }
   let record: HandleRecord;
+  const forwardText = await forwardObject.text();
   try {
-    record = JSON.parse(await forwardObject.text()) as HandleRecord;
+    const parsed = handleRecordSchema.safeParse(JSON.parse(forwardText));
+    if (!parsed.success) {
+      throw new Error("Handle migration stopped because forward ownership changed.");
+    }
+    record = parsed.data;
   } catch {
     throw new Error("Handle migration stopped because forward ownership changed.");
   }
@@ -638,14 +656,9 @@ export async function migrateHandle(options: {
   // R2 has no conditional delete. Retire only the exact anonymous reverse
   // generation observed above; if another anonymous request replaced it while
   // migration was in flight, the ETag condition loses and that newer claim
-  // survives. A storage failure is best-effort cleanup: the stale reverse is
-  // non-authoritative because its forward record now points at the subject.
+  // survives. Cleanup failures stay visible so migration never reports a
+  // completed transfer while the old ownership record is unresolved.
   if (anonReverse.etag) {
-    await retireReverseClaim(
-      bucket,
-      userHandleRecordKey(anonUserId),
-      anonReverse.etag,
-      anonHandle,
-    ).catch(() => undefined);
+    await retireReverseClaim(bucket, userHandleRecordKey(anonUserId), anonReverse.etag, anonHandle);
   }
 }

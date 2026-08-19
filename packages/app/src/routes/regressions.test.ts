@@ -3,7 +3,9 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
-import { createMockKV, createMockMutationCoordinator, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
+import { createMockKV, createMockMutationCoordinator, createTestNamespace, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
+import type { MutationCoordinator } from "../agents/mutation-coordinator";
+import type { SiteBuilderAgent } from "../agents/site-builder";
 import { R2ProjectStorage } from "../storage/r2";
 import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 import { createFileRouter } from "./files";
@@ -12,21 +14,53 @@ import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
 import { createProjectRouter } from "./projects";
 import { requireProject } from "../lib/require-project";
+import { z } from "zod";
 
 const actionAttemptRpc = vi.hoisted(() => ({
   admission: vi.fn(async () => undefined),
   terminal: vi.fn(async () => undefined),
 }));
 
-vi.mock("agents", () => ({
-  getAgentByName: vi.fn(async () => ({
-    exportChatHistoryForMigration: async () => [],
-    importChatHistoryForMigration: async () => true,
-    clearChatHistory: async () => undefined,
-    recordActionAdmission: actionAttemptRpc.admission,
-    recordActionTerminal: actionAttemptRpc.terminal,
-  }))
-}));
+type MockDataInput = string | ArrayBuffer | Uint8Array;
+type PublishBody = { success: boolean; url: string; a11yFindings: Array<{ [key: string]: string | number | boolean | null | undefined }> };
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type MockData =
+  | { kind: "text"; value: string }
+  | { kind: "bytes"; value: ArrayBuffer };
+type MockEntry = { data: MockDataInput; httpMetadata?: R2HTTPMetadata; etag?: string };
+type MockBucket = R2Bucket & { store: Map<string, MockEntry> };
+function testConditional(options?: R2PutOptions): R2Conditional | undefined {
+  const conditional = options?.onlyIf;
+  return conditional instanceof Headers ? undefined : conditional;
+}
+const mockDataSchema = z.union([
+  z.string().transform((value) => ({ kind: "text" as const, value })),
+  z.instanceof(ArrayBuffer).transform((value) => ({ kind: "bytes" as const, value })),
+  z.instanceof(Uint8Array).transform((value) => ({
+    kind: "bytes" as const,
+    value: value.slice().buffer,
+  })),
+]);
+
+function parseMockData(value: MockDataInput): MockData {
+  return mockDataSchema.parse(value);
+}
+
+function createStoredR2Object(key: string, etag: string, size = 0): R2Object {
+  const object = {
+    key,
+    version: "test-version",
+    size,
+    etag,
+    httpEtag: `"${etag}"`,
+    checksums: {},
+    uploaded: new Date(0),
+    storageClass: "Standard",
+  };
+  // SAFETY: Route regressions inspect key/etag only; remaining R2 metadata is
+  // inert fixture data and the runtime binding supplies the complete object.
+  return object as R2Object;
+}
 
 // Module-scoped session bits, reset per test: createEnv() and the request
 // helpers read these so individual tests stay terse.
@@ -34,7 +68,7 @@ let kv: MockKV;
 let csrf: CsrfSession;
 
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown; etag?: string }>();
+  const store = new Map<string, MockEntry>();
   const versions = new Map<string, number>();
 
   function nextEtag(key: string): string {
@@ -43,6 +77,8 @@ function createMockBucket() {
     return `${key}:${version}`;
   }
 
+  // SAFETY: This fixture implements the R2 methods exercised by route
+  // regressions; uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => {
@@ -54,19 +90,20 @@ function createMockBucket() {
       if (!entry) return null;
 
       const data = entry.data;
+      const parsed = parseMockData(data);
       return {
         key,
-        size: typeof data === "string" ? data.length : data.byteLength,
+        size: parsed.kind === "text" ? parsed.value.length : parsed.value.byteLength,
         etag: entry.etag,
         httpMetadata: entry.httpMetadata || {},
-        text: async () => typeof data === "string" ? data : new TextDecoder().decode(data),
-        arrayBuffer: async () => typeof data === "string" ? new TextEncoder().encode(data).buffer : data,
+        text: async () => parsed.kind === "text" ? parsed.value : new TextDecoder().decode(parsed.value),
+        arrayBuffer: async () => parsed.kind === "text" ? new TextEncoder().encode(parsed.value).buffer : parsed.value,
       };
     }),
     put: vi.fn(async (
       key: string,
-      data: string | ArrayBuffer | Uint8Array,
-      options?: { httpMetadata?: unknown; onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } }
+      data: MockDataInput,
+      options?: { httpMetadata?: R2HTTPMetadata; onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } }
     ) => {
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
       // key is empty; a failed condition returns null (no write, no throw).
@@ -76,24 +113,15 @@ function createMockBucket() {
       if (options?.onlyIf?.etagMatches !== undefined && store.get(key)?.etag !== options.onlyIf.etagMatches) {
         return null;
       }
-      let stored: ArrayBuffer | string;
-      if (typeof data === "string") {
-        stored = data;
-      } else if (data instanceof ArrayBuffer) {
-        stored = data;
-      } else {
-        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-      }
-
       const etag = nextEtag(key);
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata, etag });
-      return { key, etag };
+      store.set(key, { data, httpMetadata: options?.httpMetadata, etag });
+      return createStoredR2Object(key, etag);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
     list: vi.fn(async ({ prefix, delimiter, limit }: { prefix?: string; delimiter?: string; limit?: number } = {}) => {
-      const objects: Array<{ key: string; size: number; uploaded: Date; httpMetadata: Record<string, never> }> = [];
+      const objects: R2Object[] = [];
       const delimitedPrefixes: string[] = [];
 
       for (const key of store.keys()) {
@@ -112,17 +140,11 @@ function createMockBucket() {
         }
 
         const entry = store.get(key);
-        const size = entry
-          ? typeof entry.data === "string"
-            ? entry.data.length
-            : entry.data.byteLength
+        const parsed = entry ? parseMockData(entry.data) : undefined;
+        const size = parsed
+          ? parsed.kind === "text" ? parsed.value.length : parsed.value.byteLength
           : 0;
-        objects.push({
-          key,
-          size,
-          uploaded: new Date(),
-          httpMetadata: {},
-        });
+        objects.push(createStoredR2Object(key, entry?.etag ?? `${key}:0`, size));
       }
 
       return {
@@ -131,7 +153,9 @@ function createMockBucket() {
         delimitedPrefixes,
       };
     }),
-  } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown; etag?: string }> };
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  } as MockBucket;
 }
 
 function createTestApp() {
@@ -169,6 +193,13 @@ function createTestApp() {
 
 function createEnv(bucket: R2Bucket): Env {
   const actionAgent = {
+    // SAFETY: The action-agent fixture uses a stable inert Durable Object id.
+    id: {
+      name: "action-agent",
+      toString: () => "action-agent",
+      equals: (other: DurableObjectId) => other.toString() === "action-agent",
+    } as DurableObjectId,
+    fetch: async (_request: Request) => new Response(null, { status: 404 }),
     recordActionAdmission: actionAttemptRpc.admission,
     recordActionTerminal: actionAttemptRpc.terminal,
   };
@@ -176,15 +207,22 @@ function createEnv(bucket: R2Bucket): Env {
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
-    SITE_BUILDER_AGENT: {
-      idFromName: () => ({}) as DurableObjectId,
+    // SAFETY: Publish tests call only idFromName/get and action recorder RPCs.
+    SITE_BUILDER_AGENT: createTestNamespace<SiteBuilderAgent>({
+      idFromName: () => {
+        // SAFETY: The route fixture uses a deterministic inert object id.
+        return actionAgent.id;
+      },
       get: () => actionAgent,
-    } as unknown as DurableObjectNamespace<any>,
+    }),
+    // SAFETY: Route regressions never invoke migration coordination.
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
-    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
+    // SAFETY: Regression tests exercise only the coordinator execute RPC.
+    MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>(createMockMutationCoordinator(bucket)),
     SITE_STUDIO_MAX_PROJECT_BYTES: String(512 * 1024 * 1024),
     SITE_STUDIO_MAX_OWNER_BYTES: String(2 * 1024 * 1024 * 1024),
     SITE_STUDIO_UPLOADS_PER_MINUTE: "100",
+    // SAFETY: Route regressions do not load Worker modules through this binding.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
   };
@@ -443,7 +481,8 @@ describe("route regressions", () => {
     );
 
     expect(publishResponse.status).toBe(200);
-    const publishBody = await publishResponse.json() as { success: boolean; url: string; a11yFindings: unknown[] };
+    // SAFETY: The publish route response is validated by this fixture's known wire shape.
+    const publishBody = await publishResponse.json() as PublishBody;
     expect(publishBody).toMatchObject({
       success: true,
       url: "http://site-studio.test/u/janedoe/foo-2/"
@@ -502,12 +541,20 @@ describe("route regressions", () => {
     await storage.writeFile(userId, "new-owner", "index.html", "<h1>New</h1>");
 
     const reservationKey = `slugreservations/${userId}/shared.json`;
-    const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
-    const originalPut = putMock.getMockImplementation() as (
+    // SAFETY: createMockBucket exposes put as a Vitest mock for the slug-race
+    // failure injection; retain the original R2 implementation for pass-through.
+    const putMock = bucket.put as ReturnType<typeof vi.fn>;
+    const originalPut = putMock.getMockImplementation();
+    if (!originalPut) {
+      throw new Error("Expected the route regression bucket fixture to expose a put implementation.");
+    }
+    // SAFETY: Vitest exposes this fixture's R2 put implementation as a callable
+    // function; the constructor overload is not used by this test boundary.
+    const passThroughPut = originalPut as (
       key: string,
-      data: unknown,
-      options?: unknown,
-    ) => unknown;
+      data: MockDataInput,
+      options?: R2PutOptions,
+    ) => Promise<R2Object | null>;
     let releaseFormer!: () => void;
     const formerReleased = new Promise<void>((resolve) => {
       releaseFormer = resolve;
@@ -518,21 +565,22 @@ describe("route regressions", () => {
     });
     let paused = false;
 
-    putMock.mockImplementation(async (key: string, data: unknown, options?: any) => {
+    putMock.mockImplementation(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
+      // SAFETY: Reservation writes at this key are JSON strings in this fixture.
       const record =
-        key === reservationKey && typeof data === "string"
+        key === reservationKey && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)
           ? (JSON.parse(data) as { projectId?: string })
           : null;
       if (
         !paused &&
         record?.projectId === "former-owner" &&
-        options?.onlyIf?.etagMatches
+        testConditional(options)?.etagMatches
       ) {
         paused = true;
         formerReachedFence();
         await formerReleased;
       }
-      return originalPut(key, data, options);
+      return passThroughPut(key, data, options);
     });
 
     const formerPublish = app.request(
@@ -574,9 +622,10 @@ describe("route regressions", () => {
     });
     expect(
       putMock.mock.calls.some(([key, data]) => {
-        if (key !== `projects/${userId}/former-owner/.metadata.json` || typeof data !== "string") {
+        if (key !== `projects/${userId}/former-owner/.metadata.json` || data instanceof ArrayBuffer || data instanceof Uint8Array) {
           return false;
         }
+        // SAFETY: This reservation fixture writes JSON strings at this key.
         const written = JSON.parse(data) as { slug?: string };
         return written.slug === "shared";
       })
@@ -844,7 +893,7 @@ describe("route regressions", () => {
 
     const revalidated = await app.request(
       "http://site-studio.test/u/janedoe/cache-304/",
-      { headers: { "If-None-Match": `W/\"${etag}\"` } },
+      { headers: { "If-None-Match": `W/"${etag}"` } },
       createEnv(bucket)
     );
     expect(revalidated.status).toBe(304);
@@ -1009,6 +1058,7 @@ describe("served-bytes security headers (§3¾)", () => {
     await storage.createProject(userId, "thumbsniff", "Thumb Sniff");
     const html = new TextEncoder().encode("<!DOCTYPE html><html></html>");
     const form = new FormData();
+    // SAFETY: The encoder's backing buffer is an ArrayBuffer in this fixture.
     form.append(
       "image",
       new File([new Blob([html.buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
@@ -1046,6 +1096,7 @@ describe("served-bytes security headers (§3¾)", () => {
   it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
     await storage.createProject(userId, "thumbok", "Thumb OK");
     const form = new FormData();
+    // SAFETY: The PNG fixture's backing buffer is an ArrayBuffer.
     form.append(
       "image",
       new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
@@ -1066,6 +1117,7 @@ describe("served-bytes security headers (§3¾)", () => {
     const png = pngBytes();
     new DataView(png.buffer).setUint32(16, 5000);
     const form = new FormData();
+    // SAFETY: The PNG fixture's backing buffer is an ArrayBuffer.
     form.append("image", new File([png.buffer as ArrayBuffer], "thumb.png", { type: "image/png" }));
 
     const response = await app.request(
@@ -1081,6 +1133,7 @@ describe("served-bytes security headers (§3¾)", () => {
   it("rejects a thumbnail body above the thumbnail byte ceiling before buffering it again", async () => {
     await storage.createProject(userId, "thumbbytes", "Thumb Bytes");
     const form = new FormData();
+    // SAFETY: pngBytes returns an ArrayBuffer-backed Uint8Array fixture.
     form.append("image", new File([pngBytes(2 * 1024 * 1024 + 1).buffer as ArrayBuffer], "thumb.png", { type: "image/png" }));
 
     const response = await app.request(
@@ -1095,6 +1148,7 @@ describe("served-bytes security headers (§3¾)", () => {
 
   it("SS-33: thumbnail POST to a missing project 404s without fabricating project keys", async () => {
     const form = new FormData();
+    // SAFETY: pngBytes returns an ArrayBuffer-backed Uint8Array fixture.
     form.append(
       "image",
       new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
@@ -1204,6 +1258,7 @@ describe("served-bytes security headers (§3¾)", () => {
     );
 
     expect(response.status).toBe(200);
+    // SAFETY: The file mutation route returns the documented ETag response.
     const body = await response.json() as { etag: string };
     expect(body.etag).toBeTruthy();
     expect(body.etag).not.toBe(baseEtag);
@@ -1217,8 +1272,10 @@ describe("served-bytes security headers (§3¾)", () => {
     const originalPut = bucket.put;
     let injected = false;
 
-    bucket.put = vi.fn(async (key, data, options) => {
-      if (key === targetMetadataKey && options?.onlyIf?.etagDoesNotMatch === "*" && !injected) {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the concurrent project target.
+    bucket.put = vi.fn(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
+      if (key === targetMetadataKey && testConditional(options)?.etagDoesNotMatch === "*" && !injected) {
         injected = true;
         bucket.store.set(targetMetadataKey, {
           data: JSON.stringify({
@@ -1232,7 +1289,7 @@ describe("served-bytes security headers (§3¾)", () => {
         bucket.store.set(`projects/${userId}/new-name/index.html`, { data: "<h1>Concurrent</h1>" });
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const response = await app.request(
       "http://site-studio.test/api/projects/old-name",
@@ -1259,13 +1316,15 @@ describe("served-bytes security headers (§3¾)", () => {
 
     // A concurrent writer takes the destination between the route's advisory
     // fileExists preflight and renameFile's atomic destination claim.
-    bucket.put = vi.fn(async (key, data, options) => {
-      if (key === destKey && options?.onlyIf?.etagDoesNotMatch === "*" && !injected) {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the concurrent file destination.
+    bucket.put = vi.fn(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
+      if (key === destKey && testConditional(options)?.etagDoesNotMatch === "*" && !injected) {
         injected = true;
         bucket.store.set(destKey, { data: "concurrent content", etag: `${destKey}:c1` });
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const response = await app.request(
       "http://site-studio.test/api/projects/rename-race/files/rename",
@@ -1293,13 +1352,15 @@ describe("served-bytes security headers (§3¾)", () => {
 
     // The slug-reservation write sits between the route's metadata preflight
     // and the final metadata update — land the concurrent delete right there.
-    bucket.put = vi.fn(async (key, data, options) => {
-      if (typeof key === "string" && key.startsWith(`slugreservations/${userId}/`) && !injected) {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the concurrent project deletion.
+    bucket.put = vi.fn(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
+      if (key.startsWith(`slugreservations/${userId}/`) && !injected) {
         injected = true;
         await storage.deleteProject(userId, "pub-race");
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const response = await app.request(
       "http://site-studio.test/api/projects/pub-race/publish",
@@ -1330,6 +1391,7 @@ function uploadRequest(
   opts: { dir?: string } = {}
 ): RequestInit {
   const form = new FormData();
+  // SAFETY: Upload fixtures use ArrayBuffer-backed Uint8Arrays.
   form.append("file", new File([new Blob([data.buffer as ArrayBuffer])], fileName));
   if (opts.dir !== undefined) {
     form.append("dir", opts.dir);
@@ -1361,6 +1423,7 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(200);
+    // SAFETY: Successful upload responses contain the documented path field.
     const body = (await response.json()) as { path: string };
     expect(body.path).toBe("photo.png");
   });
@@ -1385,6 +1448,7 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(400);
+    // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("not a valid PNG");
   });
@@ -1399,6 +1463,7 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(400);
+    // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("too large");
   });
@@ -1410,7 +1475,9 @@ describe("image upload hardening", () => {
       createEnv(bucket)
     );
     expect(first.status).toBe(200);
-    expect(((await first.json()) as { path: string }).path).toBe("images/hero.png");
+    // SAFETY: Successful upload responses contain the documented path field.
+    const firstBody = (await first.json()) as { path: string };
+    expect(firstBody.path).toBe("images/hero.png");
 
     const second = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
@@ -1418,7 +1485,9 @@ describe("image upload hardening", () => {
       createEnv(bucket)
     );
     expect(second.status).toBe(200);
-    expect(((await second.json()) as { path: string }).path).toBe("images/hero_1.png");
+    // SAFETY: Successful upload responses contain the documented path field.
+    const secondBody = (await second.json()) as { path: string };
+    expect(secondBody.path).toBe("images/hero_1.png");
   });
 
   it("rejects a dir value other than images with 400", async () => {
@@ -1429,6 +1498,7 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(400);
+    // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("Only \"images\" is allowed");
   });
@@ -1442,7 +1512,9 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(((await response.json()) as { path: string }).path).toBe("notes.txt");
+    // SAFETY: Successful upload responses contain the documented path field.
+    const body = (await response.json()) as { path: string };
+    expect(body.path).toBe("notes.txt");
   });
 
   // SS-5: two concurrent uploads with the SAME name. The read-check-write
@@ -1469,10 +1541,11 @@ describe("image upload hardening", () => {
 
     expect(respA.status).toBe(200);
     expect(respB.status).toBe(200);
-    const paths = [
-      ((await respA.json()) as { path: string }).path,
-      ((await respB.json()) as { path: string }).path
-    ].sort();
+    // SAFETY: Both successful upload responses contain the documented path field.
+    const pathA = (await respA.json()) as { path: string };
+    // SAFETY: Both successful upload responses contain the documented path field.
+    const pathB = (await respB.json()) as { path: string };
+    const paths = [pathA.path, pathB.path].sort();
     expect(paths).toEqual(["photo.png", "photo_1.png"]);
 
     // Both files landed and neither overwrote the other.
@@ -1499,6 +1572,7 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(413);
+    // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("too large");
     // Guard fired before formData(): no upload landed in storage.
@@ -1516,7 +1590,9 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(((await response.json()) as { path: string }).path).toBe("ok.png");
+    // SAFETY: Successful upload responses contain the documented path field.
+    const body = (await response.json()) as { path: string };
+    expect(body.path).toBe("ok.png");
     expect(await storage.fileExists(userId, "imgproj", "ok.png")).toBe(true);
   });
 
@@ -1524,6 +1600,7 @@ describe("image upload hardening", () => {
     // Build a real multipart body but strip Content-Length. The request remains
     // valid, but the server reads it through the same absolute body ceiling.
     const req = uploadRequest("nolen.png", pngBytes());
+    // SAFETY: RequestInit.headers is a HeadersInit at this constructed boundary.
     const headers = new Headers(req.headers as HeadersInit);
     headers.delete("content-length");
     req.headers = headers;
@@ -1535,7 +1612,9 @@ describe("image upload hardening", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(((await response.json()) as { path: string }).path).toBe("nolen.png");
+    // SAFETY: Successful upload responses contain the documented path field.
+    const body = (await response.json()) as { path: string };
+    expect(body.path).toBe("nolen.png");
   });
 
   it("fails closed when upload storage/rate policy is not configured", async () => {
@@ -1584,6 +1663,7 @@ describe("images inventory endpoint", () => {
     );
 
     expect(response.status).toBe(200);
+    // SAFETY: The images route returns the documented image inventory shape.
     const body = (await response.json()) as {
       images: Array<{ path: string; size: number }>;
       placeholders: Array<{ file: string; line: number | null; message: string; src?: string }>;
@@ -1625,7 +1705,7 @@ describe("csrf protection on all mutation routes", () => {
     csrf = await mintCsrfSession(bucket, userId);
   });
 
-  const json = (body: unknown): Pick<RequestInit, "body" | "headers"> => ({
+  const json = (body: JsonValue): Pick<RequestInit, "body" | "headers"> => ({
     body: JSON.stringify(body),
     headers: { "Content-Type": "application/json" }
   });
@@ -1664,6 +1744,7 @@ describe("csrf protection on all mutation routes", () => {
       {
         method: mutation.method,
         body: init.body,
+        // SAFETY: Mutation fixtures provide string request headers only.
         headers: { ...(init.headers as Record<string, string> | undefined), ...csrfHeaders }
       },
       createEnv(bucket)
@@ -1726,6 +1807,7 @@ describe("SS-28 manual snapshot cap (over-cap → 413, normal → 201)", () => {
     );
 
     expect(res.status).toBe(201);
+    // SAFETY: Successful snapshot responses contain the documented snapshot id.
     const body = (await res.json()) as { snapshot: { id: string } };
     expect(body.snapshot.id).toBeTruthy();
   });
@@ -1742,6 +1824,7 @@ describe("SS-28 manual snapshot cap (over-cap → 413, normal → 201)", () => {
     warnSpy.mockRestore();
 
     expect(res.status).toBe(413);
+    // SAFETY: The rejected snapshot response contains the documented error field.
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("too large");
 

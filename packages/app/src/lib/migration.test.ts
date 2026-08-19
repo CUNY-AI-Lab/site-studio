@@ -9,12 +9,31 @@ import {
   type MigrationClaim
 } from "./migration";
 import { getUserHandle } from "./handles";
+import { createMockKV as createSharedMockKV, createTestR2Object } from "./test-utils";
+
+function testConditional(options?: R2PutOptions): R2Conditional | undefined {
+  const conditional = options?.onlyIf;
+  return conditional instanceof Headers ? undefined : conditional;
+}
+
+function testMetadata(options?: R2PutOptions): R2HTTPMetadata | undefined {
+  const metadata = options?.httpMetadata;
+  return metadata instanceof Headers ? undefined : metadata;
+}
 
 // Mock R2 bucket (same shape as storage/r2.test.ts).
 function createMockBucket() {
   let revision = 0;
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag?: string }>();
+  const store = new Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }>();
 
+  function textData(data: string | ArrayBuffer | Uint8Array): string {
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+    if (data instanceof Uint8Array) return new TextDecoder().decode(data);
+    return data;
+  }
+
+  // SAFETY: This fixture implements the R2 methods exercised by account import;
+  // uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => {
@@ -23,46 +42,37 @@ function createMockBucket() {
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
       if (!entry) return null;
-      const data = entry.data;
       entry.etag ??= `etag-${++revision}`;
       return {
         key,
         etag: entry.etag,
-        size: typeof data === "string" ? data.length : (data as ArrayBuffer).byteLength,
+        size: entry.data.length,
         httpMetadata: entry.httpMetadata || {},
-        text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer)),
-        arrayBuffer: async () => (typeof data === "string" ? new TextEncoder().encode(data).buffer : data)
+        text: async () => entry.data,
+        arrayBuffer: async () => new TextEncoder().encode(entry.data).buffer
       };
     }),
-    put: vi.fn(async (key: string, data: any, options?: any) => {
+    put: vi.fn(async (key: string, data: string | ArrayBuffer | Uint8Array, options?: R2PutOptions) => {
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when
       // the key is empty; a failed condition returns null (no write, no throw).
       // migrateHandle's promotion (SS-52) relies on this contract.
-      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+      const conditional = testConditional(options);
+      if (conditional?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      if (options?.onlyIf?.etagMatches && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+      if (conditional?.etagMatches && store.get(key)?.etag !== conditional.etagMatches) {
         return null;
       }
-      let stored: ArrayBuffer | string;
-      if (typeof data === "string") {
-        stored = data;
-      } else if (data instanceof ArrayBuffer) {
-        stored = data;
-      } else if (data instanceof Uint8Array) {
-        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-      } else {
-        stored = String(data);
-      }
+      const text = textData(data);
       const etag = `etag-${++revision}`;
-      store.set(key, { data: stored, httpMetadata: options?.httpMetadata, etag });
-      return { key, etag };
+      store.set(key, { data: text, httpMetadata: testMetadata(options), etag });
+      return createTestR2Object(key, etag, text.length);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async ({ prefix, delimiter, cursor, limit }: any = {}) => {
-      const objects: any[] = [];
+    list: vi.fn(async ({ prefix, delimiter, limit }: R2ListOptions = {}) => {
+      const objects: R2Object[] = [];
       const delimitedPrefixes: string[] = [];
 
       for (const key of store.keys()) {
@@ -80,12 +90,7 @@ function createMockBucket() {
           }
         }
 
-        objects.push({
-          key,
-          size: 0,
-          uploaded: new Date(),
-          httpMetadata: {}
-        });
+        objects.push(createTestR2Object(key));
       }
 
       return {
@@ -93,36 +98,24 @@ function createMockBucket() {
         truncated: false,
         delimitedPrefixes
       };
-    })
-  } as unknown as R2Bucket & { store: Map<string, any> };
+    }),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket & { store: Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }> };
 }
 
 function createMockKV() {
-  const store = new Map<string, string>();
-  return {
-    store,
-    get: vi.fn(async (key: string, type?: string) => {
-      const value = store.get(key);
-      if (value === undefined) return null;
-      return type === "json" ? JSON.parse(value) : value;
-    }),
-    put: vi.fn(async (key: string, value: string) => {
-      store.set(key, String(value));
-    }),
-    delete: vi.fn(async (key: string) => {
-      store.delete(key);
-    })
-  } as unknown as KVNamespace & { store: Map<string, string> };
+  return createSharedMockKV();
 }
 
 const ANON = "user_anon123";
 const SUBJECT = canonicalTestSubject("migration-owner");
 const PUBLISHED_BASE_URL = "https://cail-doorway.ailab-452.workers.dev/site-studio";
 
-/** Copied objects are stored as ArrayBuffers by the mock; decode for asserts. */
-function textOf(entry: { data: ArrayBuffer | string } | undefined): string | undefined {
+/** Copied objects are stored as strings by the mock. */
+function textOf(entry: { data: string } | undefined): string | undefined {
   if (!entry) return undefined;
-  return typeof entry.data === "string" ? entry.data : new TextDecoder().decode(entry.data);
+  return entry.data;
 }
 
 function metadataFor(id: string, extra: Partial<ProjectMetadata> = {}): string {
@@ -201,14 +194,14 @@ describe("migrateAnonymousData", () => {
     expect(result.projects).toEqual({ portfolio: "portfolio" });
 
     // Subject now owns the data.
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
+    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data);
     expect(meta.id).toBe("portfolio");
     expect(meta.importedFrom).toBe(ANON);
     expect(meta.importedOriginalId).toBe("portfolio");
     expect(textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`))).toContain("(anon)");
     expect(bucket.store.get(`projects/${SUBJECT}/portfolio/styles.css`)).toBeTruthy();
     expect(bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.zip`)).toBeTruthy();
-    const snapRecord = JSON.parse(bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.json`).data);
+    const snapRecord = JSON.parse(bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.json`)!.data);
     expect(snapRecord.projectId).toBe("portfolio");
     expect(bucket.store.get(`uploads/${SUBJECT}/paper.pdf`)).toBeTruthy();
 
@@ -222,6 +215,7 @@ describe("migrateAnonymousData", () => {
     expect([...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`))).toBe(false);
 
     // Claim recorded complete; anon session and pending marker cleared.
+    // SAFETY: The migration service writes this KV value from the MigrationClaim schema.
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim).toMatchObject({ subject: SUBJECT, status: "complete" });
     expect(kv.store.has("session:anon-session-id")).toBe(false);
@@ -258,9 +252,9 @@ describe("migrateAnonymousData", () => {
     expect(result.projects).toEqual({ site: "site-imported", blog: "blog" });
 
     // Subject's original is byte-identical.
-    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`).data).toBe("<h1>subject original</h1>");
+    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe("<h1>subject original</h1>");
     // Incoming copy lives under the suffixed id with its own content.
-    const imported = JSON.parse(bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`).data);
+    const imported = JSON.parse(bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`)!.data);
     expect(imported.id).toBe("site-imported");
     expect(imported.importedOriginalId).toBe("site");
     expect(textOf(bucket.store.get(`projects/${SUBJECT}/site-imported/index.html`))).toContain("(anon)");
@@ -273,19 +267,22 @@ describe("migrateAnonymousData", () => {
     const destination = `projects/${SUBJECT}/portfolio/index.html`;
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // a subject-side writer for the copy-if-absent race.
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (key === destination && !injected) {
         injected = true;
         await originalPut(destination, "<h1>subject concurrent edit</h1>");
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     await expect(run()).rejects.toThrow("destination changed");
     expect(textOf(bucket.store.get(destination))).toBe("<h1>subject concurrent edit</h1>");
     expect(textOf(bucket.store.get(`projects/${ANON}/portfolio/index.html`))).toBe(
       "<h1>anonymous source</h1>"
     );
+    // SAFETY: The failed migration leaves the claim in its documented pending shape.
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim.status).toBe("pending");
   });
@@ -298,6 +295,7 @@ describe("migrateAnonymousData", () => {
     const result = await run({ subject: otherSubject, anonSessionId: undefined });
 
     expect(result.status).toBe("refused");
+    // SAFETY: The completed first claim is stored using the MigrationClaim schema.
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim.subject).toBe(SUBJECT); // original claim untouched
     const otherKeys = [...bucket.store.keys()].filter((k) => k.includes(otherSubject));
@@ -310,10 +308,13 @@ describe("migrateAnonymousData", () => {
     // SECOND subject migrate into a namespace another subject already owns.
     seedAnonProject(bucket, "portfolio");
     const outage = new Error("KV read failed");
-    kv.get = vi.fn(async (key: string) => {
+    // SAFETY: createMockKV's get function is a Vitest spy; this test replaces
+    // its implementation to inject the deliberate KV failure.
+    const getMock = kv.get as ReturnType<typeof vi.fn>;
+    getMock.mockImplementation(async (key: string) => {
       if (key === migrationClaimKey(ANON)) throw outage;
       return null;
-    }) as unknown as typeof kv.get;
+    });
 
     await expect(run()).rejects.toThrow("KV read failed");
 
@@ -333,6 +334,7 @@ describe("migrateAnonymousData", () => {
     const result = await run();
 
     expect(result.status).toBe("nothing-to-migrate");
+    // SAFETY: The empty migration records completion using the MigrationClaim schema.
     const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
     expect(claim.status).toBe("complete");
     expect(kv.store.has("session:anon-session-id")).toBe(false);
@@ -347,13 +349,13 @@ describe("migrateAnonymousData", () => {
   function injectAfterList(triggerPrefix: string, nth: number, inject: () => void) {
     const original = bucket.list.bind(bucket);
     let count = 0;
-    bucket.list = vi.fn(async (options: any = {}) => {
+    bucket.list = vi.fn(async (options: R2ListOptions = {}) => {
       const result = await original(options);
       if (options?.prefix === triggerPrefix && ++count === nth) {
         inject();
       }
       return result;
-    }) as typeof bucket.list;
+    });
   }
 
   it("SS-54: a file written into the anon namespace during the copy sweep is migrated, not deleted", async () => {
@@ -397,7 +399,7 @@ describe("migrateAnonymousData", () => {
     expect(result.projects).toEqual({ portfolio: "portfolio", newproj: "newproj" });
 
     // The mid-run project survived into the subject namespace...
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`).data);
+    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`)!.data);
     expect(meta.importedFrom).toBe(ANON);
     expect(textOf(bucket.store.get(`projects/${SUBJECT}/newproj/index.html`))).toContain("newproj (anon)");
     // ...and the anon originals are gone.
@@ -425,7 +427,7 @@ describe("migrateAnonymousData", () => {
         .map((k) => k.slice(`projects/${SUBJECT}/`.length).split("/")[0])
     );
     expect([...importedIds].sort()).toEqual(["site", "site-imported"]);
-    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`).data).toBe("<h1>subject original</h1>");
+    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe("<h1>subject original</h1>");
   });
 
   it("resumes after partial source deletion without duplicating imported projects", async () => {
@@ -440,13 +442,15 @@ describe("migrateAnonymousData", () => {
 
     const originalDelete = bucket.delete.bind(bucket);
     let interrupted = false;
+    // SAFETY: This replacement preserves the R2 delete signature while
+    // injecting the deliberate interruption for retry coverage.
     bucket.delete = vi.fn(async (key: string) => {
       if (!interrupted && key === `projects/${ANON}/notes/.metadata.json`) {
         interrupted = true;
         throw new Error("injected delete interruption");
       }
       return originalDelete(key);
-    }) as typeof bucket.delete;
+    });
 
     await expect(run()).rejects.toThrow("injected delete interruption");
     expect(bucket.store.has(`projects/${SUBJECT}/site-imported/.metadata.json`)).toBe(true);
@@ -492,7 +496,7 @@ describe("migrateAnonymousData", () => {
     expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
     // Handle ownership and the old published namespace remain authoritative
     // until chat history can be imported on a retry.
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(ANON);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
   });
@@ -520,7 +524,7 @@ describe("migrateAnonymousData", () => {
       subject: SUBJECT,
       status: "pending",
     });
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(ANON);
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(ANON);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
@@ -534,13 +538,13 @@ describe("migrateAnonymousData", () => {
       subject: SUBJECT,
       status: "complete",
     });
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
       handle: "jane-rivera",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
   });
 
   it("retries after forward handle ownership commits before the subject reverse record", async () => {
@@ -553,22 +557,24 @@ describe("migrateAnonymousData", () => {
 
     const originalPut = bucket.put;
     let failSubjectReverse = true;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the first subject reverse-write failure.
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (key === `userhandles/${SUBJECT}.json` && failSubjectReverse) {
         failSubjectReverse = false;
         throw new Error("injected subject reverse failure");
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     await expect(run()).rejects.toThrow("injected subject reverse failure");
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
     expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
   });
 
   it("retries after subject reverse commit before anonymous reverse cleanup", async () => {
@@ -577,25 +583,29 @@ describe("migrateAnonymousData", () => {
 
     const originalPut = bucket.put;
     let failAnonReverseRetirement = true;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the anonymous reverse-retirement failure.
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (
         key === `userhandles/${ANON}.json`
-        && options?.onlyIf?.etagMatches
+        && testConditional(options)?.etagMatches
         && failAnonReverseRetirement
       ) {
         failAnonReverseRetirement = false;
         throw new Error("injected anonymous reverse cleanup failure");
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
-    const first = await run();
-    expect(first.status).toBe("migrated");
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
+    // Cleanup is part of the migration boundary. If retiring the anonymous
+    // reverse record fails, the run must stay pending so the source remains
+    // available for a complete retry.
+    await expect(run()).rejects.toThrow("injected anonymous reverse cleanup failure");
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
 
-    await expect(run()).resolves.toMatchObject({ status: "already-complete" });
+    await expect(run()).resolves.toMatchObject({ status: "migrated" });
     expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
     // The cleanup failure is intentionally best-effort; the stale reverse
     // record is not authoritative because its forward record points at the
@@ -643,15 +653,15 @@ describe("handle re-homing through migration", () => {
     });
 
     // Handle re-homed: record points at subject, reverse record moved.
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`).data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("jane-rivera");
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
       handle: "jane-rivera",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });
 
     // Migrated project's publishedUrl uses the handle, never the subject id.
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`).data);
+    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data);
     expect(meta.publishedUrl).toBe(`${PUBLISHED_BASE_URL}/u/jane-rivera/portfolio/`);
     expect(meta.publishedUrl).not.toContain(SUBJECT);
   });
@@ -670,10 +680,10 @@ describe("handle re-homing through migration", () => {
     });
 
     // Subject keeps its own primary.
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`).data).handle).toBe("primary");
+    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("primary");
     // Anon handle survives as an alias pointing at the subject.
-    expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`).data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`).data)).toMatchObject({
+    expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`)!.data).ownerId).toBe(SUBJECT);
+    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
       handle: "anon-alias",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });

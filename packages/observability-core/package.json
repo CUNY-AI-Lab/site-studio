@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cuny-ai-lab/cail-log": "0.6.0"
+    "@cuny-ai-lab/cail-log": "0.6.0",
+    "zod": "4.4.3"
   }
 }

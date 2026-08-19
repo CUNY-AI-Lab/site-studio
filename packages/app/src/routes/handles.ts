@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import type { Env } from "../types";
 import { getUser } from "../lib/session";
 import { checkHandle, claimHandle, getUserHandle } from "../lib/handles";
@@ -29,18 +30,19 @@ export function createHandleRouter() {
   app.post("/api/handle", async (c) => {
     const user = getUser(c);
 
-    let body: { handle?: unknown };
+    let body: unknown;
     try {
       body = await c.req.json();
     } catch {
       return c.json({ error: "invalid_body", message: "Expected a JSON body with a handle." }, 400);
     }
 
-    if (typeof body.handle !== "string") {
+    const parsedBody = z.object({ handle: z.string() }).safeParse(body);
+    if (!parsedBody.success) {
       return c.json({ error: "invalid_body", message: "handle must be a string." }, 400);
     }
 
-    const result = await claimHandle(c.env.SITE_STUDIO_BUCKET, user.id, body.handle);
+    const result = await claimHandle(c.env.SITE_STUDIO_BUCKET, user.id, parsedBody.data.handle);
     if (!result.ok) {
       return c.json({ error: "handle_unavailable", message: result.reason }, result.status);
     }

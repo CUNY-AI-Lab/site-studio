@@ -5,14 +5,31 @@ import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { OwnerMutationService, type MutationJournalStore } from "../lib/owner-mutations";
 import { createSiteStudioBoundaryContext } from "../lib/logging";
+import { createTestR2Object } from "../lib/test-utils";
+
+type R2TestData = string | ArrayBuffer | Uint8Array;
+type DiagnosticEvent = { [key: string]: string | number | boolean | null | undefined };
+
+function testConditional(options?: R2PutOptions): R2Conditional | undefined {
+  const conditional = options?.onlyIf;
+  return conditional instanceof Headers ? undefined : conditional;
+}
+
+function testMetadata(options?: R2PutOptions): R2HTTPMetadata | undefined {
+  const metadata = options?.httpMetadata;
+  return metadata instanceof Headers ? undefined : metadata;
+}
 
 // Mock R2 bucket
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; customMetadata?: Record<string, string>; etag: string; uploaded: Date }>();
+  type MockData = string | ArrayBuffer;
+  type MockEntry = { data: MockData; httpMetadata?: R2HTTPMetadata; customMetadata?: Record<string, string>; etag: string; uploaded: Date };
+  type MockObject = R2Object;
+  const store = new Map<string, MockEntry>();
   const versions = new Map<string, number>();
 
-  function objectSize(data: ArrayBuffer | string): number {
-    return typeof data === "string" ? data.length : data.byteLength;
+  function objectSize(data: MockData): number {
+    return data instanceof ArrayBuffer ? data.byteLength : data.length;
   }
 
   function nextEtag(key: string): string {
@@ -21,19 +38,20 @@ function createMockBucket() {
     return `${key}:${version}`;
   }
 
-  function toStored(data: any): ArrayBuffer | string {
-    if (typeof data === "string") {
-      return data;
-    }
+  function toStored(data: string | ArrayBuffer | Uint8Array): MockData {
     if (data instanceof ArrayBuffer) {
       return data;
     }
     if (data instanceof Uint8Array) {
-      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+      const copy = new Uint8Array(data.byteLength);
+      copy.set(data);
+      return copy.buffer;
     }
-    return String(data);
+    return data;
   }
 
+  // SAFETY: This fixture implements the R2 methods exercised by R2ProjectStorage;
+  // uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => {
@@ -51,32 +69,33 @@ function createMockBucket() {
         uploaded: entry.uploaded,
         httpMetadata: entry.httpMetadata || {},
         customMetadata: entry.customMetadata || {},
-        text: async () => typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer),
-        arrayBuffer: async () => typeof data === "string" ? new TextEncoder().encode(data).buffer : data,
+        text: async () => data instanceof ArrayBuffer ? new TextDecoder().decode(data) : data,
+        arrayBuffer: async () => data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer,
       };
     }),
-    put: vi.fn(async (key: string, data: any, options?: any) => {
-      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+    put: vi.fn(async (key: string, data: string | ArrayBuffer | Uint8Array, options?: R2PutOptions) => {
+      const conditional = testConditional(options);
+      if (conditional?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      if (options?.onlyIf?.etagMatches !== undefined && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+      if (conditional?.etagMatches !== undefined && store.get(key)?.etag !== conditional.etagMatches) {
         return null;
       }
       const stored = toStored(data);
       const entry = {
         data: stored,
-        httpMetadata: options?.httpMetadata,
+        httpMetadata: testMetadata(options),
         customMetadata: options?.customMetadata,
         etag: nextEtag(key),
         uploaded: new Date()
       };
       store.set(key, entry);
-      return { key, size: objectSize(stored), etag: entry.etag, uploaded: entry.uploaded };
+      return createTestR2Object(key, entry.etag, objectSize(stored));
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async ({ prefix, delimiter, cursor, limit, include }: any = {}) => {
+    list: vi.fn(async ({ prefix, delimiter, cursor, limit, include }: R2ListOptions = {}) => {
       const entries: Array<{ kind: "object"; key: string } | { kind: "prefix"; key: string }> = [];
       const seenPrefixes = new Set<string>();
       const includeCustomMetadata = Array.isArray(include) && include.includes("customMetadata");
@@ -103,7 +122,7 @@ function createMockBucket() {
       const pageSize = limit ?? 3;
       const start = cursor ? Number(cursor) : 0;
       const page = entries.slice(start, start + pageSize);
-      const objects: any[] = [];
+      const objects: MockObject[] = [];
       const delimitedPrefixes: string[] = [];
 
       for (const listedEntry of page) {
@@ -115,17 +134,18 @@ function createMockBucket() {
         const key = listedEntry.key;
         const entry = store.get(key);
         const size = entry ? objectSize(entry.data) : 0;
-        const object: any = {
-          key,
-          size,
-          etag: entry?.etag,
-          uploaded: entry?.uploaded || new Date(),
-          httpMetadata: entry?.httpMetadata || {},
-        };
         if (includeCustomMetadata) {
-          object.customMetadata = entry?.customMetadata || {};
+          objects.push(createTestR2Object(key, entry?.etag || `${key}:etag`, size, {
+            uploaded: entry?.uploaded || new Date(),
+            httpMetadata: entry?.httpMetadata || {},
+            customMetadata: entry?.customMetadata || {},
+          }));
+        } else {
+          objects.push(createTestR2Object(key, entry?.etag || `${key}:etag`, size, {
+            uploaded: entry?.uploaded || new Date(),
+            httpMetadata: entry?.httpMetadata || {},
+          }));
         }
-        objects.push(object);
       }
 
       const next = start + pageSize;
@@ -136,7 +156,9 @@ function createMockBucket() {
         delimitedPrefixes,
       };
     }),
-  } as unknown as R2Bucket & { store: Map<string, any> };
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  } as R2Bucket & { store: Map<string, MockEntry> };
 }
 
 describe("R2ProjectStorage", () => {
@@ -147,8 +169,9 @@ describe("R2ProjectStorage", () => {
 
   beforeEach(() => {
     bucket = createMockBucket();
+    // SAFETY: createMockBucket implements the R2 methods consumed by storage.
     storage = new R2ProjectStorage(
-      bucket as any,
+      bucket as R2Bucket,
       createSiteStudioBoundaryContext({ CAIL_LOG_ENV: "test" }),
     );
   });
@@ -513,6 +536,7 @@ describe("R2ProjectStorage", () => {
 
       const outcomes = [a, b];
       expect(outcomes.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      // SAFETY: Filtering Promise.allSettled outcomes by status yields rejected results.
       const rejected = outcomes.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
       expect(rejected).toHaveLength(1);
       expect(rejected[0].reason).toBeInstanceOf(FileExistsError);
@@ -534,6 +558,7 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, "old-complete", "Old Complete");
       await storage.writeFile(userId, "old-complete", "index.html", "<h1>Hi</h1>");
       await storage.writeThumbnail(userId, "old-complete", new Uint8Array([137, 80, 78, 71]));
+      // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, "old-complete", {
         trigger: "manual",
         label: "Before rename"
@@ -593,18 +618,21 @@ describe("R2ProjectStorage", () => {
     it("SS-43: rolls back a partial target and preserves the source when a snapshot copy fails", async () => {
       await storage.createProject(userId, "old-atomic", "Old Atomic");
       await storage.writeFile(userId, "old-atomic", "index.html", "source file");
+      // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, "old-atomic", {
         trigger: "manual",
         label: "Source snapshot"
       })) as ProjectSnapshot;
       const failingKey = `snapshots/${userId}/new-atomic/${snapshot.id}.zip`;
       const originalPut = bucket.put;
-      bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+      // SAFETY: This replacement preserves the R2 put signature while injecting
+      // the requested snapshot-copy failure.
+      bucket.put = vi.fn(async (key: string, data: R2TestData, options?: R2PutOptions) => {
         if (key === failingKey) {
           throw new Error("snapshot copy failed");
         }
         return originalPut(key, data, options);
-      }) as unknown as typeof bucket.put;
+      }) as typeof bucket.put;
 
       await expect(
         storage.renameProject(userId, "old-atomic", "new-atomic")
@@ -738,13 +766,15 @@ describe("R2ProjectStorage", () => {
       // Simulate a concurrent deleteProject landing between the CAS loop's read
       // and its conditional write: the metadata object vanishes, so the
       // etag-matched put loses and the retry observes an absent record.
-      bucket.put = vi.fn(async (putKey: string, data: any, options?: any) => {
-        if (putKey === key && options?.onlyIf?.etagMatches && !injected) {
+      // SAFETY: This replacement preserves the R2 put signature while deleting
+      // the metadata key to model a concurrent project removal.
+      bucket.put = vi.fn(async (putKey: string, data: R2TestData, options?: R2PutOptions) => {
+        if (putKey === key && testConditional(options)?.etagMatches && !injected) {
           injected = true;
           bucket.store.delete(key);
         }
         return originalPut(putKey, data, options);
-      }) as unknown as typeof bucket.put;
+      }) as typeof bucket.put;
 
       await expect(
         storage.updateProjectMetadata(userId, projectId, { published: true, slug: "blog" })
@@ -759,16 +789,19 @@ describe("R2ProjectStorage", () => {
       const originalPut = bucket.put;
       let injected = false;
 
-      bucket.put = vi.fn(async (putKey: string, data: any, options?: any) => {
-        if (putKey === key && options?.onlyIf?.etagMatches && !injected) {
+      // SAFETY: This replacement preserves the R2 put signature while injecting
+      // one stale-writer race for the metadata CAS loop.
+      bucket.put = vi.fn(async (putKey: string, data: R2TestData, options?: R2PutOptions) => {
+        if (putKey === key && testConditional(options)?.etagMatches && !injected) {
           injected = true;
+          // SAFETY: The metadata object is written by R2ProjectStorage using ProjectMetadata.
           const current = JSON.parse(await (await bucket.get(key))!.text()) as ProjectMetadata;
           await originalPut(key, JSON.stringify({ ...current, thumbnailUrl: "/api/projects/my-project/thumbnail" }), {
             httpMetadata: { contentType: "application/json" }
           });
         }
         return originalPut(putKey, data, options);
-      }) as unknown as typeof bucket.put;
+      }) as typeof bucket.put;
 
       const updated = await storage.updateProjectMetadata(userId, projectId, {
         published: true,
@@ -792,12 +825,14 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "My Project");
       const key = `projects/${userId}/${projectId}/.metadata.json`;
       const original = await storage.getProjectMetadata(userId, projectId);
-      bucket.put = vi.fn(async (putKey: string, _data: any, options?: any) => {
-        if (putKey === key && options?.onlyIf) {
+      // SAFETY: This replacement preserves the R2 put signature while forcing
+      // the metadata CAS conflict path.
+      bucket.put = vi.fn(async (putKey: string, _data: R2TestData, options?: R2PutOptions) => {
+        if (putKey === key && testConditional(options)) {
           return null;
         }
-        return { key: putKey };
-      }) as unknown as typeof bucket.put;
+        return createTestR2Object(putKey, `${putKey}:conflict`);
+      }) as typeof bucket.put;
 
       await expect(storage.updateProjectMetadata(userId, projectId, { published: true })).rejects.toThrow(
         `Concurrent metadata update conflict for ${key}`
@@ -852,6 +887,7 @@ describe("R2ProjectStorage", () => {
       });
 
       expect(isSnapshotSkipped(result)).toBe(false);
+      // SAFETY: The preceding discriminant check establishes the snapshot branch.
       const snapshot = result as ProjectSnapshot;
       expect(snapshot.id).toBeTruthy();
       expect(snapshot.trigger).toBe("manual");
@@ -919,6 +955,7 @@ describe("R2ProjectStorage", () => {
         const created: ProjectSnapshot[] = [];
         for (let index = 0; index < SNAPSHOT_KEEP_COUNT + 1; index += 1) {
           vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          // SAFETY: Each seeded project contains a file, so snapshot creation succeeds.
           created.push(
             (await storage.createSnapshot(userId, projectId, {
               trigger: "manual",
@@ -952,7 +989,8 @@ describe("R2ProjectStorage", () => {
         });
       }
 
-      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      // SAFETY: createMockBucket exposes get as a Vitest mock for call inspection.
+      const getMock = bucket.get as ReturnType<typeof vi.fn>;
       getMock.mockClear();
 
       const snapshots = await storage.listSnapshots(userId, projectId);
@@ -988,7 +1026,8 @@ describe("R2ProjectStorage", () => {
         httpMetadata: { contentType: "application/json" }
       });
 
-      const getMock = bucket.get as unknown as ReturnType<typeof vi.fn>;
+      // SAFETY: createMockBucket exposes get as a Vitest mock for call inspection.
+      const getMock = bucket.get as ReturnType<typeof vi.fn>;
       getMock.mockClear();
 
       const snapshots = await storage.listSnapshots(userId, projectId);
@@ -1015,7 +1054,8 @@ describe("R2ProjectStorage", () => {
           });
         }
 
-        const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
+        // SAFETY: createMockBucket exposes delete as a Vitest mock for failure injection.
+        const deleteMock = bucket.delete as ReturnType<typeof vi.fn>;
         deleteMock.mockImplementationOnce(async () => {
           throw new Error("delete failed");
         });
@@ -1026,10 +1066,12 @@ describe("R2ProjectStorage", () => {
           label: "Resilient"
         });
         expect(isSnapshotSkipped(resilient)).toBe(false);
+        // SAFETY: The preceding discriminant check establishes the snapshot branch.
         expect((resilient as ProjectSnapshot).label).toBe("Resilient");
         expect(
           logSpy.mock.calls.some(([event]) => {
-            const record = event as Record<string, unknown>;
+            // SAFETY: Structured logging emits concrete scalar diagnostic fields.
+            const record = event as DiagnosticEvent;
             return (
               record["event.name"] === "site_studio.diagnostic.warning" &&
               record["error.type"] === "snapshot_prune_failed"
@@ -1065,9 +1107,11 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Original</h1>");
 
-      const snapshot = (await storage.createSnapshot(userId, projectId, {
+      // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
+    // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
+    const snapshot = (await storage.createSnapshot(userId, projectId, {
         trigger: "manual"
-      })) as ProjectSnapshot;
+    })) as ProjectSnapshot;
 
       // Modify the file
       await storage.writeFile(userId, projectId, "index.html", "<h1>Modified</h1>");
@@ -1087,6 +1131,7 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "a.txt", "snapshot-a");
       await storage.writeFile(userId, projectId, "b.txt", "snapshot-b");
+      // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, projectId, {
         trigger: "manual"
       })) as ProjectSnapshot;
@@ -1095,19 +1140,24 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "b.txt", "current-b");
       await storage.writeFile(userId, projectId, "extra.txt", "current-extra");
 
-      const putMock = bucket.put as unknown as ReturnType<typeof vi.fn>;
-      const originalPut = putMock.getMockImplementation() as (
+      // SAFETY: createMockBucket exposes put as a Vitest mock for failure injection.
+      const putMock = bucket.put as ReturnType<typeof vi.fn>;
+      const originalPut = putMock.getMockImplementation();
+      if (!originalPut) throw new Error("R2 put fixture implementation is missing");
+      // SAFETY: Vitest exposes this fixture's R2 put implementation as a
+      // callable function; the constructor overload is not used here.
+      const passThroughPut = originalPut as (
         key: string,
-        data: unknown,
-        options?: unknown,
-      ) => unknown;
+        data: R2TestData,
+        options?: R2PutOptions,
+      ) => Promise<R2Object | null>;
       let injected = false;
-      putMock.mockImplementation(async (key: string, data: unknown, options?: unknown) => {
+      putMock.mockImplementation(async (key: string, data: R2TestData, options?: R2PutOptions) => {
         if (key.endsWith("/b.txt") && !injected) {
           injected = true;
           throw new Error("restore write failed");
         }
-        return originalPut(key, data, options);
+        return passThroughPut(key, data, options);
       });
 
       await expect(storage.restoreSnapshot(userId, projectId, snapshot.id)).rejects.toThrow(
@@ -1121,6 +1171,7 @@ describe("R2ProjectStorage", () => {
     it("rolls back overwritten and deleted files when a restore delete fails", async () => {
       await storage.createProject(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "snapshot");
+      // SAFETY: This project contains a file, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, projectId, {
         trigger: "manual"
       })) as ProjectSnapshot;
@@ -1128,10 +1179,9 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "index.html", "current");
       await storage.writeFile(userId, projectId, "extra.txt", "keep me");
 
-      const deleteMock = bucket.delete as unknown as ReturnType<typeof vi.fn>;
-      const originalDelete = deleteMock.getMockImplementation() as (
-        key: string,
-      ) => unknown;
+      // SAFETY: createMockBucket exposes delete as a Vitest mock for failure injection.
+      const deleteMock = bucket.delete as ReturnType<typeof vi.fn>;
+      const originalDelete = bucket.delete;
       let injected = false;
       deleteMock.mockImplementation(async (key: string) => {
         if (key.endsWith("/extra.txt") && !injected) {
@@ -1192,7 +1242,8 @@ describe("R2ProjectStorage", () => {
       }
       expect(
         logSpy.mock.calls.some(([event]) => {
-          const record = event as Record<string, unknown>;
+          // SAFETY: Structured logging emits concrete scalar diagnostic fields.
+          const record = event as DiagnosticEvent;
           return (
             record["event.name"] === "site_studio.diagnostic.warning" &&
             record["error.type"] === "snapshot_too_large"
@@ -1233,7 +1284,10 @@ describe("OwnerMutationService recovery journal", () => {
     const values = new Map<string, unknown>();
     const store: MutationJournalStore & { values: Map<string, unknown> } = {
       values,
-      async get<T>(key: string) { return values.get(key) as T | undefined; },
+      async get<T>(key: string) {
+        // SAFETY: The journal service reads values through its generic store contract.
+        return values.get(key) as T | undefined;
+      },
       async put<T>(key: string, value: T) { values.set(key, value); },
       async delete(key: string) { return values.delete(key); }
     };
@@ -1245,10 +1299,12 @@ describe("OwnerMutationService recovery journal", () => {
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
     const originalPut = bucket.put;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    // SAFETY: This replacement preserves the R2 put signature while injecting
+    // the template-write failure.
+    bucket.put = vi.fn(async (key: string, data: R2TestData, options?: R2PutOptions) => {
       if (key.endsWith("/styles.css")) throw new Error("injected R2 failure");
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     await expect(service.execute("user-a", {
       type: "create-project",
@@ -1520,13 +1576,15 @@ describe("OwnerMutationService recovery journal", () => {
 
     const originalDelete = bucket.delete;
     let failed = false;
+    // SAFETY: This replacement preserves the R2 delete signature while injecting
+    // the deletion failure.
     bucket.delete = vi.fn(async (key: string) => {
       if (!failed && key.endsWith("/index.html")) {
         failed = true;
         throw new Error("injected delete failure");
       }
       return originalDelete(key);
-    }) as typeof bucket.delete;
+    });
 
     await expect(service.execute("user-a", {
       type: "delete-project",
@@ -1574,7 +1632,10 @@ describe("OwnerMutationService recovery journal", () => {
       targetHasFile: boolean;
     }> = [];
     const originalJournalPut = journal.put.bind(journal);
-    journal.put = vi.fn(async (key: string, value: unknown) => {
+    // SAFETY: This replacement preserves MutationJournalStore.put while recording
+    // the typed rename-project lifecycle entries.
+    journal.put = vi.fn(async <T>(key: string, value: T) => {
+      // SAFETY: The lifecycle assertions only inspect rename-project journal entries.
       const record = value as { type?: string; stage?: string };
       if (record.type === "rename-project" && record.stage) {
         phases.push({

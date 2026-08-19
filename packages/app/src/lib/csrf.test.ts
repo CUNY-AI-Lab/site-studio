@@ -22,7 +22,7 @@ import {
   verifyWsUpgrade,
   type CsrfRequestFacts
 } from "./csrf";
-import { mintCsrfSession } from "./test-utils";
+import { createTestR2Object, mintCsrfSession } from "./test-utils";
 
 const REQUEST_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
@@ -34,6 +34,8 @@ it("uses a non-authority header that survives the shared Doorway", () => {
 
 function createCsrfBucket(): R2Bucket {
   const store = new Map<string, string>();
+  // SAFETY: This fixture implements the R2 operations used by CSRF token
+  // persistence; the remaining methods are inert binding-contract stubs.
   return {
     get: vi.fn(async (key: string) => {
       const value = store.get(key);
@@ -44,9 +46,14 @@ function createCsrfBucket(): R2Bucket {
         return null;
       }
       store.set(key, value);
-      return { key };
-    })
-  } as unknown as R2Bucket;
+      return createTestR2Object(key, `${key}:etag`, value.length);
+    }),
+    head: vi.fn(async () => null),
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket;
 }
 
 function facts(overrides: Partial<CsrfRequestFacts>): CsrfRequestFacts {
@@ -162,7 +169,8 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
       setCsrfCookie(c, TOKEN);
       return c.body(null, 204);
     });
-    const env = { CSRF_COOKIE_PATH: csrfCookiePath } as unknown as Env;
+    // SAFETY: setCsrfCookie reads only CSRF_COOKIE_PATH from this fixture.
+    const env = { CSRF_COOKIE_PATH: csrfCookiePath } as Env;
     const res = await app.request(url, {}, env);
     return res.headers.get("set-cookie") || "";
   }
@@ -311,7 +319,10 @@ describe("csrfProtect middleware", () => {
     return app;
   }
 
-  const env = (bucket: R2Bucket) => ({ CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: bucket, APP_PUBLIC_DOMAIN }) as unknown as Env;
+  const env = (bucket: R2Bucket) => {
+    // SAFETY: csrfProtect reads only these configured bindings in this suite.
+    return { CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: bucket, APP_PUBLIC_DOMAIN } as Env;
+  };
 
   it("no-ops on GET and OPTIONS", async () => {
     const bucket = createCsrfBucket();

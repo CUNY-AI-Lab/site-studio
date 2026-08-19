@@ -1,6 +1,6 @@
 import { unzipSync, zipSync, strToU8 } from "fflate";
+import { z } from "zod";
 import type {
-  Env,
   ProjectMetadata,
   ProjectSnapshot,
   ProjectSnapshotTrigger,
@@ -100,34 +100,59 @@ function publishedSortKey(metadata: ProjectMetadata): string {
   return metadata.publishedAt || metadata.updatedAt || metadata.createdAt;
 }
 
+const projectMetadataSchema: z.ZodType<ProjectMetadata> = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  published: z.boolean(),
+  publishedUrl: z.string().optional(),
+  publishedAt: z.string().optional(),
+  unpublishedAt: z.string().optional(),
+  thumbnailUrl: z.string().optional(),
+  slug: z.string().optional(),
+  importedFrom: z.string().optional(),
+  importedOriginalId: z.string().optional(),
+  creatingOperationId: z.string().optional(),
+});
+
+const projectSnapshotSchema: z.ZodType<ProjectSnapshot> = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  projectId: z.string(),
+  trigger: z.enum(["agent", "manual", "restore"]),
+  label: z.string().optional(),
+  fileCount: z.number(),
+  restoredFromSnapshotId: z.string().optional(),
+});
+
+const slugReservationSchema = z.object({
+  projectId: z.string().nullable().optional(),
+  reservedAt: z.string().optional(),
+});
+
 function safeParseJson<T>(
   value: string,
   label: string,
-  _key: string,
+  schema: z.ZodType<T>,
   logging?: SiteStudioLoggingContext,
 ): T | null {
   try {
-    return JSON.parse(value) as T;
+    const parsed = schema.safeParse(JSON.parse(value));
+    if (parsed.success) {
+      return parsed.data;
+    }
   } catch {
-    // Structured, metadata-only: the label is one of a handful of fixed
-    // strings; the R2 key (which embeds project names) never reaches the logs.
-    emitDiagnostic(
-      "warning",
-      `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
-      {},
-      logging,
-    );
-    return null;
   }
-}
-
-function isValidSnapshotRecord(value: unknown): value is ProjectSnapshot {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as ProjectSnapshot).id === "string" &&
-    typeof (value as ProjectSnapshot).createdAt === "string"
+  // Structured, metadata-only: the label is one of a handful of fixed
+  // strings; the R2 key (which embeds project names) never reaches the logs.
+  emitDiagnostic(
+    "warning",
+    `invalid_${label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+    {},
+    logging,
   );
+  return null;
 }
 
 function sortSnapshotsNewestFirst(snapshots: ProjectSnapshot[]): ProjectSnapshot[] {
@@ -226,8 +251,8 @@ export class R2ProjectStorage {
       createdAt: now,
       updatedAt: now,
       published: false,
-      ...(creatingOperationId ? { creatingOperationId } : {})
     };
+    if (creatingOperationId) metadata.creatingOperationId = creatingOperationId;
 
     // SS-42: project creation claims the metadata key atomically. The route's
     // existence preflight is only advisory because two same-name requests can
@@ -289,10 +314,10 @@ export class R2ProjectStorage {
       // SS-25: thumbnailUrl embeds the project id (/api/projects/{id}/thumbnail).
       // Re-point it at the new id so it doesn't 404 against the old (now deleted)
       // project; clear it when the old metadata had none so we never invent one.
-      ...(metadata.thumbnailUrl
-        ? { thumbnailUrl: `/api/projects/${newProjectId}/thumbnail` }
-        : {})
     };
+    if (metadata.thumbnailUrl) {
+      newMetadata.thumbnailUrl = `/api/projects/${newProjectId}/thumbnail`;
+    }
 
     // SS-31: the route preflight is advisory only. A target project can appear
     // between that check and this write, so claim the target metadata key with
@@ -340,13 +365,12 @@ export class R2ProjectStorage {
         // Carry customMetadata across so renamed projects keep the SS-39
         // list-time snapshot records instead of degrading every entry to the
         // legacy per-object GET fallback.
-        await this.bucket.put(nextKey, await object.arrayBuffer(), {
-          httpMetadata: object.httpMetadata,
-          ...(object.customMetadata ? { customMetadata: object.customMetadata } : {})
-        });
+        const copyOptions: R2PutOptions = { httpMetadata: object.httpMetadata };
+        if (object.customMetadata) copyOptions.customMetadata = object.customMetadata;
+        await this.bucket.put(nextKey, await object.arrayBuffer(), copyOptions);
       }
     } catch (error) {
-      await this.deleteProject(userId, newProjectId).catch(() => undefined);
+      await this.deleteProject(userId, newProjectId);
       throw error;
     }
 
@@ -370,7 +394,7 @@ export class R2ProjectStorage {
       return null;
     }
 
-    return safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key, this.logging);
+    return safeParseJson(await object.text(), "project metadata", projectMetadataSchema, this.logging);
   }
 
   async updateProjectMetadata(
@@ -410,7 +434,7 @@ export class R2ProjectStorage {
       // A present-but-corrupt record is repaired from defaults (parse failures
       // never fabricate a project — the object demonstrably exists).
       const existing =
-        safeParseJson<ProjectMetadata>(await object.text(), "project metadata", key, this.logging) || defaultMetadata();
+        safeParseJson(await object.text(), "project metadata", projectMetadataSchema, this.logging) || defaultMetadata();
 
       const next: ProjectMetadata = {
         ...existing,
@@ -705,10 +729,10 @@ export class R2ProjectStorage {
       createdAt: new Date().toISOString(),
       projectId,
       trigger: options?.trigger || "manual",
-      ...(options?.label ? { label: options.label } : {}),
       fileCount: files.length,
-      ...(options?.restoredFromSnapshotId ? { restoredFromSnapshotId: options.restoredFromSnapshotId } : {})
     };
+    if (options?.label) snapshot.label = options.label;
+    if (options?.restoredFromSnapshotId) snapshot.restoredFromSnapshotId = options.restoredFromSnapshotId;
 
     await this.bucket.put(snapshotArchiveKey(userId, projectId, snapshotId), zipSync(archive, { level: 6 }), {
       httpMetadata: {
@@ -730,7 +754,7 @@ export class R2ProjectStorage {
     // but it never fabricates or serves stale snapshot records.
     try {
       await this.pruneSnapshots(userId, projectId);
-    } catch (error) {
+    } catch {
       emitDiagnostic("warning", "snapshot_prune_failed", {
       }, this.logging);
     }
@@ -815,7 +839,7 @@ export class R2ProjectStorage {
       return null;
     }
 
-    return safeParseJson<ProjectSnapshot>(await object.text(), "snapshot metadata", key, this.logging);
+    return safeParseJson(await object.text(), "snapshot metadata", projectSnapshotSchema, this.logging);
   }
 
   async resolvePublishedSlug(
@@ -913,10 +937,10 @@ export class R2ProjectStorage {
       });
       return reclaimed ? { slug, etag: reclaimed.etag } : null;
     }
-    const parsed = safeParseJson<{ projectId?: string | null; reservedAt?: string }>(
+    const parsed = safeParseJson(
       await existing.text(),
       "slug reservation",
-      key,
+      slugReservationSchema,
       this.logging,
     );
     const holder = parsed?.projectId ?? null;
@@ -978,10 +1002,10 @@ export class R2ProjectStorage {
     const key = slugReservationKey(userId, slug);
     const existing = await this.bucket.get(key);
     if (!existing) return;
-    const parsed = safeParseJson<{ projectId?: string | null }>(
+    const parsed = safeParseJson(
       await existing.text(),
       "slug reservation",
-      key,
+      slugReservationSchema,
       this.logging,
     );
     if (parsed?.projectId === toProjectId) return;
@@ -1026,15 +1050,16 @@ export class R2ProjectStorage {
 
   private async putJson(
     key: string,
-    value: unknown,
+    value: ProjectMetadata | ProjectSnapshot,
     opts?: { customMetadata?: Record<string, string> }
   ): Promise<void> {
-    await this.bucket.put(key, JSON.stringify(value), {
+    const putOptions: R2PutOptions = {
       httpMetadata: {
         contentType: "application/json"
       },
-      ...(opts?.customMetadata ? { customMetadata: opts.customMetadata } : {})
-    });
+    };
+    if (opts?.customMetadata) putOptions.customMetadata = opts.customMetadata;
+    await this.bucket.put(key, JSON.stringify(value), putOptions);
   }
 
   /**
@@ -1057,10 +1082,11 @@ export class R2ProjectStorage {
     value: string | Uint8Array | ArrayBuffer,
     opts?: { httpMetadata?: R2HTTPMetadata }
   ): Promise<boolean> {
-    const result = await this.bucket.put(key, value, {
+    const putOptions: R2PutOptions = {
       onlyIf: { etagDoesNotMatch: "*" },
-      ...(opts?.httpMetadata ? { httpMetadata: opts.httpMetadata } : {})
-    });
+    };
+    if (opts?.httpMetadata) putOptions.httpMetadata = opts.httpMetadata;
+    const result = await this.bucket.put(key, value, putOptions);
     return result !== null;
   }
 
@@ -1158,13 +1184,7 @@ export class R2ProjectStorage {
     if (!value) {
       return null;
     }
-
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      return isValidSnapshotRecord(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
+    return safeParseJson(value, "snapshot metadata", projectSnapshotSchema, this.logging);
   }
 
   private async pruneSnapshots(userId: string, projectId: string): Promise<void> {

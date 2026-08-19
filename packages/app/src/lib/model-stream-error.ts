@@ -1,14 +1,21 @@
-import { extractCailError } from "@cuny-ai-lab/cail-client";
+import { extractCailError, type CailError } from "@cuny-ai-lab/cail-client";
+import { z } from "zod";
 
-function retryAfterSeconds(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
+const retryAfterSchema = z.object({
+  retry_after_seconds: z.union([z.number(), z.string()]).optional(),
+});
+
+export type DescribedModelStreamError = Readonly<{
+  message: string;
+  quota: boolean;
+}>;
+
+function retryAfterSeconds(value: CailError["extras"]): string | undefined {
+  const parsed = retryAfterSchema.safeParse(value);
+  if (!parsed.success || parsed.data.retry_after_seconds === undefined) {
     return undefined;
   }
-  const seconds = (value as Record<string, unknown>).retry_after_seconds;
-  if (typeof seconds === "number" || typeof seconds === "string") {
-    return String(seconds);
-  }
-  return undefined;
+  return String(parsed.data.retry_after_seconds);
 }
 
 function genericQuotaMessage(retryAfter: string | undefined): string {
@@ -24,7 +31,9 @@ function genericQuotaMessage(retryAfter: string | undefined): string {
  * errors are not CAIL budget decisions and must not be mislabeled to users or
  * action accounting.
  */
-export function describeModelStreamError(error: unknown): { message: string; quota: boolean } {
+export function describeModelStreamError(
+  error: Parameters<typeof extractCailError>[0],
+): DescribedModelStreamError {
   const cail = extractCailError(error);
   if (cail?.code === "quota_exceeded") {
     if (cail.message.trim().length > 0) {

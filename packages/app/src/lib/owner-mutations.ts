@@ -1,4 +1,5 @@
 import type { Env, ProjectSnapshot, SnapshotResult } from "../types";
+import { z } from "zod";
 import { isSnapshotSkipped } from "../types";
 import {
   FileExistsError,
@@ -88,6 +89,12 @@ type UploadAdmission = {
   alreadyRecorded: boolean;
 };
 
+const uploadAdmissionRecordSchema = z.object({
+  id: z.string(),
+  timestamp: z.number(),
+});
+const uploadAdmissionListSchema = z.array(uploadAdmissionRecordSchema);
+
 export class OwnerMutationService {
   private readonly storage: R2ProjectStorage;
 
@@ -126,25 +133,13 @@ export class OwnerMutationService {
     policy: UploadPolicy
   ): Promise<UploadAdmission> {
     const now = policy.now ?? Date.now();
-    const prior = await this.journalStore.get<Array<number | UploadAdmissionRecord>>(
-      UPLOAD_ADMISSIONS_KEY
-    ) ?? [];
+    const priorResult = uploadAdmissionListSchema.safeParse(
+      await this.journalStore.get<UploadAdmissionRecord[]>(UPLOAD_ADMISSIONS_KEY) ?? [],
+    );
+    const prior = priorResult.success ? priorResult.data : [];
     const recent = prior
-      .map((entry, index): UploadAdmissionRecord | null => {
-        if (typeof entry === "number") {
-          return { id: `legacy:${index}:${entry}`, timestamp: entry };
-        }
-        return (
-          entry &&
-          typeof entry.id === "string" &&
-          typeof entry.timestamp === "number"
-        )
-          ? entry
-          : null;
-      })
       .filter(
-        (entry): entry is UploadAdmissionRecord =>
-          entry !== null && entry.timestamp > now - 60_000
+        (entry) => entry.timestamp > now - 60_000
       );
     const admissionId = policy.admissionId ?? crypto.randomUUID();
     const alreadyRecorded = recent.some((entry) => entry.id === admissionId);
@@ -326,9 +321,9 @@ export class OwnerMutationService {
           nextProjectId: operation.nextProjectId,
           name: operation.name,
           published: sourceMetadata.published,
-          ...(sourceMetadata.published && sourceMetadata.slug ? { slug: sourceMetadata.slug } : {}),
           stage: "preparing"
         };
+        if (sourceMetadata.published && sourceMetadata.slug) journal.slug = sourceMetadata.slug;
         try {
           await this.storage.renameProject(ownerId, operation.projectId, operation.nextProjectId, {
             afterTargetClaim: async () => this.putJournal(journal),
@@ -527,7 +522,7 @@ export class OwnerMutationService {
 }
 
 export async function executeOwnerMutation(
-  env: Env,
+  env: Pick<Env, "MUTATION_COORDINATOR">,
   ownerId: string,
   operation: OwnerMutation,
   logging?: SiteStudioLoggingContextData,

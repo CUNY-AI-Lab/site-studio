@@ -1,6 +1,6 @@
-import { getAgentByName } from "agents";
 import { Hono, type Context } from "hono";
 import type { Env, SiteBuilderAgentProps } from "../types";
+import type { SiteBuilderObservabilitySnapshot } from "../agents/site-builder";
 import { CSRF_ERROR_BODY, getCsrfToken, verifyWsUpgrade } from "../lib/csrf";
 import { jsonError } from "../lib/http";
 import { getCailGatewayJwt, getUser } from "../lib/session";
@@ -17,6 +17,26 @@ import {
 import { outboundCorrelationHeaders } from "@cuny-ai-lab/cail-log";
 
 type AgentRouterVariables = LoggingVariables & { user: { id: string }; cailIdentityJwt?: string };
+
+type AgentRouterStub = {
+  fetch(request: Request): Promise<Response>;
+  getObservability(): Promise<SiteBuilderObservabilitySnapshot>;
+};
+
+export type AgentResolver = (
+  namespace: Env["SITE_BUILDER_AGENT"],
+  name: string,
+  options: { props: SiteBuilderAgentProps },
+) => Promise<AgentRouterStub>;
+
+async function resolveAgentByName(
+  namespace: Env["SITE_BUILDER_AGENT"],
+  name: string,
+  options: { props: SiteBuilderAgentProps },
+): Promise<AgentRouterStub> {
+  const { getAgentByName } = await import("agents");
+  return getAgentByName(namespace, name, options);
+}
 
 function agentInstanceName(userId: string, projectId: string): string {
   return `${userId}:${projectId}`;
@@ -48,7 +68,7 @@ function withCorrelationHeaders(
   // browser-supplied value before carrying the current middleware-selected JWT
   // to this connection; a missing token deliberately clears prior state.
   forwarded.headers.delete(SITE_STUDIO_AGENT_PROPS_HEADER);
-  if (typeof identityJwt === "string" && identityJwt) {
+  if (identityJwt !== undefined && identityJwt !== null && identityJwt.length > 0) {
     forwarded.headers.set(SITE_STUDIO_AGENT_PROPS_HEADER, JSON.stringify({ identityJwt }));
   }
   if (correlation) {
@@ -69,7 +89,7 @@ function noStoreResponse(response: Response): Response {
   });
 }
 
-export function createAgentRouter() {
+export function createAgentRouter(resolveAgent: AgentResolver = resolveAgentByName) {
   const app = new Hono<{ Bindings: Env; Variables: AgentRouterVariables }>();
 
   async function loadAgentStub(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
@@ -98,12 +118,12 @@ export function createAgentRouter() {
       userId: user.id,
       projectId,
       identityJwt: getCailGatewayJwt(c) ?? undefined,
-      ...(isOperationalSubject(user.operationalSubject)
-        ? { operationalSubject: user.operationalSubject }
-        : {}),
     };
+    if (isOperationalSubject(user.operationalSubject)) {
+      props.operationalSubject = user.operationalSubject;
+    }
 
-    return getAgentByName(
+    return resolveAgent(
       c.env.SITE_BUILDER_AGENT,
       agentInstanceName(user.id, projectId),
       { props }

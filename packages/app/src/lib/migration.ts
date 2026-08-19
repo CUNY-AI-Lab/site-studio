@@ -31,12 +31,39 @@
  */
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
+import { z } from "zod";
 import { getMigrationHandle, migrateHandle } from "./handles";
 import { readR2Json } from "./r2-json";
 import {
   emitDiagnostic,
   type SiteStudioLoggingContext,
 } from "./logging";
+
+const projectMetadataSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  published: z.boolean(),
+  publishedUrl: z.string().optional(),
+  publishedAt: z.string().optional(),
+  unpublishedAt: z.string().optional(),
+  thumbnailUrl: z.string().optional(),
+  slug: z.string().optional(),
+  importedFrom: z.string().optional(),
+  importedOriginalId: z.string().optional(),
+  creatingOperationId: z.string().optional(),
+});
+
+const projectSnapshotSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  projectId: z.string(),
+  trigger: z.enum(["agent", "manual", "restore"]),
+  label: z.string().optional(),
+  fileCount: z.number(),
+  restoredFromSnapshotId: z.string().optional(),
+});
 
 export interface MigrationClaim {
   subject: string;
@@ -158,7 +185,11 @@ async function copyIfAbsent(bucket: R2Bucket, fromKey: string, toKey: string): P
   }
 }
 
-async function putJsonIfAbsentOrEqual(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
+async function putJsonIfAbsentOrEqual(
+  bucket: R2Bucket,
+  key: string,
+  value: ProjectMetadata | ProjectSnapshot,
+): Promise<void> {
   const serialized = JSON.stringify(value);
   const wrote = await bucket.put(key, serialized, {
     httpMetadata: { contentType: "application/json" },
@@ -190,7 +221,11 @@ async function getMetadata(
   userId: string,
   projectId: string
 ): Promise<ProjectMetadata | null> {
-  return readR2Json<ProjectMetadata>(bucket, `${projectPrefix(userId)}${projectId}/.metadata.json`);
+  return readR2Json(
+    bucket,
+    `${projectPrefix(userId)}${projectId}/.metadata.json`,
+    projectMetadataSchema,
+  );
 }
 
 async function subjectProjectOccupied(
@@ -291,8 +326,8 @@ async function copyAnonymousNamespace(options: {
   slugMap: Record<string, string>;
 }> {
   const { bucket, anonUserId, subject, subjectHandle, publishedBaseUrl, porter, logging } = options;
-  const projectMap: Record<string, string> = { ...options.knownProjects };
-  const slugMap: Record<string, string> = { ...options.knownSlugs };
+  const projectMap = { ...options.knownProjects };
+  const slugMap = { ...options.knownSlugs };
 
   // ---- Plan: destination ids and published slugs ----
   const taken = new Set<string>(Object.values(projectMap));
@@ -340,22 +375,17 @@ async function copyAnonymousNamespace(options: {
         id: plan.newId,
         importedFrom: anonUserId,
         importedOriginalId: plan.oldId,
-        ...(plan.newSlug ? { slug: plan.newSlug } : {}),
-        ...(plan.metadata.publishedUrl && plan.newSlug
-          ? {
-              // Never let the subject id or an old host enter a client-visible
-              // URL. When the subject has a handle, build the canonical
-              // configured-base /u/{handle}/ form; otherwise drop the stored
-              // URL (it will be regenerated on the next publish once a handle
-              // exists).
-              ...(subjectHandle
-                ? {
-                    publishedUrl: canonicalPublishedUrl(publishedBaseUrl, subjectHandle, plan.newSlug)
-                  }
-                : { publishedUrl: undefined })
-            }
-          : {})
       };
+      if (plan.newSlug) rewritten.slug = plan.newSlug;
+      if (plan.metadata.publishedUrl && plan.newSlug) {
+        // Never let the subject id or an old host enter a client-visible URL.
+        // When the subject has a handle, build the canonical configured-base
+        // /u/{handle}/ form; otherwise drop the stored URL so it is regenerated
+        // on the next publish once a handle exists.
+        rewritten.publishedUrl = subjectHandle
+          ? canonicalPublishedUrl(publishedBaseUrl, subjectHandle, plan.newSlug)
+          : undefined;
+      }
       await putJsonIfAbsentOrEqual(bucket, `${toPrefix}.metadata.json`, rewritten);
     }
 
@@ -372,7 +402,7 @@ async function copyAnonymousNamespace(options: {
       const relative = key.slice(fromSnapshots.length);
       const toKey = `${toSnapshots}${relative}`;
       if (key.endsWith(".json")) {
-        const record = await readR2Json<ProjectSnapshot>(bucket, key);
+        const record = await readR2Json(bucket, key, projectSnapshotSchema);
         if (record) {
           await putJsonIfAbsentOrEqual(bucket, toKey, { ...record, projectId: plan.newId });
         }
@@ -475,7 +505,7 @@ export async function migrateAnonymousData(options: {
     );
     // Safe to swallow: best-effort resume-marker cleanup (see above).
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
-    return { status, projects } as MigrationResult;
+    return { status, projects };
   };
 
   // Plan the handle without mutating ownership. The destination metadata can

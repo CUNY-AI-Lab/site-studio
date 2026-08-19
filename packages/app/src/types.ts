@@ -94,9 +94,10 @@ export interface SiteBuilderAgentProps {
   identityJwt?: string;
   /** Verified CAIL `log_sub`; logging only, never derived from `userId`. */
   operationalSubject?: string;
-  // Props are serialized to the `x-partykit-props` header by the agents SDK,
-  // whose type requires an index signature (Props extends Record<string, unknown>).
-  [key: string]: unknown;
+  // Props are serialized to the `x-partykit-props` header by the agents SDK.
+  // All values in this channel are scalar strings, so the index signature is
+  // concrete while remaining assignable to the SDK's Record<string, unknown>.
+  [key: string]: string | undefined;
 }
 
 export interface LegacySessionRecord {
@@ -159,7 +160,7 @@ export interface SnapshotSkipped {
 export type SnapshotResult = ProjectSnapshot | SnapshotSkipped;
 
 export function isSnapshotSkipped(result: SnapshotResult): result is SnapshotSkipped {
-  return (result as SnapshotSkipped).skipped === true;
+  return "skipped" in result && result.skipped === true;
 }
 
 export interface StorageFile {

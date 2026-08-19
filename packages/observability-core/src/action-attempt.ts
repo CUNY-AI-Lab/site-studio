@@ -130,20 +130,20 @@ export function summarizeDurableActionReliability(options: Readonly<{
     if (present === terminalFields.length) {
       const terminalAt = Date.parse(attempt.terminalAt!);
       const admittedAt = Date.parse(attempt.admittedAt);
-      const compatibleReason: Readonly<Record<CailOutcome, readonly CailTerminalReason[]>> = {
-        ok: ["completed"],
-        client_error: ["client_error"],
-        error: ["application_failure", "upstream_failure"],
-        denied: ["denied", "quota_blocked", "rate_limited"],
-        cancelled: ["cancelled"],
-        timeout: ["timeout"],
-        outcome_unknown: ["unknown"],
-      };
+      const compatibleReason = {
+        ok: new Set<CailTerminalReason>(["completed"]),
+        client_error: new Set<CailTerminalReason>(["client_error"]),
+        error: new Set<CailTerminalReason>(["application_failure", "upstream_failure"]),
+        denied: new Set<CailTerminalReason>(["denied", "quota_blocked", "rate_limited"]),
+        cancelled: new Set<CailTerminalReason>(["cancelled"]),
+        timeout: new Set<CailTerminalReason>(["timeout"]),
+        outcome_unknown: new Set<CailTerminalReason>(["unknown"]),
+      } satisfies Readonly<Record<CailOutcome, ReadonlySet<CailTerminalReason>>>;
       if (
         !Number.isFinite(terminalAt)
         || terminalAt < admittedAt
         || attempt.durationMs !== terminalAt - admittedAt
-        || !compatibleReason[attempt.outcome!].includes(attempt.reason!)
+        || !compatibleReason[attempt.outcome!].has(attempt.reason!)
         || (attempt.outcome === "ok" && attempt.errorType !== undefined)
       ) {
         throw new TypeError("durable action terminal is contradictory");

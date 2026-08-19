@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
+import { z } from "zod";
 
 /** Stable spend-attribution slug for this tool. */
 export const CAIL_APP_SLUG = "site-studio";
@@ -28,6 +29,7 @@ export interface CailModelOptions {
 }
 
 const WORKERS_AI_MODEL_ID_RE = /^@cf\/[a-z0-9][a-z0-9._/-]*$/i;
+const jwtPayloadSchema = z.object({ exp: z.number().optional() });
 
 export function resolveWorkersAiModelId(
   configured: string | undefined,
@@ -46,10 +48,10 @@ export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtl
   if (!payload) return;
   try {
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const decoded = JSON.parse(
+    const parsed = jwtPayloadSchema.safeParse(JSON.parse(
       atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="))
-    ) as { exp?: unknown };
-    if (typeof decoded.exp === "number" && decoded.exp * 1000 <= nowMs + minimumTtlSeconds * 1000) {
+    ));
+    if (parsed.success && parsed.data.exp !== undefined && parsed.data.exp * 1000 <= nowMs + minimumTtlSeconds * 1000) {
       throw new Error("CAIL identity expired during this turn.");
     }
   } catch (error) {
@@ -66,7 +68,7 @@ export function assertCailJwtFresh(token: string, nowMs = Date.now(), minimumTtl
  * credentials, query parameters, fragments, whitespace, or controls.
  */
 export function canonicalCailApiBase(apiBase: string): string {
-  if (apiBase.trim() !== apiBase || /[\u0000-\u001f\u007f\s\\]/.test(apiBase)) {
+  if (apiBase.trim() !== apiBase || /[\p{Cc}\s\\]/u.test(apiBase)) {
     throw new Error("CAIL_API_BASE must be a trimmed absolute HTTPS URL.");
   }
 
@@ -116,7 +118,7 @@ export function createCailAuthorityFetch(
   identityJwt: string,
   fetchImpl: typeof fetch = fetch,
 ): typeof fetch {
-  return ((input: RequestInfo | URL, init?: RequestInit) => {
+  const authorityFetch: typeof fetch = (input, init) => {
     assertCailJwtFresh(identityJwt);
 
     // AI SDK normally passes a URL plus init, but the Web Fetch contract also
@@ -149,7 +151,8 @@ export function createCailAuthorityFetch(
       // upstream response.
       redirect: "manual",
     });
-  }) as typeof fetch;
+  };
+  return authorityFetch;
 }
 
 /**

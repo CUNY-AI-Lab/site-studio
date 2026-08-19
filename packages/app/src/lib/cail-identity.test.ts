@@ -14,12 +14,15 @@ import {
 } from "./cail-identity";
 
 const AUDIENCE = "cail:site-studio";
-
-let issuer: TestIdentityIssuer;
-let currentEnv: {
+type IdentityJsonValue = string | number | boolean | null | IdentityJsonValue[] | { [key: string]: IdentityJsonValue };
+type IdentityJsonObject = { [key: string]: IdentityJsonValue };
+type IdentityEnv = {
   CAIL_IDENTITY_JWKS: string;
   CAIL_IDENTITY_ISSUER: string;
 };
+
+let issuer: TestIdentityIssuer;
+let currentEnv: IdentityEnv;
 
 beforeAll(async () => {
   // Mint the exact production Doorway issuer used by the app.
@@ -60,7 +63,7 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-function base64urlJson(value: unknown): string {
+function base64urlJson(value: IdentityJsonValue): string {
   return base64url(new TextEncoder().encode(JSON.stringify(value)));
 }
 
@@ -68,6 +71,8 @@ type PublicJwk = JsonWebKey & { kid: string; alg: "RS256"; use: "sig" };
 type LocalKey = { privateKey: CryptoKey; jwk: PublicJwk };
 
 async function generateLocalKey(kid: string): Promise<LocalKey> {
+  // SAFETY: Web Crypto generateKey with RSASSA-PKCS1-v1_5 and extractable keys
+  // returns a CryptoKeyPair by contract.
   const pair = await crypto.subtle.generateKey(
     {
       name: "RSASSA-PKCS1-v1_5",
@@ -81,11 +86,13 @@ async function generateLocalKey(kid: string): Promise<LocalKey> {
   const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
   return {
     privateKey: pair.privateKey,
+    // SAFETY: The test signer adds the required RS256 metadata to this exported
+    // public JWK before using it as the local verification key.
     jwk: { ...jwk, kid, alg: "RS256", use: "sig" } as PublicJwk,
   };
 }
 
-function validLocalClaims(overrides: Record<string, unknown> = {}) {
+function validLocalClaims(overrides: IdentityJsonObject = {}) {
   const now = Math.floor(Date.now() / 1000);
   return {
     iss: CAIL_CANONICAL_ISSUER,
@@ -100,8 +107,8 @@ function validLocalClaims(overrides: Record<string, unknown> = {}) {
 
 async function signLocalJwt(
   key: LocalKey,
-  claims: Record<string, unknown> = {},
-  header: Record<string, unknown> = { alg: "RS256", typ: "JWT", kid: key.jwk.kid }
+  claims: IdentityJsonObject = {},
+  header: IdentityJsonObject = { alg: "RS256", typ: "JWT", kid: key.jwk.kid }
 ): Promise<string> {
   const headerPart = base64urlJson(header);
   const payloadPart = base64urlJson(validLocalClaims(claims));
@@ -114,10 +121,7 @@ async function signLocalJwt(
 }
 
 let localKey: LocalKey;
-let localEnv: {
-  CAIL_IDENTITY_JWKS: string;
-  CAIL_IDENTITY_ISSUER: string;
-};
+let localEnv: IdentityEnv;
 
 beforeAll(async () => {
   localKey = await generateLocalKey("local");

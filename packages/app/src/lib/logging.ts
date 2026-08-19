@@ -22,7 +22,10 @@ import {
   serviceUnavailableResponse,
 } from "../../../observability-core/src/contract";
 import { createSiteStudioBoundarySink } from "../../../observability-core/src/fleet-projection";
-import type { ActionAttemptRecorder } from "../../../observability-core/src/action-attempt";
+import type {
+  ActionAttemptRecorder,
+  ActionAttemptTerminal,
+} from "../../../observability-core/src/action-attempt";
 import type { Env } from "../types";
 
 export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;
@@ -110,9 +113,44 @@ export type SiteStudioConnectionLoggingState = Readonly<{
   identityJwt?: string;
 }>;
 
+type MutableConnectionLoggingState = {
+  correlation: SiteStudioCorrelation;
+  operationalSubject?: string;
+  identityJwt?: string;
+};
+
+type MutableSiteStudioCorrelation = {
+  trace_id: string;
+  span_id: string;
+  trace_flags: CailTraceFields["trace_flags"];
+  request_id: string;
+  tracestate?: string;
+  trace: CailTraceFields;
+};
+
+type MutableActionAttemptTerminal = {
+  actionId: string;
+  outcome: ActionAttemptTerminal["outcome"];
+  reason: ActionAttemptTerminal["reason"];
+  terminalAt: string;
+  durationMs: number;
+  errorType?: string;
+};
+
+type MutableLoggingContext = {
+  logger: SiteStudioLogger;
+  correlation?: SiteStudioCorrelation;
+  operationalSubject?: string;
+};
+
+type MutableLoggingContextData = {
+  correlation?: CailCorrelation | SiteStudioCorrelation;
+  operationalSubject?: string;
+};
+
 /** Only a verified, separately salted operational subject may become a user principal. */
-export function isOperationalSubject(value: unknown): value is string {
-  return typeof value === "string" && OPERATIONAL_SUBJECT_RE.test(value);
+export function isOperationalSubject(value: string | undefined): value is string {
+  return value !== undefined && OPERATIONAL_SUBJECT_RE.test(value);
 }
 
 /** Clone the primitive correlation fields and deeply freeze its nested trace. */
@@ -122,14 +160,15 @@ function cloneAndFreezeCorrelation(correlation: CailCorrelation): SiteStudioCorr
     span_id: correlation.span_id,
     trace_flags: correlation.trace_flags,
   });
-  return Object.freeze({
+  const cloned: MutableSiteStudioCorrelation = {
     trace_id: correlation.trace_id,
     span_id: correlation.span_id,
     trace_flags: correlation.trace_flags,
     request_id: correlation.request_id,
-    ...(correlation.tracestate ? { tracestate: correlation.tracestate } : {}),
     trace,
-  });
+  };
+  if (correlation.tracestate) cloned.tracestate = correlation.tracestate;
+  return Object.freeze(cloned);
 }
 
 /**
@@ -139,24 +178,24 @@ function cloneAndFreezeCorrelation(correlation: CailCorrelation): SiteStudioCorr
  */
 export function createSiteStudioConnectionLoggingState(
   request: Request,
-  operationalSubject?: unknown,
-  identityJwt?: unknown,
+  operationalSubject?: string,
+  identityJwt?: string,
 ): SiteStudioConnectionLoggingState {
   const parsedCorrelation = correlationFromHeaders(request);
   const correlation = cloneAndFreezeCorrelation(parsedCorrelation);
   const forwardedSubject = request.headers.get(SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER);
-  const subject = operationalSubject ?? forwardedSubject;
-  const jwt = typeof identityJwt === "string" && identityJwt ? identityJwt : undefined;
-  return Object.freeze({
+  const subject = operationalSubject ?? forwardedSubject ?? undefined;
+  const state: MutableConnectionLoggingState = {
     correlation,
-    ...(isOperationalSubject(subject) ? { operationalSubject: subject } : {}),
-    ...(jwt ? { identityJwt: jwt } : {}),
-  });
+  };
+  if (isOperationalSubject(subject)) state.operationalSubject = subject;
+  if (identityJwt) state.identityJwt = identityJwt;
+  return Object.freeze(state);
 }
 
 export function createSiteStudioLogger(options: {
   sink: CailLogSink;
-  env: unknown;
+  env: string | undefined;
   release?: string;
   clock?: () => number;
 }): SiteStudioLogger {
@@ -196,11 +235,12 @@ export function createSiteStudioLoggingContext(
   const correlation = data.correlation
     ? cloneAndFreezeCorrelation(data.correlation)
     : undefined;
-  return Object.freeze({
+  const context: MutableLoggingContext = {
     logger,
-    ...(correlation ? { correlation } : {}),
-    ...(data.operationalSubject ? { operationalSubject: data.operationalSubject } : {}),
-  });
+  };
+  if (correlation) context.correlation = correlation;
+  if (data.operationalSubject) context.operationalSubject = data.operationalSubject;
+  return Object.freeze(context);
 }
 
 export function createSiteStudioBoundaryContext(
@@ -217,10 +257,10 @@ export function serializeSiteStudioLoggingContext(
   const correlation = context.correlation
     ? cloneAndFreezeCorrelation(context.correlation)
     : undefined;
-  return Object.freeze({
-    ...(correlation ? { correlation } : {}),
-    ...(context.operationalSubject ? { operationalSubject: context.operationalSubject } : {}),
-  });
+  const data: MutableLoggingContextData = {};
+  if (correlation) data.correlation = correlation;
+  if (context.operationalSubject) data.operationalSubject = context.operationalSubject;
+  return Object.freeze(data);
 }
 
 export function withOperationalSubject(
@@ -240,12 +280,13 @@ export type LoggingVariables = {
 };
 
 export function getLoggingContext(c: {
-  get: (key: "logger" | "correlation") => unknown;
+  get(key: "logger"): SiteStudioLogger | undefined;
+  get(key: "correlation"): CailCorrelation | undefined;
 }, operationalSubject?: string): SiteStudioLoggingContext | undefined {
-  const logger = c.get("logger") as SiteStudioLogger | undefined;
+  const logger = c.get("logger");
   if (!logger) return undefined;
   return createSiteStudioLoggingContext(logger, {
-    correlation: c.get("correlation") as CailCorrelation | undefined,
+    correlation: c.get("correlation"),
     operationalSubject,
   });
 }
@@ -316,11 +357,8 @@ export function outcomeForStatus(status: number): CailTerminalFields["outcome"] 
 }
 
 /** Stable machine type derived only from the exception class, never its message. */
-export function errorCodeFrom(error: unknown): string {
-  const name =
-    error instanceof Error && typeof error.name === "string" && error.name
-      ? error.name
-      : "error";
+export function errorCodeFrom(cause: unknown): string {
+  const name = cause instanceof Error && cause.name ? cause.name : "error";
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9_.-]/g, "_")
@@ -348,19 +386,41 @@ export function withCorrelationFetch(
   fetchImpl: typeof fetch = fetch,
 ): typeof fetch {
   const extra = outboundCorrelationHeaders(correlation);
-  const wrapped = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input as RequestInfo, init);
+  const wrapped: typeof fetch = (input, init) => {
+    const request = new Request(input, init);
     for (const [name, value] of Object.entries(extra)) {
       request.headers.set(name, value);
     }
     return fetchImpl(request);
   };
-  return wrapped as typeof fetch;
+  return wrapped;
 }
 
 type DiagnosticSeverity = "info" | "warning" | "error";
 
 type DiagnosticTarget = SiteStudioLogger | SiteStudioLoggingContext;
+
+type DiagnosticPayload = {
+  product_id: string;
+  error_type: string;
+  principal?: CailPrincipalFields;
+  request_id?: string;
+  trace?: CailTraceFields;
+  status?: number;
+  retry_count?: number;
+  req_bytes?: number;
+};
+
+type RequestCompletedBase = {
+  request_id: string;
+  product_id: string;
+  http_method: CailHttpMethod;
+  route: string;
+  status: number;
+  duration_ms: number;
+  trace: CailTraceFields;
+  principal?: CailPrincipalFields;
+};
 
 export function emitDiagnostic(
   severity: DiagnosticSeverity,
@@ -387,22 +447,20 @@ export function emitDiagnostic(
     : severity === "warning"
       ? SITE_STUDIO_EVENTS.DIAGNOSTIC_WARNING
       : SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR;
-  logger.emit(event, {
+  const payload: DiagnosticPayload = {
     product_id: PRODUCT_ID,
     error_type: errorType,
-    ...(fields.operationalSubject || context?.operationalSubject
-      ? { principal: principalForOperationalSubject(fields.operationalSubject ?? context?.operationalSubject) }
-      : {}),
-    ...(context?.correlation
-      ? {
-          request_id: context.correlation.request_id,
-          trace: traceFromCorrelation(context.correlation),
-        }
-      : {}),
-    ...(fields.status !== undefined ? { status: fields.status } : {}),
-    ...(fields.retry_count !== undefined ? { retry_count: fields.retry_count } : {}),
-    ...(fields.req_bytes !== undefined ? { req_bytes: fields.req_bytes } : {}),
-  });
+  };
+  const subject = fields.operationalSubject ?? context?.operationalSubject;
+  if (subject) payload.principal = principalForOperationalSubject(subject);
+  if (context?.correlation) {
+    payload.request_id = context.correlation.request_id;
+    payload.trace = traceFromCorrelation(context.correlation);
+  }
+  if (fields.status !== undefined) payload.status = fields.status;
+  if (fields.retry_count !== undefined) payload.retry_count = fields.retry_count;
+  if (fields.req_bytes !== undefined) payload.req_bytes = fields.req_bytes;
+  logger.emit(event, payload);
 }
 
 type FailureTerminal = Exclude<CailTerminalFields, { outcome: "ok" }>;
@@ -493,27 +551,41 @@ export class SiteStudioActionLifecycle {
     if (!this.admitted || this.terminal) return;
     const terminalAt = this.clock();
     const action = OBSERVABILITY_CONTRACT.actions[this.fields.action];
-    this.recorder?.terminal({
+    const attempt: MutableActionAttemptTerminal = {
       actionId: this.actionId,
       outcome: terminal.outcome,
       reason: terminal.reason,
       terminalAt: new Date(terminalAt).toISOString(),
       durationMs: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
-      ...(errorType ? { errorType } : {}),
-    });
+    };
+    if (errorType) attempt.errorType = errorType;
+    this.recorder?.terminal(attempt);
     this.terminal = true;
-    this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-      action_id: this.actionId,
-      product_id: PRODUCT_ID,
-      principal: this.fields.principal,
-      request_id: this.fields.correlation.request_id,
-      trace: traceFromCorrelation(this.fields.correlation),
-      http_method: action.method,
-      route: action.route,
-      terminal,
-      duration_ms: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
-      ...(errorType ? { error_type: errorType } : {}),
-    });
+    const actionFields = errorType === undefined
+      ? {
+          action_id: this.actionId,
+          product_id: PRODUCT_ID,
+          principal: this.fields.principal,
+          request_id: this.fields.correlation.request_id,
+          trace: traceFromCorrelation(this.fields.correlation),
+          http_method: action.method,
+          route: action.route,
+          terminal,
+          duration_ms: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
+        }
+      : {
+          action_id: this.actionId,
+          product_id: PRODUCT_ID,
+          principal: this.fields.principal,
+          request_id: this.fields.correlation.request_id,
+          trace: traceFromCorrelation(this.fields.correlation),
+          http_method: action.method,
+          route: action.route,
+          terminal,
+          duration_ms: Math.max(0, terminalAt - (this.admittedAt ?? terminalAt)),
+          error_type: errorType,
+        };
+    this.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, actionFields);
   }
 
   wasAdmitted(): boolean {
@@ -524,7 +596,7 @@ export class SiteStudioActionLifecycle {
 export function requestLogging(logger?: SiteStudioLogger) {
   return createMiddleware<{
     Bindings: Env;
-    Variables: LoggingVariables & { user?: { id: string } };
+    Variables: LoggingVariables & { user?: { id?: string; operationalSubject?: string } };
   }>(async (c, next) => {
     const environment = parseCailLogEnvironment(c.env.CAIL_LOG_ENV);
     if (!environment) return serviceUnavailableResponse();
@@ -552,15 +624,13 @@ export function requestLogging(logger?: SiteStudioLogger) {
 
     const status = c.res?.status ?? 500;
     const terminal = terminalForStatus(status);
-    const user = c.get("user") as
-      | { id?: string; operationalSubject?: string }
-      | undefined;
+    const user = c.get("user");
     const principal = user?.operationalSubject
       ? principalForOperationalSubject(user.operationalSubject)
       : undefined;
     const errorType = c.error ? errorCodeFrom(c.error) : undefined;
 
-    const completedBase = {
+    const completedBase: RequestCompletedBase = {
       request_id: correlation.request_id,
       product_id: PRODUCT_ID,
       http_method: method,
@@ -568,33 +638,44 @@ export function requestLogging(logger?: SiteStudioLogger) {
       status,
       duration_ms: Date.now() - started,
       trace: traceFromCorrelation(correlation),
-      ...(principal ? { principal } : {}),
     };
+    if (principal) completedBase.principal = principal;
     if (terminal.outcome === "ok") {
       boundaryLogger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
         ...completedBase,
         terminal,
       });
     } else {
-      boundaryLogger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {
-        ...completedBase,
-        terminal,
-        ...(errorType ? { error_type: errorType } : {}),
-      });
+      const completed = errorType === undefined
+        ? { ...completedBase, terminal }
+        : { ...completedBase, terminal, error_type: errorType };
+      boundaryLogger.emit(CAIL_EVENTS.REQUEST_COMPLETED, completed);
     }
 
     if (status === 401 || status === 403) {
-      boundaryLogger.emit(CAIL_EVENTS.AUTH_DENIED, {
-        request_id: correlation.request_id,
-        product_id: PRODUCT_ID,
-        principal: principal ?? { type: "anonymous" },
-        http_method: method,
-        route,
-        status,
-        terminal: { outcome: "denied", reason: "denied" },
-        trace: traceFromCorrelation(correlation),
-        ...(errorType ? { error_type: errorType } : {}),
-      });
+      const denied = errorType === undefined
+        ? {
+            request_id: correlation.request_id,
+            product_id: PRODUCT_ID,
+            principal: principal ?? { type: "anonymous" },
+            http_method: method,
+            route,
+            status,
+            terminal: { outcome: "denied" as const, reason: "denied" as const },
+            trace: traceFromCorrelation(correlation),
+          }
+        : {
+            request_id: correlation.request_id,
+            product_id: PRODUCT_ID,
+            principal: principal ?? { type: "anonymous" },
+            http_method: method,
+            route,
+            status,
+            terminal: { outcome: "denied" as const, reason: "denied" as const },
+            trace: traceFromCorrelation(correlation),
+            error_type: errorType,
+          };
+      boundaryLogger.emit(CAIL_EVENTS.AUTH_DENIED, denied);
     }
   });
 }

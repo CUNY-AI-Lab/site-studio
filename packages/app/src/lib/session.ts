@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { deleteCookie, getCookie } from "hono/cookie";
 import type { Context } from "hono";
+import { z } from "zod";
 import type { Env, LegacySessionRecord, User } from "../types";
 import { SESSION_COOKIE_NAME } from "./constants";
 import {
@@ -20,7 +21,7 @@ import {
   withOperationalSubject,
 } from "./logging";
 
-type SessionVariables = {
+export type SessionVariables = {
   sessionId: string;
   user: User;
   /**
@@ -32,33 +33,33 @@ type SessionVariables = {
 };
 
 function userFromIdentity(identity: CailIdentity, createdAt: string): User {
-  return {
+  const user: User = {
     id: identity.subject,
     createdAt,
     cail: true,
     email: identity.email,
     name: identity.name,
-    // Separately keyed log subject; never derived from `id`.
-    ...(identity.operationalSubject === undefined
-      ? {}
-      : { operationalSubject: identity.operationalSubject }),
   };
-}
-
-function isSessionRecord(value: unknown): value is LegacySessionRecord {
-  if (!value || typeof value !== "object") {
-    return false;
+  // Separately keyed log subject; never derived from `id`.
+  if (identity.operationalSubject !== undefined) {
+    user.operationalSubject = identity.operationalSubject;
   }
-
-  const maybe = value as Record<string, unknown>;
-  return (
-    typeof maybe.expiresAt === "string" &&
-    !!maybe.user &&
-    typeof maybe.user === "object" &&
-    typeof (maybe.user as Record<string, unknown>).id === "string" &&
-    typeof (maybe.user as Record<string, unknown>).createdAt === "string"
-  );
+  return user;
 }
+
+const legacyUserSchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  cail: z.boolean().optional(),
+  email: z.string().optional(),
+  name: z.string().optional(),
+  operationalSubject: z.string().optional(),
+});
+
+const legacySessionSchema = z.object({
+  user: legacyUserSchema,
+  expiresAt: z.string(),
+});
 
 /**
  * SS-46: the session/migration store was
@@ -113,15 +114,11 @@ async function readLegacySession(
     return null;
   }
 
-  let parsed: unknown;
+  let parsed: LegacySessionRecord;
   try {
-    parsed = JSON.parse(legacyText) as unknown;
+    parsed = legacySessionSchema.parse(JSON.parse(legacyText));
   } catch {
     emitDiagnostic("warning", "invalid_legacy_session", {}, logging);
-    return null;
-  }
-
-  if (!isSessionRecord(parsed)) {
     return null;
   }
 
@@ -306,7 +303,7 @@ async function migrateAnonymousSessionIfPresent(
           c.env.MIGRATION_COORDINATOR.idFromName(anonId)
         );
         await stub.markComplete(anonId, subject);
-      } catch (error) {
+      } catch {
         emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
       }
       return "imported";
@@ -348,7 +345,7 @@ async function migrateAnonymousSessionIfPresent(
         c.env.MIGRATION_COORDINATOR.idFromName(pendingAnonId)
       );
       await stub.markComplete(pendingAnonId, subject);
-    } catch (error) {
+    } catch {
       emitDiagnostic("warning", "migration_mark_complete_failed", {}, logging);
     }
     return "imported";
@@ -382,8 +379,8 @@ export const authMiddleware = createMiddleware<{
   Variables: SessionVariables & LoggingVariables;
 }>(async (c, next) => {
   const logging = getLoggingContext(c) ?? createSiteStudioBoundaryContext(c.env);
-  const existingSessionId = c.get("sessionId") as string | undefined;
-  const existingUser = c.get("user") as User | undefined;
+  const existingSessionId = c.get("sessionId");
+  const existingUser = c.get("user");
 
   // Preview assets have a separate, short-lived project capability. No other
   // session state may bypass verified identity authentication.
@@ -433,7 +430,7 @@ export const authMiddleware = createMiddleware<{
       if (importOutcome === "imported") {
         emitDiagnostic("info", "account_import_completed", {}, identityLogging);
       }
-    } catch (error) {
+    } catch {
       // Never replace the legacy cookie after a failed import. A private 503
       // preserves both the source namespace and the subject-keyed resume marker
       // so the next successful login can retry the same idempotent copy.

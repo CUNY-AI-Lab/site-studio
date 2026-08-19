@@ -6,7 +6,8 @@ import { createPreviewRouter } from "./preview";
 import { createPublishRouter } from "./publish";
 import { authMiddleware } from "../lib/session";
 import { mintPreviewToken, previewTokenAuth } from "../lib/preview-token";
-import { createMockKV, type MockKV } from "../lib/test-utils";
+import { createMockKV, createTestR2Object, type MockKV } from "../lib/test-utils";
+import { z } from "zod";
 
 /**
  * Dedicated coverage for the editor preview route's file resolution. preview.ts
@@ -18,39 +19,46 @@ import { createMockKV, type MockKV } from "../lib/test-utils";
  */
 
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }>();
+  type MockData = string | ArrayBuffer;
+  type MockEntry = { data: MockData; httpMetadata?: R2HTTPMetadata };
+  const dataSchema = z.union([z.string(), z.instanceof(ArrayBuffer)]);
+  const store = new Map<string, MockEntry>();
+  // SAFETY: The fixture implements every R2 operation exercised by the preview
+  // and publish routes; uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
       if (!entry) return null;
-      const data = entry.data;
+      const data = dataSchema.parse(entry.data);
       return {
         key,
-        size: typeof data === "string" ? data.length : data.byteLength,
+        size: data instanceof ArrayBuffer ? data.byteLength : data.length,
         httpMetadata: entry.httpMetadata || {},
-        text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data)),
+        text: async () => (data instanceof ArrayBuffer ? new TextDecoder().decode(data) : data),
         arrayBuffer: async () =>
-          typeof data === "string" ? new TextEncoder().encode(data).buffer : data
+          data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer
       };
     }),
-    put: vi.fn(async (key: string, data: string, options?: { httpMetadata?: unknown }) => {
+    put: vi.fn(async (key: string, data: MockData, options?: { httpMetadata?: R2HTTPMetadata }) => {
       store.set(key, { data, httpMetadata: options?.httpMetadata });
-      return { key, etag: `${key}:1` };
+      return createTestR2Object(key, `${key}:1`, data instanceof ArrayBuffer ? data.byteLength : data.length);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
     list: vi.fn(async ({ prefix }: { prefix?: string } = {}) => {
-      const objects: Array<{ key: string; size: number }> = [];
+      const objects: R2Object[] = [];
       for (const key of store.keys()) {
         if (prefix && !key.startsWith(prefix)) continue;
-        objects.push({ key, size: 0 });
+        objects.push(createTestR2Object(key));
       }
       return { objects, truncated: false, delimitedPrefixes: [] };
-    })
-  } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string }> };
+    }),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket & { store: Map<string, MockEntry> };
 }
 
 function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides: Partial<Env> = {}): Env {
@@ -58,8 +66,11 @@ function createEnv(bucket: R2Bucket, kv: KVNamespace = createMockKV(), overrides
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
+    // SAFETY: Preview tests do not connect to either Durable Object namespace.
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+    // SAFETY: Preview tests do not invoke migration coordination.
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
+    // SAFETY: The app does not load templates through the WorkerLoader in this suite.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
     ...overrides

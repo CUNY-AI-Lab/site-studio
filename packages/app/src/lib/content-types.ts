@@ -5,7 +5,7 @@
  * documents consistently, and `.mjs` is served as JavaScript so browser
  * modules load correctly.
  */
-export const SERVED_CONTENT_TYPES: Record<string, string> = {
+export const SERVED_CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -34,8 +34,8 @@ export const SERVED_CONTENT_TYPES: Record<string, string> = {
   ".webm": "video/webm",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
-  ".ogg": "audio/ogg"
-};
+  ".ogg": "audio/ogg",
+} as const satisfies Readonly<Record<string, string>>;
 
 /**
  * Look up the Content-Type for an HTTP response serving `filePath`. Extension
@@ -44,5 +44,7 @@ export const SERVED_CONTENT_TYPES: Record<string, string> = {
  */
 export function getServedContentType(filePath: string): string {
   const match = filePath.toLowerCase().match(/\.[^.]+$/);
-  return match ? SERVED_CONTENT_TYPES[match[0]] || "application/octet-stream" : "application/octet-stream";
+  if (!match) return "application/octet-stream";
+  const entry = Object.entries(SERVED_CONTENT_TYPES).find(([extension]) => extension === match[0]);
+  return entry?.[1] || "application/octet-stream";
 }

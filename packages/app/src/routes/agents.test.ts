@@ -6,15 +6,119 @@ import { createMockKV, mintCsrfSession, type CsrfSession } from "../lib/test-uti
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import { SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER } from "../lib/logging";
 import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
+import { ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION, ACTION_ATTEMPT_RETENTION_HOURS } from "../../../observability-core/src/action-attempt";
+import { z } from "zod";
 
-const agentFetch = vi.hoisted(() => ({ lastRequest: null as Request | null }));
+import { createAgentRouter } from "./agents";
+import type { AgentResolver } from "./agents";
 
-// The real `agents` package imports `cloudflare:`-scheme modules that only
-// exist in the Workers runtime; stub getAgentByName with a DO stub that echoes
-// the forwarded URL and server-owned subject channel so the WS-gate behavior
-// stays observable.
-vi.mock("agents", () => ({
-  getAgentByName: vi.fn(async () => ({
+const USER_ID = TEST_SUBJECTS.alice;
+const PROJECT_ID = "proj-1";
+const OPERATIONAL_SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
+const OWN_ORIGIN = "https://site-studio.example";
+const APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
+type AgentFetchState = { lastRequest: Request | null };
+const forwardedUrlSchema = z.object({ forwardedUrl: z.string() });
+
+function createStoredR2Object(key: string): R2Object {
+  const object = {
+    key,
+    version: "test-version",
+    size: 0,
+    etag: `${key}:etag`,
+    httpEtag: `"${key}:etag"`,
+    checksums: {},
+    uploaded: new Date(0),
+    storageClass: "Standard",
+  };
+  // SAFETY: The route tests inspect only key/text; the remaining R2 metadata
+  // is inert fixture data and production supplies the complete object.
+  return object as R2Object;
+}
+
+function createStoredR2Body(key: string, value: string): R2ObjectBody {
+  const body = {
+    ...createStoredR2Object(key),
+    body: new ReadableStream<Uint8Array>(),
+    bodyUsed: false,
+    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
+    blob: async () => new Blob([value]),
+    json: async () => JSON.parse(value),
+    text: async () => value,
+  };
+  // SAFETY: The route tests consume only text(); the other body methods are
+  // deterministic inert implementations for the R2 object contract.
+  return body as R2ObjectBody;
+}
+
+function createMockBucket(): R2Bucket {
+  const store = new Map<string, string>([[
+    `projects/${USER_ID}/${PROJECT_ID}/.metadata.json`,
+    JSON.stringify({
+      id: PROJECT_ID,
+      name: "Test project",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      published: false,
+    }),
+  ]]);
+  // SAFETY: This fixture implements the R2 methods exercised by
+  // R2ProjectStorage.projectExists and intentionally omits unrelated bindings.
+  const fixture = {
+    head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
+    get: vi.fn(async (key: string) => {
+      const value = store.get(key);
+      return value === undefined ? null : createStoredR2Body(key, value);
+    }),
+    put: vi.fn(async (key: string, value: string, _options?: R2PutOptions) => {
+      store.set(key, value);
+      return createStoredR2Object(key);
+    }),
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    delete: vi.fn(async () => undefined),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  };
+  // SAFETY: This fixture implements the R2 methods exercised by
+  // R2ProjectStorage.projectExists and intentionally omits unrelated bindings.
+  return fixture as R2Bucket;
+}
+
+describe("agent route WebSocket gate (rule 4)", () => {
+  let kv: ReturnType<typeof createMockKV>;
+  let bucket: R2Bucket;
+  let csrf: CsrfSession;
+  let resolveAgent: ReturnType<typeof vi.fn<AgentResolver>>;
+  let agentFetch: AgentFetchState;
+  let app: Hono<{
+    Bindings: Env;
+    Variables: { user: { id: string; operationalSubject?: string }; cailGatewayJwt?: string };
+  }>;
+
+  const env = () => {
+    const bindings = {
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      // SAFETY: The resolver is injected below; this namespace is an opaque
+      // token that is never invoked by the test.
+      SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
+      // SAFETY: The migration coordinator is not reached by the agent route.
+      MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
+      // SAFETY: The worker loader is not reached by the agent route.
+      LOADER: {} as WorkerLoader,
+      APP_PUBLIC_DOMAIN
+    } satisfies Pick<Env, "SESSION_KV" | "SITE_STUDIO_BUCKET" | "SITE_BUILDER_AGENT" | "MIGRATION_COORDINATOR" | "LOADER" | "APP_PUBLIC_DOMAIN">;
+    // SAFETY: This test supplies the bindings reached by the agent router;
+    // identity/session fields are installed by the middleware above.
+    return bindings as Env;
+  };
+
+  beforeEach(async () => {
+    kv = createMockKV();
+    bucket = createMockBucket();
+    csrf = await mintCsrfSession(bucket, USER_ID);
+    agentFetch = { lastRequest: null } satisfies AgentFetchState;
+    resolveAgent = vi.fn<AgentResolver>(async () => ({
       fetch: async (req: Request) => {
         agentFetch.lastRequest = req;
         if (new URL(req.url).pathname.endsWith("/refresh-credential")) {
@@ -32,60 +136,18 @@ vi.mock("agents", () => ({
           headers: { "Content-Type": "application/json" }
         });
       },
-    getObservability: async () => ({ calls: [] })
-  }))
-}));
-
-import { createAgentRouter } from "./agents";
-import { getAgentByName } from "agents";
-
-const USER_ID = TEST_SUBJECTS.alice;
-const PROJECT_ID = "proj-1";
-const OPERATIONAL_SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
-const OWN_ORIGIN = "https://site-studio.example";
-const APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
-
-function createMockBucket(): R2Bucket {
-  const store = new Map<string, string>([[`projects/${USER_ID}/${PROJECT_ID}/.metadata.json`, "{}"]]);
-  return {
-    head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
-    get: vi.fn(async (key: string) => {
-      const value = store.get(key);
-      return value === undefined ? null : { key, text: async () => value };
-    }),
-    put: vi.fn(async (key: string, value: string, options?: R2PutOptions) => {
-      if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && store.has(key)) {
-        return null;
-      }
-      store.set(key, value);
-      return { key };
-    }),
-    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
-  } as unknown as R2Bucket;
-}
-
-describe("agent route WebSocket gate (rule 4)", () => {
-  let kv: ReturnType<typeof createMockKV>;
-  let bucket: R2Bucket;
-  let csrf: CsrfSession;
-  let app: Hono<{
-    Bindings: Env;
-    Variables: { user: { id: string; operationalSubject?: string }; cailGatewayJwt?: string };
-  }>;
-
-  const env = () =>
-    ({
-      SESSION_KV: kv,
-      SITE_STUDIO_BUCKET: bucket,
-      SITE_BUILDER_AGENT: {} as DurableObjectNamespace<never>,
-      APP_PUBLIC_DOMAIN
-    }) as unknown as Env;
-
-  beforeEach(async () => {
-    kv = createMockKV();
-    bucket = createMockBucket();
-    csrf = await mintCsrfSession(bucket, USER_ID);
-    vi.mocked(getAgentByName).mockClear();
+      getObservability: async () => ({
+        generatedAt: new Date().toISOString(),
+        actionAttempts: {
+          schemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
+          authoritative: true,
+          retentionHours: ACTION_ATTEMPT_RETENTION_HOURS,
+          attempts: [],
+        },
+        requests: [],
+        events: [],
+      }),
+    }));
     app = new Hono<{
       Bindings: Env;
       Variables: { user: { id: string; operationalSubject?: string }; cailGatewayJwt?: string };
@@ -96,8 +158,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
       await next();
     });
     app.use("/api/*", csrfProtect);
-    app.route("/", createAgentRouter());
-    agentFetch.lastRequest = null;
+    app.route("/", createAgentRouter(resolveAgent));
   });
 
   const upgrade = (query: string, headers: Record<string, string>) =>
@@ -110,7 +171,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
   it("accepts an upgrade with own-origin Origin + valid ?csrf and strips the token before forwarding", async () => {
     const res = await upgrade(`?csrf=${csrf.token}&foo=bar`, { Origin: OWN_ORIGIN });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { forwardedUrl: string };
+    const body = forwardedUrlSchema.parse(await res.json());
     // Token never reaches the Durable Object; other params survive.
     expect(body.forwardedUrl).not.toContain("csrf=");
     expect(body.forwardedUrl).toContain("foo=bar");
@@ -165,7 +226,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
       env()
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { forwardedUrl: string };
+    const body = forwardedUrlSchema.parse(await res.json());
     expect(body.forwardedUrl).toContain("/get-messages");
   });
 
@@ -186,7 +247,7 @@ describe("agent route WebSocket gate (rule 4)", () => {
       forwardedOperationalSubject: OPERATIONAL_SUBJECT,
       forwardedIdentityJwt: JSON.stringify({ identityJwt: "verified-token" }),
     });
-    expect(vi.mocked(getAgentByName)).toHaveBeenLastCalledWith(
+    expect(resolveAgent).toHaveBeenLastCalledWith(
       expect.anything(),
       `${USER_ID}:${PROJECT_ID}`,
       {

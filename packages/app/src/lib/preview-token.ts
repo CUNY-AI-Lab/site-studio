@@ -1,4 +1,5 @@
 import { createMiddleware } from "hono/factory";
+import { z } from "zod";
 import type { Env, User } from "../types";
 
 const PREVIEW_TOKEN_TTL_SECONDS = 600;
@@ -9,6 +10,13 @@ export type PreviewTokenGrant = {
   allowedPaths: string[];
   expiresAt: number;
 };
+
+const previewTokenGrantSchema = z.object({
+  userId: z.string(),
+  projectId: z.string(),
+  allowedPaths: z.array(z.string()),
+  expiresAt: z.number(),
+});
 
 function previewTokenKey(token: string): string {
   return `preview-token:${token}`;
@@ -59,18 +67,12 @@ export async function validatePreviewToken(
   }
 
   try {
-    const value = JSON.parse(stored) as Partial<PreviewTokenGrant>;
-    return (
-      value.projectId === projectId &&
-      typeof value.userId === "string" &&
-      Array.isArray(value.allowedPaths) &&
-      value.allowedPaths.every((path) => typeof path === "string") &&
-      value.allowedPaths.includes(requestedPath) &&
-      typeof value.expiresAt === "number" &&
-      value.expiresAt > now
-    )
-      ? value as PreviewTokenGrant
-      : null;
+    const parsed = previewTokenGrantSchema.safeParse(JSON.parse(stored));
+    if (!parsed.success || parsed.data.projectId !== projectId) return null;
+    if (!parsed.data.allowedPaths.includes(requestedPath) || parsed.data.expiresAt <= now) {
+      return null;
+    }
+    return parsed.data;
   } catch {
     return null;
   }

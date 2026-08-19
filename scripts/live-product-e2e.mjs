@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import { z } from 'zod';
 
 const PRODUCTION_SITE_URL = 'https://site-studio-app.ailab-452.workers.dev/site-studio/';
 const PRODUCTION_PUBLIC_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
@@ -10,6 +11,20 @@ const CHAT_CANCEL = 'cf_agent_chat_request_cancel';
 const STREAM_RESUMING = 'cf_agent_stream_resuming';
 const STREAM_RESUME_ACK = 'cf_agent_stream_resume_ack';
 
+const jwtClaimsSchema = z.object({
+	sub: z.string().regex(/^cail-[0-9a-f]{32}$/),
+	iss: z.string(),
+	aud: z.string()
+});
+const textChunkSchema = z.object({ delta: z.string().optional(), text: z.string().optional() }).passthrough();
+const chatMessageSchema = z.object({
+	id: z.string(),
+	type: z.string().optional(),
+	error: z.unknown().optional(),
+	body: z.unknown().optional(),
+	done: z.boolean().optional()
+}).passthrough();
+
 function required(name) {
 	const value = process.env[name]?.trim();
 	if (!value) throw new Error(`${name} is required`);
@@ -19,14 +34,14 @@ function required(name) {
 function jwtClaims(jwt, audience) {
 	const payload = jwt.split('.')[1];
 	if (!payload) throw new Error(`${audience} JWT is malformed`);
-	const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-	if (typeof claims.sub !== 'string' || !/^cail-[0-9a-f]{32}$/.test(claims.sub)) {
+	const claims = jwtClaimsSchema.safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')));
+	if (!claims.success) {
 		throw new Error(`${audience} JWT has no canonical subject`);
 	}
-	if (claims.iss !== PRODUCTION_IDENTITY_ISSUER || claims.aud !== audience) {
+	if (claims.data.iss !== PRODUCTION_IDENTITY_ISSUER || claims.data.aud !== audience) {
 		throw new Error(`${audience} JWT has the wrong issuer or scalar audience`);
 	}
-	return claims;
+	return claims.data;
 }
 
 function parseCsrfCookie(response) {
@@ -44,8 +59,10 @@ function userMessage(text) {
 }
 
 function textFromChunk(chunk) {
-	if (typeof chunk?.delta === 'string') return chunk.delta;
-	if (typeof chunk?.text === 'string') return chunk.text;
+	const parsed = textChunkSchema.safeParse(chunk);
+	if (!parsed.success) return '';
+	if (parsed.data.delta !== undefined) return parsed.data.delta;
+	if (parsed.data.text !== undefined) return parsed.data.text;
 	return '';
 }
 
@@ -172,7 +189,9 @@ async function runChat({ baseUrl, projectId, csrfToken, headers, messages, promp
 		const onClose = (code) => fail(new Error(`chat socket closed before completion with code ${code}`));
 		const onMessage = (raw) => {
 			try {
-				const message = JSON.parse(raw.toString('utf8'));
+				const messageResult = chatMessageSchema.safeParse(JSON.parse(raw.toString('utf8')));
+				if (!messageResult.success) throw new Error('chat stream sent an invalid message');
+				const message = messageResult.data;
 				if (message.id !== requestId) return;
 				if (message.type === STREAM_RESUMING) {
 					socket.send(JSON.stringify({ type: STREAM_RESUME_ACK, id: requestId }));
@@ -180,12 +199,14 @@ async function runChat({ baseUrl, projectId, csrfToken, headers, messages, promp
 				}
 				if (message.type !== CHAT_RESPONSE) return;
 				if (message.error) throw new Error(message.body || 'chat stream failed');
-				if (typeof message.body === 'string' && message.body.trim()) {
-					const chunk = JSON.parse(message.body);
+				const bodyResult = z.string().safeParse(message.body);
+				if (bodyResult.success && bodyResult.data.trim()) {
+					const chunk = JSON.parse(bodyResult.data);
 					if (chunk.type === 'finish') sawFinish = true;
 					const part = textFromChunk(chunk);
 					if (part) text.push(part);
-					if (typeof chunk.toolName === 'string') tools.add(chunk.toolName);
+					const toolName = z.string().safeParse(chunk.toolName);
+					if (toolName.success) tools.add(toolName.data);
 				}
 				if (message.done) {
 					if (!sawFinish) throw new Error('chat stream ended without a finish event');
@@ -360,7 +381,8 @@ try {
 		throw new Error('proof project already exists; no mutation was made');
 	}
 	const { handle } = await json('api/handle');
-	if (typeof handle !== 'string' || !handle) {
+	const handleResult = z.string().min(1).safeParse(handle);
+	if (!handleResult.success) {
 		throw new Error('the admitted identity must already own a Site Studio handle');
 	}
 	const appOnlyQuota = await request('api/quota');

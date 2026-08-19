@@ -23,13 +23,15 @@ describe("quota route", () => {
       await next();
     });
     app.route("/", createQuotaRouter());
+    // SAFETY: This fixture supplies the bindings used by the quota route.
     const response = await app.request("http://site-studio.test/api/quota", {}, {
       CAIL_API_BASE: "https://cail.example"
     } as Env);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    const body = await response.json() as Record<string, unknown>;
+    // SAFETY: quotaSnapshotResponse() supplies the route's documented JSON shape.
+    const body = await response.json() as ReturnType<typeof quotaSnapshotResponse>;
     expect(body).toEqual({
       object: "quota",
       managed_by: "cloudflare",
@@ -59,6 +61,7 @@ describe("quota route", () => {
       await next();
     });
     app.route("/", createQuotaRouter());
+    // SAFETY: This fixture supplies the bindings used by the quota route.
     const response = await app.request("http://site-studio.test/api/quota", {}, {
       CAIL_API_BASE: "https://cail.example"
     } as Env);

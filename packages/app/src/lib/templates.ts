@@ -46,6 +46,8 @@ export const TEMPLATE_IDS = [
 
 export type TemplateId = (typeof TEMPLATE_IDS)[number];
 
+const TEMPLATE_ID_SET = new Set<string>(TEMPLATE_IDS);
+
 const TEMPLATE_CATEGORIES: TemplateCategory[] = [
   {
     name: "Personal Pages",
@@ -141,11 +143,12 @@ export function getTemplateCategories(): TemplateCategory[] {
 }
 
 export function isValidTemplate(templateId: string): templateId is TemplateId {
-  return TEMPLATE_IDS.includes(templateId as TemplateId);
+  return TEMPLATE_ID_SET.has(templateId);
 }
 
 export function getTemplateFiles(templateId: string): Record<string, string> | null {
-  return TEMPLATE_FILES[templateId] || null;
+  const entry = Object.entries(TEMPLATE_FILES).find(([id]) => id === templateId);
+  return entry === undefined ? null : { ...entry[1] };
 }
 
 export function createBlankIndexHtml(projectName: string): string {

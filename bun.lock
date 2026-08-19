@@ -9,6 +9,7 @@
         "@oxlint/plugins": "1.79.0",
         "oxlint": "1.79.0",
         "ws": "8.21.0",
+        "zod": "4.4.3",
       },
     },
     "packages/app": {
@@ -81,6 +82,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@cuny-ai-lab/cail-log": "0.6.0",
+        "zod": "4.4.3",
       },
     },
   },

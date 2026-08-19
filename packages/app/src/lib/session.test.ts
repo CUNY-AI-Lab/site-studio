@@ -10,6 +10,10 @@ import {
 import type { Env } from "../types";
 import { authMiddleware, getCailIdentityJwt } from "./session";
 import { migrateAnonymousData } from "./migration";
+import type { MigrationResult } from "./migration";
+import { createMockKV, createTestNamespace, createTestR2Object, DURABLE_OBJECT_BRAND } from "./test-utils";
+import type { MigrationCoordinator } from "../agents/migration-coordinator";
+import type { MutationCoordinator } from "../agents/mutation-coordinator";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
@@ -43,6 +47,8 @@ function mintIdentityJwt(sub: string): Promise<string> {
  * claim an anonId wins; a different subject is refused (granted:false).
  */
 type CoordinatorRecord = { subject: string; status: "pending" | "complete" };
+type SessionBody = { user: { id: string; cail?: boolean; email?: string }; error?: string };
+type DiagnosticEvent = { [key: string]: string | number | boolean | null | undefined };
 type MockCoordinator = {
   /** The DO namespace, ready to drop into Env["MIGRATION_COORDINATOR"]. */
   namespace: Env["MIGRATION_COORDINATOR"];
@@ -50,11 +56,67 @@ type MockCoordinator = {
   records: Map<string, CoordinatorRecord>;
 };
 
+function testDurableObjectId(name: string): DurableObjectId {
+  // SAFETY: The in-memory fixture exposes the stable name/equality behavior
+  // consumed by these tests; Cloudflare supplies the opaque implementation.
+  return {
+    name,
+    toString: () => name,
+    equals: (other: DurableObjectId) => other.toString() === name,
+  } as DurableObjectId;
+}
+
+type MigrationRpc = (anonUserId: string, subject: string, anonSessionId?: string) => Promise<MigrationResult>;
+
+function createMutationCoordinatorNamespace(migrateAnonymous: MigrationRpc): Env["MUTATION_COORDINATOR"] {
+  const rpc = {
+    id: testDurableObjectId("rpc"),
+    fetch: async (_request: Request) => new Response(null, { status: 404 }),
+    execute: async () => { throw new Error("execute is not part of this session fixture"); },
+    migrateAnonymous,
+    // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
+    // implements the methods exposed over the migration RPC boundary.
+    [DURABLE_OBJECT_BRAND]: undefined as never,
+  };
+  const namespace = {
+    newUniqueId: () => testDurableObjectId("new"),
+    idFromName: testDurableObjectId,
+    idFromString: testDurableObjectId,
+    get: () => rpc,
+    getByName: () => rpc,
+    jurisdiction: () => namespace,
+  };
+  // SAFETY: Session tests exercise only migrateAnonymous; the other namespace
+  // methods are inert binding-contract stubs.
+  return createTestNamespace<MutationCoordinator>(namespace);
+}
+
+function createStubBucket(): R2Bucket {
+  const fixture = {
+    head: vi.fn(async () => null),
+    get: vi.fn(async () => null),
+    put: vi.fn(async (key: string) => createTestR2Object(key)),
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  };
+  // SAFETY: Auth tests touch only get/put; the remaining methods are inert
+  // implementations required by the R2 binding contract.
+  return fixture as R2Bucket;
+}
+
 function createCoordinatorNamespace(): MockCoordinator {
   const records = new Map<string, CoordinatorRecord>();
+  // SAFETY: The namespace fixture models the claim/markComplete RPCs used by
+  // authMiddleware; Cloudflare adds only transport metadata around them.
   const namespace = {
-    idFromName: (name: string) => name,
-    get: (id: string) => ({
+    newUniqueId: () => testDurableObjectId("new"),
+    idFromName: testDurableObjectId,
+    idFromString: testDurableObjectId,
+    get: (id: DurableObjectId) => ({
+      id: testDurableObjectId(id.toString()),
+      fetch: async (_request: Request) => new Response(null, { status: 404 }),
       claim: async (anonId: string, subject: string) => {
         const existing = records.get(anonId);
         if (!existing) {
@@ -71,10 +133,18 @@ function createCoordinatorNamespace(): MockCoordinator {
         if (existing && existing.subject === subject) {
           records.set(anonId, { ...existing, status: "complete" });
         }
-      }
-    })
-  } as unknown as Env["MIGRATION_COORDINATOR"];
-  return { namespace, records };
+      },
+      // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
+      // implements the claim/markComplete methods used by authMiddleware.
+      [DURABLE_OBJECT_BRAND]: undefined as never,
+    }),
+    getByName: (name: string) => namespace.get(testDurableObjectId(name)),
+    jurisdiction: () => namespace,
+  };
+  // SAFETY: The fixture implements the migration claim RPC; Cloudflare adds
+  // namespace transport and placement metadata around the stub.
+  const typedNamespace = createTestNamespace<MigrationCoordinator>(namespace);
+  return { namespace: typedNamespace, records };
 }
 
 function createEnv(overrides?: Partial<Env>): Env {
@@ -82,26 +152,30 @@ function createEnv(overrides?: Partial<Env>): Env {
     CAIL_LOG_ENV: "test",
     APP_PUBLIC_DOMAIN: "https://cail-doorway.ailab-452.workers.dev",
     PUBLISHED_BASE_URL,
+    // SAFETY: Session tests never load a Worker module through this binding.
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
     CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     CAIL_MODEL: "test-model",
-    SESSION_KV: {
-      get: vi.fn(async () => null),
-      put: vi.fn(async () => undefined)
-    } as unknown as KVNamespace,
-    SITE_STUDIO_BUCKET: {
-      get: vi.fn(async () => null),
-      put: vi.fn(async (key: string) => ({ key }))
-    } as unknown as R2Bucket,
+    // SAFETY: Auth tests exercise only KV get/put for this binding.
+    SESSION_KV: createMockKV(),
+    // SAFETY: Auth tests exercise only R2 get/put for this binding.
+    SITE_STUDIO_BUCKET: createStubBucket(),
+    // SAFETY: Auth tests never connect to the SiteBuilderAgent namespace.
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
     MIGRATION_COORDINATOR: createCoordinatorNamespace().namespace,
     ASSETS: undefined,
     ...overrides
   };
-  env.MUTATION_COORDINATOR ??= {
-    idFromName: (name: string) => name as unknown as DurableObjectId,
+  // SAFETY: The migration coordinator fixture exposes the RPC used by auth;
+  // Cloudflare adds only transport metadata around this test stub.
+  const mutationNamespace = {
+    newUniqueId: () => testDurableObjectId("new"),
+    idFromName: testDurableObjectId,
+    idFromString: testDurableObjectId,
     get: () => ({
+      id: testDurableObjectId("rpc"),
+      fetch: async (_request: Request) => new Response(null, { status: 404 }),
       migrateAnonymous: (anonUserId: string, subject: string, anonSessionId?: string) =>
         migrateAnonymousData({
           bucket: env.SITE_STUDIO_BUCKET,
@@ -110,9 +184,29 @@ function createEnv(overrides?: Partial<Env>): Env {
           subject,
           publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId
-        })
-    })
-  } as unknown as Env["MUTATION_COORDINATOR"];
+        }),
+      // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
+      // implements the migration method used by authMiddleware.
+      [DURABLE_OBJECT_BRAND]: undefined as never,
+    }),
+    getByName: () => ({
+      id: testDurableObjectId("rpc"),
+      fetch: async (_request: Request) => new Response(null, { status: 404 }),
+      execute: async () => { throw new Error("execute is not part of this session fixture"); },
+      migrateAnonymous: async (anonUserId: string, subject: string, anonSessionId?: string) =>
+        migrateAnonymousData({
+          bucket: env.SITE_STUDIO_BUCKET,
+          kv: env.SESSION_KV,
+          anonUserId,
+          subject,
+          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
+          anonSessionId,
+        }),
+      [DURABLE_OBJECT_BRAND]: undefined as never,
+    }),
+    jurisdiction: () => mutationNamespace,
+  };
+  env.MUTATION_COORDINATOR ??= createTestNamespace<MutationCoordinator>(mutationNamespace);
   return env;
 }
 
@@ -123,12 +217,16 @@ describe("authMiddleware", () => {
     app.get("/api/test", (c) => c.json({ user: c.get("user") }));
 
     const kvPut = vi.fn(async () => undefined);
+    const requestKv = createMockKV();
+    // SAFETY: createMockKV exposes get as a Vitest spy for this request.
+    const requestKvGet = requestKv.get as ReturnType<typeof vi.fn>;
+    requestKvGet.mockResolvedValue(null);
+    // SAFETY: createMockKV exposes put as a Vitest spy for this request.
+    const requestKvPut = requestKv.put as ReturnType<typeof vi.fn>;
+    requestKvPut.mockImplementation(kvPut);
     const env = createEnv({
       CAIL_IDENTITY_JWKS: identityJwks,
-      SESSION_KV: {
-        get: vi.fn(async () => null),
-        put: kvPut
-      } as unknown as KVNamespace
+      SESSION_KV: requestKv
     });
 
     const subject = TEST_SUBJECTS.alice;
@@ -140,7 +238,8 @@ describe("authMiddleware", () => {
     );
 
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { user: { id: string; cail?: boolean; email?: string } };
+    // SAFETY: The test endpoint returns the documented authenticated user body.
+    const body = (await response.json()) as SessionBody;
     expect(body.user.id).toBe(subject);
     expect(body.user.cail).toBe(true);
     expect(body.user.email).toBe("u@gc.cuny.edu");
@@ -158,18 +257,18 @@ describe("authMiddleware", () => {
 
     const subject = TEST_SUBJECTS.alice;
     const token = await mintIdentityJwt(subject);
-    const bucketGet = vi.fn(async (..._args: unknown[]) => null);
-    const kvGet = vi.fn(async (..._args: unknown[]) => null);
+    const requestBucket = createStubBucket();
+    // SAFETY: createStubBucket exposes get as a Vitest spy for this request.
+    const bucketGet = requestBucket.get as ReturnType<typeof vi.fn>;
+    bucketGet.mockResolvedValue(null);
+    const requestKv = createMockKV();
+    // SAFETY: createMockKV exposes get as a Vitest spy for this request.
+    const kvGet = requestKv.get as ReturnType<typeof vi.fn>;
+    kvGet.mockResolvedValue(null);
     const env = createEnv({
       CAIL_IDENTITY_JWKS: identityJwks,
-      SITE_STUDIO_BUCKET: {
-        get: bucketGet,
-        put: vi.fn(async () => undefined)
-      } as unknown as R2Bucket,
-      SESSION_KV: {
-        get: kvGet,
-        put: vi.fn(async () => undefined)
-      } as unknown as KVNamespace
+      SITE_STUDIO_BUCKET: requestBucket,
+      SESSION_KV: requestKv
     });
 
     const response = await app.request(
@@ -200,7 +299,8 @@ describe("authMiddleware", () => {
 
     const response = await app.request("http://site-studio.test/api/test", {}, env);
     expect(response.status).toBe(401);
-    const body = (await response.json()) as Record<string, unknown>;
+    // SAFETY: The authentication error response has a string error field.
+    const body = (await response.json()) as { error: string };
     expect(body.error).toBe("authentication_required");
   });
 
@@ -260,24 +360,47 @@ describe("authMiddleware", () => {
 
 function createLiveKV() {
   const store = new Map<string, string>();
-  return {
+  // SAFETY: The live KV fixture handles the single-key text/json overloads used
+  // by migration tests; unsupported KV overloads are outside this boundary.
+  const get = (async (key: string, type?: string) => {
+    const value = store.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? JSON.parse(value) : value;
+  }) as KVNamespace["get"];
+  // SAFETY: Migration writes strings in this fixture; the binding accepts a
+  // wider value union outside this test boundary.
+  const put = (async (key: string, value: string) => {
+    store.set(key, String(value));
+  }) as KVNamespace["put"];
+  // SAFETY: Migration deletes one key at a time in this fixture.
+  const remove = (async (key: string) => {
+    store.delete(key);
+  }) as KVNamespace["delete"];
+  const getWithMetadata = async <Metadata = never>(
+    _key: string,
+  ): Promise<KVNamespaceGetWithMetadataResult<string, Metadata>> => ({ value: null, metadata: null, cacheStatus: null });
+  // SAFETY: Migration tests do not enumerate KV keys in this fixture.
+  const list = (async () => ({ keys: [], list_complete: true, cacheStatus: null })) as KVNamespace["list"];
+  // SAFETY: The migration fixture implements the KV methods used by the
+  // import path and retains its backing map for assertions.
+  const fixture = {
     store,
-    get: vi.fn(async (key: string, type?: string) => {
-      const value = store.get(key);
-      if (value === undefined) return null;
-      return type === "json" ? JSON.parse(value) : value;
-    }),
-    put: vi.fn(async (key: string, value: string) => {
-      store.set(key, String(value));
-    }),
-    delete: vi.fn(async (key: string) => {
-      store.delete(key);
-    })
-  } as unknown as KVNamespace & { store: Map<string, string> };
+    get,
+    put,
+    delete: remove,
+    getWithMetadata,
+    list
+  } as KVNamespace & { store: Map<string, string> };
+  vi.spyOn(fixture, "get");
+  vi.spyOn(fixture, "put");
+  return fixture;
 }
 
 function createLiveBucket() {
+  type LiveData = string | ArrayBuffer | Uint8Array;
   const store = new Map<string, string>();
+  // SAFETY: The migration fixture implements the R2 methods used by import and
+  // keeps all stored values as decoded text for deterministic assertions.
   return {
     store,
     head: vi.fn(async (key: string) => (store.has(key) ? { key } : null)),
@@ -291,23 +414,31 @@ function createLiveBucket() {
         arrayBuffer: async () => new TextEncoder().encode(data).buffer
       };
     }),
-    put: vi.fn(async (key: string, value: any) => {
-      store.set(key, typeof value === "string" ? value : new TextDecoder().decode(value));
+    put: vi.fn(async (key: string, value: LiveData) => {
+      const text = value instanceof ArrayBuffer
+        ? new TextDecoder().decode(value)
+        : value instanceof Uint8Array
+          ? new TextDecoder().decode(value)
+          : value;
+      store.set(key, text);
+      return createTestR2Object(key, `${key}:etag`, text.length);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async ({ prefix, limit }: any = {}) => {
-      const objects = [...store.keys()]
+    list: vi.fn(async ({ prefix, limit }: R2ListOptions = {}) => {
+      const objects: R2Object[] = [...store.keys()]
         .filter((key) => !prefix || key.startsWith(prefix))
-        .map((key) => ({ key, size: 0, uploaded: new Date(), httpMetadata: {} }));
+        .map((key) => createTestR2Object(key));
       return {
         objects: limit ? objects.slice(0, limit) : objects,
         truncated: false,
         delimitedPrefixes: []
       };
-    })
-  } as unknown as R2Bucket & { store: Map<string, string> };
+    }),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket & { store: Map<string, string> };
 }
 
 function seedLegacySession(
@@ -359,6 +490,7 @@ describe("authMiddleware anonymous-data migration", () => {
     );
 
     expect(response.status).toBe(200);
+    // SAFETY: The migration endpoint returns the documented user envelope.
     const body = (await response.json()) as { user: { id: string } };
     expect(body.user.id).toBe(SUBJECT);
     expect(response.headers.get("set-cookie")).toMatch(/site-studio-session=;[^\r\n]*Max-Age=0/);
@@ -397,10 +529,8 @@ describe("authMiddleware anonymous-data migration", () => {
       CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
-      MUTATION_COORDINATOR: {
-        idFromName: (name: string) => name as unknown as DurableObjectId,
-        get: () => ({ migrateAnonymous }),
-      } as unknown as Env["MUTATION_COORDINATOR"],
+      // SAFETY: The fixture exposes only the migration RPC used by authMiddleware.
+      MUTATION_COORDINATOR: createMutationCoordinatorNamespace(migrateAnonymous),
     });
     const token = await mintIdentityJwt(SUBJECT);
 
@@ -471,10 +601,8 @@ describe("authMiddleware anonymous-data migration", () => {
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
     });
-    env.MUTATION_COORDINATOR = {
-      idFromName: (name: string) => name as unknown as DurableObjectId,
-      get: () => ({
-        migrateAnonymous: async (anonUserId: string, subject: string, anonSessionId?: string) => {
+    // SAFETY: The fixture exposes only the migration RPC used by authMiddleware.
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(async (anonUserId: string, subject: string, anonSessionId?: string) => {
           attempts += 1;
           if (attempts === 1) throw new Error("injected import failure");
           return migrateAnonymousData({
@@ -485,9 +613,7 @@ describe("authMiddleware anonymous-data migration", () => {
             publishedBaseUrl: env.PUBLISHED_BASE_URL!,
             anonSessionId,
           });
-        },
-      }),
-    } as unknown as Env["MUTATION_COORDINATOR"];
+        });
     const token = await mintIdentityJwt(SUBJECT);
 
     const first = await buildApp().request(
@@ -555,6 +681,8 @@ describe("authMiddleware anonymous-data migration", () => {
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
     const originalDelete = bucket.delete.bind(bucket);
     let failRetirement = true;
+    // SAFETY: This replacement preserves the R2 delete signature while
+    // injecting one retirement failure for retry coverage.
     bucket.delete = vi.fn(async (key: string) => {
       if (key === "sessions/anon-cookie-retire.json" && failRetirement) {
         failRetirement = false;
@@ -643,7 +771,8 @@ describe("authMiddleware anonymous-data migration", () => {
       );
 
       expect(response.status).toBe(200);
-      const events = info.mock.calls.map(([event]) => event as Record<string, unknown>);
+      // SAFETY: The logging boundary emits concrete scalar diagnostic fields.
+      const events = info.mock.calls.map(([event]) => event as DiagnosticEvent);
       const completed = events.find(
         (event) => event["event.name"] === "site_studio.diagnostic.info"
       );
@@ -842,6 +971,7 @@ describe("authMiddleware anonymous-data migration", () => {
     const bucket = createLiveBucket();
     bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
 
+    // SAFETY: createLiveBucket exposes get as a Vitest mock for this outage test.
     const get = bucket.get as ReturnType<typeof vi.fn>;
     get.mockRejectedValue(new Error("R2 transport failure"));
     const env = createEnv({
@@ -858,7 +988,8 @@ describe("authMiddleware anonymous-data migration", () => {
 
     // Fail loud and retryable — NOT a 200 that clears the anon cookie.
     expect(response.status).toBe(503);
-    const body = (await response.json()) as Record<string, unknown>;
+    // SAFETY: The migration failure response has a string error field.
+    const body = (await response.json()) as { error: string };
     expect(body.error).toBe("session_store_unavailable");
     // The anon cookie is retained for a retry.
     expect(response.headers.get("set-cookie")).toBeNull();
@@ -876,15 +1007,31 @@ describe("authMiddleware anonymous-data migration", () => {
       CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
-      MIGRATION_COORDINATOR: {
-        idFromName: (name: string) => name,
-        get: () => ({
+      // SAFETY: This fixture deliberately fails the coordinator claim RPC.
+      MIGRATION_COORDINATOR: createTestNamespace<MigrationCoordinator>({
+        newUniqueId: () => testDurableObjectId("new"),
+        idFromName: testDurableObjectId,
+        idFromString: testDurableObjectId,
+        get: (id: DurableObjectId) => ({
+          id,
+          fetch: async (_request: Request) => new Response(null, { status: 404 }),
           claim: async () => {
             throw new Error("DO unreachable");
           },
-          markComplete: async () => undefined
-        })
-      } as unknown as Env["MIGRATION_COORDINATOR"]
+          markComplete: async () => undefined,
+          // SAFETY: Cloudflare's RPC brand is nominal type metadata; this
+          // fixture deliberately fails the claim RPC above.
+          [DURABLE_OBJECT_BRAND]: undefined as never,
+        }),
+        getByName: (name: string) => ({
+          id: testDurableObjectId(name),
+          fetch: async (_request: Request) => new Response(null, { status: 404 }),
+          claim: async () => { throw new Error("DO unreachable"); },
+          markComplete: async () => undefined,
+          [DURABLE_OBJECT_BRAND]: undefined as never,
+        }),
+        jurisdiction: () => undefined,
+      })
     });
 
     const token = await mintIdentityJwt(SUBJECT);
@@ -909,6 +1056,7 @@ describe("authMiddleware anonymous-data migration", () => {
 
     // Writes to the migration claim/marker keys fail (pre-marker outage window);
     // everything else works.
+    // SAFETY: createLiveKV exposes put as a Vitest mock for this outage test.
     const put = kv.put as ReturnType<typeof vi.fn>;
     put.mockImplementation(async (key: string, value: string) => {
       if (key.startsWith("migration")) {

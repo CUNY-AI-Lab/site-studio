@@ -205,7 +205,6 @@ export function createPublishRouter() {
     }
 
     const desiredSlug = metadata.slug || slugify(metadata.name || projectId) || projectId;
-    let slug = "";
     let url = "";
     const publishAction = new SiteStudioActionLifecycle({
       action: "publish",
@@ -244,7 +243,7 @@ export function createPublishRouter() {
         throw error;
       }
       if (!("published" in result)) throw new Error("Unexpected mutation result");
-      ({ slug, url } = result.published);
+      ({ url } = result.published);
       publishAction.acknowledgeMutation();
 
       const terminalAt = Date.now();
@@ -349,11 +348,11 @@ export function createPublishRouter() {
     );
     const entry = form.get("image");
 
-    if (!entry || typeof entry === "string") {
+    if (!(entry instanceof File)) {
       jsonError("No image uploaded", 400);
     }
 
-    const image = entry as File;
+    const image = entry;
 
     if (image.type !== "image/png") {
       jsonError("Only image/png is supported", 400);
