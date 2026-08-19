@@ -2,7 +2,13 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import { createProject, fetchProjects, fetchTemplateCategories, type TemplateCategory, type TemplateMetadata } from '$lib/api/projects';
+	import {
+		createProject as createProjectRequest,
+		fetchProjects as fetchProjectsRequest,
+		fetchTemplateCategories as fetchTemplateCategoriesRequest,
+		type TemplateCategory,
+		type TemplateMetadata
+	} from '$lib/api/projects';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Input from '$lib/components/ui/input/input.svelte';
@@ -39,12 +45,27 @@
 		open: boolean;
 		onOpenChange: (open: boolean) => void;
 		onSuccess?: () => void;
+		createProject?: typeof createProjectRequest;
+		fetchProjects?: typeof fetchProjectsRequest;
+		fetchTemplateCategories?: typeof fetchTemplateCategoriesRequest;
 	}
 
-	let { open = $bindable(), onOpenChange, onSuccess }: Props = $props();
+	type IconComponent = typeof User;
+	interface IconMap {
+		[name: string]: IconComponent;
+	}
+
+	let {
+		open = $bindable(),
+		onOpenChange,
+		onSuccess,
+		createProject = createProjectRequest,
+		fetchProjects = fetchProjectsRequest,
+		fetchTemplateCategories = fetchTemplateCategoriesRequest
+	}: Props = $props();
 
 	// Map of icon name strings to Lucide components
-	const iconMap: Record<string, any> = {
+	const iconMap: IconMap = {
 		User,
 		UserCircle,
 		Contact,
@@ -160,10 +181,11 @@
 			if (onSuccess) onSuccess();
 		} catch (error) {
 			console.error('Error creating project:', error);
-			if (isApiError(error) && error.statusCode === 409) {
+			const caughtError = error instanceof Error ? error : undefined;
+			if (isApiError(caughtError) && caughtError.statusCode === 409) {
 				toast.error('That project name is already taken. Pick a different name.');
-			} else if (isApiError(error)) {
-				toast.error(error.getUserMessage());
+			} else if (isApiError(caughtError)) {
+				toast.error(caughtError.getUserMessage());
 			} else {
 				toast.error('Failed to create project. Please try again.');
 			}

@@ -1,4 +1,5 @@
 import { resolvePath } from '$lib/utils/paths';
+import { decodeJson } from '$lib/contracts';
 import { apiFetch, handleApiError } from './errors';
 import { csrfFetch } from './csrf';
 
@@ -109,7 +110,7 @@ export async function uploadProjectImage(projectId: string, file: File): Promise
 		await handleApiError(response);
 	}
 
-	const data = (await response.json()) as { path: string };
+	const data = decodeJson<{ path: string }>(await response.text());
 	return data.path;
 }
 
@@ -197,6 +198,11 @@ export interface PublishNeedsHandle {
 
 export type PublishResult = PublishSuccess | PublishNeedsHandle;
 
+interface PublishErrorResponse {
+	error?: string;
+	message?: string;
+}
+
 /**
  * Publish a project to make it publicly accessible. Resolves to a typed result;
  * only unexpected failures throw.
@@ -207,13 +213,17 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 	});
 
 	if (response.status === 409) {
-		const data = await response.json().catch(() => ({}) as Record<string, unknown>);
-		if ((data as { error?: string }).error === 'handle_required') {
+		const data = await response
+			.clone()
+			.text()
+			.then((body) => decodeJson<PublishErrorResponse>(body))
+			.catch((): PublishErrorResponse => ({}));
+		if (data.error === 'handle_required') {
 			return {
 				ok: false,
 				reason: 'handle_required',
 				message:
-					(data as { message?: string }).message || 'Choose your public address before publishing.',
+					data.message || 'Choose your public address before publishing.',
 			};
 		}
 	}
@@ -222,7 +232,7 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 		await handleApiError(response);
 	}
 
-	const data = (await response.json()) as { url: string; a11yFindings?: A11yFinding[] };
+	const data = decodeJson<{ url: string; a11yFindings?: A11yFinding[] }>(await response.text());
 	return { ok: true, url: data.url, a11yFindings: data.a11yFindings };
 }
 

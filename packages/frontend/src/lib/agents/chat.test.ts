@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { decodeJson } from '$lib/contracts';
 import {
 	applyChunkToParts,
 	mergeUpdatedMessage,
@@ -8,7 +9,8 @@ import {
 	type UIToolPart,
 	type UITextPart,
 	type UIChatMessage,
-	type UIStreamChunk
+	type UIStreamChunk,
+	type UIDataPart
 } from './chat';
 
 /**
@@ -18,13 +20,15 @@ import {
  */
 
 function textPart(parts: UIMessagePart[], index = 0): UITextPart {
-	const p = parts.filter((x) => x.type === 'text')[index];
-	return p as UITextPart;
+	const p = parts.filter((x): x is UITextPart => x.type === 'text')[index];
+	if (!p) throw new Error(`Missing text part at index ${index}`);
+	return p;
 }
 
 function toolPart(parts: UIMessagePart[], toolCallId: string): UIToolPart {
 	const p = parts.find((x) => isToolPart(x) && x.toolCallId === toolCallId);
-	return p as UIToolPart;
+	if (!p || !isToolPart(p)) throw new Error(`Missing tool part ${toolCallId}`);
+	return p;
 }
 
 describe('isToolPart', () => {
@@ -68,7 +72,8 @@ describe('applyChunkToParts — text lifecycle', () => {
 
 	it('text-delta tolerates a missing delta (treats as empty)', () => {
 		const parts: UIMessagePart[] = [{ type: 'text', text: 'x', state: 'streaming' }];
-		applyChunkToParts(parts, { type: 'text-delta', id: 't1' } as UIStreamChunk);
+		const missingDelta = decodeJson<UIStreamChunk>(JSON.stringify({ type: 'text-delta', id: 't1' }));
+		applyChunkToParts(parts, missingDelta);
 		expect(textPart(parts).text).toBe('x');
 	});
 
@@ -285,30 +290,39 @@ describe('applyChunkToParts — step markers, data parts, unknown chunks', () =>
 
 	it('data-* chunk without id is appended', () => {
 		const parts: UIMessagePart[] = [];
-		applyChunkToParts(parts, { type: 'data-status', data: { phase: 'a' } } as UIStreamChunk);
+		const chunk: UIDataPart = { type: 'data-status', data: { phase: 'a' } };
+		applyChunkToParts(parts, chunk);
 		expect(parts).toEqual([{ type: 'data-status', data: { phase: 'a' } }]);
 	});
 
 	it('data-* chunk with id updates the existing part of the same type+id in place', () => {
 		const parts: UIMessagePart[] = [];
-		applyChunkToParts(parts, { type: 'data-status', id: 's1', data: { phase: 'a' } } as UIStreamChunk);
-		applyChunkToParts(parts, { type: 'data-status', id: 's1', data: { phase: 'b' } } as UIStreamChunk);
+		const firstChunk: UIDataPart = { type: 'data-status', id: 's1', data: { phase: 'a' } };
+		const secondChunk: UIDataPart = { type: 'data-status', id: 's1', data: { phase: 'b' } };
+		applyChunkToParts(parts, firstChunk);
+		applyChunkToParts(parts, secondChunk);
 		expect(parts).toEqual([{ type: 'data-status', id: 's1', data: { phase: 'b' } }]);
 	});
 
 	it('data-* chunks with distinct ids create separate parts', () => {
 		const parts: UIMessagePart[] = [];
-		applyChunkToParts(parts, { type: 'data-status', id: 's1', data: 1 } as UIStreamChunk);
-		applyChunkToParts(parts, { type: 'data-status', id: 's2', data: 2 } as UIStreamChunk);
+		const firstChunk: UIDataPart = { type: 'data-status', id: 's1', data: 1 };
+		const secondChunk: UIDataPart = { type: 'data-status', id: 's2', data: 2 };
+		applyChunkToParts(parts, firstChunk);
+		applyChunkToParts(parts, secondChunk);
 		expect(parts).toHaveLength(2);
 	});
 
 	it('unknown chunk types return false and do not mutate parts', () => {
 		const parts: UIMessagePart[] = [{ type: 'text', text: 'x' }];
-		expect(applyChunkToParts(parts, { type: 'message-metadata', messageMetadata: {} } as UIStreamChunk)).toBe(false);
-		expect(applyChunkToParts(parts, { type: 'error', errorText: 'e' } as UIStreamChunk)).toBe(false);
-		expect(applyChunkToParts(parts, { type: 'start' } as UIStreamChunk)).toBe(false);
-		expect(applyChunkToParts(parts, { type: 'finish' } as UIStreamChunk)).toBe(false);
+		const metadataChunk: UIStreamChunk = { type: 'message-metadata', messageMetadata: {} };
+		const errorChunk: UIStreamChunk = { type: 'error', errorText: 'e' };
+		const startChunk: UIStreamChunk = { type: 'start' };
+		const finishChunk: UIStreamChunk = { type: 'finish' };
+		expect(applyChunkToParts(parts, metadataChunk)).toBe(false);
+		expect(applyChunkToParts(parts, errorChunk)).toBe(false);
+		expect(applyChunkToParts(parts, startChunk)).toBe(false);
+		expect(applyChunkToParts(parts, finishChunk)).toBe(false);
 		expect(parts).toEqual([{ type: 'text', text: 'x' }]);
 	});
 });
@@ -319,7 +333,8 @@ describe('applyChunkToParts — a full assistant turn', () => {
 
 		// 'start' is an unknown-to-the-machine chunk (handled by the socket layer),
 		// so it should be a no-op here.
-		expect(applyChunkToParts(parts, { type: 'start', messageId: 'm1' } as UIStreamChunk)).toBe(false);
+		const startChunk: UIStreamChunk = { type: 'start', messageId: 'm1' };
+		expect(applyChunkToParts(parts, startChunk)).toBe(false);
 
 		applyChunkToParts(parts, { type: 'text-start', id: 't1' });
 		applyChunkToParts(parts, { type: 'text-delta', id: 't1', delta: "I'll " });
@@ -335,11 +350,12 @@ describe('applyChunkToParts — a full assistant turn', () => {
 		});
 		applyChunkToParts(parts, { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } });
 
-		expect(applyChunkToParts(parts, { type: 'finish' } as UIStreamChunk)).toBe(false);
+		const finishChunk: UIStreamChunk = { type: 'finish' };
+		expect(applyChunkToParts(parts, finishChunk)).toBe(false);
 
 		expect(parts).toHaveLength(2);
 		expect(parts[0]).toEqual({ type: 'text', text: "I'll edit the file.", state: 'done' });
-		const tp = parts[1] as UIToolPart;
+		const tp = toolPart(parts, 'c1');
 		expect(tp.type).toBe('tool-write_file');
 		expect(tp.state).toBe('output-available');
 		expect(tp.output).toEqual({ ok: true });
@@ -354,7 +370,7 @@ describe('applyChunkToParts — a full assistant turn', () => {
 		applyChunkToParts(parts, { type: 'text-start', id: 't2' });
 		applyChunkToParts(parts, { type: 'text-delta', id: 't2', delta: 'after' });
 
-		const texts = parts.filter((p) => p.type === 'text') as UITextPart[];
+		const texts = parts.filter((p): p is UITextPart => p.type === 'text');
 		expect(texts.map((t) => t.text)).toEqual(['before', 'after']);
 		// The delta after the tool must land on the second text part, not the first.
 		expect(texts[1].text).toBe('after');
@@ -380,10 +396,10 @@ describe('cloneParts', () => {
 		expect(copy[0]).not.toBe(parts[0]);
 
 		// Mutating the clone must not touch the original.
-		(copy[1] as UIToolPart).input = { nested: { a: 999 } };
-		(copy[0] as UITextPart).text = 'changed';
-		expect((parts[1] as UIToolPart).input).toEqual({ nested: { a: 1 } });
-		expect((parts[0] as UITextPart).text).toBe('hi');
+		toolPart(copy, 'c1').input = { nested: { a: 999 } };
+		textPart(copy).text = 'changed';
+		expect(toolPart(parts, 'c1').input).toEqual({ nested: { a: 1 } });
+		expect(textPart(parts).text).toBe('hi');
 	});
 
 	it('returns a new empty array for empty input', () => {
@@ -437,7 +453,7 @@ describe('mergeUpdatedMessage', () => {
 		};
 		const next = mergeUpdatedMessage(messages, updated);
 		expect(next[0].id).toBe('a1');
-		expect((next[0].parts[0] as UIToolPart).state).toBe('output-available');
+		expect(toolPart(next[0].parts, 'call-42').state).toBe('output-available');
 	});
 
 	it('returns the same messages array (append is not performed) when no match is found', () => {

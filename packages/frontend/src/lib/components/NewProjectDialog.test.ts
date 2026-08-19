@@ -3,24 +3,15 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import NewProjectDialog from './NewProjectDialog.svelte';
 import {
+	createProject,
 	fetchProjects,
 	fetchTemplateCategories,
 	type Project,
 	type TemplateCategory
 } from '$lib/api/projects';
-
-vi.mock('$lib/api/projects', async () => {
-	const actual = await vi.importActual<typeof import('$lib/api/projects')>('$lib/api/projects');
-	return {
-		...actual,
-		createProject: vi.fn(),
-		fetchProjects: vi.fn(),
-		fetchTemplateCategories: vi.fn()
-	};
-});
-
-const mockFetchProjects = vi.mocked(fetchProjects);
-const mockFetchTemplateCategories = vi.mocked(fetchTemplateCategories);
+const mockCreateProject = vi.fn<typeof createProject>();
+const mockFetchProjects = vi.fn<typeof fetchProjects>();
+const mockFetchTemplateCategories = vi.fn<typeof fetchTemplateCategories>();
 
 function deferred<T>() {
 	let resolve!: (value: T | PromiseLike<T>) => void;
@@ -62,15 +53,24 @@ function openDialog() {
 	render(NewProjectDialog, {
 		props: {
 			open: true,
-			onOpenChange: vi.fn()
+			onOpenChange: vi.fn(),
+			createProject: mockCreateProject,
+			fetchProjects: mockFetchProjects,
+			fetchTemplateCategories: mockFetchTemplateCategories
 		}
 	});
+}
+
+function projectNameInput(): HTMLInputElement {
+	const input = screen.getByLabelText('Project Name (optional)');
+	if (!(input instanceof HTMLInputElement)) throw new Error('expected project name input');
+	return input;
 }
 
 async function chooseTemplate(name: RegExp) {
 	const user = userEvent.setup({ delay: null });
 	await user.click(await screen.findByRole('button', { name }));
-	return { user, input: screen.getByLabelText('Project Name (optional)') as HTMLInputElement };
+	return { user, input: projectNameInput() };
 }
 
 describe('NewProjectDialog project-name suggestion race', () => {
@@ -108,7 +108,7 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		await user.click(screen.getByRole('button', { name: 'Change' }));
 		await user.click(await screen.findByRole('button', { name: /Beta template/ }));
 		expect(mockFetchProjects).toHaveBeenCalledTimes(2);
-		const input = screen.getByLabelText('Project Name (optional)') as HTMLInputElement;
+		const input = projectNameInput();
 
 		alphaProjects.resolve([]);
 		await alphaProjects.promise;
@@ -133,7 +133,7 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		await user.click(screen.getByRole('button', { name: 'Change' }));
 		await user.click(await screen.findByRole('button', { name: /Alpha template/ }));
 		expect(mockFetchProjects).toHaveBeenCalledTimes(2);
-		const input = screen.getByLabelText('Project Name (optional)') as HTMLInputElement;
+		const input = projectNameInput();
 
 		secondRequest.resolve([{ id: 'alpha-4', name: 'alpha-4' }]);
 		await secondRequest.promise;

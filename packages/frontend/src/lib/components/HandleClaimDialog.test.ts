@@ -1,18 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import HandleClaimDialog from './HandleClaimDialog.svelte';
 import { checkHandle, claimHandle } from '$lib/api/handles';
 
-// Mock at the api-module boundary. The component debounces checkHandle by 350ms;
-// we drive that with fake timers where needed.
-vi.mock('$lib/api/handles', () => ({
-	checkHandle: vi.fn(),
-	claimHandle: vi.fn()
-}));
+const mockCheck = vi.fn<typeof checkHandle>();
+const mockClaim = vi.fn<typeof claimHandle>();
 
-const mockCheck = vi.mocked(checkHandle);
-const mockClaim = vi.mocked(claimHandle);
+interface DialogOverrides {
+	checkHandle?: typeof checkHandle;
+	claimHandle?: typeof claimHandle;
+}
+
+function addressInput(): HTMLInputElement {
+	const input = screen.getByLabelText('Address');
+	if (!(input instanceof HTMLInputElement)) throw new Error('expected address input');
+	return input;
+}
 
 describe('HandleClaimDialog', () => {
 	beforeEach(() => {
@@ -20,11 +24,18 @@ describe('HandleClaimDialog', () => {
 		mockClaim.mockReset();
 	});
 
-	function open(overrides: Record<string, unknown> = {}) {
+	function open(overrides: DialogOverrides = {}) {
 		const onOpenChange = vi.fn();
 		const onClaimed = vi.fn();
 		render(HandleClaimDialog, {
-			props: { open: true, onOpenChange, onClaimed, ...overrides }
+			props: {
+				open: true,
+				onOpenChange,
+				onClaimed,
+				checkHandle: mockCheck,
+				claimHandle: mockClaim,
+				...overrides
+			}
 		});
 		return { onOpenChange, onClaimed };
 	}
@@ -42,7 +53,7 @@ describe('HandleClaimDialog', () => {
 		const user = userEvent.setup({ delay: null });
 		mockCheck.mockResolvedValue({ handle: 'jane', valid: true, available: true });
 		open();
-		const input = screen.getByLabelText('Address') as HTMLInputElement;
+		const input = addressInput();
 		await user.type(input, 'JaNe');
 		expect(input.value).toBe('jane');
 	});

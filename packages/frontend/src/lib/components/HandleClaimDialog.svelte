@@ -2,18 +2,27 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import { AtSign, Check, Loader2, X } from 'lucide-svelte';
-	import { checkHandle, claimHandle, type HandleCheckResult } from '$lib/api/handles';
+	import {
+		checkHandle as checkHandleRequest,
+		claimHandle as claimHandleRequest,
+		type HandleCheckResult
+	} from '$lib/api/handles';
 	import { resolvePath } from '$lib/utils/paths';
+	import { browserWindow } from '$lib/contracts';
 
 	let {
 		open = false,
 		onOpenChange,
-		onClaimed
+		onClaimed,
+		checkHandle = checkHandleRequest,
+		claimHandle = claimHandleRequest
 	}: {
 		open: boolean;
 		onOpenChange: (open: boolean) => void;
 		/** Called with the claimed handle after a successful claim. */
 		onClaimed: (handle: string) => void;
+		checkHandle?: typeof checkHandleRequest;
+		claimHandle?: typeof claimHandleRequest;
 	} = $props();
 
 	let value = $state('');
@@ -27,7 +36,7 @@
 	let checkSeq = 0;
 
 	// Preview of the public address. Uses the live origin so it matches reality.
-	let origin = $derived(typeof window !== 'undefined' ? window.location.origin : '');
+	let origin = $derived(browserWindow()?.location.origin ?? '');
 	let previewHandle = $derived(value.trim() || 'your-handle');
 	let publicPath = $derived(resolvePath(`/u/${previewHandle}/`));
 
@@ -46,7 +55,9 @@
 
 	function onInput(event: Event) {
 		// Lowercase as the user types (handles are lowercase-only).
-		const raw = (event.target as HTMLInputElement).value.toLowerCase();
+		const target = event.target;
+		if (!(target instanceof HTMLInputElement)) return;
+		const raw = target.value.toLowerCase();
 		value = raw;
 		claimError = null;
 		result = null;

@@ -5,8 +5,8 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import { toast } from '$lib/toast.svelte';
 	import {
-		fetchProjectImages,
-		uploadProjectImage,
+		fetchProjectImages as fetchProjectImagesRequest,
+		uploadProjectImage as uploadProjectImageRequest,
 		type PlaceholderFinding,
 		type ProjectImage
 	} from '$lib/api/projects';
@@ -16,7 +16,9 @@
 		open = false,
 		projectId,
 		onOpenChange,
-		onAskAssistant
+		onAskAssistant,
+		fetchProjectImages = fetchProjectImagesRequest,
+		uploadProjectImage = uploadProjectImageRequest
 	}: {
 		open: boolean;
 		projectId: string;
@@ -26,6 +28,8 @@
 		 * as AccessibilityNotesDialog). The dialog closes itself first.
 		 */
 		onAskAssistant: (prompt: string) => void;
+		fetchProjectImages?: typeof fetchProjectImagesRequest;
+		uploadProjectImage?: typeof uploadProjectImageRequest;
 	} = $props();
 
 	let images = $state<ProjectImage[]>([]);
@@ -64,7 +68,7 @@
 			images = result.images;
 			placeholders = result.placeholders;
 		} catch (e) {
-			loadError = getErrorMessage(e);
+			loadError = getErrorMessage(e instanceof Error ? e : undefined);
 		} finally {
 			loading = false;
 		}
@@ -87,7 +91,8 @@
 	}
 
 	async function handleUpload(event: Event) {
-		const input = event.target as HTMLInputElement;
+		const input = event.target;
+		if (!(input instanceof HTMLInputElement)) return;
 		const file = input.files?.[0];
 		if (!file) return;
 
@@ -96,7 +101,7 @@
 			await uploadProjectImage(projectId, file);
 			await load();
 		} catch (e) {
-			toast.error(`Could not upload image. ${getErrorMessage(e)}`);
+			toast.error(`Could not upload image. ${getErrorMessage(e instanceof Error ? e : undefined)}`);
 		} finally {
 			uploading = false;
 			input.value = '';
@@ -124,7 +129,9 @@
 	}
 
 	function onDecorativeChange(event: Event) {
-		isDecorative = (event.target as HTMLInputElement).checked;
+		const input = event.target;
+		if (!(input instanceof HTMLInputElement)) return;
+		isDecorative = input.checked;
 		if (isDecorative) {
 			altText = '';
 		}

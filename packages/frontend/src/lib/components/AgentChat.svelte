@@ -5,6 +5,13 @@
 	import { resolveWebSocketPath } from '$lib/utils/ws';
 	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError } from '$lib/api/errors';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
+	import {
+		decodeJson,
+		decodeToolInput,
+		type JsonRecord,
+		type JsonValue,
+		type ToolInputRecord
+	} from '$lib/contracts';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
@@ -37,7 +44,7 @@
 		id?: string;
 		name: string;
 		title?: string;
-		input: Record<string, any>;
+		input: ToolInputRecord;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
 		startTime?: number;
@@ -47,17 +54,39 @@
 	interface PendingToolInteraction {
 		toolCallId: string;
 		toolName: string;
-		input: Record<string, any>;
+		input: ToolInputRecord;
 	}
 
 	interface RunningToolState {
 		toolCallId: string;
 		name: string;
 		title?: string;
-		input: Record<string, any>;
+		input: ToolInputRecord;
 	}
 
-	import type { QuestionOption, UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
+	interface ActivitySummary {
+		headline: string;
+		detail: string;
+	}
+
+	interface UserQuestionToolOutput extends JsonRecord {
+		answer: string;
+		question?: string;
+		annotations?: JsonValue;
+	}
+
+	interface AgentSocketMessage {
+		type: string;
+		messages?: UIChatMessage[];
+		message?: UIChatMessage;
+		id?: string;
+		continuation?: boolean;
+		body?: string;
+		done?: boolean;
+		error?: boolean;
+	}
+
+	import type { UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
 		projectId,
@@ -78,8 +107,8 @@
 	let isLoading = $state(false);
 	let isPreparingRequest = $state(false);
 	let requestPreparationSequence = 0;
-	let messagesContainer: HTMLDivElement;
-	let fileInput: HTMLInputElement;
+	let messagesContainer = $state<HTMLDivElement | null>(null);
+	let fileInput = $state<HTMLInputElement | null>(null);
 	let currentStatus = $state<string>('');
 	let attachedFile = $state<File | null>(null);
 	let isUploading = $state(false);
@@ -123,74 +152,47 @@
 			.join('');
 	}
 
-	function serializeToolOutput(output: unknown, errorText?: string, toolName?: string): string {
-		if (typeof output === 'string' && output.trim().length > 0) {
-			return output;
-		}
+	function stringValue(value: JsonValue | undefined): string | undefined {
+		if (value === undefined || value === null) return undefined;
+		const encoded = JSON.stringify(value);
+		if (!encoded.startsWith('"')) return undefined;
+		return decodeJson<string>(encoded);
+	}
 
-		if (output && typeof output === 'object') {
-			const record = output as Record<string, unknown>;
-
-			if (toolName === 'codemode' && record.result !== undefined) {
-				const summaryLines: string[] = [];
-				const result = record.result;
-
-				if (result && typeof result === 'object') {
-					const resultRecord = result as Record<string, unknown>;
-					if (typeof resultRecord.summary === 'string' && resultRecord.summary.trim().length > 0) {
-						summaryLines.push(resultRecord.summary.trim());
-					}
-
-					const changedFiles = Array.isArray(resultRecord.changedFiles)
-						? resultRecord.changedFiles.filter(
-								(filePath): filePath is string => typeof filePath === 'string' && filePath.length > 0
-							)
-						: [];
-
-					if (changedFiles.length > 0) {
-						summaryLines.push(`Changed: ${changedFiles.join(', ')}`);
-					}
-				} else if (typeof result === 'string' && result.trim().length > 0) {
-					summaryLines.push(result.trim());
-				}
-
-				const logs = Array.isArray(record.logs)
-					? record.logs.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+	function serializeToolOutput(output: JsonValue | undefined, errorText?: string, toolName?: string): string {
+		if (errorText) return errorText;
+		if (output === undefined || output === null) return '';
+		const outputText = stringValue(output);
+		if (outputText?.trim()) return outputText;
+		if (toolName === 'codemode') {
+			const record = decodeJson<JsonRecord>(JSON.stringify(output));
+			const result = record.result;
+			if (result !== undefined) {
+				const resultRecord = decodeJson<JsonRecord>(JSON.stringify(result));
+				const summary = resultRecord.summary;
+				const changedFiles = Array.isArray(resultRecord.changedFiles)
+					? resultRecord.changedFiles
+						.map((filePath) => stringValue(filePath))
+						.filter((filePath): filePath is string => Boolean(filePath?.trim()))
 					: [];
-
-				if (logs.length > 0) {
-					summaryLines.push(`Logs:\n${logs.join('\n')}`);
-				}
-
-				if (summaryLines.length > 0) {
-					return summaryLines.join('\n');
-				}
+				const logs = Array.isArray(record.logs)
+					? record.logs
+						.map((entry) => stringValue(entry))
+						.filter((entry): entry is string => Boolean(entry?.trim()))
+					: [];
+				const summaryLines = [
+					stringValue(summary)?.trim() ?? '',
+					changedFiles.length > 0 ? `Changed: ${changedFiles.join(', ')}` : '',
+					logs.length > 0 ? `Logs:\n${logs.join('\n')}` : ''
+				].filter(Boolean);
+				if (summaryLines.length > 0) return summaryLines.join('\n');
 			}
-
-			if (typeof record.message === 'string' && record.message.trim().length > 0) {
-				return record.message;
-			}
-
-			if (typeof record.tree === 'string' && record.tree.trim().length > 0) {
-				return record.tree;
-			}
-
-			if (typeof record.content === 'string' && record.content.trim().length > 0) {
-				return record.content;
-			}
-
-			return JSON.stringify(record, null, 2);
 		}
-
-		if (errorText) {
-			return errorText;
-		}
-
-		if (output == null) {
-			return '';
-		}
-
-		return String(output);
+		const record = decodeJson<JsonRecord>(JSON.stringify(output));
+		const message = record.message ?? record.tree ?? record.content;
+		const messageText = stringValue(message);
+		if (messageText) return messageText;
+		return JSON.stringify(output) ?? '';
 	}
 
 	function toolStatusFromState(state: string | undefined): ToolExecution['status'] {
@@ -272,7 +274,7 @@
 					toolCallId: part.toolCallId,
 					name: part.toolName,
 					title: part.title,
-					input: ((part.input as Record<string, any>) || {}) as Record<string, any>
+					input: decodeToolInput(part.input)
 				};
 			}
 		}
@@ -304,17 +306,7 @@
 
 		const { input } = tool;
 		const pathValue =
-			typeof input.file_path === 'string'
-				? input.file_path
-				: typeof input.path === 'string'
-					? input.path
-					: typeof input.directory_path === 'string'
-						? input.directory_path
-						: typeof input.oldPath === 'string'
-							? input.oldPath
-							: typeof input.page_name === 'string'
-								? input.page_name
-								: '';
+			input.file_path ?? input.path ?? input.directory_path ?? input.oldPath ?? input.page_name ?? '';
 
 		if (!pathValue) return '';
 
@@ -326,7 +318,7 @@
 		tool: RunningToolState | null,
 		status: string,
 		elapsedMs: number
-	): { headline: string; detail: string } {
+	): ActivitySummary {
 		const headline = status || 'Thinking...';
 
 		if (!tool) {
@@ -442,7 +434,7 @@
 						id: part.toolCallId,
 						name: part.toolName,
 						title: part.title,
-						input: (part.input as Record<string, any>) || {},
+						input: decodeToolInput(part.input),
 						status,
 						output: serializeToolOutput(part.output, part.errorText, part.toolName),
 						startTime,
@@ -483,7 +475,7 @@
 			return {
 				toolCallId: questionPart.toolCallId,
 				toolName: questionPart.toolName,
-				input: (questionPart.input as Record<string, any>) || {}
+				input: decodeToolInput(questionPart.input)
 			};
 		}
 
@@ -492,23 +484,23 @@
 
 	function createStreamState(requestId: string, continuation: boolean): ActiveStreamMessage {
 		const lastAssistant = continuation ? findLastAssistantMessage(uiMessages) : undefined;
-
-		return {
+		const stream: ActiveStreamMessage = {
 			id: requestId,
 			messageId: lastAssistant?.id || generateId(),
 			continuation,
-			parts: lastAssistant ? cloneParts(lastAssistant.parts) : [],
-			...(lastAssistant?.metadata ? { metadata: { ...lastAssistant.metadata } } : {})
+			parts: lastAssistant ? cloneParts(lastAssistant.parts) : []
 		};
+		if (lastAssistant?.metadata) stream.metadata = { ...lastAssistant.metadata };
+		return stream;
 	}
 
 	function flushActiveStreamToMessages(stream: ActiveStreamMessage) {
 		const nextMessage: UIChatMessage = {
 			id: stream.messageId,
 			role: 'assistant',
-			parts: cloneParts(stream.parts),
-			...(stream.metadata ? { metadata: { ...stream.metadata } } : {})
+			parts: cloneParts(stream.parts)
 		};
+		if (stream.metadata) nextMessage.metadata = { ...stream.metadata };
 
 		const existingIndex = uiMessages.findIndex((message) => message.id === nextMessage.id);
 		if (existingIndex >= 0) {
@@ -569,7 +561,8 @@
 		// current socket exists to protect), just clean up its own listeners and
 		// return — do not null refs or schedule a reconnect. When `socket` is null
 		// there is no newer socket to protect, so we proceed normally.
-		const closedSocket = event.currentTarget as WebSocket | null;
+		const currentTarget = event.currentTarget;
+		const closedSocket = currentTarget instanceof WebSocket ? currentTarget : null;
 		if (socket && closedSocket && closedSocket !== socket) {
 			closedSocket.removeEventListener('message', handleSocketMessage);
 			closedSocket.removeEventListener('close', handleSocketClose);
@@ -824,11 +817,11 @@
 				return;
 			}
 
-			const data = await response.json();
+			const data = decodeJson<UIChatMessage[]>(await response.text());
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
 			}
-			uiMessages = Array.isArray(data) ? (data as UIChatMessage[]) : [];
+			uiMessages = data;
 			await tick();
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
@@ -838,7 +831,8 @@
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
 			}
-			if (isApiError(error) && error.statusCode === 401 && error.code === 'authentication_required') {
+			const caughtError = error instanceof Error ? error : undefined;
+			if (isApiError(caughtError) && caughtError.statusCode === 401 && caughtError.code === 'authentication_required') {
 				return;
 			}
 
@@ -853,7 +847,7 @@
 		void loadChatHistory(projectId, projectContextEpoch);
 	}
 
-	function sendSocketMessage(payload: Record<string, unknown>) {
+	function sendSocketMessage(payload: JsonRecord) {
 		if (!socket || socketProjectId !== projectId || socket.readyState !== WebSocket.OPEN) {
 			throw new Error('Agent connection is not open');
 		}
@@ -981,14 +975,14 @@
 
 	function parseStreamChunkBody(body: string): UIStreamChunk {
 		try {
-			return JSON.parse(body) as UIStreamChunk;
+			return decodeJson<UIStreamChunk>(body);
 		} catch (error) {
 			if (!body.startsWith('data:')) {
 				throw error;
 			}
 
 			const payload = body.slice('data:'.length).replace(/[\r\n]+$/, '');
-			return JSON.parse(payload) as UIStreamChunk;
+			return decodeJson<UIStreamChunk>(payload);
 		}
 	}
 
@@ -996,11 +990,9 @@
 		if (event.currentTarget !== socket || socketProjectId !== projectId) {
 			return;
 		}
-		if (typeof event.data !== 'string') return;
-
-		let data: any;
+		let data: AgentSocketMessage;
 		try {
-			data = JSON.parse(event.data);
+			data = decodeJson<AgentSocketMessage>(event.data);
 		} catch {
 			// Malformed (non-JSON) frame on the agent socket: a transport issue.
 			// Still drop the frame, but say so — silent drops made transport
@@ -1014,14 +1006,14 @@
 				uiMessages = [];
 				break;
 			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
-				uiMessages = Array.isArray(data.messages) ? (data.messages as UIChatMessage[]) : [];
+				uiMessages = data.messages ?? [];
 				// The agent socket just delivered the authoritative history, so a
 				// previously failed HTTP history load is moot (SS-49).
 				historyLoadFailed = false;
 				scrollToBottom();
 				break;
 			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
-				uiMessages = mergeUpdatedMessage(uiMessages, data.message as UIChatMessage);
+				if (data.message) uiMessages = mergeUpdatedMessage(uiMessages, data.message);
 				scrollToBottom();
 				break;
 			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE:
@@ -1029,6 +1021,7 @@
 				resetRequestState();
 				break;
 			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
+				if (!data.id) break;
 				const continuation = expectingContinuation;
 				expectingContinuation = false;
 				currentRequestId = data.id;
@@ -1044,9 +1037,10 @@
 				break;
 			}
 			case AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE: {
+				if (!data.id) break;
 				// SS-9: drop frames for a request the user stopped. Without this a late
 				// frame would recreate activeStream below and resume appending text.
-				if (typeof data.id === 'string' && cancelledRequestIds.has(data.id)) {
+				if (data.id && cancelledRequestIds.has(data.id)) {
 					break;
 				}
 
@@ -1068,7 +1062,7 @@
 						// Only a body that looks encoded (broken JSON / SSE framing) is a
 						// genuinely malformed frame — warn and surface a visible fallback so
 						// the user is not left hanging.
-						const bodyText = typeof data.body === 'string' ? data.body.trim() : '';
+						const bodyText = data.body?.trim() ?? '';
 						const looksLikeProse =
 							!!bodyText &&
 							!bodyText.startsWith('data:') &&
@@ -1298,10 +1292,10 @@
 				preparation.projectId,
 				preparation.projectEpoch
 			);
-		} catch (error: any) {
+			} catch (error) {
 			if (!isCurrentRequestPreparation(preparation)) return;
 			console.error('Error sending message:', error);
-			const message = getErrorMessage(error);
+				const message = getErrorMessage(error instanceof Error ? error : undefined);
 			resetRequestState();
 			uiMessages = [
 				...uiMessages,
@@ -1370,35 +1364,25 @@
 		}
 	}
 
-	function getPendingQuestions(input: Record<string, any>): UserQuestionPrompt[] {
-		if (typeof input.question === 'string' && input.question.length > 0) {
+	function getPendingQuestions(input: ToolInputRecord): UserQuestionPrompt[] {
+		if (input.question) {
 			return [
 				{
-					header: typeof input.context === 'string' ? 'Clarification' : undefined,
+					header: input.context ? 'Clarification' : undefined,
 					question: input.question,
-					options: Array.isArray(input.options)
-						? input.options
-								.map((option) =>
-									typeof option === 'string'
-										? { label: option }
-										: option && typeof option.label === 'string'
-											? option
-											: null
-								)
-								.filter((option): option is QuestionOption => option !== null)
-						: undefined,
+					options: input.options,
 					placeholder: 'Write your answer'
 				}
 			];
 		}
 
-		if (!Array.isArray(input.questions)) {
+		if (!input.questions) {
 			return [];
 		}
 
-		return input.questions.filter((question): question is UserQuestionPrompt => {
-			return typeof question?.question === 'string' && question.question.length > 0;
-		});
+		return input.questions.flatMap((question) =>
+			question.question ? [{ header: question.header, question: question.question }] : []
+		);
 	}
 
 	async function submitUserQuestionAnswers({ answers, annotations }: UserQuestionSubmission) {
@@ -1411,17 +1395,17 @@
 		try {
 			const ready = await ensureReadyForRequest(preparation);
 			if (!ready || !isCurrentRequestPreparation(preparation)) return;
-			const questions = getPendingQuestions(interaction.input || {});
+			const questions = getPendingQuestions(interaction.input);
 			const primaryQuestion = questions[0]?.question;
 			const answer =
 				(primaryQuestion ? answers[primaryQuestion] : undefined) ||
 				Object.values(answers)[0] ||
 				'';
-			const output = {
-				...(primaryQuestion ? { question: primaryQuestion } : {}),
-				answer,
-				...(annotations && Object.keys(annotations).length > 0 ? { annotations } : {})
-			};
+			const output: UserQuestionToolOutput = { answer };
+			if (primaryQuestion) output.question = primaryQuestion;
+			if (annotations && Object.keys(annotations).length > 0) {
+				output.annotations = decodeJson<JsonValue>(JSON.stringify(annotations));
+			}
 
 			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
 			if (!isCurrentRequestPreparation(preparation)) return;
@@ -1471,7 +1455,8 @@
 	}
 
 	function onFileSelected(e: Event) {
-		const target = e.target as HTMLInputElement;
+		const target = e.target;
+		if (!(target instanceof HTMLInputElement)) return;
 		if (target.files && target.files.length > 0) {
 			attachedFile = target.files[0];
 		}
@@ -1534,7 +1519,7 @@
 		{#key pendingToolInteraction}
 			{#if pendingToolInteraction}
 				<AskUserQuestionCard
-					questions={getPendingQuestions(pendingToolInteraction.input || {})}
+					questions={getPendingQuestions(pendingToolInteraction.input)}
 					busy={isPreparingRequest}
 					onSubmit={submitUserQuestionAnswers}
 					onReject={rejectUserQuestion}
@@ -1572,7 +1557,8 @@
 				bind:value={input}
 				onkeydown={handleKeyDown}
 				oninput={(e) => {
-					const target = e.target as HTMLTextAreaElement;
+					const target = e.target;
+					if (!(target instanceof HTMLTextAreaElement)) return;
 					target.style.height = 'auto';
 					target.style.height = Math.min(target.scrollHeight, 200) + 'px';
 				}}

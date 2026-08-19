@@ -22,8 +22,9 @@ afterEach(async () => {
 	// timer so a same-tick replacement overlay can acquire the lock first.
 	// jsdom must stay alive until that teardown callback has run; otherwise the
 	// callback can touch document.body after Vitest has destroyed the environment.
+	const document = globalThis.document;
 	const overlayCleanupPending =
-		typeof document !== 'undefined' &&
+		document !== undefined &&
 		(document.body.style.overflow === 'hidden' ||
 			document.body.style.pointerEvents === 'none' ||
 			document.body.style.getPropertyValue('--scrollbar-width') !== '');
@@ -31,7 +32,7 @@ afterEach(async () => {
 		if (fakeTimers) {
 			await vi.advanceTimersByTimeAsync(OVERLAY_BODY_CLEANUP_MS);
 		} else {
-			await new Promise((resolve) => window.setTimeout(resolve, OVERLAY_BODY_CLEANUP_MS));
+			await new Promise((resolve) => globalThis.setTimeout(resolve, OVERLAY_BODY_CLEANUP_MS));
 		}
 	}
 	vi.useRealTimers();

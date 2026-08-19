@@ -1,3 +1,5 @@
+import { decodeJson, type JsonValue } from '$lib/contracts';
+
 export const AgentMessageType = {
 	CF_AGENT_CHAT_MESSAGES: 'cf_agent_chat_messages',
 	CF_AGENT_USE_CHAT_REQUEST: 'cf_agent_use_chat_request',
@@ -37,8 +39,8 @@ export interface UIToolPart {
 	toolCallId: string;
 	toolName: string;
 	state: ToolPartState;
-	input?: unknown;
-	output?: unknown;
+	input?: JsonValue;
+	output?: JsonValue;
 	errorText?: string;
 	approval?: {
 		id: string;
@@ -56,7 +58,7 @@ export interface UIStepStartPart {
 export interface UIDataPart {
 	type: `data-${string}`;
 	id?: string;
-	data: unknown;
+	data: JsonValue;
 }
 
 export type UIMessagePart = UITextPart | UIReasoningPart | UIToolPart | UIStepStartPart | UIDataPart;
@@ -65,7 +67,7 @@ export interface UIChatMessage {
 	id: string;
 	role: 'user' | 'assistant';
 	parts: UIMessagePart[];
-	metadata?: Record<string, unknown>;
+	metadata?: Record<string, JsonValue>;
 }
 
 export interface ActiveStreamMessage {
@@ -73,7 +75,7 @@ export interface ActiveStreamMessage {
 	messageId: string;
 	continuation: boolean;
 	parts: UIMessagePart[];
-	metadata?: Record<string, unknown>;
+	metadata?: Record<string, JsonValue>;
 }
 
 export interface ToolApprovalRequestChunk {
@@ -86,14 +88,14 @@ export interface ToolInputAvailableChunk {
 	type: 'tool-input-available';
 	toolCallId: string;
 	toolName: string;
-	input: unknown;
+	input: JsonValue;
 	title?: string;
 }
 
 export interface ToolOutputAvailableChunk {
 	type: 'tool-output-available';
 	toolCallId: string;
-	output: unknown;
+	output: JsonValue;
 	preliminary?: boolean;
 }
 
@@ -127,12 +129,12 @@ export interface TextEndChunk {
 export interface MessageStartChunk {
 	type: 'start';
 	messageId?: string;
-	messageMetadata?: Record<string, unknown>;
+	messageMetadata?: Record<string, JsonValue>;
 }
 
 export interface MessageFinishChunk {
 	type: 'finish';
-	messageMetadata?: Record<string, unknown>;
+	messageMetadata?: Record<string, JsonValue>;
 }
 
 export type UIStreamChunk =
@@ -156,13 +158,13 @@ export type UIStreamChunk =
 			type: 'tool-input-delta';
 			toolCallId: string;
 			inputTextDelta?: string;
-			input?: unknown;
+			input?: JsonValue;
 	  }
 	| {
 			type: 'tool-input-error';
 			toolCallId: string;
 			toolName: string;
-			input: unknown;
+			input: JsonValue;
 			errorText: string;
 			title?: string;
 	  }
@@ -187,7 +189,7 @@ export type UIStreamChunk =
 	  }
 	| {
 			type: 'message-metadata';
-			messageMetadata: Record<string, unknown>;
+			messageMetadata: Record<string, JsonValue>;
 	  }
 	| {
 			type: 'error';
@@ -215,8 +217,8 @@ function findToolPartByCallId(parts: UIMessagePart[], toolCallId: string): UIToo
 function findDataPartByTypeAndId(parts: UIMessagePart[], type: string, id: string): UIDataPart | undefined {
 	for (let i = parts.length - 1; i >= 0; i -= 1) {
 		const part = parts[i];
-		if (part.type === type && 'id' in part && part.id === id) {
-			return part as UIDataPart;
+		if (isDataPart(part) && part.type === type && part.id === id) {
+			return part;
 		}
 	}
 }
@@ -225,8 +227,12 @@ export function isToolPart(part: UIMessagePart): part is UIToolPart {
 	return part.type.startsWith('tool-');
 }
 
+function isDataPart(part: UIMessagePart): part is UIDataPart {
+	return part.type.startsWith('data-');
+}
+
 export function cloneParts(parts: UIMessagePart[]): UIMessagePart[] {
-	return parts.map((part) => JSON.parse(JSON.stringify(part)) as UIMessagePart);
+	return parts.map((part) => decodeJson<UIMessagePart>(JSON.stringify(part)));
 }
 
 export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk): boolean {
@@ -360,8 +366,8 @@ export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk):
 			parts.push({ type: 'step-start' });
 			return true;
 		default:
-			if (chunk.type.startsWith('data-')) {
-				const dataChunk = chunk as UIDataPart;
+			if (isDataChunk(chunk)) {
+				const dataChunk = chunk;
 
 				if ('id' in chunk && chunk.id) {
 					const existing = findDataPartByTypeAndId(parts, dataChunk.type, chunk.id);
@@ -371,16 +377,18 @@ export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk):
 					}
 				}
 
-				parts.push({
-					type: dataChunk.type,
-					...('id' in chunk && chunk.id ? { id: chunk.id } : {}),
-					data: dataChunk.data
-				});
+				const dataPart: UIDataPart = { type: dataChunk.type, data: dataChunk.data };
+				if (dataChunk.id) dataPart.id = dataChunk.id;
+				parts.push(dataPart);
 				return true;
 			}
 
 			return false;
 	}
+}
+
+function isDataChunk(chunk: UIStreamChunk): chunk is UIDataPart {
+	return chunk.type.startsWith('data-');
 }
 
 export function mergeUpdatedMessage(messages: UIChatMessage[], updatedMessage: UIChatMessage): UIChatMessage[] {
@@ -415,7 +423,7 @@ export function mergeUpdatedMessage(messages: UIChatMessage[], updatedMessage: U
 export function applyLocalToolOutput(
 	messages: UIChatMessage[],
 	toolCallId: string,
-	output: unknown,
+	output: JsonValue,
 	state: 'output-available' | 'output-error' = 'output-available',
 	errorText?: string
 ): UIChatMessage[] {
@@ -426,12 +434,13 @@ export function applyLocalToolOutput(
 				return part;
 			}
 
-			return {
+			const nextPart: UIToolPart = {
 				...part,
 				state,
-				output,
-				...(errorText ? { errorText } : {})
+				output
 			};
+			if (errorText) nextPart.errorText = errorText;
+			return nextPart;
 		})
 	}));
 }

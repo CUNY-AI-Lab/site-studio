@@ -4,6 +4,34 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import AgentChat from './AgentChat.svelte';
 import { AgentMessageType, type UIChatMessage } from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
+import type { JsonValue } from '$lib/contracts';
+
+interface AgentChatTestProps {
+	projectId?: string;
+	onUpdate?: () => void;
+	onBeforeSend?: () => Promise<boolean> | boolean;
+}
+
+interface FakeSocketMessage {
+	type: string;
+	id?: string;
+	messages?: UIChatMessage[];
+	body?: string;
+	done?: boolean;
+	error?: boolean;
+}
+
+declare global {
+	interface Location {
+		[symbol: symbol]: { assign: (url: string) => void } | undefined;
+	}
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+	if (input instanceof Request) return input.url;
+	if (input instanceof URL) return input.toString();
+	return input;
+}
 
 /**
  * A scriptable fake WebSocket. The component calls `new WebSocket(url)` directly
@@ -24,17 +52,17 @@ class FakeWebSocket {
 	url: string;
 	readyState = FakeWebSocket.CONNECTING;
 	sent: string[] = [];
-	private listeners: Record<string, Set<(ev: any) => void>> = {};
+	private listeners: Record<string, Set<(event: Event) => void>> = {};
 
 	constructor(url: string) {
 		this.url = url;
 		FakeWebSocket.instances.push(this);
 	}
 
-	addEventListener(type: string, cb: (ev: any) => void) {
+	addEventListener(type: string, cb: (event: Event) => void) {
 		(this.listeners[type] ??= new Set()).add(cb);
 	}
-	removeEventListener(type: string, cb: (ev: any) => void) {
+	removeEventListener(type: string, cb: (event: Event) => void) {
 		this.listeners[type]?.delete(cb);
 	}
 	send(data: string) {
@@ -44,17 +72,12 @@ class FakeWebSocket {
 		this.readyState = FakeWebSocket.CLOSED;
 	}
 
-	private emit(type: string, ev: any) {
+	private emit(type: string, event: Event) {
 		// Real WebSocket events carry `currentTarget`; the component relies on it to
 		// distinguish the current socket from an orphaned/superseded one (SS-12).
-		try {
-			Object.defineProperty(ev, 'currentTarget', { value: this, configurable: true });
-			Object.defineProperty(ev, 'target', { value: this, configurable: true });
-		} catch {
-			// Some Event impls make these read-only accessors; fall back to assignment.
-			(ev as any).currentTarget = this;
-		}
-		this.listeners[type]?.forEach((cb) => cb(ev));
+		Object.defineProperty(event, 'currentTarget', { value: this, configurable: true });
+		Object.defineProperty(event, 'target', { value: this, configurable: true });
+		this.listeners[type]?.forEach((cb) => cb(event));
 	}
 
 	// --- test controls ---
@@ -62,12 +85,12 @@ class FakeWebSocket {
 		this.readyState = FakeWebSocket.OPEN;
 		this.emit('open', new Event('open'));
 	}
-	serverMessage(payload: unknown) {
-		this.emit('message', { data: JSON.stringify(payload) } as MessageEvent);
+	serverMessage(payload: FakeSocketMessage) {
+		this.emit('message', new MessageEvent('message', { data: JSON.stringify(payload) }));
 	}
 	/** Push a raw (possibly non-JSON) frame, bypassing serialization. */
 	serverRawMessage(data: string) {
-		this.emit('message', { data } as MessageEvent);
+		this.emit('message', new MessageEvent('message', { data }));
 	}
 	serverClose() {
 		this.readyState = FakeWebSocket.CLOSED;
@@ -95,12 +118,12 @@ describe('AgentChat', () => {
 		// delivery cookie; clear both so each test re-derives against the stub.
 		invalidateCsrfToken();
 		document.cookie = 'cail_csrf_sitestudio=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-		vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+		vi.stubGlobal('WebSocket', FakeWebSocket);
 		// The component fetches a CSRF token before connecting, and loadChatHistory
 		// hits GET /get-messages. The token is delivered via Set-Cookie (rule 3),
 		// so the /api/csrf stub sets document.cookie; empty history otherwise.
 		fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -116,7 +139,7 @@ describe('AgentChat', () => {
 		vi.unstubAllGlobals();
 	});
 
-	function mount(props: Record<string, unknown> = {}) {
+	function mount(props: AgentChatTestProps = {}) {
 		const onUpdate = vi.fn();
 		render(AgentChat, { props: { projectId: 'proj1', onUpdate, ...props } });
 		return { onUpdate };
@@ -140,7 +163,7 @@ describe('AgentChat', () => {
 		const onUpdate = vi.fn();
 
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -189,7 +212,7 @@ describe('AgentChat', () => {
 		const onUpdate = vi.fn();
 
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				csrfRequested = true;
 				return csrfResponse;
@@ -255,15 +278,14 @@ describe('AgentChat', () => {
 
 	it('routes authentication_required history responses through the login redirect path', async () => {
 		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
-			(symbol) => symbol.toString() === 'Symbol(impl)'
+			(symbol) => symbol.description === 'impl'
 		);
-		expect(locationImplSymbol).toBeDefined();
-		const locationImpl = (window.location as any)[locationImplSymbol as symbol] as {
-			assign: (url: string) => void;
-		};
+		if (!locationImplSymbol) throw new Error('JSDOM location implementation symbol is unavailable');
+		const locationImpl = window.location[locationImplSymbol];
+		if (!locationImpl) throw new Error('JSDOM location implementation is unavailable');
 		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -290,7 +312,7 @@ describe('AgentChat', () => {
 	it('surfaces a retryable error when history loading fails, not an empty transcript (SS-49)', async () => {
 		let historyRequests = 0;
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -339,7 +361,7 @@ describe('AgentChat', () => {
 
 	it('a network failure loading history also surfaces the error state (SS-49)', async () => {
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -382,7 +404,7 @@ describe('AgentChat', () => {
 			parts: [{ type: 'text', text }]
 		}));
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -410,7 +432,7 @@ describe('AgentChat', () => {
 		ws.open();
 
 		const streamId = 'stream-1';
-		function chunk(body: unknown, done = false) {
+		function chunk(body: JsonValue, done = false) {
 			ws.serverMessage({
 				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 				id: streamId,
@@ -635,7 +657,7 @@ describe('AgentChat', () => {
 		let resolveRefresh!: (response: Response) => void;
 		let refreshRequested = false;
 		fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -669,7 +691,7 @@ describe('AgentChat', () => {
 
 	it('sends no model frame when the credential refresh fails', async () => {
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -700,7 +722,7 @@ describe('AgentChat', () => {
 		const events: string[] = [];
 		let refreshCount = 0;
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
 				return new Response(null, { status: 204 });
@@ -794,7 +816,7 @@ describe('AgentChat', () => {
 		expect(requestFrame).toBeTruthy();
 		const streamId: string = requestFrame.id;
 
-		function chunk(body: unknown, done = false) {
+		function chunk(body: JsonValue, done = false) {
 			ws.serverMessage({
 				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 				id: streamId,
@@ -836,7 +858,7 @@ describe('AgentChat', () => {
 		// reconnect used a freshly-fetched one rather than the cached original.
 		let csrfHits = 0;
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				csrfHits += 1;
 				document.cookie = `cail_csrf_sitestudio=token-${csrfHits}`;
@@ -881,7 +903,7 @@ describe('AgentChat', () => {
 	// number of failures.
 	it('continues reconnecting with bounded backoff while the project is active', async () => {
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-			const url = typeof input === 'string' ? input : input.toString();
+			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {
 				document.cookie = 'cail_csrf_sitestudio=rotating-token';
 				return new Response(null, { status: 204 });
@@ -1078,7 +1100,7 @@ describe('AgentChat', () => {
 // Helper to render AgentChat and get a handle on the component instance so we
 // can call its exported `sendPrompt`. @testing-library/svelte's render returns
 // `component` for this purpose.
-function renderExposed(props: Record<string, unknown> = {}) {
+function renderExposed(props: AgentChatTestProps = {}) {
 	const onUpdate = vi.fn();
 	const result = render(AgentChat, { props: { projectId: 'proj1', onUpdate, ...props } });
 	return { ...result, onUpdate };

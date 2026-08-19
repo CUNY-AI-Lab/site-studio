@@ -32,7 +32,8 @@
 	let isUploading = $state(false);
 
 	async function handleUpload(event: Event) {
-		const input = event.target as HTMLInputElement;
+		const input = event.target;
+		if (!(input instanceof HTMLInputElement)) return;
 		const file = input.files?.[0];
 
 		if (!file) return;
@@ -56,7 +57,7 @@
 			input.value = '';
 		} catch (error) {
 			console.error('Error uploading file:', error);
-			toast.error(`Couldn't upload file. ${getErrorMessage(error)}`);
+			toast.error(`Couldn't upload file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		} finally {
 			isUploading = false;
 		}
@@ -100,9 +101,9 @@
 
 			// Refresh file list
 			onRefresh();
-		} catch (error: any) {
+		} catch (error) {
 			console.error('Error deleting file:', error);
-			toast.error(`Couldn't delete that file. ${getErrorMessage(error)}`);
+			toast.error(`Couldn't delete that file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		}
 	}
 
@@ -130,9 +131,9 @@
 
 			// Refresh file list
 			onRefresh();
-		} catch (error: any) {
+		} catch (error) {
 			console.error('Error renaming file:', error);
-			toast.error(`Couldn't rename that file. ${getErrorMessage(error)}`);
+			toast.error(`Couldn't rename that file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		}
 	}
 </script>

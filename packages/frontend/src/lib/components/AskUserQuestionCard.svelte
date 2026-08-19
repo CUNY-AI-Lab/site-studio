@@ -111,7 +111,7 @@
 		if (!question.options) return undefined;
 		const previews = getSelectedAnswers(index)
 			.map((label) => question.options?.find((o) => o.label === label)?.preview)
-			.filter((p): p is string => typeof p === 'string' && p.length > 0);
+			.filter((p): p is string => Boolean(p && p.length > 0));
 		return previews.length > 0 ? previews.join('\n') : undefined;
 	}
 
@@ -143,10 +143,11 @@
 			}
 		}
 
-		onSubmit({
-			answers,
-			...(Object.keys(annotations).length > 0 ? { annotations } : {})
-		});
+		const submission: UserQuestionSubmission = { answers };
+		if (Object.keys(annotations).length > 0) {
+			submission.annotations = annotations;
+		}
+		onSubmit(submission);
 	}
 
 	function handleKeydown(event: KeyboardEvent) {

@@ -1,20 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, waitFor } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import ImageManagerDialog from './ImageManagerDialog.svelte';
-import { fetchProjectImages, type ProjectImagesResult } from '$lib/api/projects';
+import {
+	fetchProjectImages,
+	uploadProjectImage,
+	type ProjectImagesResult
+} from '$lib/api/projects';
 
-// Mock the api module boundary — the dialog fetches images when it opens.
-vi.mock('$lib/api/projects', async () => {
-	const actual = await vi.importActual<typeof import('$lib/api/projects')>('$lib/api/projects');
-	return {
-		...actual,
-		fetchProjectImages: vi.fn(),
-		uploadProjectImage: vi.fn()
-	};
-});
+const mockFetch = vi.fn<typeof fetchProjectImages>();
+const mockUpload = vi.fn<typeof uploadProjectImage>();
 
-const mockFetch = vi.mocked(fetchProjectImages);
+interface DialogOverrides {
+	fetchProjectImages?: typeof fetchProjectImages;
+	uploadProjectImage?: typeof uploadProjectImage;
+}
 
 const imagesResult: ProjectImagesResult = {
 	images: [
@@ -26,7 +26,7 @@ const imagesResult: ProjectImagesResult = {
 	]
 };
 
-function open(overrides: Record<string, unknown> = {}) {
+function open(overrides: DialogOverrides = {}) {
 	const onOpenChange = vi.fn();
 	const onAskAssistant = vi.fn();
 	render(ImageManagerDialog, {
@@ -35,10 +35,18 @@ function open(overrides: Record<string, unknown> = {}) {
 			projectId: 'proj1',
 			onOpenChange,
 			onAskAssistant,
+			fetchProjectImages: mockFetch,
+			uploadProjectImage: mockUpload,
 			...overrides
 		}
 	});
 	return { onOpenChange, onAskAssistant };
+}
+
+function labeledInput(label: RegExp): HTMLInputElement {
+	const input = screen.getByLabelText(label);
+	if (!(input instanceof HTMLInputElement)) throw new Error('expected input');
+	return input;
 }
 
 async function waitForImages() {
@@ -98,7 +106,7 @@ describe('ImageManagerDialog', () => {
 			await waitForImages();
 			await user.click(thumbnail(0));
 
-			const altInput = screen.getByLabelText(/describe this image/i) as HTMLInputElement;
+			const altInput = labeledInput(/describe this image/i);
 			await user.type(altInput, 'some alt');
 			expect(altInput.value).toBe('some alt');
 
@@ -127,7 +135,7 @@ describe('ImageManagerDialog', () => {
 
 			// Still in replace mode (scope kept) and the typed alt text survived.
 			expect(screen.getByText(/replace placeholder with this image/i)).toBeInTheDocument();
-			expect((screen.getByLabelText(/describe this image/i) as HTMLInputElement).value).toBe('Team photo');
+			expect(labeledInput(/describe this image/i).value).toBe('Team photo');
 
 			// Submitting produces a REPLACE prompt with the newly-selected image path.
 			await clickSubmit(user);
@@ -232,7 +240,8 @@ describe('ImageManagerDialog', () => {
 			await user.type(screen.getByLabelText(/describe this image/i), 'A "great" photo');
 			await clickSubmit(user);
 
-			const prompt = onAskAssistant.mock.calls[0][0] as string;
+			const prompt = onAskAssistant.mock.calls[0]?.[0];
+			if (prompt === undefined) throw new Error('expected assistant prompt');
 			// The quotes inside the alt text are escaped, so JSON.parse round-trips
 			// the exact user string out of its quoted segment.
 			expect(prompt).toBe(
@@ -251,7 +260,8 @@ describe('ImageManagerDialog', () => {
 			await user.type(screen.getByLabelText(/where should it go/i), 'the "hero" band');
 			await clickSubmit(user);
 
-			const prompt = onAskAssistant.mock.calls[0][0] as string;
+			const prompt = onAskAssistant.mock.calls[0]?.[0];
+			if (prompt === undefined) throw new Error('expected assistant prompt');
 			// The hint's quotes are escaped inside the parenthesized segment, so the
 			// surrounding structure of the instruction stays intact.
 			expect(prompt).toBe(

@@ -1,4 +1,5 @@
 import type { SaveSnapshot } from './autosave';
+import { decodeJson } from '$lib/contracts';
 
 export interface StoredDraft extends SaveSnapshot {
 	baseEtag: string | null;
@@ -23,7 +24,12 @@ function base64(bytes: Uint8Array): string {
 
 function fromBase64(value: string): ArrayBuffer {
 	const binary = atob(value);
-	return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer as ArrayBuffer;
+	const buffer = new ArrayBuffer(binary.length);
+	const bytes = new Uint8Array(buffer);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return buffer;
 }
 
 async function digest(value: string): Promise<ArrayBuffer> {
@@ -66,8 +72,8 @@ export async function loadDraft(
 	try {
 		const raw = storage.getItem(await storageKey(secret, projectId, filePath));
 		if (!raw) return null;
-		const envelope = JSON.parse(raw) as Partial<EncryptedDraft>;
-		if (envelope.version !== 1 || typeof envelope.iv !== 'string' || typeof envelope.ciphertext !== 'string') {
+		const envelope = decodeJson<EncryptedDraft>(raw);
+		if (envelope.version !== 1 || !envelope.iv || !envelope.ciphertext) {
 			return null;
 		}
 		const plaintext = await crypto.subtle.decrypt(
@@ -75,17 +81,17 @@ export async function loadDraft(
 			await key(secret),
 			fromBase64(envelope.ciphertext)
 		);
-		const draft = JSON.parse(decoder.decode(plaintext)) as Partial<StoredDraft>;
+		const draft = decodeJson<StoredDraft>(decoder.decode(plaintext));
 		if (
 			draft.projectId !== projectId ||
 			draft.filePath !== filePath ||
-			typeof draft.content !== 'string' ||
-			(draft.baseEtag !== null && typeof draft.baseEtag !== 'string') ||
-			typeof draft.updatedAt !== 'string'
+			draft.content === undefined ||
+			(draft.baseEtag !== null && draft.baseEtag === undefined) ||
+			draft.updatedAt === undefined
 		) {
 			return null;
 		}
-		return draft as StoredDraft;
+		return draft;
 	} catch {
 		return null;
 	}

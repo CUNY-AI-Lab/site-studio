@@ -1,4 +1,5 @@
 import { resolvePath } from '$lib/utils/paths';
+import { browserWindow, decodeJson } from '$lib/contracts';
 
 /**
  * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
@@ -38,7 +39,8 @@ let inFlight: Promise<string> | null = null;
  * Guards against a missing `document` (non-browser contexts).
  */
 function readCookie(name: string): string | null {
-	if (typeof document === 'undefined' || !document.cookie) {
+	const document = browserWindow()?.document;
+	if (!document?.cookie) {
 		return null;
 	}
 	const prefix = `${name}=`;
@@ -133,9 +135,7 @@ export async function refreshCsrfToken(): Promise<string> {
 function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
 	const raw =
 		init?.method ??
-		(typeof input === 'object' && input !== null && 'method' in input
-			? (input as Request).method
-			: undefined) ??
+		(input instanceof Request ? input.method : undefined) ??
 		'GET';
 	return raw.toUpperCase();
 }
@@ -160,7 +160,7 @@ async function isCsrfFailure(response: Response): Promise<boolean> {
 		return false;
 	}
 	try {
-		const data = (await response.clone().json()) as { error?: unknown };
+		const data = decodeJson<{ error?: string }>(await response.clone().text());
 		return data.error === CSRF_ERROR_CODE;
 	} catch {
 		return false;
