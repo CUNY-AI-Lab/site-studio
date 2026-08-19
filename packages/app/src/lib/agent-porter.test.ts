@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "../types";
+import type { UIMessage } from "ai";
 import type { AgentHistoryResolver } from "./agent-porter";
 
 const SUBJECT = TEST_SUBJECTS.alice;
@@ -33,7 +34,7 @@ describe("project agent history lifecycle", () => {
   });
 
   it("SS-41: moves non-empty history to the renamed project and clears the source", async () => {
-    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const messages = [{ id: "m1", role: "user", parts: [{ type: "text", text: "history" }] }] satisfies UIMessage[];
     const source = {
       exportChatHistoryForMigration: vi.fn(async () => messages),
       clearChatHistory: vi.fn(async () => undefined)
@@ -65,7 +66,7 @@ describe("project agent history lifecycle", () => {
   });
 
   it("SS-41: preserves source history when the rename destination refuses it", async () => {
-    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const messages = [{ id: "m1", role: "user", parts: [{ type: "text", text: "history" }] }] satisfies UIMessage[];
     const source = {
       exportChatHistoryForMigration: vi.fn(async () => messages),
       clearChatHistory: vi.fn(async () => undefined)
@@ -93,7 +94,7 @@ describe("createAgentHistoryPorter", () => {
   });
 
   it("ports chat history from the anonymous instance to the subject instance", async () => {
-    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const messages = [{ id: "m1", role: "user", parts: [{ type: "text", text: "history" }] }] satisfies UIMessage[];
     const importSpy = vi.fn(async () => true);
     getAgentByName
       .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
@@ -133,7 +134,7 @@ describe("createAgentHistoryPorter", () => {
   });
 
   it("propagates destination import failures so account import retains the source", async () => {
-    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const messages = [{ id: "m1", role: "user", parts: [{ type: "text", text: "history" }] }] satisfies UIMessage[];
     const error = new Error("subject chat import unavailable");
     getAgentByName
       .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
@@ -151,7 +152,7 @@ describe("createAgentHistoryPorter", () => {
   });
 
   it("fails when the destination refuses different existing history", async () => {
-    const messages = [{ id: "m1", role: "user", parts: [] }];
+    const messages = [{ id: "m1", role: "user", parts: [{ type: "text", text: "history" }] }] satisfies UIMessage[];
     getAgentByName
       .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
       .mockResolvedValueOnce({ importChatHistoryForMigration: vi.fn(async () => false) });

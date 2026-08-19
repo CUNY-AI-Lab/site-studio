@@ -159,7 +159,7 @@ export function createMockMutationCoordinator(bucket: R2Bucket): TestMutationCoo
   };
   const rpc = {
     id: idFor("rpc"),
-    execute: (ownerId: string, operation: any) => service.execute(ownerId, operation),
+    execute: (ownerId: string, operation: OwnerMutation) => service.execute(ownerId, operation),
     // SAFETY: The fallback migration RPC returns the documented result shape.
     migrateAnonymous: async () => ({ status: "nothing-to-migrate", projects: {} }) as MigrationResult,
     fetch: async (_request: Request) => new Response(null, { status: 404 }),

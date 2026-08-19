@@ -403,9 +403,10 @@ async function copyAnonymousNamespace(options: {
       const toKey = `${toSnapshots}${relative}`;
       if (key.endsWith(".json")) {
         const record = await readR2Json(bucket, key, projectSnapshotSchema);
-        if (record) {
-          await putJsonIfAbsentOrEqual(bucket, toKey, { ...record, projectId: plan.newId });
+        if (!record) {
+          throw new Error("Anonymous-data migration stopped because snapshot metadata is invalid; source retained.");
         }
+        await putJsonIfAbsentOrEqual(bucket, toKey, { ...record, projectId: plan.newId });
       } else {
         await copyIfAbsent(bucket, key, toKey);
       }

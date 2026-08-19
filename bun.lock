@@ -57,6 +57,7 @@
         "marked": "18.0.6",
         "marked-highlight": "2.2.4",
         "tailwind-merge": "3.6.0",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@sveltejs/adapter-static": "3.0.10",

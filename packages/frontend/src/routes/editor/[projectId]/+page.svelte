@@ -25,7 +25,7 @@
 	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
-	import { decodeJson } from '$lib/contracts';
+	import { z } from 'zod';
 
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
@@ -48,6 +48,33 @@
 		path: string;
 		content: string;
 		baseEtag?: string;
+	}
+
+	const loadedFileResponseSchema = z.object({
+		content: z.string(),
+		contentType: z.string().optional(),
+		isText: z.boolean().optional(),
+		etag: z.string().optional()
+	});
+	const saveConflictResponseSchema = z.object({ error: z.string().optional() });
+	const saveResponseSchema = z.object({ etag: z.string().optional() });
+
+	function parseLoadedFileResponse(payload: string): LoadedFileResponse {
+		const parsed = loadedFileResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid file response');
+		return parsed.data;
+	}
+
+	function parseSaveConflictResponse(payload: string): SaveConflictResponse {
+		const parsed = saveConflictResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid save conflict response');
+		return parsed.data;
+	}
+
+	function parseSaveResponse(payload: string): SaveResponse {
+		const parsed = saveResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid save response');
+		return parsed.data;
 	}
 
 	let previewComponent = $state<Preview>();
@@ -270,7 +297,7 @@
 			// Ignore stale response if user selected a different file
 			if (requestId !== fileSelectCounter) return;
 
-			const data = decodeJson<LoadedFileResponse>(await response.text());
+			const data = parseLoadedFileResponse(await response.text());
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
 			currentFileIsText = data.isText ?? true;
 			let draft: StoredDraft | null = null;
@@ -339,7 +366,7 @@
 			});
 
 			if (response.status === 409) {
-				const conflict = decodeJson<SaveConflictResponse>(await response.text());
+				const conflict = parseSaveConflictResponse(await response.text());
 				if (conflict.error === 'file_conflict') {
 					toast.error('This file changed elsewhere. Your local draft is preserved; copy it before reloading.');
 					return false;
@@ -348,7 +375,7 @@
 
 			if (!response.ok) throw new Error('Failed to save file');
 
-			const data = decodeJson<SaveResponse>(await response.text());
+			const data = parseSaveResponse(await response.text());
 			if (
 				targetProjectId === projectId &&
 				filePath === currentFile &&

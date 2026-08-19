@@ -1,5 +1,6 @@
 import { resolvePath } from '$lib/utils/paths';
-import { browserWindow, decodeJson } from '$lib/contracts';
+import { browserWindow } from '$lib/contracts';
+import { z } from 'zod';
 
 /**
  * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
@@ -26,6 +27,7 @@ const CSRF_HEADER = 'X-CSRF-Token';
 const CSRF_ERROR_CODE = 'csrf_verification_failed';
 /** Name of the delivery cookie the server sets (server: lib/constants.ts). */
 const CSRF_COOKIE_NAME = 'cail_csrf_sitestudio';
+const csrfErrorEnvelopeSchema = z.object({ error: z.string().optional() });
 
 /** Methods that mutate server state and therefore require the CSRF header. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
@@ -160,8 +162,8 @@ async function isCsrfFailure(response: Response): Promise<boolean> {
 		return false;
 	}
 	try {
-		const data = decodeJson<{ error?: string }>(await response.clone().text());
-		return data.error === CSRF_ERROR_CODE;
+		const parsed = csrfErrorEnvelopeSchema.safeParse(JSON.parse(await response.clone().text()));
+		return parsed.success && parsed.data.error === CSRF_ERROR_CODE;
 	} catch {
 		return false;
 	}

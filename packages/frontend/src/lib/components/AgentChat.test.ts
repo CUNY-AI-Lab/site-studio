@@ -276,6 +276,43 @@ describe('AgentChat', () => {
 		}
 	});
 
+	it.each([
+		['an object', '{}'],
+		['null', 'null'],
+		['a malformed message', JSON.stringify([{ id: 'm1', role: 'assistant', parts: null }])]
+	])('fails closed when history is %s', async (_label, body) => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) return new Response(body, { status: 200 });
+			return new Response('[]', { status: 200 });
+		});
+
+		mount();
+		await waitFor(() => expect(screen.getByText('Your chat history could not be loaded.')).toBeInTheDocument());
+		expect(screen.queryByText('Project history')).not.toBeInTheDocument();
+	});
+
+	it('drops a JSON socket frame with malformed message data', async () => {
+		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			mount();
+			await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+			const socket = FakeWebSocket.last();
+			socket.open();
+			socket.serverRawMessage(JSON.stringify({ type: AgentMessageType.CF_AGENT_CHAT_MESSAGES, messages: {} }));
+			await settle();
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining('malformed (non-JSON) agent-socket frame')
+			);
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+
 	it('routes authentication_required history responses through the login redirect path', async () => {
 		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
 			(symbol) => symbol.description === 'impl'
@@ -758,7 +795,7 @@ describe('AgentChat', () => {
 					type: 'tool-input-available',
 					toolCallId,
 					toolName: 'ask_user_question',
-					input: { question: 'Pick a direction', options: [{ label: 'A' }] }
+					input: { question: 'Pick a direction', options: ['A', { label: 'B' }, 7, null] }
 				})
 			});
 		}
@@ -774,6 +811,7 @@ describe('AgentChat', () => {
 		questionFrame('stream-2', 'tool-2');
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument());
 		screen.getByRole('button', { name: 'A' }).click();
+		expect(screen.getByRole('button', { name: 'B' })).toBeInTheDocument();
 		await settle();
 		const replyButton = screen.getByRole('button', { name: 'Reply' });
 		replyButton.click();

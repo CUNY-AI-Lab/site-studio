@@ -14,20 +14,11 @@
 import type { Env } from "../types";
 import type { ChatHistoryPorter } from "./migration";
 import type { ProjectHistoryLifecycle } from "./owner-mutations";
-import type { UIMessage } from "ai";
-import { z } from "zod";
+import { safeValidateUIMessages, type UIMessage } from "ai";
 
-const chatHistorySchema = z.array(z.object({
-  id: z.string(),
-  role: z.enum(["system", "user", "assistant"]),
-  parts: z.array(z.object({ type: z.string() }).passthrough()),
-}).passthrough());
-
-type AgentHistoryPart = { type: string; [key: string]: string | number | boolean | null | undefined };
-type AgentHistoryPayload = Array<{ id: string; role: string; parts: AgentHistoryPart[] }>;
 type AgentHistoryStub = {
   clearChatHistory?: () => Promise<void>;
-  exportChatHistoryForMigration?: () => Promise<AgentHistoryPayload>;
+  exportChatHistoryForMigration?: () => Promise<UIMessage[]>;
   importChatHistoryForMigration?: (messages: UIMessage[]) => Promise<boolean>;
 };
 
@@ -44,14 +35,13 @@ async function resolveAgentByName(
   return getAgentByName(namespace, name);
 }
 
-function parseChatHistory(cause: AgentHistoryPayload): UIMessage[] {
-  const parsed = chatHistorySchema.safeParse(cause);
+async function parseChatHistory(cause: UIMessage[]): Promise<UIMessage[]> {
+  if (Array.isArray(cause) && cause.length === 0) return [];
+  const parsed = await safeValidateUIMessages({ messages: cause });
   if (!parsed.success) {
-    throw new Error("Agent chat history is malformed");
+    throw new Error("Agent chat history is malformed", { cause: parsed.error });
   }
-  // SAFETY: The schema validates the structured-clone envelope emitted by
-  // AIChatAgent persistence; the agent API consumes this same UIMessage shape.
-  return parsed.data as UIMessage[];
+  return parsed.data;
 }
 
 export async function clearProjectAgentHistory(
@@ -84,7 +74,7 @@ export async function moveProjectAgentHistory(
     throw new Error("Agent history source cannot export history");
   }
   const rawMessages = await source.exportChatHistoryForMigration();
-  const messages = parseChatHistory(rawMessages);
+  const messages = await parseChatHistory(rawMessages);
 
   if (Array.isArray(messages) && messages.length > 0) {
     const destination = await resolveAgent(
@@ -121,7 +111,7 @@ export function createAgentHistoryPorter(
         throw new Error("Agent history source cannot export history");
       }
       const rawMessages = await source.exportChatHistoryForMigration();
-      const messages = parseChatHistory(rawMessages);
+      const messages = await parseChatHistory(rawMessages);
       if (!Array.isArray(messages) || messages.length === 0) {
         return;
       }

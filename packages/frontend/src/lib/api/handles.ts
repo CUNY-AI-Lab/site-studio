@@ -1,7 +1,7 @@
 import { resolvePath } from '$lib/utils/paths';
-import { decodeJson } from '$lib/contracts';
 import { apiFetch } from './errors';
 import { csrfFetch } from './csrf';
+import { z } from 'zod';
 
 const API_BASE = resolvePath('/api');
 
@@ -24,6 +24,13 @@ interface HandleResponse {
 	message?: string;
 	error?: string;
 }
+
+const handleResponseSchema = z.object({
+	handle: z.string().optional(),
+	alreadyOwned: z.boolean().optional(),
+	message: z.string().optional(),
+	error: z.string().optional()
+});
 
 /** Validate + availability check for a candidate handle. */
 export async function checkHandle(handle: string): Promise<HandleCheckResult> {
@@ -52,7 +59,8 @@ export async function claimHandle(
 	// read fields off. Track that explicitly instead of coercing to `{}`.
 	let data: HandleResponse | null;
 	try {
-		data = decodeJson<HandleResponse>(await response.text());
+		const parsed = handleResponseSchema.safeParse(JSON.parse(await response.text()));
+		data = parsed.success ? parsed.data : null;
 	} catch {
 		data = null;
 	}

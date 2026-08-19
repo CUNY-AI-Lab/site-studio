@@ -501,6 +501,31 @@ describe("migrateAnonymousData", () => {
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
   });
 
+  it("retains the anonymous source when snapshot metadata is invalid", async () => {
+    seedAnonProject(bucket, "portfolio");
+    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.zip`, { data: "zipbytes" });
+    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.json`, {
+      data: JSON.stringify({
+        id: "snap1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        projectId: "portfolio",
+        trigger: "manual",
+        fileCount: "not-a-number",
+      }),
+    });
+
+    await expect(run()).rejects.toThrow("snapshot metadata is invalid");
+
+    // The strict snapshot schema must fail before migration reaches source
+    // deletion. Both the archive and its invalid record remain recoverable.
+    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.zip`)).toBe(true);
+    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.json`)).toBe(true);
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+  });
+
   it("fails closed on chat import failure and retries the pending claim", async () => {
     seedAnonHandle(bucket);
     seedAnonProject(bucket, "portfolio", {

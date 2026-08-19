@@ -5,13 +5,14 @@
 	import { resolveWebSocketPath } from '$lib/utils/ws';
 	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError } from '$lib/api/errors';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
-	import {
-		decodeJson,
+import {
 		decodeToolInput,
+		jsonValueSchema,
 		type JsonRecord,
 		type JsonValue,
 		type ToolInputRecord
 	} from '$lib/contracts';
+	import { z } from 'zod';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
 	import MessageContent from './MessageContent.svelte';
@@ -22,6 +23,10 @@
 		cloneParts,
 		isToolPart,
 		mergeUpdatedMessage,
+		parseAgentSocketMessage,
+		parseUIChatMessages,
+		parseUIStreamChunk,
+		type AgentSocketMessage,
 		type ActiveStreamMessage,
 		type UIChatMessage,
 		type UIMessagePart,
@@ -73,17 +78,6 @@
 		answer: string;
 		question?: string;
 		annotations?: JsonValue;
-	}
-
-	interface AgentSocketMessage {
-		type: string;
-		messages?: UIChatMessage[];
-		message?: UIChatMessage;
-		id?: string;
-		continuation?: boolean;
-		body?: string;
-		done?: boolean;
-		error?: boolean;
 	}
 
 	import type { UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
@@ -153,10 +147,8 @@
 	}
 
 	function stringValue(value: JsonValue | undefined): string | undefined {
-		if (value === undefined || value === null) return undefined;
-		const encoded = JSON.stringify(value);
-		if (!encoded.startsWith('"')) return undefined;
-		return decodeJson<string>(encoded);
+		const parsed = z.string().safeParse(value);
+		return parsed.success ? parsed.data : undefined;
 	}
 
 	function serializeToolOutput(output: JsonValue | undefined, errorText?: string, toolName?: string): string {
@@ -165,18 +157,19 @@
 		const outputText = stringValue(output);
 		if (outputText?.trim()) return outputText;
 		if (toolName === 'codemode') {
-			const record = decodeJson<JsonRecord>(JSON.stringify(output));
-			const result = record.result;
-			if (result !== undefined) {
-				const resultRecord = decodeJson<JsonRecord>(JSON.stringify(result));
-				const summary = resultRecord.summary;
-				const changedFiles = Array.isArray(resultRecord.changedFiles)
-					? resultRecord.changedFiles
+			const record = z.record(z.string(), jsonValueSchema).safeParse(output);
+			if (record.success) {
+				const result = record.data.result;
+				const resultRecord = z.record(z.string(), jsonValueSchema).safeParse(result);
+				if (resultRecord.success) {
+				const summary = resultRecord.data.summary;
+				const changedFiles = Array.isArray(resultRecord.data.changedFiles)
+					? resultRecord.data.changedFiles
 						.map((filePath) => stringValue(filePath))
 						.filter((filePath): filePath is string => Boolean(filePath?.trim()))
 					: [];
-				const logs = Array.isArray(record.logs)
-					? record.logs
+				const logs = Array.isArray(record.data.logs)
+					? record.data.logs
 						.map((entry) => stringValue(entry))
 						.filter((entry): entry is string => Boolean(entry?.trim()))
 					: [];
@@ -186,12 +179,15 @@
 					logs.length > 0 ? `Logs:\n${logs.join('\n')}` : ''
 				].filter(Boolean);
 				if (summaryLines.length > 0) return summaryLines.join('\n');
+				}
 			}
 		}
-		const record = decodeJson<JsonRecord>(JSON.stringify(output));
-		const message = record.message ?? record.tree ?? record.content;
-		const messageText = stringValue(message);
-		if (messageText) return messageText;
+		const record = z.record(z.string(), jsonValueSchema).safeParse(output);
+		if (record.success) {
+			const message = record.data.message ?? record.data.tree ?? record.data.content;
+			const messageText = stringValue(message);
+			if (messageText) return messageText;
+		}
 		return JSON.stringify(output) ?? '';
 	}
 
@@ -817,7 +813,7 @@
 				return;
 			}
 
-			const data = decodeJson<UIChatMessage[]>(await response.text());
+			const data = parseUIChatMessages(await response.text());
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
 			}
@@ -974,32 +970,26 @@
 	}
 
 	function parseStreamChunkBody(body: string): UIStreamChunk {
-		try {
-			return decodeJson<UIStreamChunk>(body);
-		} catch (error) {
-			if (!body.startsWith('data:')) {
-				throw error;
-			}
-
-			const payload = body.slice('data:'.length).replace(/[\r\n]+$/, '');
-			return decodeJson<UIStreamChunk>(payload);
-		}
+		return parseUIStreamChunk(body);
 	}
 
 	function handleSocketMessage(event: MessageEvent<string>) {
 		if (event.currentTarget !== socket || socketProjectId !== projectId) {
 			return;
 		}
-		let data: AgentSocketMessage;
 		try {
-			data = decodeJson<AgentSocketMessage>(event.data);
+			const data = parseAgentSocketMessage(event.data);
+			handleParsedSocketMessage(data);
 		} catch {
-			// Malformed (non-JSON) frame on the agent socket: a transport issue.
+			// Malformed frame on the agent socket: a transport issue.
 			// Still drop the frame, but say so — silent drops made transport
 			// corruption invisible.
 			console.warn('Dropping malformed (non-JSON) agent-socket frame');
 			return;
 		}
+	}
+
+	function handleParsedSocketMessage(data: AgentSocketMessage) {
 
 		switch (data.type) {
 			case AgentMessageType.CF_AGENT_CHAT_CLEAR:
@@ -1404,7 +1394,8 @@
 			const output: UserQuestionToolOutput = { answer };
 			if (primaryQuestion) output.question = primaryQuestion;
 			if (annotations && Object.keys(annotations).length > 0) {
-				output.annotations = decodeJson<JsonValue>(JSON.stringify(annotations));
+				const parsedAnnotations = jsonValueSchema.safeParse(annotations);
+				if (parsedAnnotations.success) output.annotations = parsedAnnotations.data;
 			}
 
 			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);

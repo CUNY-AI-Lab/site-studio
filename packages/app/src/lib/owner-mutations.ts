@@ -93,7 +93,6 @@ const uploadAdmissionRecordSchema = z.object({
   id: z.string(),
   timestamp: z.number(),
 });
-const uploadAdmissionListSchema = z.array(uploadAdmissionRecordSchema);
 
 export class OwnerMutationService {
   private readonly storage: R2ProjectStorage;
@@ -133,10 +132,18 @@ export class OwnerMutationService {
     policy: UploadPolicy
   ): Promise<UploadAdmission> {
     const now = policy.now ?? Date.now();
-    const priorResult = uploadAdmissionListSchema.safeParse(
-      await this.journalStore.get<UploadAdmissionRecord[]>(UPLOAD_ADMISSIONS_KEY) ?? [],
-    );
-    const prior = priorResult.success ? priorResult.data : [];
+    const stored = await this.journalStore.get<UploadAdmissionRecord[] | undefined>(UPLOAD_ADMISSIONS_KEY);
+    let prior: UploadAdmissionRecord[] = [];
+    if (stored !== undefined) {
+      if (!Array.isArray(stored)) {
+        throw new Error("Invalid upload admission journal.");
+      }
+      const parsedEntries = stored.map((entry) => uploadAdmissionRecordSchema.safeParse(entry));
+      if (parsedEntries.some((entry) => !entry.success)) {
+        throw new Error("Invalid upload admission journal.");
+      }
+      prior = parsedEntries.flatMap((entry) => entry.success ? [entry.data] : []);
+    }
     const recent = prior
       .filter(
         (entry) => entry.timestamp > now - 60_000

@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { decodeJson } from '$lib/contracts';
 import {
 	applyChunkToParts,
 	mergeUpdatedMessage,
@@ -72,8 +71,7 @@ describe('applyChunkToParts — text lifecycle', () => {
 
 	it('text-delta tolerates a missing delta (treats as empty)', () => {
 		const parts: UIMessagePart[] = [{ type: 'text', text: 'x', state: 'streaming' }];
-		const missingDelta = decodeJson<UIStreamChunk>(JSON.stringify({ type: 'text-delta', id: 't1' }));
-		applyChunkToParts(parts, missingDelta);
+		applyChunkToParts(parts, { type: 'text-delta', id: 't1', delta: '' });
 		expect(textPart(parts).text).toBe('x');
 	});
 

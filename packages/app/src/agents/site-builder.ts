@@ -218,9 +218,10 @@ const requestMessagesSchema = z.array(z.object({
   role: z.enum(["system", "user", "assistant"]),
   parts: z.array(z.object({ type: z.string(), text: z.string().optional() })),
 }));
-
-// SAFETY: agents.callable ignores the decorator context at runtime; this placeholder is only for the explicit post-class registration path used by workerd and tests.
-const DECORATOR_CONTEXT = {} as ClassMethodDecoratorContext;
+const chatRequestBodySchema = z.object({
+  messages: requestMessagesSchema,
+  trigger: z.enum(["submit-message", "regenerate-message"]).optional(),
+});
 
 function noStoreJson(body: Record<string, string>, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -410,9 +411,12 @@ function isTextFile(filePath: string): boolean {
   return isTextContentType(getContentType(filePath));
 }
 
-function summarizeLatestUserRequest(messages: RequestMessage[]): string | undefined {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
+export function summarizeLatestUserRequest(messages: RequestMessage[] | UIMessage[]): string | undefined {
+  const parsed = requestMessagesSchema.safeParse(messages);
+  if (!parsed.success) return undefined;
+
+  for (let index = parsed.data.length - 1; index >= 0; index -= 1) {
+    const message = parsed.data[index];
     if (message.role !== "user") {
       continue;
     }
@@ -1567,8 +1571,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // errors are followable end to end (browser → worker → DO → gateway).
       const gatewayFetch = withCorrelationFetch(correlation);
       const model = createCailModel(this.env, identityJwt, gatewayFetch);
-      const parsedBody = requestMessagesSchema.safeParse(options?.body);
-      const bodyMessages = parsedBody.success ? parsedBody.data : undefined;
+      const parsedBody = chatRequestBodySchema.safeParse(options?.body);
+      const bodyMessages: RequestMessage[] | undefined = parsedBody.success
+        ? parsedBody.data.messages
+        : undefined;
       const latestUserRequest = (bodyMessages ? summarizeLatestUserRequest(bodyMessages) : undefined)
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
@@ -1970,11 +1976,43 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   }
 }
 
-// Register the RPC method without decorator syntax so the same source can be
-// loaded by both workerd and Node-based unit-test transforms.
-callable()(SiteBuilderAgent.prototype.getObservability, DECORATOR_CONTEXT);
-callable()(SiteBuilderAgent.prototype.recordActionAdmission, DECORATOR_CONTEXT);
-callable()(SiteBuilderAgent.prototype.recordActionTerminal, DECORATOR_CONTEXT);
+callable()(SiteBuilderAgent.prototype.getObservability, {
+  kind: "method",
+  name: "getObservability",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "getObservability" in object,
+    get: (object: SiteBuilderAgent) => object.getObservability,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+callable()(SiteBuilderAgent.prototype.recordActionAdmission, {
+  kind: "method",
+  name: "recordActionAdmission",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "recordActionAdmission" in object,
+    get: (object: SiteBuilderAgent) => object.recordActionAdmission,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+callable()(SiteBuilderAgent.prototype.recordActionTerminal, {
+  kind: "method",
+  name: "recordActionTerminal",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "recordActionTerminal" in object,
+    get: (object: SiteBuilderAgent) => object.recordActionTerminal,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+
 function requiredPositiveInteger(value: string | undefined, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {

@@ -4,7 +4,8 @@
  */
 
 import { csrfFetch } from './csrf';
-import { browserWindow, decodeJson, type JsonValue } from '$lib/contracts';
+import { browserWindow, type JsonValue } from '$lib/contracts';
+import { z } from 'zod';
 
 export interface ValidationDetail {
 	path: string;
@@ -16,6 +17,19 @@ interface ApiErrorEnvelope {
 	message?: string;
 	code?: string;
 	details?: ValidationDetail[];
+}
+
+const apiErrorEnvelopeSchema = z.object({
+	error: z.string().optional(),
+	message: z.string().optional(),
+	code: z.string().optional(),
+	details: z.array(z.object({ path: z.string(), message: z.string() })).optional()
+});
+
+function parseApiErrorEnvelope(payload: string): ApiErrorEnvelope {
+	const parsed = apiErrorEnvelopeSchema.safeParse(JSON.parse(payload));
+	if (!parsed.success) throw new Error('Invalid API error envelope');
+	return parsed.data;
 }
 
 /**
@@ -124,7 +138,7 @@ export async function handleApiError(response: Response): Promise<never> {
 	let errorData: ApiErrorEnvelope;
 
 	try {
-		errorData = decodeJson<ApiErrorEnvelope>(await response.text());
+		errorData = parseApiErrorEnvelope(await response.text());
 	} catch {
 		// Response doesn't contain JSON, throw generic error
 		throw new ApiError(
@@ -157,7 +171,7 @@ export async function apiResponseFetch(
 
 	let errorData: ApiErrorEnvelope;
 	try {
-		errorData = decodeJson<ApiErrorEnvelope>(await response.clone().text());
+		errorData = parseApiErrorEnvelope(await response.clone().text());
 	} catch {
 		return response;
 	}

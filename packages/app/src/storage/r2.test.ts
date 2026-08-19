@@ -1411,6 +1411,33 @@ describe("OwnerMutationService recovery journal", () => {
     await expect(storage.fileExists("user-a", "site", "images/new.png")).resolves.toBe(false);
   });
 
+  it("fails closed on a mixed upload-admission journal without dropping valid entries", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProject("user-a", "site", "Site");
+    const prior = [
+      { id: "prior-upload", timestamp: 100_000 },
+      { id: "corrupt-upload", timestamp: "100_000" },
+    ];
+    journal.values.set("upload-admissions", prior);
+    const service = new OwnerMutationService(bucket, journal);
+
+    await expect(service.execute("user-a", {
+      type: "upload-if-absent",
+      projectId: "site",
+      path: "images/new.png",
+      content: new Uint8Array(10),
+      maxProjectBytes: 1_000_000,
+      maxOwnerBytes: 1_000_000,
+      uploadsPerMinute: 10,
+      now: 100_001,
+    })).rejects.toThrow("Invalid upload admission journal");
+
+    expect(journal.values.get("upload-admissions")).toEqual(prior);
+    await expect(storage.fileExists("user-a", "site", "images/new.png")).resolves.toBe(false);
+  });
+
   it("counts collision-suffix attempts with one admission id only once", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);

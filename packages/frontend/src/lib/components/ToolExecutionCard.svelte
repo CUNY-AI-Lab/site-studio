@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks, Play } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
-	import { decodeJson, type ToolInputRecord } from '$lib/contracts';
+	import { type ToolInputRecord } from '$lib/contracts';
+	import { z } from 'zod';
 
 	type ToolIcon = typeof Blocks;
 	interface ToolIconMap {
@@ -29,6 +30,14 @@
 		after: string | null;
 		isNewFile: boolean;
 	}
+
+	const diffDataSchema = z.object({
+		type: z.enum(['file_write', 'file_edit', 'file_delete']),
+		file_path: z.string(),
+		before: z.string().nullable(),
+		after: z.string().nullable(),
+		isNewFile: z.boolean()
+	});
 
 	let {
 		tool
@@ -191,7 +200,9 @@
 		const diffMatch = output.match(/<!-- diff:([\s\S]*?) -->/);
 		if (diffMatch) {
 			try {
-				const diffData = decodeJson<DiffData>(diffMatch[1]);
+				const parsed = diffDataSchema.safeParse(JSON.parse(diffMatch[1]));
+				if (!parsed.success) throw new Error('Invalid diff data');
+				const diffData: DiffData = parsed.data;
 				const cleanOutput = output.replace(/<!-- diff:[\s\S]*? -->/g, '').trim();
 				return { diffData, cleanOutput };
 			} catch (e) {

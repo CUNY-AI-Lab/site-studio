@@ -13,6 +13,34 @@ function memoryStorage() {
 
 const snapshot = { projectId: 'project-1', filePath: 'index.html', content: 'local edit' };
 const secret = 'owner-scoped-csrf-token';
+type DraftPayload = {
+	projectId: string;
+	filePath: string;
+	content: string | number;
+	baseEtag: string | { value: string };
+	updatedAt: string | number;
+};
+
+function encodeBase64(bytes: Uint8Array): string {
+	let binary = '';
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary);
+}
+
+async function encryptedDraft(secretValue: string, draft: DraftPayload): Promise<string> {
+	const encoder = new TextEncoder();
+	const digest = await crypto.subtle.digest('SHA-256', encoder.encode(secretValue));
+	const encryptionKey = await crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt']);
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ciphertext = new Uint8Array(
+		await crypto.subtle.encrypt(
+			{ name: 'AES-GCM', iv },
+			encryptionKey,
+			encoder.encode(JSON.stringify(draft))
+		)
+	);
+	return JSON.stringify({ version: 1, iv: encodeBase64(iv), ciphertext: encodeBase64(ciphertext) });
+}
 
 describe('draft-store', () => {
 	it('round-trips an encrypted draft with the etag it was based on', async () => {
@@ -30,6 +58,25 @@ describe('draft-store', () => {
 		const storage = memoryStorage();
 		await saveDraft(storage, snapshot, 'etag-1', secret);
 		expect(await loadDraft(storage, snapshot.projectId, snapshot.filePath, 'different-owner-token')).toBeNull();
+	});
+
+	it('rejects a decrypted draft whose fields have the wrong types', async () => {
+		const storage = memoryStorage();
+		await saveDraft(storage, snapshot, 'etag-1', secret);
+		const [storageKey] = [...storage.values.keys()];
+		if (!storageKey) throw new Error('draft storage key was not written');
+		storage.setItem(
+			storageKey,
+			await encryptedDraft(secret, {
+				projectId: snapshot.projectId,
+				filePath: snapshot.filePath,
+				content: 42,
+				baseEtag: { value: 'etag-2' },
+				updatedAt: 20260714
+			})
+		);
+
+		expect(await loadDraft(storage, snapshot.projectId, snapshot.filePath, secret)).toBeNull();
 	});
 
 	it('does not clear a newer queued draft when an older save completes', async () => {
