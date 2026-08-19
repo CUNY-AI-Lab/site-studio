@@ -16,12 +16,20 @@ const jwtClaimsSchema = z.object({
 	iss: z.string(),
 	aud: z.string()
 });
+const jsonValueSchema = z.lazy(() => z.union([
+	z.string(),
+	z.number(),
+	z.boolean(),
+	z.null(),
+	z.array(jsonValueSchema),
+	z.record(z.string(), jsonValueSchema)
+]));
 const textChunkSchema = z.object({ delta: z.string().optional(), text: z.string().optional() }).passthrough();
 const chatMessageSchema = z.object({
 	id: z.string(),
 	type: z.string().optional(),
-	error: z.unknown().optional(),
-	body: z.unknown().optional(),
+	error: jsonValueSchema.optional(),
+	body: jsonValueSchema.optional(),
 	done: z.boolean().optional()
 }).passthrough();
 
