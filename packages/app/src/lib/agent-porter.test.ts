@@ -108,6 +108,33 @@ describe("createAgentHistoryPorter", () => {
     expect(importSpy).toHaveBeenCalledWith(messages);
   });
 
+  it("preserves tool labels and preliminary results during migration", async () => {
+    const messages = [{
+      id: "m-tool",
+      role: "assistant",
+      parts: [{
+        type: "tool-ask_user_question",
+        toolCallId: "call-1",
+        state: "output-available",
+        input: { question: "Which direction?" },
+        output: { answer: "left" },
+        title: "Custom label",
+        preliminary: true,
+      }]
+    }] satisfies UIMessage[];
+    const importSpy = vi.fn(async (received: UIMessage[]) => received.length >= 0);
+    getAgentByName
+      .mockResolvedValueOnce({ exportChatHistoryForMigration: async () => messages })
+      .mockResolvedValueOnce({ importChatHistoryForMigration: importSpy });
+
+    const porter = createAgentHistoryPorter(env, getAgentByName);
+    await porter.port("user_anon42", "blog", SUBJECT, "blog-imported");
+
+    expect(importSpy).toHaveBeenCalledOnce();
+    expect(importSpy.mock.calls[0]?.[0]).toBe(messages);
+    expect(importSpy.mock.calls[0]?.[0][0]?.parts[0]).toEqual(messages[0].parts[0]);
+  });
+
   it("does not touch the destination when the source has no history", async () => {
     getAgentByName.mockResolvedValueOnce({ exportChatHistoryForMigration: async () => [] });
 

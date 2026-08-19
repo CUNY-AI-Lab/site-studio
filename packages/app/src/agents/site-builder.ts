@@ -79,8 +79,6 @@ type Scope = {
 };
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
-type ChatFinishCallback = NonNullable<Parameters<ChatHandler>[0]>;
-type ChatFinishEvent = Parameters<ChatFinishCallback>[0];
 type CompatibleReasonByOutcome = Readonly<Record<CailOutcome, ReadonlySet<CailTerminalReason>>>;
 
 type SiteBuilderObservabilityToolCall = {
@@ -1593,7 +1591,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId);
       this.pushObservabilityEvent(requestId, "request-start", "Chat request started");
 
-      const result = streamText({
+      const result = streamText<ToolSet>({
         model,
         // Model POSTs are billed and the gateway does not yet provide
         // execution idempotency. Retrying an uncertain request can run it
@@ -1632,13 +1630,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             this.buildActionAwaitingPersistence = buildAction;
           }
           if (onFinish) {
-            // SAFETY: AIChatAgent deliberately erases the concrete tool set on
-            // its callback type; this event is produced by the same stream and
-            // has the required base fields.
-            const erasedFinishEvent = event as unknown;
-            // SAFETY: The stream callback above is the single runtime source
-            // for this event, so its erased payload matches ChatFinishEvent.
-            onFinish(erasedFinishEvent as ChatFinishEvent);
+            onFinish(event);
           }
         },
         onAbort: ({ steps }) => {

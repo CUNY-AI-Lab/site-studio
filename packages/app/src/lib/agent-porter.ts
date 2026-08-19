@@ -14,11 +14,12 @@
 import type { Env } from "../types";
 import type { ChatHistoryPorter } from "./migration";
 import type { ProjectHistoryLifecycle } from "./owner-mutations";
-import { safeValidateUIMessages, type UIMessage } from "ai";
+import type { UIMessage } from "ai";
+import { z } from "zod";
 
 type AgentHistoryStub = {
   clearChatHistory?: () => Promise<void>;
-  exportChatHistoryForMigration?: () => Promise<UIMessage[]>;
+  exportChatHistoryForMigration?: () => Promise<ChatHistoryWire>;
   importChatHistoryForMigration?: (messages: UIMessage[]) => Promise<boolean>;
 };
 
@@ -35,13 +36,161 @@ async function resolveAgentByName(
   return getAgentByName(namespace, name);
 }
 
-async function parseChatHistory(cause: UIMessage[]): Promise<UIMessage[]> {
-  if (Array.isArray(cause) && cause.length === 0) return [];
-  const parsed = await safeValidateUIMessages({ messages: cause });
+const jsonValueSchema = z.json();
+const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+const toolStateSchema = z.enum([
+  "input-streaming",
+  "input-available",
+  "approval-requested",
+  "approval-responded",
+  "output-available",
+  "output-error",
+  "output-denied",
+]);
+const partStateSchema = z.union([toolStateSchema, z.enum(["streaming", "done"])]);
+const toolTypeSchema = z.string().startsWith("tool-");
+const approvalSchema = z.object({
+  id: z.string(),
+  approved: z.boolean().optional(),
+  reason: z.string().optional(),
+  signature: z.string().optional(),
+}).catchall(jsonValueSchema);
+
+const chatPartSchema = z.object({
+  type: z.string(),
+  text: z.string().optional(),
+  state: partStateSchema.optional(),
+  sourceId: z.string().optional(),
+  url: z.string().optional(),
+  mediaType: z.string().optional(),
+  title: z.string().optional(),
+  filename: z.string().optional(),
+  id: z.string().optional(),
+  data: jsonValueSchema.optional(),
+  toolName: z.string().optional(),
+  toolCallId: z.string().optional(),
+  toolMetadata: jsonObjectSchema.optional(),
+  providerExecuted: z.boolean().optional(),
+  input: jsonValueSchema.optional(),
+  output: jsonValueSchema.optional(),
+  errorText: z.string().optional(),
+  rawInput: jsonValueSchema.optional(),
+  callProviderMetadata: jsonObjectSchema.optional(),
+  resultProviderMetadata: jsonObjectSchema.optional(),
+  providerMetadata: jsonObjectSchema.optional(),
+  preliminary: z.boolean().optional(),
+  approval: approvalSchema.optional(),
+}).catchall(jsonValueSchema).superRefine((part, context) => {
+  const issue = (path: string, message: string) => {
+    context.addIssue({ code: "custom", path: [path], message });
+  };
+  const has = (value: z.infer<typeof jsonValueSchema> | undefined): boolean => value !== undefined;
+  const requireString = (field: "text" | "sourceId" | "url" | "mediaType" | "title" | "filename" | "data") => {
+    if (field === "data") {
+      if (!has(part.data)) issue(field, "data parts require data");
+      return;
+    }
+    if (!z.string().safeParse(part[field]).success) issue(field, `${field} is required`);
+  };
+
+  if (part.type === "text" || part.type === "reasoning") {
+    requireString("text");
+    if (part.state !== undefined && (part.state !== "streaming" && part.state !== "done")) {
+      issue("state", "text and reasoning parts use streaming or done state");
+    }
+    return;
+  }
+
+  if (part.type === "source-url") {
+    requireString("sourceId");
+    requireString("url");
+    return;
+  }
+  if (part.type === "source-document") {
+    requireString("sourceId");
+    requireString("mediaType");
+    requireString("title");
+    return;
+  }
+  if (part.type === "file") {
+    requireString("mediaType");
+    requireString("url");
+    return;
+  }
+  if (part.type === "step-start") return;
+  if (part.type.startsWith("data-")) {
+    requireString("data");
+    return;
+  }
+
+  const isDynamicTool = part.type === "dynamic-tool";
+  if (!isDynamicTool && !toolTypeSchema.safeParse(part.type).success) {
+    issue("type", "unsupported chat part type");
+    return;
+  }
+  if (isDynamicTool && part.toolName === undefined) issue("toolName", "dynamic tools require a tool name");
+  if (part.toolCallId === undefined) issue("toolCallId", "tool parts require a call id");
+  if (part.state === undefined || !toolStateSchema.safeParse(part.state).success) {
+    issue("state", "tool parts require a valid state");
+    return;
+  }
+
+  const requiresInput = part.state !== "input-streaming" && part.state !== "output-error";
+  if (requiresInput && !has(part.input)) issue("input", "this tool state requires input");
+  if (part.state === "output-available" && !has(part.output)) issue("output", "output-available requires output");
+  if (part.state === "output-error" && part.errorText === undefined) issue("errorText", "output-error requires errorText");
+
+  if (part.state === "input-streaming" || part.state === "input-available") {
+    if (has(part.output) || has(part.errorText) || has(part.approval)) {
+      issue("state", `${part.state} cannot contain output, error, or approval`);
+    }
+  }
+  if (part.state === "approval-requested") {
+    if (!part.approval || part.approval.approved !== undefined) {
+      issue("approval", "approval-requested requires an undecided approval");
+    }
+  }
+  if (part.state === "approval-responded") {
+    if (!part.approval || !z.boolean().safeParse(part.approval.approved).success) {
+      issue("approval", "approval-responded requires an approval decision");
+    }
+  }
+  if (part.state === "output-available" || part.state === "output-error") {
+    if (part.approval && part.approval.approved !== true) {
+      issue("approval", `${part.state} approvals must be approved`);
+    }
+  }
+  if (part.state === "output-denied") {
+    if (!part.approval || part.approval.approved !== false) {
+      issue("approval", "output-denied requires a rejected approval");
+    }
+    if (has(part.output) || has(part.errorText)) issue("state", "output-denied cannot contain output or error");
+  }
+});
+
+const chatMessageSchema = z.object({
+  id: z.string(),
+  role: z.enum(["system", "user", "assistant"]),
+  metadata: jsonValueSchema.optional(),
+  parts: z.array(chatPartSchema).nonempty(),
+}).catchall(jsonValueSchema);
+const chatHistorySchema = z.array(chatMessageSchema).nonempty();
+type ChatHistoryWire = UIMessage[] | z.input<typeof chatHistorySchema>;
+
+function assertChatHistory(value: ChatHistoryWire): asserts value is UIMessage[] {
+  const parsed = chatHistorySchema.safeParse(value);
   if (!parsed.success) {
     throw new Error("Agent chat history is malformed", { cause: parsed.error });
   }
-  return parsed.data;
+}
+
+function parseChatHistory(value: ChatHistoryWire): UIMessage[] {
+  if (Array.isArray(value) && value.length === 0) return [];
+  assertChatHistory(value);
+  // Return the validated RPC value itself. Zod's parsed object intentionally
+  // is not used here: Durable Object history may carry valid UI SDK extension
+  // fields, and migration must preserve those fields without reconstruction.
+  return value;
 }
 
 export async function clearProjectAgentHistory(
@@ -69,7 +218,6 @@ export async function moveProjectAgentHistory(
     env.SITE_BUILDER_AGENT,
     `${owner}:${fromProjectId}`
   );
-  // SAFETY: the generated Durable Object stub erases the method's return type; the RPC payload is decoded by chatHistorySchema before use.
   if (!source.exportChatHistoryForMigration) {
     throw new Error("Agent history source cannot export history");
   }
@@ -104,9 +252,6 @@ export function createAgentHistoryPorter(
         env.SITE_BUILDER_AGENT,
         `${fromOwner}:${fromProjectId}`
       );
-      // The DO-stub RPC mapped type collapses `unknown[]` to `never`; the
-      // runtime value is the agent's UIMessage[] (structured-clone friendly).
-      // SAFETY: the generated Durable Object stub erases the method's return type; the RPC payload is decoded by chatHistorySchema before use.
       if (!source.exportChatHistoryForMigration) {
         throw new Error("Agent history source cannot export history");
       }
