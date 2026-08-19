@@ -135,6 +135,61 @@ describe("createAgentHistoryPorter", () => {
     expect(importSpy.mock.calls[0]?.[0][0]?.parts[0]).toEqual(messages[0].parts[0]);
   });
 
+  it("rejects output-error tool parts that carry an output", async () => {
+    const malformedMessages = JSON.parse(`[
+      {
+        "id": "m-tool",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool-ask_user_question",
+            "toolCallId": "call-1",
+            "state": "output-error",
+            "input": { "question": "Which direction?" },
+            "output": { "answer": "left" },
+            "errorText": "question failed"
+          }
+        ]
+      }
+    ]`);
+    getAgentByName.mockResolvedValueOnce({
+      exportChatHistoryForMigration: async () => malformedMessages
+    });
+
+    const porter = createAgentHistoryPorter(env, getAgentByName);
+    await expect(
+      porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
+    ).rejects.toThrow("Agent chat history is malformed");
+    expect(getAgentByName).toHaveBeenCalledOnce();
+  });
+
+  it("rejects approval-requested tool parts that carry an approval reason", async () => {
+    const malformedMessages = JSON.parse(`[
+      {
+        "id": "m-tool",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool-ask_user_question",
+            "toolCallId": "call-1",
+            "state": "approval-requested",
+            "input": { "question": "Which direction?" },
+            "approval": { "id": "approval-1", "reason": "already decided" }
+          }
+        ]
+      }
+    ]`);
+    getAgentByName.mockResolvedValueOnce({
+      exportChatHistoryForMigration: async () => malformedMessages
+    });
+
+    const porter = createAgentHistoryPorter(env, getAgentByName);
+    await expect(
+      porter.port("user_anon42", "blog", SUBJECT, "blog-imported")
+    ).rejects.toThrow("Agent chat history is malformed");
+    expect(getAgentByName).toHaveBeenCalledOnce();
+  });
+
   it("does not touch the destination when the source has no history", async () => {
     getAgentByName.mockResolvedValueOnce({ exportChatHistoryForMigration: async () => [] });
 

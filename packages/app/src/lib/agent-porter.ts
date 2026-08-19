@@ -146,19 +146,36 @@ const chatPartSchema = z.object({
     }
   }
   if (part.state === "approval-requested") {
-    if (!part.approval || part.approval.approved !== undefined) {
+    if (
+      !part.approval
+      || part.approval.approved !== undefined
+      || part.approval.reason !== undefined
+    ) {
       issue("approval", "approval-requested requires an undecided approval");
+    }
+    if (has(part.output) || has(part.errorText)) {
+      issue("state", "approval-requested cannot contain output or error");
     }
   }
   if (part.state === "approval-responded") {
     if (!part.approval || !z.boolean().safeParse(part.approval.approved).success) {
       issue("approval", "approval-responded requires an approval decision");
     }
+    if (has(part.output) || has(part.errorText)) {
+      issue("state", "approval-responded cannot contain output or error");
+    }
   }
-  if (part.state === "output-available" || part.state === "output-error") {
+  if (part.state === "output-available") {
     if (part.approval && part.approval.approved !== true) {
       issue("approval", `${part.state} approvals must be approved`);
     }
+    if (has(part.errorText)) issue("state", "output-available cannot contain error");
+  }
+  if (part.state === "output-error") {
+    if (part.approval && part.approval.approved !== true) {
+      issue("approval", "output-error approvals must be approved");
+    }
+    if (has(part.output)) issue("state", "output-error cannot contain output");
   }
   if (part.state === "output-denied") {
     if (!part.approval || part.approval.approved !== false) {
