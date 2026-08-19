@@ -40,11 +40,11 @@
 	let snapshotLabel = $state('');
 	let lastLoadedProjectId = $state<string | null>(null);
 
-	const TRIGGER_LABELS: Record<ProjectSnapshot['trigger'], string> = {
+	const TRIGGER_LABELS = {
 		agent: 'AI run',
 		manual: 'Manual',
 		restore: 'Restore point'
-	};
+	} satisfies Record<ProjectSnapshot['trigger'], string>;
 
 	function formatCreatedAt(value: string): string {
 		try {
@@ -81,7 +81,7 @@
 			snapshots = await fetchProjectSnapshots(projectId);
 			lastLoadedProjectId = projectId;
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
 		} finally {
 			isLoading = false;
 		}
@@ -120,7 +120,7 @@
 			snapshots = [snapshot, ...snapshots];
 			snapshotLabel = '';
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
 		} finally {
 			isCreating = false;
 		}
@@ -145,7 +145,7 @@
 				await onRestoreSuccess();
 			}
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
 		} finally {
 			restoringSnapshotId = null;
 		}

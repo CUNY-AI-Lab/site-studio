@@ -16,10 +16,13 @@ import {
   isLoopFinished,
   pruneMessages,
   streamText,
+  type TextStreamPart,
+  type ToolSet,
+  type UIMessage,
   tool,
 } from "ai";
 import { z } from "zod";
-import type { Env, SnapshotResult } from "../types";
+import type { Env, SiteBuilderAgentProps, SnapshotResult } from "../types";
 import { isSnapshotSkipped } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
@@ -58,10 +61,15 @@ import {
   serializeSiteStudioLoggingContext,
   type SiteStudioConnectionLoggingState,
   type SiteStudioLoggingContext,
+  type SiteStudioLoggingContextData,
   withCorrelationFetch,
 } from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
-import { executeOwnerMutation } from "../lib/owner-mutations";
+import {
+  executeOwnerMutation,
+  type OwnerMutation,
+  type OwnerMutationResult,
+} from "../lib/owner-mutations";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -71,6 +79,7 @@ type Scope = {
 };
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
+type CompatibleReasonByOutcome = Readonly<Record<CailOutcome, ReadonlySet<CailTerminalReason>>>;
 
 type SiteBuilderObservabilityToolCall = {
   toolCallId: string;
@@ -113,10 +122,47 @@ type SiteBuilderObservabilityEvent = {
   level: "info" | "warn" | "error";
   type: "request-start" | "step-start" | "chunk" | "tool-call" | "tool-result" | "finish" | "abort" | "error";
   detail: string;
-  data?: Record<string, unknown>;
+  data?: ObservabilityData;
 };
 
-type SiteBuilderObservabilitySnapshot = {
+type ObservabilityData = Record<string, string | number | boolean | null>;
+
+type MutableDurableActionAttempt = {
+  schemaVersion: typeof ACTION_ATTEMPT_SCHEMA_VERSION;
+  actionId: string;
+  action: "build" | "publish";
+  route: string;
+  admittedAt: string;
+  terminalAt?: string;
+  outcome?: CailOutcome;
+  reason?: CailTerminalReason;
+  durationMs?: number;
+  errorType?: string;
+};
+
+type SiteBuilderStreamChunk = Extract<
+  TextStreamPart<ToolSet>,
+  { type: "text-delta" | "reasoning-delta" | "source" | "tool-input-start" | "tool-input-delta" | "tool-call" | "tool-result" | "raw" }
+>;
+
+type AgentInitializationProps = Partial<SiteBuilderAgentProps>;
+
+type RequestMessage = {
+  role: "system" | "user" | "assistant";
+  parts: Array<{ type: string; text?: string }>;
+};
+
+export type ProjectStorageLike = Pick<
+  R2ProjectStorage,
+  "fileExists" | "listFiles" | "readFile" | "readFileWithEtag" | "readFileBuffer"
+>;
+export type ProjectMutationExecutor = (
+  ownerId: string,
+  operation: OwnerMutation,
+  logging?: SiteStudioLoggingContextData,
+) => Promise<OwnerMutationResult>;
+
+export type SiteBuilderObservabilitySnapshot = {
   generatedAt: string;
   actionAttempts: ActionAttemptAdminRead;
   requests: SiteBuilderObservabilityRequest[];
@@ -142,6 +188,38 @@ const MAX_SNAPSHOT_LABEL_CHARS = 120;
 const MAX_OBSERVABILITY_EVENTS = 400;
 const MAX_OBSERVABILITY_REQUESTS = 20;
 const OBSERVABILITY_STALL_MS = 15_000;
+
+const connectionStateSchema = z.object({
+  correlation: z.object({
+    trace_id: z.string(),
+    span_id: z.string(),
+    trace_flags: z.union([z.literal(0), z.literal(1)]),
+    request_id: z.string(),
+    tracestate: z.string().optional(),
+    trace: z.object({
+      trace_id: z.string(),
+      span_id: z.string(),
+      trace_flags: z.union([z.literal(0), z.literal(1)]),
+    }),
+  }),
+  operationalSubject: z.string().optional(),
+  identityJwt: z.string().optional(),
+});
+
+const finalObservabilityDataSchema = z.object({
+  error_type: z.string().nullable().optional(),
+  finishReason: z.string().nullable().optional(),
+  rawFinishReason: z.string().nullable().optional(),
+});
+
+const requestMessagesSchema = z.array(z.object({
+  role: z.enum(["system", "user", "assistant"]),
+  parts: z.array(z.object({ type: z.string(), text: z.string().optional() })),
+}));
+const chatRequestBodySchema = z.object({
+  messages: requestMessagesSchema,
+  trigger: z.enum(["submit-message", "regenerate-message"]).optional(),
+});
 
 function noStoreJson(body: Record<string, string>, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -184,7 +262,7 @@ function parseScope(name: string): Scope {
   };
 }
 
-function clipText(text: string, maxChars = MAX_FILE_CONTENT_CHARS): { text: string; truncated: boolean } {
+function clipText(text: string, maxChars = MAX_FILE_CONTENT_CHARS) {
   if (text.length <= maxChars) {
     return { text, truncated: false };
   }
@@ -202,45 +280,50 @@ function clipPreview(value: string, maxChars = 180): string {
   return `${value.slice(0, maxChars - 1)}...`;
 }
 
-export function summarizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
+export function summarizeError(cause: unknown): string {
+  if (cause instanceof Error) {
+    return `${cause.name}: ${cause.message}`;
   }
-  if (typeof error === "string") {
-    return error;
+  const stringCause = z.string().safeParse(cause);
+  if (stringCause.success) {
+    return stringCause.data;
   }
   try {
-    return clipPreview(JSON.stringify(error));
+    const serialized = JSON.stringify(cause);
+    return serialized === undefined ? String(cause) : clipPreview(serialized);
   } catch {
-    return String(error);
+    return String(cause);
   }
 }
 
-function summarizeChunkData(chunk: { type: string } & Record<string, unknown>): Record<string, unknown> | undefined {
+function summarizeChunkData(chunk: SiteBuilderStreamChunk): ObservabilityData | undefined {
   switch (chunk.type) {
     case "text-delta":
     case "reasoning-delta":
-      return { chars: typeof chunk.text === "string" ? chunk.text.length : 0 };
+      return { chars: chunk.text.length };
     case "tool-input-start":
       return {
-        toolCallId: typeof chunk.id === "string" ? chunk.id : undefined,
-        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined
+        toolCallId: chunk.id,
+        toolName: chunk.toolName,
       };
     case "tool-input-delta":
       return {
-        toolCallId: typeof chunk.id === "string" ? chunk.id : undefined,
-        chars: typeof chunk.delta === "string" ? chunk.delta.length : 0,
+        toolCallId: chunk.id,
+        chars: chunk.delta.length,
       };
     case "tool-call":
-      return {
-        toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
-        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
-        invalid: Boolean(chunk.invalid),
-      };
+      {
+        const data = {
+          toolCallId: chunk.toolCallId,
+          toolName: chunk.toolName,
+          invalid: chunk.invalid ?? null,
+        };
+        return data;
+      }
     case "tool-result":
       return {
-        toolCallId: typeof chunk.toolCallId === "string" ? chunk.toolCallId : undefined,
-        toolName: typeof chunk.toolName === "string" ? chunk.toolName : undefined,
+        toolCallId: chunk.toolCallId,
+        toolName: chunk.toolName,
       };
     case "raw":
       return undefined;
@@ -326,27 +409,19 @@ function isTextFile(filePath: string): boolean {
   return isTextContentType(getContentType(filePath));
 }
 
-function summarizeLatestUserRequest(messages: unknown): string | undefined {
-  if (!Array.isArray(messages)) {
-    return undefined;
-  }
+export function summarizeLatestUserRequest(messages: RequestMessage[] | UIMessage[]): string | undefined {
+  const parsed = requestMessagesSchema.safeParse(messages);
+  if (!parsed.success) return undefined;
 
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as Record<string, unknown> | null;
-    if (!message || message.role !== "user" || !Array.isArray(message.parts)) {
+  for (let index = parsed.data.length - 1; index >= 0; index -= 1) {
+    const message = parsed.data[index];
+    if (message.role !== "user") {
       continue;
     }
 
     const text = message.parts
       .map((part) => {
-        if (!part || typeof part !== "object") {
-          return "";
-        }
-
-        const candidate = part as Record<string, unknown>;
-        return candidate.type === "text" && typeof candidate.text === "string"
-          ? candidate.text.trim()
-          : "";
+        return part.type === "text" && part.text !== undefined ? part.text.trim() : "";
       })
       .filter((value) => value.length > 0)
       .join(" ")
@@ -365,7 +440,7 @@ function summarizeLatestUserRequest(messages: unknown): string | undefined {
 }
 
 export function createProjectTools(
-  env: Env,
+  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "SITE_STUDIO_MAX_PROJECT_BYTES" | "SITE_STUDIO_MAX_OWNER_BYTES" | "SITE_STUDIO_UPLOADS_PER_MINUTE" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
   scope: Scope,
   identityJwt: string | null,
   snapshotOptions?: {
@@ -375,13 +450,17 @@ export function createProjectTools(
   fetchImpl?: typeof fetch,
   mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
   logging?: SiteStudioLoggingContext,
+  storageOverride?: ProjectStorageLike,
+  mutationExecutor?: ProjectMutationExecutor,
 ) {
   const serializedLogging = serializeSiteStudioLoggingContext(logging);
-  const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
+  const storage = storageOverride ?? new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
+  const executeMutation: ProjectMutationExecutor = mutationExecutor
+    ?? ((ownerId, operation, mutationLogging) => executeOwnerMutation(env, ownerId, operation, mutationLogging));
   let snapshotPromise: Promise<SnapshotResult> | null = null;
 
   async function writeIfAbsent(path: string, content: string): Promise<string | null> {
-    const result = await executeOwnerMutation(env, scope.userId, {
+    const result = await executeMutation(scope.userId, {
       type: "write-file-if-absent",
       projectId: scope.projectId,
       path,
@@ -392,7 +471,7 @@ export function createProjectTools(
   }
 
   async function writeIfMatch(path: string, content: string, baseEtag: string): Promise<string | null> {
-    const result = await executeOwnerMutation(env, scope.userId, {
+    const result = await executeMutation(scope.userId, {
       type: "write-file",
       projectId: scope.projectId,
       path,
@@ -410,7 +489,7 @@ export function createProjectTools(
   // swallowing it.
   async function ensureSnapshot() {
     if (!snapshotPromise) {
-      snapshotPromise = executeOwnerMutation(env, scope.userId, {
+      snapshotPromise = executeMutation(scope.userId, {
         type: "create-snapshot",
         projectId: scope.projectId,
         trigger: snapshotOptions?.trigger || "agent",
@@ -822,7 +901,7 @@ export function createProjectTools(
         // claims the destination atomically; losing that claim means a
         // concurrent write or rename took the destination after the preflight.
         try {
-          await executeOwnerMutation(env, scope.userId, {
+          await executeMutation(scope.userId, {
             type: "rename-file",
             projectId: scope.projectId,
             oldPath: currentPath,
@@ -885,7 +964,7 @@ export function createProjectTools(
 
         mutationLifecycle?.admit();
         await ensureSnapshot();
-        await executeOwnerMutation(env, scope.userId, {
+        await executeMutation(scope.userId, {
           type: "delete-file",
           projectId: scope.projectId,
           path: filePath
@@ -930,7 +1009,7 @@ export function createProjectTools(
         const replacementFiles = templateFiles ?? {
           "index.html": createBlankIndexHtml(scope.projectId)
         };
-        await executeOwnerMutation(env, scope.userId, {
+        await executeMutation(scope.userId, {
           type: "replace-files",
           projectId: scope.projectId,
           files: replacementFiles,
@@ -1053,7 +1132,7 @@ export function createProjectTools(
           generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
           screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
           saveIfAbsent: async (path, bytes) => {
-            const saved = await executeOwnerMutation(env, scope.userId, {
+            const saved = await executeMutation(scope.userId, {
               type: "upload-if-absent",
               projectId: scope.projectId,
               path,
@@ -1203,7 +1282,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    * `onStart` runs once per DO lifetime; the per-connection server-owned props
    * header is read in `onConnect` below instead.
    */
-  onStart(_props?: Record<string, unknown>): void {}
+  onStart(_props?: AgentInitializationProps): void {}
 
   /**
    * Refresh the caller JWT on every new WebSocket connection. The upgrade
@@ -1217,7 +1296,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // socket therefore cannot overwrite the trace/request id used by a first
     // socket that is still mid-turn.
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
-    connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt));
+    connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt ?? undefined));
 
   }
 
@@ -1247,7 +1326,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // owner/project DO keeps the socket open while replacing only its
     // connection-local (hibernation-safe) model credential; the token is never
     // sent back to the browser.
-    const connections = Array.from(this.getConnections());
+    const connections = Array.from(this.getConnections<SiteStudioConnectionLoggingState>());
     if (connections.length === 0) {
       return noStoreJson({ error: "agent_connection_not_found" }, 409);
     }
@@ -1256,14 +1335,13 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // state. Agents wraps hibernated connections to keep internal `_cf_` flags
     // out of application state; setState's updater preserves those flags while
     // retaining the connection's existing correlation and other fields.
-    if (connections.some((connection) => !connection.state || typeof connection.state !== "object")) {
+    if (connections.some((connection) => !connection.state)) {
       return noStoreJson({ error: "agent_connection_state_unavailable" }, 409);
     }
 
     for (const connection of connections) {
-      const typedConnection = connection as Connection<SiteStudioConnectionLoggingState>;
-      typedConnection.setState((state: Readonly<SiteStudioConnectionLoggingState> | null) => {
-        if (!state || typeof state !== "object") {
+      connection.setState((state) => {
+        if (!state) {
           // The preflight above makes this unreachable for a live connection;
           // fail closed if a connection disappears between enumeration and the
           // synchronous state update.
@@ -1300,8 +1378,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const cutoff = new Date(
       Date.parse(admission.admittedAt) - ACTION_ATTEMPT_RETENTION_HOURS * 3_600_000,
     ).toISOString();
-    this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
-    this.sql`
+    void this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
+    void this.sql`
       INSERT INTO site_studio_action_attempts (
         action_id, action_kind, route, admitted_at
       ) VALUES (
@@ -1328,19 +1406,19 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     `][0];
     if (!existing) throw new TypeError("action terminal requires a durable admission");
     const expectedDuration = Date.parse(terminal.terminalAt) - Date.parse(existing.admitted_at);
-    const compatibleReason: Readonly<Record<CailOutcome, readonly CailTerminalReason[]>> = {
-      ok: ["completed"],
-      client_error: ["client_error"],
-      error: ["application_failure", "upstream_failure"],
-      denied: ["denied", "quota_blocked", "rate_limited"],
-      cancelled: ["cancelled"],
-      timeout: ["timeout"],
-      outcome_unknown: ["unknown"],
-    };
+    const compatibleReason = {
+      ok: new Set<CailTerminalReason>(["completed"]),
+      client_error: new Set<CailTerminalReason>(["client_error"]),
+      error: new Set<CailTerminalReason>(["application_failure", "upstream_failure"]),
+      denied: new Set<CailTerminalReason>(["denied", "quota_blocked", "rate_limited"]),
+      cancelled: new Set<CailTerminalReason>(["cancelled"]),
+      timeout: new Set<CailTerminalReason>(["timeout"]),
+      outcome_unknown: new Set<CailTerminalReason>(["unknown"]),
+    } satisfies CompatibleReasonByOutcome;
     if (
       expectedDuration < 0
       || terminal.durationMs !== expectedDuration
-      || !compatibleReason[terminal.outcome].includes(terminal.reason)
+      || !compatibleReason[terminal.outcome].has(terminal.reason)
       || (terminal.outcome === "ok" && terminal.errorType !== undefined)
     ) {
       throw new TypeError("action terminal contradicts its durable admission");
@@ -1354,7 +1432,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       if (same) return;
       throw new TypeError("action attempt already has a different terminal");
     }
-    this.sql`
+    void this.sql`
       UPDATE site_studio_action_attempts
       SET terminal_at = ${terminal.terminalAt},
           outcome = ${terminal.outcome},
@@ -1369,7 +1447,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    * Export the persisted chat history for the anonymous-data migration
    * (lib/migration.ts). Called over DO RPC by the main worker only.
    */
-  async exportChatHistoryForMigration(): Promise<unknown[]> {
+  async exportChatHistoryForMigration(): Promise<UIMessage[]> {
     return this.messages;
   }
 
@@ -1378,13 +1456,13 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    * refuses when this instance already has messages of its own. Returns
    * whether the history was imported.
    */
-  async importChatHistoryForMigration(messages: unknown[]): Promise<boolean> {
+  async importChatHistoryForMigration(messages: UIMessage[]): Promise<boolean> {
     if (this.messages.length > 0) {
       // A retry after a later migration step failed must accept the exact chat
       // it already imported, while still refusing to overwrite different work.
       return JSON.stringify(this.messages) === JSON.stringify(messages);
     }
-    await this.saveMessages(messages as typeof this.messages);
+    await this.saveMessages(messages);
     return true;
   }
 
@@ -1396,7 +1474,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    */
   async clearChatHistory(): Promise<void> {
     this.resetTurnState();
-    this.sql`delete from cf_ai_chat_agent_messages`;
+    void this.sql`delete from cf_ai_chat_agent_messages`;
     this.messages = [];
   }
 
@@ -1423,10 +1501,11 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   ) {
     const requestId = options?.requestId ?? "unknown";
 
-    const connection = getCurrentAgent().connection as
-      | Connection<SiteStudioConnectionLoggingState>
-      | undefined;
-    const connectionState = connection?.state;
+    const connection = getCurrentAgent().connection;
+    const parsedConnectionState = connection?.state
+      ? connectionStateSchema.safeParse(connection.state)
+      : null;
+    const connectionState = parsedConnectionState?.success ? parsedConnectionState.data : null;
     const correlation = connectionState?.correlation ?? mintCorrelation();
     const identityJwt = connectionState?.identityJwt ?? null;
     const logging = createSiteStudioLoggingContext(
@@ -1490,7 +1569,11 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // errors are followable end to end (browser → worker → DO → gateway).
       const gatewayFetch = withCorrelationFetch(correlation);
       const model = createCailModel(this.env, identityJwt, gatewayFetch);
-      const latestUserRequest = summarizeLatestUserRequest(options?.body?.messages)
+      const parsedBody = chatRequestBodySchema.safeParse(options?.body);
+      const bodyMessages: RequestMessage[] | undefined = parsedBody.success
+        ? parsedBody.data.messages
+        : undefined;
+      const latestUserRequest = (bodyMessages ? summarizeLatestUserRequest(bodyMessages) : undefined)
         || summarizeLatestUserRequest(this.messages);
       const projectFiles = await storage.listFiles(scope.userId, scope.projectId);
       const systemPrompt = `${SITE_BUILDER_PROMPT}\n\n${buildProjectContext(projectFiles)}`;
@@ -1508,7 +1591,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId);
       this.pushObservabilityEvent(requestId, "request-start", "Chat request started");
 
-      const result = streamText({
+      const result = streamText<ToolSet>({
         model,
         // Model POSTs are billed and the gateway does not yet provide
         // execution idempotency. Retrying an uncertain request can run it
@@ -1535,19 +1618,19 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             requestId,
             modelName,
             scope.projectId,
-            chunk as { type: string } & Record<string, unknown>
+            chunk
           );
         },
         onFinish: (event) => {
           this.finalizeObservabilityRequest(requestId, "finished", "Chat request finished", {
             finishReason: event.finishReason,
-            rawFinishReason: event.rawFinishReason,
+            rawFinishReason: event.rawFinishReason ?? null,
           });
           if (buildAction.wasAdmitted()) {
             this.buildActionAwaitingPersistence = buildAction;
           }
           if (onFinish) {
-            (onFinish as (event: unknown) => unknown)(event);
+            onFinish(event);
           }
         },
         onAbort: ({ steps }) => {
@@ -1633,7 +1716,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   }
 
   private ensureActionAttemptTable(): void {
-    this.sql`
+    void this.sql`
       CREATE TABLE IF NOT EXISTS site_studio_action_attempts (
         action_id TEXT PRIMARY KEY,
         action_kind TEXT NOT NULL CHECK (action_kind IN ('build', 'publish')),
@@ -1651,21 +1734,24 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private readActionAttempts(now: number): ActionAttemptAdminRead {
     this.ensureActionAttemptTable();
     const cutoff = new Date(now - ACTION_ATTEMPT_RETENTION_HOURS * 3_600_000).toISOString();
-    this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
+    void this.sql`DELETE FROM site_studio_action_attempts WHERE admitted_at < ${cutoff}`;
     const attempts: DurableActionAttempt[] = [...this.sql<ActionAttemptRow>`
       SELECT * FROM site_studio_action_attempts ORDER BY admitted_at DESC
-    `].map((row) => ({
-      schemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
-      actionId: row.action_id,
-      action: row.action_kind,
-      route: row.route,
-      admittedAt: row.admitted_at,
-      ...(row.terminal_at !== null ? { terminalAt: row.terminal_at } : {}),
-      ...(row.outcome !== null ? { outcome: row.outcome } : {}),
-      ...(row.reason !== null ? { reason: row.reason } : {}),
-      ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
-      ...(row.error_type !== null ? { errorType: row.error_type } : {}),
-    }));
+    `].map((row) => {
+      const attempt: MutableDurableActionAttempt = {
+        schemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
+        actionId: row.action_id,
+        action: row.action_kind,
+        route: row.route,
+        admittedAt: row.admitted_at,
+      };
+      if (row.terminal_at !== null) attempt.terminalAt = row.terminal_at;
+      if (row.outcome !== null) attempt.outcome = row.outcome;
+      if (row.reason !== null) attempt.reason = row.reason;
+      if (row.duration_ms !== null) attempt.durationMs = row.duration_ms;
+      if (row.error_type !== null) attempt.errorType = row.error_type;
+      return attempt;
+    });
     return {
       schemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
       authoritative: true,
@@ -1708,7 +1794,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     };
     this.observabilityRequests.set(requestId, request);
     while (this.observabilityRequests.size > MAX_OBSERVABILITY_REQUESTS) {
-      const oldestKey = this.observabilityRequests.keys().next().value as string | undefined;
+      const oldestKey = this.observabilityRequests.keys().next().value;
       if (!oldestKey) break;
       this.observabilityRequests.delete(oldestKey);
     }
@@ -1720,7 +1806,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     type: SiteBuilderObservabilityEvent["type"],
     detail: string,
     level: SiteBuilderObservabilityEvent["level"] = "info",
-    data?: Record<string, unknown>
+    data?: ObservabilityData
   ) {
     const event: SiteBuilderObservabilityEvent = {
       id: `${Date.now()}-${this.observabilitySequence += 1}`,
@@ -1729,8 +1815,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       level,
       type,
       detail,
-      ...(data ? { data } : {})
     };
+    if (data) event.data = data;
     this.observabilityEvents.push(event);
     if (this.observabilityEvents.length > MAX_OBSERVABILITY_EVENTS) {
       this.observabilityEvents.splice(0, this.observabilityEvents.length - MAX_OBSERVABILITY_EVENTS);
@@ -1776,7 +1862,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     requestId: string,
     model: string,
     projectId: string,
-    chunk: { type: string } & Record<string, unknown>
+    chunk: SiteBuilderStreamChunk
   ) {
     const request = this.ensureObservabilityRequest(requestId, model, projectId);
     this.markObservabilityUpdated(request, true);
@@ -1795,8 +1881,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         }
         break;
       case "tool-input-start": {
-        const toolCallId = typeof chunk.id === "string" ? chunk.id : crypto.randomUUID();
-        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolCallId = chunk.id;
+        const toolName = chunk.toolName;
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
         toolTrace.state = "input-streaming";
         toolTrace.updatedAt = new Date().toISOString();
@@ -1805,9 +1891,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       }
       case "tool-input-delta": {
         request.chunkCounts.toolInput += 1;
-        const toolCallId = typeof chunk.id === "string" ? chunk.id : "unknown";
+        const toolCallId = chunk.id;
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, "unknown");
-        const delta = typeof chunk.delta === "string" ? chunk.delta : "";
+        const delta = chunk.delta;
         toolTrace.inputChars += delta.length;
         toolTrace.deltaCount += 1;
         toolTrace.updatedAt = new Date().toISOString();
@@ -1825,8 +1911,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         break;
       }
       case "tool-call": {
-        const toolCallId = typeof chunk.toolCallId === "string" ? chunk.toolCallId : "unknown";
-        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolCallId = chunk.toolCallId;
+        const toolName = chunk.toolName;
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
         toolTrace.state = "input-available";
         toolTrace.updatedAt = new Date().toISOString();
@@ -1835,8 +1921,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       }
       case "tool-result": {
         request.chunkCounts.toolResult += 1;
-        const toolCallId = typeof chunk.toolCallId === "string" ? chunk.toolCallId : "unknown";
-        const toolName = typeof chunk.toolName === "string" ? chunk.toolName : "unknown";
+        const toolCallId = chunk.toolCallId;
+        const toolName = chunk.toolName;
         const toolTrace = this.getOrCreateToolTrace(request, toolCallId, toolName);
         toolTrace.state = "output-available";
         toolTrace.updatedAt = new Date().toISOString();
@@ -1858,32 +1944,67 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     requestId: string,
     status: SiteBuilderObservabilityRequest["status"],
     detail: string,
-    data?: Record<string, unknown>,
+    data?: ObservabilityData,
     level: SiteBuilderObservabilityEvent["level"] = "info"
   ) {
     const request = this.observabilityRequests.get(requestId);
     if (request) {
       request.status = status;
       this.markObservabilityUpdated(request, false);
-      if (status === "error" && typeof data?.error_type === "string") {
-        request.errorTypes.push(data.error_type);
-      }
-      if (typeof data?.finishReason === "string") {
-        request.finishReason = data.finishReason;
-      }
-      if (typeof data?.rawFinishReason === "string") {
-        request.rawFinishReason = data.rawFinishReason;
+      const finalData = data ? finalObservabilityDataSchema.safeParse(data) : null;
+      if (finalData?.success) {
+        if (status === "error" && finalData.data.error_type !== undefined && finalData.data.error_type !== null) {
+          request.errorTypes.push(finalData.data.error_type);
+        }
+        if (finalData.data.finishReason !== undefined && finalData.data.finishReason !== null) {
+          request.finishReason = finalData.data.finishReason;
+        }
+        if (finalData.data.rawFinishReason !== undefined && finalData.data.rawFinishReason !== null) {
+          request.rawFinishReason = finalData.data.rawFinishReason;
+        }
       }
     }
     this.pushObservabilityEvent(requestId, status === "finished" ? "finish" : status === "aborted" ? "abort" : "error", detail, level, data);
   }
 }
 
-// Register the RPC method without decorator syntax so the same source can be
-// loaded by both workerd and Node-based unit-test transforms.
-callable()(SiteBuilderAgent.prototype.getObservability, {} as ClassMethodDecoratorContext);
-callable()(SiteBuilderAgent.prototype.recordActionAdmission, {} as ClassMethodDecoratorContext);
-callable()(SiteBuilderAgent.prototype.recordActionTerminal, {} as ClassMethodDecoratorContext);
+callable()(SiteBuilderAgent.prototype.getObservability, {
+  kind: "method",
+  name: "getObservability",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "getObservability" in object,
+    get: (object: SiteBuilderAgent) => object.getObservability,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+callable()(SiteBuilderAgent.prototype.recordActionAdmission, {
+  kind: "method",
+  name: "recordActionAdmission",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "recordActionAdmission" in object,
+    get: (object: SiteBuilderAgent) => object.recordActionAdmission,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+callable()(SiteBuilderAgent.prototype.recordActionTerminal, {
+  kind: "method",
+  name: "recordActionTerminal",
+  static: false,
+  private: false,
+  access: {
+    has: (object: SiteBuilderAgent) => "recordActionTerminal" in object,
+    get: (object: SiteBuilderAgent) => object.recordActionTerminal,
+  },
+  addInitializer: () => undefined,
+  metadata: {},
+});
+
 function requiredPositiveInteger(value: string | undefined, name: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {

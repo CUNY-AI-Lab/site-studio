@@ -1,60 +1,42 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
-
-const storage = vi.hoisted(() => ({
-  createSnapshot: vi.fn(),
-  fileExists: vi.fn(),
-  readFileWithEtag: vi.fn(),
-  renameFile: vi.fn(),
-  writeFileIfAbsent: vi.fn(),
-  writeFileIfMatch: vi.fn()
-}));
-
-vi.mock("agents", () => ({
-  callable: () => () => undefined,
-  getCurrentAgent: () => ({ connection: undefined }),
-}));
-
-vi.mock("@cloudflare/ai-chat", () => ({
-  AIChatAgent: class {},
-  createToolsFromClientSchemas: () => ({})
-}));
-
-vi.mock("@cloudflare/codemode", () => ({
-  DynamicWorkerExecutor: class {}
-}));
-
-// Keep the real error classes (FileExistsError etc.) so the `instanceof`
-// checks in site-builder.ts and the mocks here share the genuine exports.
-vi.mock("../storage/r2", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../storage/r2")>()),
-  R2ProjectStorage: class {
-    constructor() {
-      return storage;
-    }
-  }
-}));
-
+import { z } from "zod";
+import type { OwnerMutation, OwnerMutationResult } from "../lib/owner-mutations";
 import { FileExistsError } from "../storage/r2";
 import {
   createProjectTools,
   describeModelStreamError,
   SiteBuilderAgent,
   SITE_STUDIO_EVENT_ID_RE,
-  summarizeError
+  summarizeError,
+  type ProjectStorageLike,
 } from "./site-builder";
 import {
   createSiteStudioLoggingContext,
+  createSiteStudioLogger,
   serializeSiteStudioLoggingContext,
   SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER,
   type SiteStudioCorrelation,
   type SiteStudioConnectionLoggingState,
+  type SiteStudioLoggingContextData,
 } from "../lib/logging";
 import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
 
+const storage = vi.hoisted(() => ({
+  createSnapshot: vi.fn(),
+  fileExists: vi.fn(),
+  listFiles: vi.fn(),
+  readFile: vi.fn(),
+  readFileWithEtag: vi.fn(),
+  readFileBuffer: vi.fn(),
+  renameFile: vi.fn(),
+  writeFileIfAbsent: vi.fn(),
+  writeFileIfMatch: vi.fn()
+}));
+
 function projectTool(name: "edit_file" | "write_file" | "rename_file") {
   const mutationStub = {
-    execute: async (_ownerId: string, operation: any) => {
+    execute: async (_ownerId: string, operation: OwnerMutation, _logging?: SiteStudioLoggingContextData): Promise<OwnerMutationResult> => {
       switch (operation.type) {
         case "create-snapshot": return { snapshot: await storage.createSnapshot("user-1", "project-1", operation) };
         case "write-file-if-absent": return {
@@ -74,22 +56,58 @@ function projectTool(name: "edit_file" | "write_file" | "rename_file") {
           return { ok: true };
         default: throw new Error(`Unexpected mutation ${operation.type}`);
       }
-    }
+    },
+    migrateAnonymous: async () => {
+      throw new Error("migration is not part of this fixture");
+    },
+  };
+  const testEnv = {
+    // SAFETY: Project tools use the injected storage and mutation executor;
+    // the bucket is an unused binding in these tests.
+    SITE_STUDIO_BUCKET: {} as R2Bucket,
   };
   const tools = createProjectTools(
-    {
-      SITE_STUDIO_BUCKET: {} as R2Bucket,
-      MUTATION_COORDINATOR: {
-        idFromName: () => ({}) as DurableObjectId,
-        get: () => mutationStub
-      }
-    } as any,
+    testEnv,
     { userId: "user-1", projectId: "project-1" },
-    null
+    null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    storage satisfies ProjectStorageLike,
+    (ownerId, operation, logging) => mutationStub.execute(ownerId, operation, logging),
   );
-  return tools[name] as unknown as {
-    execute: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+type ProjectTool = {
+    execute: (input: Record<string, string | boolean>) => Promise<{
+      ok: boolean;
+      path?: string;
+      message?: string;
+      replacements?: number;
+      created?: boolean;
+      changed?: boolean;
+    }>;
   };
+  const projectToolResultSchema = z.object({
+    ok: z.boolean(),
+    path: z.string().optional(),
+    message: z.string().optional(),
+    replacements: z.number().optional(),
+    created: z.boolean().optional(),
+    changed: z.boolean().optional(),
+  });
+  const tool = tools[name];
+  if (!tool.execute) throw new Error(`Tool ${name} has no execute handler`);
+  return {
+    execute: async (input: Record<string, string | boolean>) => {
+      // SAFETY: The test inputs are the Zod schemas owned by the requested
+      // named tool; the SDK erases that concrete input type on the union.
+      // SAFETY: Tool execution options are unused by these deterministic
+      // project mutations; the SDK's erased second argument is intentionally
+      // absent at this unit boundary.
+      const result = await tool.execute(input as never, undefined as never);
+      return projectToolResultSchema.parse(result);
+    },
+  } satisfies ProjectTool;
 }
 
 describe("Site Builder event ID contract", () => {
@@ -105,8 +123,9 @@ describe("Site Builder event ID contract", () => {
 
   it("uses the strict event-ID contract before touching durable action state", () => {
     const sql = vi.fn(() => []);
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
-    (agent as unknown as { sql: typeof sql }).sql = sql;
+    // SAFETY: This unit test calls the class's durable SQL methods with a
+    // controlled fake SQL tag; no constructor/runtime bindings are needed.
+    const agent = Object.assign(Object.create(SiteBuilderAgent.prototype), { sql }) as SiteBuilderAgent;
 
     expect(() => agent.recordActionAdmission({
       actionId: UUID_V4,
@@ -272,7 +291,7 @@ describe("Site Builder file write concurrency", () => {
 describe("Site Builder connection logging concurrency", () => {
   function fakeConnection() {
     let current: SiteStudioConnectionLoggingState | null = null;
-    return {
+    const fixture = {
       get state() {
         return current;
       },
@@ -282,10 +301,23 @@ describe("Site Builder connection logging concurrency", () => {
           | null
           | ((prev: Readonly<SiteStudioConnectionLoggingState> | null) => SiteStudioConnectionLoggingState)
       ) {
-        current = typeof next === "function" ? next(current) : next;
+        current = next instanceof Function ? next(current) : next;
         return current;
       },
-    } as unknown as Parameters<SiteBuilderAgent["onConnect"]>[0];
+    };
+    // SAFETY: The fake connection implements the state/get/set contract used
+    // by SiteBuilderAgent.onConnect and omits transport-only methods.
+    return fixture as Parameters<SiteBuilderAgent["onConnect"]>[0];
+  }
+
+  function createTestAgent(): SiteBuilderAgent {
+    // SAFETY: These tests exercise prototype methods with controlled state;
+    // the Worker/DO constructor is intentionally not invoked.
+    return Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+  }
+
+  function setConnections(agent: SiteBuilderAgent, connections: Iterable<ReturnType<typeof fakeConnection>>) {
+    Object.assign(agent, { getConnections: () => connections });
   }
 
   it("retains socket A while missing and changed subjects clear/isolate later sockets", () => {
@@ -315,7 +347,7 @@ describe("Site Builder connection logging concurrency", () => {
         [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: jwtB }),
       },
     });
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const agent = createTestAgent();
     // A subject in initialization props must not become a DO-wide fallback.
     agent.onStart({ identityJwt: jwtA, operationalSubject: subjectA });
     const connectionA = fakeConnection();
@@ -366,13 +398,12 @@ describe("Site Builder connection logging concurrency", () => {
       trace_flags: 1 as const,
       request_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     };
-    const logger = {
-      emit: () => undefined,
-    } as never;
+    const logger = createSiteStudioLogger({ sink: () => undefined, env: "test" });
     const context = createSiteStudioLoggingContext(logger, {
       correlation: callerCorrelation,
     });
-    const snapshot = context.correlation as SiteStudioCorrelation;
+    if (!context.correlation) throw new Error("expected correlation snapshot");
+    const snapshot: SiteStudioCorrelation = context.correlation;
 
     expect(snapshot).not.toBe(callerCorrelation);
     expect(Object.isFrozen(snapshot)).toBe(true);
@@ -383,7 +414,11 @@ describe("Site Builder connection logging concurrency", () => {
     const serialized = serializeSiteStudioLoggingContext(context);
     expect(serialized?.correlation).not.toBe(snapshot);
     expect(Object.isFrozen(serialized?.correlation)).toBe(true);
-    expect(Object.isFrozen((serialized?.correlation as SiteStudioCorrelation).trace)).toBe(true);
+    const serializedCorrelation = serialized?.correlation;
+    if (!serializedCorrelation || !("trace" in serializedCorrelation)) {
+      throw new Error("expected serialized correlation");
+    }
+    expect(Object.isFrozen(serializedCorrelation.trace)).toBe(true);
   });
 
   it("updates every live connection's credential while preserving its correlation", async () => {
@@ -402,11 +437,11 @@ describe("Site Builder connection logging concurrency", () => {
         [SITE_STUDIO_AGENT_PROPS_HEADER]: JSON.stringify({ identityJwt: freshJwt }),
       },
     });
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const agent = createTestAgent();
     const connection = fakeConnection();
     agent.onConnect(connection, { request });
     const retainedCorrelation = connection.state?.correlation;
-    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+    setConnections(agent, [connection]);
 
     const response = await agent.onRequest(refresh);
 
@@ -418,11 +453,11 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("rejects a refresh without the verified Gateway token", async () => {
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const agent = createTestAgent();
     const connection = fakeConnection();
     agent.onConnect(connection, { request: new Request("https://site-studio.example/agent") });
     const before = connection.state;
-    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+    setConnections(agent, [connection]);
 
     const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
       method: "POST",
@@ -434,11 +469,11 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("rejects non-POST refresh requests without changing connection state", async () => {
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
+    const agent = createTestAgent();
     const connection = fakeConnection();
     agent.onConnect(connection, { request: new Request("https://site-studio.example/agent") });
     const before = connection.state;
-    (agent as unknown as { getConnections: () => Iterable<typeof connection> }).getConnections = () => [connection];
+    setConnections(agent, [connection]);
 
     const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
       method: "GET",
@@ -454,8 +489,8 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("fails honestly when the agent has no active connections", async () => {
-    const agent = Object.create(SiteBuilderAgent.prototype) as SiteBuilderAgent;
-    (agent as unknown as { getConnections: () => Iterable<never> }).getConnections = () => [];
+    const agent = createTestAgent();
+    setConnections(agent, []);
 
     const response = await agent.onRequest(new Request("https://site-studio.example/api/refresh-credential", {
       method: "POST",

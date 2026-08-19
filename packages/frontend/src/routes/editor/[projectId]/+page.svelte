@@ -25,8 +25,57 @@
 	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
+	import { z } from 'zod';
 
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
+
+	interface LoadedFileResponse {
+		content: string;
+		contentType?: string;
+		isText?: boolean;
+		etag?: string;
+	}
+
+	interface SaveConflictResponse {
+		error?: string;
+	}
+
+	interface SaveResponse {
+		etag?: string;
+	}
+
+	interface SavePayload {
+		path: string;
+		content: string;
+		baseEtag?: string;
+	}
+
+	const loadedFileResponseSchema = z.object({
+		content: z.string(),
+		contentType: z.string().optional(),
+		isText: z.boolean().optional(),
+		etag: z.string().optional()
+	});
+	const saveConflictResponseSchema = z.object({ error: z.string().optional() });
+	const saveResponseSchema = z.object({ etag: z.string().optional() });
+
+	function parseLoadedFileResponse(payload: string): LoadedFileResponse {
+		const parsed = loadedFileResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid file response');
+		return parsed.data;
+	}
+
+	function parseSaveConflictResponse(payload: string): SaveConflictResponse {
+		const parsed = saveConflictResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid save conflict response');
+		return parsed.data;
+	}
+
+	function parseSaveResponse(payload: string): SaveResponse {
+		const parsed = saveResponseSchema.safeParse(JSON.parse(payload));
+		if (!parsed.success) throw new Error('Invalid save response');
+		return parsed.data;
+	}
 
 	let previewComponent = $state<Preview>();
 	let chatComponent = $state<AgentChat>();
@@ -152,14 +201,14 @@
 		window.addEventListener('beforeunload', handleBeforeUnload);
 
 		// Expose function to force tutorial from console
-		(window as any).showEditorTutorial = async () => {
+		window.showEditorTutorial = async () => {
 			await maybeStartEditorTour(true);
 		};
 
 		return () => {
 			window.removeEventListener('keydown', handleKeyPress);
 			window.removeEventListener('beforeunload', handleBeforeUnload);
-			delete (window as any).showEditorTutorial;
+			delete window.showEditorTutorial;
 		};
 	});
 
@@ -248,7 +297,7 @@
 			// Ignore stale response if user selected a different file
 			if (requestId !== fileSelectCounter) return;
 
-			const data = await response.json();
+			const data = parseLoadedFileResponse(await response.text());
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
 			currentFileIsText = data.isText ?? true;
 			let draft: StoredDraft | null = null;
@@ -265,7 +314,7 @@
 				toast.error("We restored your unsaved changes. They won't replace a newer saved copy.");
 			} else {
 				fileContent = data.content;
-				currentFileEtag = typeof data.etag === 'string' ? data.etag : null;
+				currentFileEtag = data.etag ?? null;
 			}
 			currentFileOpenStatus = 'loaded';
 		} catch (error) {
@@ -304,18 +353,20 @@
 		const requestBaseEtag = currentFileEtag;
 
 		try {
+			const savePayload: SavePayload = {
+				path: filePath,
+				content
+			};
+			if (currentFileEtag !== null) savePayload.baseEtag = currentFileEtag;
+
 			const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					path: filePath,
-					content,
-					...(currentFileEtag !== null ? { baseEtag: currentFileEtag } : {})
-				})
+				body: JSON.stringify(savePayload)
 			});
 
 			if (response.status === 409) {
-				const conflict = (await response.json()) as { error?: unknown };
+				const conflict = parseSaveConflictResponse(await response.text());
 				if (conflict.error === 'file_conflict') {
 					toast.error('This file changed elsewhere. Your local draft is preserved; copy it before reloading.');
 					return false;
@@ -324,17 +375,17 @@
 
 			if (!response.ok) throw new Error('Failed to save file');
 
-			const data = (await response.json()) as { etag?: unknown };
+			const data = parseSaveResponse(await response.text());
 			if (
 				targetProjectId === projectId &&
 				filePath === currentFile &&
-				typeof data.etag === 'string'
+				data.etag !== undefined
 			) {
 				currentFileEtag = data.etag;
 			}
 			await draftWriteQueue;
 			if (draftSecret) {
-				if (typeof data.etag === 'string') {
+				if (data.etag !== undefined) {
 					await rebaseDraft(localStorage, snapshot, requestBaseEtag, data.etag, draftSecret);
 				}
 				await clearDraft(localStorage, snapshot, draftSecret);

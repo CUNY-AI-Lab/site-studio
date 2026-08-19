@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { getCsrfToken, invalidateCsrfToken, csrfFetch } from './csrf';
 
 // resolvePath depends on $app/paths (aliased to a test stub returning base '').
@@ -23,11 +23,13 @@ function csrfFailure(): Response {
 	);
 }
 
-let fetchMock: ReturnType<typeof vi.fn>;
+type FetchFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+let fetchMock: Mock<FetchFunction>;
 
 /** True if the request was a token fetch to /api/csrf. */
-function isTokenFetch(call: unknown[]): boolean {
-	return typeof call[0] === 'string' && (call[0] as string).endsWith('/api/csrf');
+function isTokenFetch(input: RequestInfo | URL): boolean {
+	const path = input instanceof Request ? input.url : input instanceof URL ? input.toString() : input;
+	return path.endsWith('/api/csrf');
 }
 
 describe('csrf token client', () => {
@@ -36,7 +38,7 @@ describe('csrf token client', () => {
 		// assertions are isolated.
 		invalidateCsrfToken();
 		setCookieToken(null);
-		fetchMock = vi.fn();
+		fetchMock = vi.fn<FetchFunction>();
 		vi.stubGlobal('fetch', fetchMock);
 	});
 
@@ -101,9 +103,10 @@ describe('csrf token client', () => {
 
 		await csrfFetch('/api/projects', { method: 'POST', body: '{}' });
 
-		const requestCall = fetchMock.mock.calls.find((c) => !isTokenFetch(c));
-		expect(requestCall).toBeDefined();
-		const init = requestCall![1] as RequestInit;
+		const requestCall = fetchMock.mock.calls.find((c) => !isTokenFetch(c[0]));
+		if (!requestCall) throw new Error('expected a project request');
+		const init = requestCall[1];
+		if (!init) throw new Error('expected request init');
 		const headers = new Headers(init.headers);
 		expect(headers.get('X-CSRF-Token')).toBe('tok-post');
 		expect(init.credentials).toBe('include');
@@ -117,10 +120,11 @@ describe('csrf token client', () => {
 
 		// GET must not trigger a token fetch, and must not carry the CSRF header.
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-		const [, init] = fetchMock.mock.calls[0];
-		const headers = new Headers((init as RequestInit).headers);
+		const init = fetchMock.mock.calls[0]?.[1];
+		if (!init) throw new Error('expected request init');
+		const headers = new Headers(init.headers);
 		expect(headers.has('X-CSRF-Token')).toBe(false);
-		expect((init as RequestInit).credentials).toBe('include');
+		expect(init.credentials).toBe('include');
 	});
 
 	it('csrfFetch treats a method-less request as GET (no header)', async () => {
@@ -130,8 +134,8 @@ describe('csrf token client', () => {
 		await csrfFetch('/api/projects');
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-		const [, init] = fetchMock.mock.calls[0];
-		const headers = new Headers((init as RequestInit | undefined)?.headers);
+		const init = fetchMock.mock.calls[0]?.[1];
+		const headers = new Headers(init?.headers);
 		expect(headers.has('X-CSRF-Token')).toBe(false);
 	});
 
@@ -141,8 +145,8 @@ describe('csrf token client', () => {
 
 		let tokenFetches = 0;
 		let requestAttempts = 0;
-		fetchMock.mockImplementation(async (input: unknown) => {
-			if (typeof input === 'string' && input.endsWith('/api/csrf')) {
+		fetchMock.mockImplementation(async (input) => {
+			if (isTokenFetch(input)) {
 				tokenFetches += 1;
 				// The refresh Set-Cookie delivers a fresh token.
 				setCookieToken('tok-fresh');
@@ -161,19 +165,22 @@ describe('csrf token client', () => {
 		expect(requestAttempts).toBe(2);
 
 		// The retry used the fresh token read from the refreshed cookie.
-		const requestCalls = fetchMock.mock.calls.filter((c) => !isTokenFetch(c));
+		const requestCalls = fetchMock.mock.calls.filter((c) => !isTokenFetch(c[0]));
 		expect(requestCalls).toHaveLength(2);
-		const firstHeaders = new Headers((requestCalls[0][1] as RequestInit).headers);
+		const firstInit = requestCalls[0]?.[1];
+		const retryInit = requestCalls[1]?.[1];
+		if (!firstInit || !retryInit) throw new Error('expected request init');
+		const firstHeaders = new Headers(firstInit.headers);
 		expect(firstHeaders.get('X-CSRF-Token')).toBe('tok-stale');
-		const retryHeaders = new Headers((requestCalls[1][1] as RequestInit).headers);
+		const retryHeaders = new Headers(retryInit.headers);
 		expect(retryHeaders.get('X-CSRF-Token')).toBe('tok-fresh');
 	});
 
 	it('does not retry on a non-CSRF 403', async () => {
 		setCookieToken('tok-x');
 		let requestAttempts = 0;
-		fetchMock.mockImplementation(async (input: unknown) => {
-			if (typeof input === 'string' && input.endsWith('/api/csrf')) {
+		fetchMock.mockImplementation(async (input) => {
+			if (isTokenFetch(input)) {
 				return new Response(null, { status: 204 });
 			}
 			requestAttempts += 1;

@@ -8,6 +8,12 @@ const snapshot: SaveSnapshot = {
 	content: '<h1>Hello</h1>'
 };
 
+function parseBody(init: RequestInit) {
+	const body = init.body;
+	if (body === null || body === undefined) throw new Error('expected a request body');
+	return JSON.parse(body.toString());
+}
+
 describe('buildKeepaliveSave', () => {
 	it('builds a credentialed keepalive POST with CSRF and base etag', () => {
 		const request = buildKeepaliveSave(snapshot, {
@@ -24,7 +30,7 @@ describe('buildKeepaliveSave', () => {
 			'Content-Type': 'application/json',
 			'X-CSRF-Token': 'csrf-token'
 		});
-		expect(JSON.parse(request.init.body as string)).toEqual({
+		expect(parseBody(request.init)).toEqual({
 			path: 'index.html',
 			content: '<h1>Hello</h1>',
 			baseEtag: 'etag-1'
@@ -38,7 +44,7 @@ describe('buildKeepaliveSave', () => {
 			baseEtag
 		});
 
-		expect(JSON.parse(init.body as string)).toEqual({
+		expect(parseBody(init)).toEqual({
 			path: 'index.html',
 			content: '<h1>Hello</h1>'
 		});

@@ -151,7 +151,6 @@ export function createProjectRouter() {
   });
 
   app.delete("/api/projects/:id", async (c) => {
-    const storage = c.get("storage");
     const user = getUser(c);
     const projectId = c.get("projectId");
 
@@ -190,7 +189,6 @@ export function createProjectRouter() {
   });
 
   app.post("/api/projects/:id/snapshots", async (c) => {
-    const storage = c.get("storage");
     const user = getUser(c);
     const projectId = c.get("projectId");
 

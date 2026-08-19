@@ -14,6 +14,14 @@ import {
 } from "./model";
 
 const VALID_REQUEST_ID = "019f8bdc-342a-76e1-ba71-005d69808f86";
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+
+function asFetch(stub: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): typeof fetch {
+  // SAFETY: Test adapters implement the Fetch API call signature used by the
+  // model boundary and return real Response objects.
+  return stub as typeof fetch;
+}
 
 describe("model-call JWT expiry guard", () => {
   const token = (exp: number) => `header.${btoa(JSON.stringify({ exp })).replace(/=/g, "")}.signature`;
@@ -72,7 +80,9 @@ describe("createCailModel", () => {
     );
     // createOpenAICompatible returns a model object (not the bare string branch
     // of the LanguageModel union); assert on its metadata.
-    expect(typeof model).toBe("object");
+    expect(model).toBeDefined();
+    // SAFETY: createCailModel returns the OpenAI-compatible model object for a
+    // configured gateway; this test asserts its documented metadata fields.
     const meta = model as { modelId: string; provider: string };
     expect(meta.modelId).toBe("@cf/openai/gpt-oss-120b");
     expect(meta.provider).toContain("cail");
@@ -84,7 +94,7 @@ describe("gateway quota errors at the adapter boundary", () => {
   it("preserves the typed CAIL envelope through the direct provider without retrying", async () => {
     const verbatim = "You have used your hourly AI quota. It resets on the hour.";
     let calls = 0;
-    const upstream = (async () => {
+    const upstream = asFetch(async () => {
       calls += 1;
       return cailErrorResponse(
         429,
@@ -95,7 +105,7 @@ describe("gateway quota errors at the adapter boundary", () => {
           "x-should-retry": "false",
         }
       );
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
 
     let thrown: unknown;
@@ -123,7 +133,7 @@ describe("gateway quota errors at the adapter boundary", () => {
 
   it("throws a gateway-declared non-retryable authentication error without retrying", async () => {
     let calls = 0;
-    const upstream = (async () => {
+    const upstream = asFetch(async () => {
       calls += 1;
       return cailErrorResponse(
         401,
@@ -138,10 +148,10 @@ describe("gateway quota errors at the adapter boundary", () => {
           "x-should-retry": "false",
         }
       );
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", upstream);
 
-    const thrown = await generateText({ model, prompt: "hi", maxRetries: 0 }).catch((error: unknown) => error);
+    const thrown = await generateText({ model, prompt: "hi", maxRetries: 0 }).catch((cause: unknown) => cause);
 
     expect(thrown).toMatchObject({ name: "AI_APICallError" });
     expect(extractCailError(thrown)).toMatchObject({
@@ -212,20 +222,22 @@ describe("createCailModel wire contract", () => {
    * Build a fetch stub that records the outbound URL and headers (as a
    * case-insensitive `Headers` object), then returns a canned completion.
    */
-  function makeCaptureFetch(): {
+  type CaptureFetch = {
     fetch: typeof fetch;
     captured: () => { url: string; headers: Headers };
-  } {
+  };
+
+  function makeCaptureFetch(): CaptureFetch {
     let seen: { url: string; headers: Headers } | undefined;
     const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
       // cail-client calls fetchImpl(url, init) with init.headers as a plain
       // record; wrap it in Headers for robust case-insensitive lookup.
       seen = {
         url: String(input),
-        headers: new Headers((init?.headers ?? {}) as HeadersInit),
+        headers: new Headers(init?.headers),
       };
       return chatCompletionResponse();
-    }) as typeof fetch;
+    });
     return {
       fetch: stub,
       captured: () => seen ?? { url: "", headers: new Headers() },
@@ -234,10 +246,11 @@ describe("createCailModel wire contract", () => {
 
   it("continues after a streamed tool call until the model returns text", async () => {
     let calls = 0;
-    const requestBodies: Array<Record<string, unknown>> = [];
-    const upstream = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const requestBodies: JsonObject[] = [];
+    const upstream = asFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
       calls += 1;
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      // SAFETY: The model provider sends a JSON object at this test seam.
+      const body = JSON.parse(String(init?.body)) as JsonObject;
       requestBodies.push(body);
       const response = calls === 1
         ? {
@@ -275,7 +288,7 @@ describe("createCailModel wire contract", () => {
         status: 200,
         headers: { "content-type": "text/event-stream" },
       });
-    }) as typeof fetch;
+    });
     const model = createCailModel(
       { CAIL_API_BASE: "https://cail.example", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
       "jwt",
@@ -327,10 +340,11 @@ describe("createCailModel wire contract", () => {
   });
 
   it("strips hostile authority/routing headers on buffered and streaming calls", async () => {
-    const calls: Array<{ url: string; headers: Headers; body: Record<string, unknown>; init: RequestInit }> = [];
-    const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const calls: Array<{ url: string; headers: Headers; body: JsonObject; init: RequestInit }> = [];
+    const stub = asFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      // SAFETY: The model provider sends a JSON object at this test seam.
+      const body = JSON.parse(String(init?.body)) as JsonObject;
       calls.push({ url: String(input), headers, body, init: init ?? {} });
       if (body.stream === true) {
         return new Response(
@@ -340,7 +354,7 @@ describe("createCailModel wire contract", () => {
         );
       }
       return chatCompletionResponse();
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "verified-jwt", stub);
     const hostileHeaders = {
       Authorization: "Bearer attacker",
@@ -383,13 +397,13 @@ describe("createCailModel wire contract", () => {
 
   it.each([302, 429, 503])("makes exactly one attempt for a %s gateway response", async (status) => {
     let calls = 0;
-    const stub = (async () => {
+    const stub = asFetch(async () => {
       calls += 1;
       return new Response(JSON.stringify({ error: { message: "upstream failure" } }), {
         status,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", stub);
     await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
     expect(calls).toBe(1);
@@ -397,10 +411,10 @@ describe("createCailModel wire contract", () => {
 
   it("makes exactly one attempt when the gateway connection is ambiguous", async () => {
     let calls = 0;
-    const stub = (async () => {
+    const stub = asFetch(async () => {
       calls += 1;
       throw new TypeError("connection reset");
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "jwt", stub);
     await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
     expect(calls).toBe(1);
@@ -409,10 +423,10 @@ describe("createCailModel wire contract", () => {
   it("checks JWT freshness immediately before a billed request", async () => {
     const expired = `header.${btoa(JSON.stringify({ exp: 1 })).replace(/=/g, "")}.signature`;
     let calls = 0;
-    const stub = (async () => {
+    const stub = asFetch(async () => {
       calls += 1;
       return chatCompletionResponse();
-    }) as typeof fetch;
+    });
     const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, expired, stub);
     await generateText({ model, prompt: "hello", maxRetries: 0 }).catch(() => undefined);
     expect(calls).toBe(0);
@@ -420,13 +434,13 @@ describe("createCailModel wire contract", () => {
 
   it("sanitizes authority headers owned by a Request input as well as init", async () => {
     let captured: Headers | undefined;
-    const authorityFetch = createCailAuthorityFetch("verified-jwt", (async (
+    const authorityFetch = createCailAuthorityFetch("verified-jwt", asFetch(async (
       _input: RequestInfo | URL,
       init?: RequestInit,
     ) => {
       captured = new Headers(init?.headers);
       return chatCompletionResponse();
-    }) as typeof fetch);
+    }));
     const request = new Request("https://cail.example/v1/chat/completions", {
       method: "POST",
       headers: {

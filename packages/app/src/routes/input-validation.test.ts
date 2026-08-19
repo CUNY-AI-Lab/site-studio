@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
-import { createMockMutationCoordinator } from "../lib/test-utils";
+import { createMockMutationCoordinator, createTestNamespace, createTestR2Object } from "../lib/test-utils";
+import type { MutationCoordinator } from "../agents/mutation-coordinator";
 import { csrfProtect } from "../lib/csrf";
 import { createMockKV, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import { R2ProjectStorage } from "../storage/r2";
 import { createFileRouter } from "./files";
 import { createProjectRouter } from "./projects";
 import { requireProject } from "../lib/require-project";
+import { z } from "zod";
 
 /**
  * SS-6: malformed / schema-invalid JSON bodies on the four mutation routes must
@@ -27,8 +29,13 @@ let kv: MockKV;
 let csrf: CsrfSession;
 
 function createMockBucket() {
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }>();
+  type MockData = string | ArrayBuffer;
+  type MockEntry = { data: MockData; httpMetadata?: R2HTTPMetadata };
+  const dataSchema = z.union([z.string(), z.instanceof(ArrayBuffer)]);
+  const store = new Map<string, MockEntry>();
 
+  // SAFETY: The fixture implements the R2 methods exercised by the mutation
+  // routes; uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => {
@@ -38,40 +45,42 @@ function createMockBucket() {
       const entry = store.get(key);
       if (!entry) return null;
 
-      const data = entry.data;
+      const data = dataSchema.parse(entry.data);
       return {
         key,
-        size: typeof data === "string" ? data.length : data.byteLength,
+        size: data instanceof ArrayBuffer ? data.byteLength : data.length,
         httpMetadata: entry.httpMetadata || {},
-        text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data)),
-        arrayBuffer: async () => (typeof data === "string" ? new TextEncoder().encode(data).buffer : data)
+        text: async () => (data instanceof ArrayBuffer ? new TextDecoder().decode(data) : data),
+        arrayBuffer: async () => (data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer)
       };
     }),
     put: vi.fn(async (
       key: string,
       data: string | ArrayBuffer | Uint8Array,
-      options?: { httpMetadata?: unknown; onlyIf?: { etagDoesNotMatch?: string } }
+      options?: { httpMetadata?: R2HTTPMetadata; onlyIf?: { etagDoesNotMatch?: string } }
     ) => {
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
       let stored: ArrayBuffer | string;
-      if (typeof data === "string") {
+      if (data instanceof ArrayBuffer) {
         stored = data;
-      } else if (data instanceof ArrayBuffer) {
-        stored = data;
+      } else if (data instanceof Uint8Array) {
+        const copy = new Uint8Array(data.byteLength);
+        copy.set(data);
+        stored = copy.buffer;
       } else {
-        stored = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+        stored = data;
       }
 
       store.set(key, { data: stored, httpMetadata: options?.httpMetadata });
-      return { key };
+      return createTestR2Object(key, `${key}:etag`, stored instanceof ArrayBuffer ? stored.byteLength : stored.length);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
     list: vi.fn(async ({ prefix, delimiter, limit }: { prefix?: string; delimiter?: string; limit?: number } = {}) => {
-      const objects: Array<{ key: string; size: number; uploaded: Date; httpMetadata: Record<string, never> }> = [];
+      const objects: R2Object[] = [];
       const delimitedPrefixes: string[] = [];
 
       for (const key of store.keys()) {
@@ -89,7 +98,7 @@ function createMockBucket() {
           }
         }
 
-        objects.push({ key, size: 0, uploaded: new Date(), httpMetadata: {} });
+        objects.push(createTestR2Object(key));
       }
 
       return {
@@ -97,8 +106,10 @@ function createMockBucket() {
         truncated: false,
         delimitedPrefixes
       };
-    })
-  } as unknown as R2Bucket & { store: Map<string, { data: ArrayBuffer | string; httpMetadata?: unknown }> };
+    }),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket & { store: Map<string, MockEntry> };
 }
 
 function createTestApp() {
@@ -130,9 +141,12 @@ function createEnv(bucket: R2Bucket): Env {
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
+    // SAFETY: Input-validation routes never connect to these namespaces.
     SITE_BUILDER_AGENT: {} as DurableObjectNamespace<any>,
+    // SAFETY: Input-validation routes never invoke migration coordination.
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
-    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
+    MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>(createMockMutationCoordinator(bucket)),
+    // SAFETY: This suite does not load template modules through WorkerLoader.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined
   };
@@ -185,6 +199,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     it("valid body → still succeeds", async () => {
       const res = await app.request(url, jsonBody(JSON.stringify({ name: "My Project" })), createEnv(bucket));
       expect(res.status).toBe(200);
+      // SAFETY: The successful project route returns the documented object shape.
       const body = (await res.json()) as { id: string; name: string };
       expect(body.name).toBe("My Project");
     });
@@ -219,6 +234,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     it("valid body → still succeeds", async () => {
       const res = await app.request(url, patch(JSON.stringify({ name: "Renamed" })), createEnv(bucket));
       expect(res.status).toBe(200);
+      // SAFETY: The successful project patch returns the documented object shape.
       const body = (await res.json()) as { name: string };
       expect(body.name).toBe("Renamed");
     });

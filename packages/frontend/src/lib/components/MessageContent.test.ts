@@ -11,7 +11,9 @@ import MessageContent from './MessageContent.svelte';
 function renderContent(content: string): HTMLElement {
 	const { container } = render(MessageContent, { props: { content } });
 	// The rendered markdown lives inside the .message-content wrapper.
-	return container.querySelector('.message-content') as HTMLElement;
+	const element = container.querySelector('.message-content');
+	if (!(element instanceof HTMLElement)) throw new Error('expected message content wrapper');
+	return element;
 }
 
 describe('MessageContent XSS sanitization', () => {

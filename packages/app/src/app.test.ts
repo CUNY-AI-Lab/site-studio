@@ -7,40 +7,71 @@ import {
 } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME } from "./lib/csrf";
-import { createMockKV, createMockMutationCoordinator, type MockKV } from "./lib/test-utils";
-
-// app.ts mounts the agent router, whose `agents` dependency imports
-// `cloudflare:`-scheme modules; stub it so the full app is importable here.
-vi.mock("agents", () => ({
-  getAgentByName: vi.fn(async () => ({
-    fetch: async () => new Response("{}", { status: 200 }),
-    getObservability: async () => ({ calls: [] })
-  }))
-}));
+import { createMockKV, createMockMutationCoordinator, createTestNamespace, type MockKV } from "./lib/test-utils";
+import type { MutationCoordinator } from "./agents/mutation-coordinator";
 
 import app from "./app";
 
 const BASE = "https://site-studio.example";
 const ALLOWED_ORIGIN = "https://cail-doorway.ailab-452.workers.dev";
 
+function createStoredR2Object(key: string): R2Object {
+  const object = {
+    key,
+    version: "test-version",
+    size: 0,
+    etag: `${key}:etag`,
+    httpEtag: `"${key}:etag"`,
+    checksums: {},
+    uploaded: new Date(0),
+    storageClass: "Standard",
+  };
+  // SAFETY: The app tests inspect only key/text; the remaining R2 metadata is
+  // an inert fixture value and the runtime binding supplies the full object.
+  return object as R2Object;
+}
+
+function createStoredR2Body(key: string, value: string): R2ObjectBody {
+  const body = {
+    ...createStoredR2Object(key),
+    body: new ReadableStream<Uint8Array>(),
+    bodyUsed: false,
+    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
+    blob: async () => new Blob([value]),
+    json: async () => JSON.parse(value),
+    text: async () => value,
+  };
+  // SAFETY: The app tests consume only text(); the other body methods are
+  // deterministic inert implementations for the R2 object contract.
+  return body as R2ObjectBody;
+}
+
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();
-  return {
+  const fixture = {
     head: vi.fn(async (key: string) => (store.has(key) ? { key } : null)),
     get: vi.fn(async (key: string) => {
       const value = store.get(key);
-      return value === undefined ? null : { key, text: async () => value };
+      return value === undefined ? null : createStoredR2Body(key, value);
     }),
-    put: vi.fn(async (key: string, value: string, options?: R2PutOptions) => {
-      if (options?.onlyIf && "etagDoesNotMatch" in options.onlyIf && options.onlyIf.etagDoesNotMatch === "*" && store.has(key)) {
-        return null;
-      }
+    put: vi.fn(async (key: string, value: string, _options?: R2PutOptions) => {
       store.set(key, value);
-      return { key, etag: `${key}:1` };
+      return createStoredR2Object(key);
     }),
     delete: vi.fn(async () => undefined),
-    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
-  } as unknown as R2Bucket;
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  };
+  // SAFETY: This fixture implements every R2 method exercised by these app
+  // boundary tests; omitted multipart methods are outside the tested path.
+  return fixture as R2Bucket;
+}
+
+function asTestFetcher(fetch: Fetcher["fetch"]): Fetcher {
+  const fixture = { fetch };
+  // SAFETY: App asset fallback only calls the binding's fetch method.
+  return fixture as Fetcher;
 }
 
 let kv: MockKV;
@@ -70,9 +101,12 @@ function createEnv(): Env {
     CAIL_IDENTITY_ISSUER: CAIL_CANONICAL_ISSUER,
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
+    // SAFETY: Agent bindings are not reached by these middleware/asset tests.
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
+    // SAFETY: Migration coordinator is not reached by these middleware tests.
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
-    MUTATION_COORDINATOR: createMockMutationCoordinator(bucket),
+    MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>(createMockMutationCoordinator(bucket)),
+    // SAFETY: The loader binding is not reached by these app boundary tests.
     LOADER: {} as WorkerLoader,
     CSRF_COOKIE_PATH: "/site-studio",
     ASSETS: undefined
@@ -160,7 +194,7 @@ describe("retired public routes", () => {
   it("returns 404 for /sites instead of falling through to the SPA asset", async () => {
     const assetFetch = vi.fn(async () => new Response("SPA", { status: 200 }));
     const env = createEnv();
-    env.ASSETS = { fetch: assetFetch } as unknown as Fetcher;
+    env.ASSETS = asTestFetcher(assetFetch);
 
     const response = await app.request(`${BASE}/sites/legacy-owner/site/`, {}, env);
 
@@ -186,7 +220,7 @@ describe("mounted SPA assets", () => {
           });
     });
     const env = createEnv();
-    env.ASSETS = { fetch: assetFetch } as unknown as Fetcher;
+    env.ASSETS = asTestFetcher(assetFetch);
 
     const root = await app.request(`${BASE}/site-studio/`, {}, env);
     const asset = await app.request(

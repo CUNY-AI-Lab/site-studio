@@ -1,6 +1,7 @@
 import { resolvePath } from '$lib/utils/paths';
 import { apiFetch, handleApiError } from './errors';
 import { csrfFetch } from './csrf';
+import { z } from 'zod';
 
 const API_BASE = resolvePath('/api');
 
@@ -109,7 +110,9 @@ export async function uploadProjectImage(projectId: string, file: File): Promise
 		await handleApiError(response);
 	}
 
-	const data = (await response.json()) as { path: string };
+	const parsed = uploadResponseSchema.safeParse(JSON.parse(await response.text()));
+	if (!parsed.success) throw new Error('Invalid upload response');
+	const data = parsed.data;
 	return data.path;
 }
 
@@ -197,6 +200,25 @@ export interface PublishNeedsHandle {
 
 export type PublishResult = PublishSuccess | PublishNeedsHandle;
 
+interface PublishErrorResponse {
+	error?: string;
+	message?: string;
+}
+
+const uploadResponseSchema = z.object({ path: z.string() });
+const publishErrorResponseSchema = z.object({ error: z.string().optional(), message: z.string().optional() });
+const a11yFindingSchema = z.object({
+	file: z.string(),
+	line: z.number().nullable(),
+	rule: z.string(),
+	severity: z.enum(['error', 'warning']),
+	message: z.string()
+});
+const publishSuccessResponseSchema = z.object({
+	url: z.string(),
+	a11yFindings: z.array(a11yFindingSchema).optional()
+});
+
 /**
  * Publish a project to make it publicly accessible. Resolves to a typed result;
  * only unexpected failures throw.
@@ -207,13 +229,21 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 	});
 
 	if (response.status === 409) {
-		const data = await response.json().catch(() => ({}) as Record<string, unknown>);
-		if ((data as { error?: string }).error === 'handle_required') {
+		const data = await response
+			.clone()
+			.text()
+			.then((body) => {
+				const parsed = publishErrorResponseSchema.safeParse(JSON.parse(body));
+				if (!parsed.success) throw new Error('Invalid publish error response');
+				return parsed.data;
+			})
+			.catch((): PublishErrorResponse => ({}));
+		if (data.error === 'handle_required') {
 			return {
 				ok: false,
 				reason: 'handle_required',
 				message:
-					(data as { message?: string }).message || 'Choose your public address before publishing.',
+					data.message || 'Choose your public address before publishing.',
 			};
 		}
 	}
@@ -222,7 +252,9 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 		await handleApiError(response);
 	}
 
-	const data = (await response.json()) as { url: string; a11yFindings?: A11yFinding[] };
+	const parsed = publishSuccessResponseSchema.safeParse(JSON.parse(await response.text()));
+	if (!parsed.success) throw new Error('Invalid publish response');
+	const data = parsed.data;
 	return { ok: true, url: data.url, a11yFindings: data.a11yFindings };
 }
 

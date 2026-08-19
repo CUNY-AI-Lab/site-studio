@@ -8,13 +8,7 @@ import {
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
 import { createMockKV, type MockKV } from "./lib/test-utils";
-
-vi.mock("agents", () => ({
-  getAgentByName: vi.fn(async () => ({
-    fetch: async () => new Response("{}", { status: 200 }),
-    getObservability: async () => ({ calls: [] })
-  }))
-}));
+import { z } from "zod";
 
 import app from "./app";
 import {
@@ -38,38 +32,86 @@ import {
 const BASE = "https://site-studio.example";
 const REQUEST_ID = "8b9ec144-39aa-4f1f-bda5-4c645facf2cd";
 const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
+type CapturedLogValue = string | number | boolean | null;
+type CapturedLogEvent = Readonly<Record<string, CapturedLogValue>>;
+const capturedLogEventSchema = z.record(
+  z.string(),
+  z.union([z.string(), z.number(), z.boolean(), z.null()]),
+);
+
+function createStoredR2Object(key: string): R2Object {
+  const object = {
+    key,
+    version: "test-version",
+    size: 0,
+    etag: `${key}:etag`,
+    httpEtag: `"${key}:etag"`,
+    checksums: {},
+    uploaded: new Date(0),
+    storageClass: "Standard",
+  };
+  // SAFETY: Boundary tests inspect only key/text; remaining R2 metadata is
+  // inert fixture data and the runtime binding supplies the complete object.
+  return object as R2Object;
+}
+
+function createStoredR2Body(key: string, value: string): R2ObjectBody {
+  const body = {
+    ...createStoredR2Object(key),
+    body: new ReadableStream<Uint8Array>(),
+    bodyUsed: false,
+    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
+    blob: async () => new Blob([value]),
+    json: async () => JSON.parse(value),
+    text: async () => value,
+  };
+  // SAFETY: Boundary tests consume only text(); other body methods are inert
+  // deterministic implementations for the R2 object contract.
+  return body as R2ObjectBody;
+}
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();
-  return {
+  const fixture = {
     head: vi.fn(async (key: string) => (store.has(key) ? { key } : null)),
     get: vi.fn(async (key: string) => {
       const value = store.get(key);
-      return value === undefined ? null : { key, text: async () => value };
+      return value === undefined ? null : createStoredR2Body(key, value);
     }),
     put: vi.fn(async (key: string, value: string) => {
       store.set(key, value);
-      return { key, etag: `${key}:1` };
+      return createStoredR2Object(key);
     }),
     delete: vi.fn(async () => undefined),
-    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
-  } as unknown as R2Bucket;
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  };
+  // SAFETY: Boundary tests use only get/put/list; the remaining methods are
+  // inert fixture implementations matching the R2 binding shape.
+  return fixture as R2Bucket;
 }
 
 let kv: MockKV;
 let bucket: R2Bucket;
 
-function createEnv(extra?: Partial<Env>): Env {
-  return {
+function createEnv(extra?: { CAIL_LOG_ENV?: string }): Env {
+  const bindings = {
     CAIL_LOG_ENV: "test",
     SESSION_KV: kv,
     SITE_STUDIO_BUCKET: bucket,
+    // SAFETY: Agent bindings are not reached by logging boundary tests.
     SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
+    // SAFETY: Migration bindings are not reached by logging boundary tests.
     MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
+    // SAFETY: The loader binding is not reached by logging boundary tests.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
     ...extra
   };
+  // SAFETY: Invalid CAIL_LOG_ENV strings are deliberate boundary fixtures;
+  // runtime health validation rejects them before any binding is used.
+  return bindings as Env;
 }
 
 function captureConsole() {
@@ -79,12 +121,12 @@ function captureConsole() {
     vi.spyOn(console, "error").mockImplementation(() => {})
   ];
   return {
-    events(): Array<Record<string, unknown>> {
+    events(): CapturedLogEvent[] {
       return spies.flatMap((spy) => spy.mock.calls)
-        .map(([event]) => event)
-        .filter((event): event is Record<string, unknown> =>
-          !!event && typeof event === "object" && "event.name" in event
-        );
+        .map(([event]) => capturedLogEventSchema.safeParse(event))
+        .filter((result) => result.success)
+        .map((result) => result.data)
+        .filter((event) => "event.name" in event);
     },
     lines(): string[] {
       return spies.flatMap((spy) => spy.mock.calls).map(([value]) => JSON.stringify(value));
@@ -203,7 +245,7 @@ describe("CAIL_LOG_ENV boundary", () => {
     async (environment) => {
       const capture = captureConsole();
       try {
-        const env = createEnv({ CAIL_LOG_ENV: environment as Env["CAIL_LOG_ENV"] });
+        const env = createEnv({ CAIL_LOG_ENV: environment });
         const health = await app.request(`${BASE}/api/health`, {}, env);
         const operational = await app.request(`${BASE}/api/projects/probe`, {}, env);
 
@@ -501,6 +543,8 @@ describe("service-local diagnostics and helpers", () => {
     expect(errorCodeFrom(error)).toBe("error");
     const correlation = mintCorrelation();
     const captured: Request[] = [];
+    // SAFETY: The callback implements the global fetch signature used by the
+    // correlation wrapper and records the forwarded request for assertions.
     const gatewayFetch = withCorrelationFetch(correlation, (async (input, init) => {
       captured.push(new Request(input, init));
       return new Response("{}");

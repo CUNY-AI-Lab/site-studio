@@ -1,12 +1,22 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks, Play } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
+	import { type ToolInputRecord } from '$lib/contracts';
+	import { z } from 'zod';
+
+	type ToolIcon = typeof Blocks;
+	interface ToolIconMap {
+		[name: string]: ToolIcon;
+	}
+	interface ToolLabelMap {
+		[name: string]: string;
+	}
 
 	interface ToolExecution {
 		id?: string;
 		name: string;
 		title?: string;
-		input: Record<string, any>;
+		input: ToolInputRecord;
 		status?: 'running' | 'success' | 'error';
 		output?: string;
 		startTime?: number;
@@ -21,6 +31,14 @@
 		isNewFile: boolean;
 	}
 
+	const diffDataSchema = z.object({
+		type: z.enum(['file_write', 'file_edit', 'file_delete']),
+		file_path: z.string(),
+		before: z.string().nullable(),
+		after: z.string().nullable(),
+		isNewFile: z.boolean()
+	});
+
 	let {
 		tool
 	}: {
@@ -30,7 +48,7 @@
 	let expanded = $state(false);
 	let outputId = $derived(`tool-output-${tool.id ?? tool.name.replace(/[^a-z0-9_-]/gi, '-')}`);
 
-	const toolIcons: Record<string, any> = {
+	const toolIcons: ToolIconMap = {
 		codemode: Blocks,
 		write_file: FileEdit,
 		edit_file: FileEdit,
@@ -47,7 +65,7 @@
 		AskUserQuestion: MessageSquare
 	};
 
-	const toolLabels: Record<string, string> = {
+	const toolLabels: ToolLabelMap = {
 		codemode: 'Working on your site',
 		write_file: 'Writing file',
 		edit_file: 'Editing file',
@@ -101,7 +119,7 @@
 		return toolIcons[cleanName] || Play;
 	}
 
-	function formatInput(input: Record<string, any>): string {
+	function formatInput(input: ToolInputRecord): string {
 		if (tool.name === 'codemode') {
 			if (tool.status === 'success') {
 				return 'Reviewed or updated project files';
@@ -137,7 +155,7 @@
 			return input.questions[0]?.header || input.questions[0]?.question || '';
 		}
 		if (input.question) return input.question;
-		return Object.keys(input).length > 0 ? JSON.stringify(input, null, 2) : '';
+		return Object.keys(input).length > 0 ? JSON.stringify(input, null, 2) ?? '' : '';
 	}
 
 	function getStatusIcon() {
@@ -171,13 +189,20 @@
 	}
 
 	// Extract diff data from output
-	function extractDiffData(output: string | undefined): { diffData: DiffData | null; cleanOutput: string } {
+	interface ExtractedDiffData {
+		diffData: DiffData | null;
+		cleanOutput: string;
+	}
+
+	function extractDiffData(output: string | undefined): ExtractedDiffData {
 		if (!output) return { diffData: null, cleanOutput: '' };
 
 		const diffMatch = output.match(/<!-- diff:([\s\S]*?) -->/);
 		if (diffMatch) {
 			try {
-				const diffData = JSON.parse(diffMatch[1]) as DiffData;
+				const parsed = diffDataSchema.safeParse(JSON.parse(diffMatch[1]));
+				if (!parsed.success) throw new Error('Invalid diff data');
+				const diffData: DiffData = parsed.data;
 				const cleanOutput = output.replace(/<!-- diff:[\s\S]*? -->/g, '').trim();
 				return { diffData, cleanOutput };
 			} catch (e) {

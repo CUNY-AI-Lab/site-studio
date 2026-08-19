@@ -4,10 +4,32 @@
  */
 
 import { csrfFetch } from './csrf';
+import { browserWindow, type JsonValue } from '$lib/contracts';
+import { z } from 'zod';
 
 export interface ValidationDetail {
 	path: string;
 	message: string;
+}
+
+interface ApiErrorEnvelope {
+	error?: string;
+	message?: string;
+	code?: string;
+	details?: ValidationDetail[];
+}
+
+const apiErrorEnvelopeSchema = z.object({
+	error: z.string().optional(),
+	message: z.string().optional(),
+	code: z.string().optional(),
+	details: z.array(z.object({ path: z.string(), message: z.string() })).optional()
+});
+
+function parseApiErrorEnvelope(payload: string): ApiErrorEnvelope {
+	const parsed = apiErrorEnvelopeSchema.safeParse(JSON.parse(payload));
+	if (!parsed.success) throw new Error('Invalid API error envelope');
+	return parsed.data;
 }
 
 /**
@@ -65,8 +87,9 @@ const CAIL_DOORWAY_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
 const SITE_STUDIO_DOORWAY_PATH = '/site-studio';
 
 function redirectToLogin(): void {
-	if (typeof window === 'undefined') return;
-	const currentPath = window.location.pathname;
+	const browser = browserWindow();
+	if (!browser) return;
+	const currentPath = browser.location.pathname;
 	const safeCurrentPath = currentPath.startsWith('/') && !currentPath.startsWith('//')
 		? currentPath
 		: '/';
@@ -77,16 +100,16 @@ function redirectToLogin(): void {
 	const target = new URL(doorwayPath, CAIL_DOORWAY_ORIGIN);
 	// Doorway stores this classified protected path as the login return target;
 	// its route policy keeps the path on Site Studio and forwards it after auth.
-	target.search = window.location.search;
+	target.search = browser.location.search;
 	target.hash = '';
-	window.location.assign(target.href);
+	browser.location.assign(target.href);
 }
 
-function isAuthenticationRequiredEnvelope(status: number, errorData: any): boolean {
+function isAuthenticationRequiredEnvelope(status: number, errorData: ApiErrorEnvelope): boolean {
 	return status === 401 && errorData?.error === 'authentication_required';
 }
 
-function maybeRedirectToLogin(status: number, errorData: any): void {
+function maybeRedirectToLogin(status: number, errorData: ApiErrorEnvelope): void {
 	if (!isAuthenticationRequiredEnvelope(status, errorData)) {
 		return;
 	}
@@ -94,7 +117,7 @@ function maybeRedirectToLogin(status: number, errorData: any): void {
 	redirectToLogin();
 }
 
-function toApiError(response: Response, errorData: any): ApiError {
+function toApiError(response: Response, errorData: ApiErrorEnvelope): ApiError {
 	const message = errorData.message || errorData.error || 'Something went wrong. Try again.';
 	const code = errorData.code || errorData.error;
 	const details = errorData.details;
@@ -112,10 +135,10 @@ function toApiError(response: Response, errorData: any): ApiError {
  * through unmodified as ApiError so callers can show `message` as-is.
  */
 export async function handleApiError(response: Response): Promise<never> {
-	let errorData: any;
+	let errorData: ApiErrorEnvelope;
 
 	try {
-		errorData = await response.json();
+		errorData = parseApiErrorEnvelope(await response.text());
 	} catch {
 		// Response doesn't contain JSON, throw generic error
 		throw new ApiError(
@@ -146,9 +169,9 @@ export async function apiResponseFetch(
 		return response;
 	}
 
-	let errorData: any;
+	let errorData: ApiErrorEnvelope;
 	try {
-		errorData = await response.clone().json();
+		errorData = parseApiErrorEnvelope(await response.clone().text());
 	} catch {
 		return response;
 	}
@@ -168,7 +191,7 @@ export async function apiResponseFetch(
  * Routes through `csrfFetch` so state-changing methods carry the anti-CSRF
  * header (CAIL INTEGRATION.md §3¾); GET/HEAD pass through without it.
  */
-export async function apiFetch<T = any>(
+export async function apiFetch<T = JsonValue>(
 	url: string,
 	options?: RequestInit
 ): Promise<T> {
@@ -184,14 +207,16 @@ export async function apiFetch<T = any>(
 /**
  * Check if an error is an ApiError instance
  */
-export function isApiError(error: unknown): error is ApiError {
+export type CaughtError = ApiError | Error | string | null | undefined;
+
+export function isApiError(error: CaughtError): error is ApiError {
 	return error instanceof ApiError;
 }
 
 /**
  * Get a user-friendly error message from any error
  */
-export function getErrorMessage(error: unknown): string {
+export function getErrorMessage(error: CaughtError): string {
 	if (isApiError(error)) {
 		return error.getUserMessage();
 	}

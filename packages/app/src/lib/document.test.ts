@@ -1,16 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("unpdf", () => ({
-  extractText: vi.fn(),
-  getMeta: vi.fn()
-}));
-
-import { extractText, getMeta } from "unpdf";
-import { extractDocumentText, supportsDocumentExtraction } from "./document";
+import { extractDocumentText, supportsDocumentExtraction, type DocumentExtractor } from "./document";
 
 describe("document extraction", () => {
-  const mockedExtractText = vi.mocked(extractText);
-  const mockedGetMeta = vi.mocked(getMeta);
+  const mockedExtractText = vi.fn<DocumentExtractor["extractText"]>();
+  const mockedGetMeta = vi.fn<DocumentExtractor["getMeta"]>();
+  const extractor = { extractText: mockedExtractText, getMeta: mockedGetMeta };
 
   beforeEach(() => {
     mockedExtractText.mockReset();
@@ -26,16 +21,16 @@ describe("document extraction", () => {
     mockedExtractText.mockResolvedValue({
       totalPages: 2,
       text: ["Abstract text", "Methods text"]
-    } as never);
+    });
     mockedGetMeta.mockResolvedValue({
       info: {
         Title: "Research Paper",
         Author: "Ada Lovelace"
       },
       metadata: {}
-    } as never);
+    });
 
-    const result = await extractDocumentText("paper.pdf", new Uint8Array([1, 2, 3]));
+    const result = await extractDocumentText("paper.pdf", new Uint8Array([1, 2, 3]), extractor);
 
     expect(result.pageCount).toBe(2);
     expect(result.title).toBe("Research Paper");
@@ -49,13 +44,13 @@ describe("document extraction", () => {
     mockedExtractText.mockResolvedValue({
       totalPages: 1,
       text: [""]
-    } as never);
+    });
     mockedGetMeta.mockResolvedValue({
       info: {},
       metadata: {}
-    } as never);
+    });
 
-    const result = await extractDocumentText("scan.pdf", new Uint8Array([1, 2, 3]));
+    const result = await extractDocumentText("scan.pdf", new Uint8Array([1, 2, 3]), extractor);
 
     expect(result.text).toContain("[no extractable text]");
     expect(result.warnings).toEqual([

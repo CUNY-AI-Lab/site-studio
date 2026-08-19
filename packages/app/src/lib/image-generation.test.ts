@@ -27,21 +27,32 @@ function expiredJwt(): string {
 }
 
 type Captured = { url: string; init: RequestInit; headers: Headers };
-
-/** Fetch stub that records the outbound request and returns a canned response. */
-function captureFetch(response: () => Response): {
+type CaptureFetch = {
   fetch: typeof fetch;
   captured: () => Captured;
   calls: () => number;
-} {
+};
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type ModerationPart = { type: "image_url"; image_url: { url: string } } | { type: string; text?: string };
+type ModerationBody = {
+  model: string;
+  input: { prompt: string; width: number; height: number };
+  messages: Array<{ content: string | ModerationPart[] }>;
+  response_format: JsonValue;
+};
+
+/** Fetch stub that records the outbound request and returns a canned response. */
+function captureFetch(response: () => Response): CaptureFetch {
   let seen: Captured | undefined;
   let callCount = 0;
+  // SAFETY: The stub implements the Fetch API call signature and returns real
+  // Response objects for this provider-boundary test.
   const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
     callCount += 1;
     seen = {
       url: String(input),
       init: init ?? {},
-      headers: new Headers((init?.headers ?? {}) as HeadersInit)
+      headers: new Headers(init?.headers)
     };
     return response();
   }) as typeof fetch;
@@ -52,7 +63,7 @@ function captureFetch(response: () => Response): {
   };
 }
 
-function json(body: unknown, status = 200): Response {
+function json(body: JsonValue, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" }
@@ -121,7 +132,8 @@ describe("generateImage wire contract", () => {
     expect(cap.init.redirect).toBe("error");
 
     // Cloudflare's native {model, input} body.
-    const body = JSON.parse(String(cap.init.body));
+    // SAFETY: The moderation adapter emits this documented request body shape.
+    const body = JSON.parse(String(cap.init.body)) as ModerationBody;
     expect(body.model).toBe(DEFAULT_CAIL_IMAGE_MODEL);
     expect(body.input.prompt).toBe("a quiet library");
     expect(body.input.width).toBe(1024);
@@ -270,7 +282,9 @@ describe("screenImage moderation gate (fail closed)", () => {
         },
       },
     });
-    const parts = body.messages[1].content as Array<Record<string, unknown>>;
+    const parts = body.messages[1]?.content;
+    if (!Array.isArray(parts)) throw new Error("expected image content parts");
+    // SAFETY: The moderation request schema marks image_url parts with a nested URL.
     const imagePart = parts.find((p) => p.type === "image_url") as
       | { image_url: { url: string } }
       | undefined;
@@ -321,6 +335,7 @@ describe("screenImage moderation gate (fail closed)", () => {
 
   it("fails closed on a network throw with one attempt", async () => {
     let calls = 0;
+    // SAFETY: This deliberate failure stub implements the Fetch API signature.
     const stub = (async () => {
       calls += 1;
       throw new Error("network down");

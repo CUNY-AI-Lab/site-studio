@@ -5,8 +5,8 @@
 
     let { projectId, onRefresh }: { projectId: string; onRefresh?: () => void } = $props();
 
-    let iframe1: HTMLIFrameElement;
-    let iframe2: HTMLIFrameElement;
+    let iframe1 = $state<HTMLIFrameElement | null>(null);
+    let iframe2 = $state<HTMLIFrameElement | null>(null);
     let showIframe1 = $state(true);
     let previewUrl = $derived(resolvePath(`/preview/${projectId}/index.html`));
     let refreshKey = $state(0);

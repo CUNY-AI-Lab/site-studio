@@ -10,6 +10,7 @@
 	import css from 'highlight.js/lib/languages/css';
 	import json from 'highlight.js/lib/languages/json';
 	import bash from 'highlight.js/lib/languages/bash';
+	import { browserWindow } from '$lib/contracts';
 
 	// One-time configuration of the module-global `marked` singleton. This lives in
 	// a `<script module>` block so it runs exactly ONCE per module load rather than
@@ -77,7 +78,7 @@
 	// (DOMPurify hooks require a DOM); harmless if it never registers under SSR.
 	let hookRegistered = false;
 	function ensureHook() {
-		if (hookRegistered || typeof window === 'undefined') return;
+		if (hookRegistered || !browserWindow()) return;
 		DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 			if (node.tagName === 'A' && node.hasAttribute('href')) {
 				node.setAttribute('rel', 'noopener noreferrer');
@@ -103,8 +104,8 @@
 	// Turn untrusted markdown into sanitized, inert HTML. Kept at module scope so it
 	// closes over the shared config/hook without re-creating them per instance.
 	function renderMarkdown(content: string): string {
-		const rawHtml = marked.parse(content) as string;
-		if (typeof window === 'undefined') {
+		const rawHtml = marked.parse(content, { async: false });
+		if (!browserWindow()) {
 			// No DOM available (SSR/prerender): never emit unsanitized HTML.
 			return escapeHtml(content);
 		}

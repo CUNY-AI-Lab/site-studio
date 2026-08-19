@@ -36,7 +36,9 @@ export function sanitizeFilePath(filePath: string): string {
 
 export function getContentType(filePath: string): string {
   const match = filePath.toLowerCase().match(/\.[^.]+$/);
-  return match ? CONTENT_TYPES[match[0]] || "application/octet-stream" : "application/octet-stream";
+  if (!match) return "application/octet-stream";
+  const entry = Object.entries(CONTENT_TYPES).find(([extension]) => extension === match[0]);
+  return entry?.[1] || "application/octet-stream";
 }
 
 export function isTextContentType(contentType: string): boolean {
@@ -116,7 +118,11 @@ export function collectPreviewResourcePaths(html: string, documentPath: string):
 }
 
 export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
-  const tree: Record<string, any> = {};
+  type TreeNode = {
+    dirs: Record<string, TreeNode>;
+    files: ProjectTreeNode[];
+  };
+  const tree: TreeNode = { dirs: {}, files: [] };
 
   for (const file of files) {
     const parts = file.path.split("/");
@@ -124,8 +130,7 @@ export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
 
     parts.forEach((part, index) => {
       if (index === parts.length - 1) {
-        current._files ||= [];
-        current._files.push({
+        current.files.push({
           name: file.name,
           path: file.path,
           type: "file",
@@ -135,31 +140,25 @@ export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
         return;
       }
 
-      current[part] ||= {};
-      current = current[part];
+      current.dirs[part] ||= { dirs: {}, files: [] };
+      current = current.dirs[part];
     });
   }
 
-  function toArray(node: Record<string, any>, parentPath = ""): ProjectTreeNode[] {
+  function toArray(node: TreeNode, parentPath = ""): ProjectTreeNode[] {
     const entries: ProjectTreeNode[] = [];
 
-    for (const key of Object.keys(node)) {
-      if (key === "_files") {
-        continue;
-      }
-
+    for (const key of Object.keys(node.dirs)) {
       const dirPath = parentPath ? `${parentPath}/${key}` : key;
       entries.push({
         name: key,
         path: dirPath,
         type: "directory",
-        children: toArray(node[key], dirPath),
+        children: toArray(node.dirs[key], dirPath),
       });
     }
 
-    if (Array.isArray(node._files)) {
-      entries.push(...node._files);
-    }
+    entries.push(...node.files);
 
     return entries;
   }

@@ -1,28 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
 
-vi.mock("agents", () => ({
-  getAgentByName: vi.fn(),
-}));
-vi.mock("./agents/site-builder", () => ({ SiteBuilderAgent: class {} }));
-vi.mock("./agents/migration-coordinator", () => ({ MigrationCoordinator: class {} }));
-vi.mock("./agents/mutation-coordinator", () => ({ MutationCoordinator: class {} }));
-
-import worker from "./index";
+import worker from "./worker";
 
 const BASE = "https://site-studio.example";
-const executionContext = {
-  passThroughOnException() {},
-  waitUntil() {},
-} as unknown as ExecutionContext;
+function createExecutionContext(): ExecutionContext {
+  const fixture = {
+    passThroughOnException() {},
+    waitUntil(_promise: Promise<unknown>) {},
+    exports: {},
+    props: {},
+    // SAFETY: Fetch dispatch never opens tracing spans in these tests.
+    tracing: {} as Tracing,
+    abort() {},
+  };
+  // SAFETY: Worker tests exercise only fetch dispatch; lifecycle methods and
+  // runtime tracing are inert test doubles.
+  return fixture as ExecutionContext;
+}
+
+function createTestBucket(): R2Bucket {
+  const fixture = {
+    head: vi.fn(async () => null),
+    get: vi.fn(async () => null),
+    put: vi.fn(async () => { throw new Error("R2 writes are not part of this fixture"); }),
+    delete: vi.fn(async () => undefined),
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); }),
+  };
+  // SAFETY: Worker tests reach only the null metadata lookup and asset paths.
+  return fixture as R2Bucket;
+}
+
+function asTestFetcher(fetch: Fetcher["fetch"]): Fetcher {
+  const fixture = { fetch };
+  // SAFETY: Worker asset dispatch only invokes the binding's fetch method.
+  return fixture as Fetcher;
+}
 
 function createEnv(assetFetch?: Fetcher): Env {
+  // SAFETY: Worker tests exercise only the listed health/asset bindings.
   return {
     CAIL_LOG_ENV: "test",
     CSRF_COOKIE_PATH: "/site-studio",
-    SITE_STUDIO_BUCKET: {
-      get: vi.fn(async () => null),
-    } as unknown as R2Bucket,
+    SITE_STUDIO_BUCKET: createTestBucket(),
     ASSETS: assetFetch,
   } as Env;
 }
@@ -32,7 +54,7 @@ describe("mounted Worker dispatch", () => {
     const response = await worker.fetch(
       new Request(`${BASE}/site-studio/api/health`),
       createEnv(),
-      executionContext,
+      createExecutionContext(),
     );
 
     expect(response.status).toBe(200);
@@ -41,7 +63,7 @@ describe("mounted Worker dispatch", () => {
     const rootResponse = await worker.fetch(
       new Request(`${BASE}/api/health`),
       createEnv(),
-      executionContext,
+      createExecutionContext(),
     );
     expect(rootResponse.status).toBe(200);
   });
@@ -53,8 +75,8 @@ describe("mounted Worker dispatch", () => {
     const assetFetch = vi.fn(async () => new Response("SPA", { status: 200 }));
     const response = await worker.fetch(
       new Request(`${BASE}${path}`),
-      createEnv({ fetch: assetFetch } as unknown as Fetcher),
-      executionContext,
+      createEnv(asTestFetcher(assetFetch)),
+      createExecutionContext(),
     );
 
     expect(response.status).toBe(status);
@@ -65,8 +87,8 @@ describe("mounted Worker dispatch", () => {
     const assetFetch = vi.fn(async () => new Response("SPA", { status: 200 }));
     const response = await worker.fetch(
       new Request(`${BASE}/site-studio/sites/legacy-owner/site/`),
-      createEnv({ fetch: assetFetch } as unknown as Fetcher),
-      executionContext,
+      createEnv(asTestFetcher(assetFetch)),
+      createExecutionContext(),
     );
 
     expect(response.status).toBe(404);
@@ -83,8 +105,8 @@ describe("mounted Worker dispatch", () => {
     });
     const response = await worker.fetch(
       new Request(`${BASE}/site-studio/`),
-      createEnv({ fetch: assetFetch } as unknown as Fetcher),
-      executionContext,
+      createEnv(asTestFetcher(assetFetch)),
+      createExecutionContext(),
     );
 
     expect(response.status).toBe(200);

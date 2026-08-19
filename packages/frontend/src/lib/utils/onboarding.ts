@@ -1,17 +1,15 @@
 import { driver } from 'driver.js';
 import type { DriveStep, Config } from 'driver.js';
+import { browserStorage } from '$lib/contracts';
 
 const ONBOARDING_KEY = 'site-studio-onboarding-completed';
 
 export function hasCompletedOnboarding(): boolean {
-	if (typeof localStorage === 'undefined') return true;
-	return localStorage.getItem(ONBOARDING_KEY) === 'true';
+	return browserStorage()?.getItem(ONBOARDING_KEY) === 'true';
 }
 
 export function markOnboardingComplete(): void {
-	if (typeof localStorage !== 'undefined') {
-		localStorage.setItem(ONBOARDING_KEY, 'true');
-	}
+	browserStorage()?.setItem(ONBOARDING_KEY, 'true');
 }
 
 export function createDashboardTour() {

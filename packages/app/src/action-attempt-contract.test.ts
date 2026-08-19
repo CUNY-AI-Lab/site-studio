@@ -30,6 +30,20 @@ function attempt(
     };
   }
   const terminalAtMs = admittedAtMs + 1_000;
+  if (outcome === "error") {
+    return {
+      schemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
+      actionId,
+      action,
+      route,
+      admittedAt: new Date(admittedAtMs).toISOString(),
+      terminalAt: new Date(terminalAtMs).toISOString(),
+      outcome,
+      reason: "application_failure",
+      durationMs: 1_000,
+      errorType: "application_failure",
+    };
+  }
   return {
     schemaVersion: ACTION_ATTEMPT_SCHEMA_VERSION,
     actionId,
@@ -38,9 +52,8 @@ function attempt(
     admittedAt: new Date(admittedAtMs).toISOString(),
     terminalAt: new Date(terminalAtMs).toISOString(),
     outcome,
-    reason: outcome === "ok" ? "completed" : "application_failure",
+    reason: "completed",
     durationMs: 1_000,
-    ...(outcome === "error" ? { errorType: "application_failure" } : {}),
   };
 }
 

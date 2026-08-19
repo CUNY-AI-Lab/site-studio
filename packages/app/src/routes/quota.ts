@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { createCailClient, CailError } from "@cuny-ai-lab/cail-client";
 import type { Env } from "../types";
 import { getCailGatewayJwt } from "../lib/session";
@@ -23,14 +24,17 @@ export function createQuotaRouter() {
       return c.json(quota);
     } catch (error) {
       if (error instanceof CailError) {
-        const status = error.status >= 400 && error.status <= 599 ? error.status : 503;
+        const statusValue = error.status >= 400 && error.status <= 599 ? error.status : 503;
+        // SAFETY: the range check above constrains the CAIL error status to
+        // Hono's content-bearing 4xx/5xx response status range.
+        const status = statusValue as ContentfulStatusCode;
         // The client's network_error message names transport internals; show a
         // plain sentence instead. Other envelope messages pass through as-is.
         const message =
           error.code === "network_error"
             ? "Couldn't check your remaining AI time."
             : error.message;
-        return c.json({ error: error.code, message }, status as any);
+        return c.json({ error: error.code, message }, status);
       }
       throw error;
     }

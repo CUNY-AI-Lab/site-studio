@@ -1,3 +1,6 @@
+import { jsonValueSchema, type JsonValue } from '$lib/contracts';
+import { z } from 'zod';
+
 export const AgentMessageType = {
 	CF_AGENT_CHAT_MESSAGES: 'cf_agent_chat_messages',
 	CF_AGENT_USE_CHAT_REQUEST: 'cf_agent_use_chat_request',
@@ -37,8 +40,8 @@ export interface UIToolPart {
 	toolCallId: string;
 	toolName: string;
 	state: ToolPartState;
-	input?: unknown;
-	output?: unknown;
+	input?: JsonValue;
+	output?: JsonValue;
 	errorText?: string;
 	approval?: {
 		id: string;
@@ -56,7 +59,7 @@ export interface UIStepStartPart {
 export interface UIDataPart {
 	type: `data-${string}`;
 	id?: string;
-	data: unknown;
+	data: JsonValue;
 }
 
 export type UIMessagePart = UITextPart | UIReasoningPart | UIToolPart | UIStepStartPart | UIDataPart;
@@ -65,15 +68,75 @@ export interface UIChatMessage {
 	id: string;
 	role: 'user' | 'assistant';
 	parts: UIMessagePart[];
-	metadata?: Record<string, unknown>;
+	metadata?: Record<string, JsonValue>;
 }
+
+const toolPartTypeSchema = z.string().refine((value): value is `tool-${string}` => value.startsWith('tool-'));
+const dataPartTypeSchema = z.string().refine((value): value is `data-${string}` => value.startsWith('data-'));
+const toolStateSchema = z.enum([
+	'input-streaming',
+	'input-available',
+	'approval-requested',
+	'approval-responded',
+	'output-available',
+	'output-error',
+	'output-denied'
+]);
+const metadataSchema = z.record(z.string(), jsonValueSchema);
+const uiMessagePartSchema = z.union([
+	z.object({ type: z.literal('text'), text: z.string(), state: z.enum(['streaming', 'done']).optional() }).catchall(jsonValueSchema),
+	z.object({ type: z.literal('reasoning'), text: z.string(), state: z.enum(['streaming', 'done']).optional() }).catchall(jsonValueSchema),
+	z.object({
+		type: toolPartTypeSchema,
+		toolCallId: z.string(),
+		toolName: z.string(),
+		state: toolStateSchema,
+		input: jsonValueSchema.optional(),
+		output: jsonValueSchema.optional(),
+		errorText: z.string().optional(),
+		approval: z.object({ id: z.string(), approved: z.boolean().optional(), reason: z.string().optional() }).optional(),
+		title: z.string().optional(),
+		preliminary: z.boolean().optional()
+	}).catchall(jsonValueSchema),
+	z.object({ type: z.literal('step-start') }).catchall(jsonValueSchema),
+	z.object({ type: dataPartTypeSchema, id: z.string().optional(), data: jsonValueSchema }).catchall(jsonValueSchema)
+]);
+const uiChatMessageSchema = z.object({
+	id: z.string().min(1),
+	role: z.enum(['user', 'assistant']),
+	parts: z.array(uiMessagePartSchema),
+	metadata: metadataSchema.optional()
+}).catchall(jsonValueSchema);
+const uiChatMessagesSchema = z.array(uiChatMessageSchema);
+
+export interface AgentSocketMessage {
+	type: string;
+	messages?: UIChatMessage[];
+	message?: UIChatMessage;
+	id?: string;
+	continuation?: boolean;
+	body?: string;
+	done?: boolean;
+	error?: boolean;
+}
+
+const agentSocketMessageSchema = z.object({
+	type: z.string(),
+	messages: uiChatMessagesSchema.optional(),
+	message: uiChatMessageSchema.optional(),
+	id: z.string().optional(),
+	continuation: z.boolean().optional(),
+	body: z.string().optional(),
+	done: z.boolean().optional(),
+	error: z.boolean().optional()
+}).catchall(jsonValueSchema);
 
 export interface ActiveStreamMessage {
 	id: string;
 	messageId: string;
 	continuation: boolean;
 	parts: UIMessagePart[];
-	metadata?: Record<string, unknown>;
+	metadata?: Record<string, JsonValue>;
 }
 
 export interface ToolApprovalRequestChunk {
@@ -86,14 +149,14 @@ export interface ToolInputAvailableChunk {
 	type: 'tool-input-available';
 	toolCallId: string;
 	toolName: string;
-	input: unknown;
+	input: JsonValue;
 	title?: string;
 }
 
 export interface ToolOutputAvailableChunk {
 	type: 'tool-output-available';
 	toolCallId: string;
-	output: unknown;
+	output: JsonValue;
 	preliminary?: boolean;
 }
 
@@ -127,12 +190,12 @@ export interface TextEndChunk {
 export interface MessageStartChunk {
 	type: 'start';
 	messageId?: string;
-	messageMetadata?: Record<string, unknown>;
+	messageMetadata?: Record<string, JsonValue>;
 }
 
 export interface MessageFinishChunk {
 	type: 'finish';
-	messageMetadata?: Record<string, unknown>;
+	messageMetadata?: Record<string, JsonValue>;
 }
 
 export type UIStreamChunk =
@@ -156,13 +219,13 @@ export type UIStreamChunk =
 			type: 'tool-input-delta';
 			toolCallId: string;
 			inputTextDelta?: string;
-			input?: unknown;
+			input?: JsonValue;
 	  }
 	| {
 			type: 'tool-input-error';
 			toolCallId: string;
 			toolName: string;
-			input: unknown;
+			input: JsonValue;
 			errorText: string;
 			title?: string;
 	  }
@@ -187,13 +250,68 @@ export type UIStreamChunk =
 	  }
 	| {
 			type: 'message-metadata';
-			messageMetadata: Record<string, unknown>;
+			messageMetadata: Record<string, JsonValue>;
 	  }
 	| {
 			type: 'error';
 			errorText: string;
 	  }
 	| UIDataPart;
+
+const uiStreamChunkSchema = z.union([
+	z.object({ type: z.literal('text-start'), id: z.string() }),
+	z.object({ type: z.literal('text-delta'), id: z.string(), delta: z.string() }),
+	z.object({ type: z.literal('text-end'), id: z.string() }),
+	z.object({ type: z.literal('tool-input-start'), toolCallId: z.string(), toolName: z.string(), title: z.string().optional() }),
+	z.object({ type: z.literal('tool-input-delta'), toolCallId: z.string(), inputTextDelta: z.string().optional(), input: jsonValueSchema.optional() }),
+	z.object({ type: z.literal('tool-input-available'), toolCallId: z.string(), toolName: z.string(), input: jsonValueSchema, title: z.string().optional() }),
+	z.object({ type: z.literal('tool-input-error'), toolCallId: z.string(), toolName: z.string(), input: jsonValueSchema, errorText: z.string(), title: z.string().optional() }),
+	z.object({ type: z.literal('tool-approval-request'), approvalId: z.string(), toolCallId: z.string() }),
+	z.object({ type: z.literal('tool-output-available'), toolCallId: z.string(), output: jsonValueSchema, preliminary: z.boolean().optional() }),
+	z.object({ type: z.literal('tool-output-error'), toolCallId: z.string(), errorText: z.string() }),
+	z.object({ type: z.literal('tool-output-denied'), toolCallId: z.string() }),
+	z.object({ type: z.literal('reasoning-start'), id: z.string() }),
+	z.object({ type: z.literal('reasoning-delta'), id: z.string(), delta: z.string() }),
+	z.object({ type: z.literal('reasoning-end'), id: z.string() }),
+	z.object({ type: z.literal('start'), messageId: z.string().optional(), messageMetadata: metadataSchema.optional() }),
+	z.object({ type: z.literal('finish'), messageMetadata: metadataSchema.optional() }),
+	z.object({ type: z.literal('start-step') }),
+	z.object({ type: z.literal('step-start') }),
+	z.object({ type: z.literal('message-metadata'), messageMetadata: metadataSchema }),
+	z.object({ type: z.literal('error'), errorText: z.string() }),
+	z.object({ type: dataPartTypeSchema, id: z.string().optional(), data: jsonValueSchema })
+]);
+
+/** Parse and validate persisted chat history before it enters component state. */
+export function parseUIChatMessages(payload: string): UIChatMessage[] {
+	const parsed = uiChatMessagesSchema.safeParse(JSON.parse(payload));
+	if (!parsed.success) throw new Error('Invalid chat history payload');
+	return parsed.data;
+}
+
+/** Parse and validate a server WebSocket frame before dispatching it. */
+export function parseAgentSocketMessage(payload: string): AgentSocketMessage {
+	const parsed = agentSocketMessageSchema.safeParse(JSON.parse(payload));
+	if (!parsed.success) throw new Error('Invalid agent socket payload');
+	return parsed.data;
+}
+
+/** Parse a streamed UI chunk, including the server's optional `data:` prefix. */
+export function parseUIStreamChunk(payload: string): UIStreamChunk {
+	let value: string = payload;
+	try {
+		const parsed = uiStreamChunkSchema.safeParse(JSON.parse(value));
+		if (parsed.success) return parsed.data;
+	} catch {
+		// Retry below for a `data:`-prefixed frame.
+	}
+
+	if (!value.startsWith('data:')) throw new Error('Invalid UI stream chunk');
+	value = value.slice('data:'.length).replace(/[\r\n]+$/, '');
+	const parsed = uiStreamChunkSchema.safeParse(JSON.parse(value));
+	if (!parsed.success) throw new Error('Invalid UI stream chunk');
+	return parsed.data;
+}
 
 function findLastPartByType(parts: UIMessagePart[], type: UIMessagePart['type']): UIMessagePart | undefined {
 	for (let i = parts.length - 1; i >= 0; i -= 1) {
@@ -215,8 +333,8 @@ function findToolPartByCallId(parts: UIMessagePart[], toolCallId: string): UIToo
 function findDataPartByTypeAndId(parts: UIMessagePart[], type: string, id: string): UIDataPart | undefined {
 	for (let i = parts.length - 1; i >= 0; i -= 1) {
 		const part = parts[i];
-		if (part.type === type && 'id' in part && part.id === id) {
-			return part as UIDataPart;
+		if (isDataPart(part) && part.type === type && part.id === id) {
+			return part;
 		}
 	}
 }
@@ -225,8 +343,16 @@ export function isToolPart(part: UIMessagePart): part is UIToolPart {
 	return part.type.startsWith('tool-');
 }
 
+function isDataPart(part: UIMessagePart): part is UIDataPart {
+	return part.type.startsWith('data-');
+}
+
 export function cloneParts(parts: UIMessagePart[]): UIMessagePart[] {
-	return parts.map((part) => JSON.parse(JSON.stringify(part)) as UIMessagePart);
+	return parts.map((part) => {
+		const parsed = uiMessagePartSchema.safeParse(JSON.parse(JSON.stringify(part)));
+		if (!parsed.success) throw new Error('Invalid chat message part');
+		return parsed.data;
+	});
 }
 
 export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk): boolean {
@@ -360,8 +486,8 @@ export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk):
 			parts.push({ type: 'step-start' });
 			return true;
 		default:
-			if (chunk.type.startsWith('data-')) {
-				const dataChunk = chunk as UIDataPart;
+			if (isDataChunk(chunk)) {
+				const dataChunk = chunk;
 
 				if ('id' in chunk && chunk.id) {
 					const existing = findDataPartByTypeAndId(parts, dataChunk.type, chunk.id);
@@ -371,16 +497,18 @@ export function applyChunkToParts(parts: UIMessagePart[], chunk: UIStreamChunk):
 					}
 				}
 
-				parts.push({
-					type: dataChunk.type,
-					...('id' in chunk && chunk.id ? { id: chunk.id } : {}),
-					data: dataChunk.data
-				});
+				const dataPart: UIDataPart = { type: dataChunk.type, data: dataChunk.data };
+				if (dataChunk.id) dataPart.id = dataChunk.id;
+				parts.push(dataPart);
 				return true;
 			}
 
 			return false;
 	}
+}
+
+function isDataChunk(chunk: UIStreamChunk): chunk is UIDataPart {
+	return chunk.type.startsWith('data-');
 }
 
 export function mergeUpdatedMessage(messages: UIChatMessage[], updatedMessage: UIChatMessage): UIChatMessage[] {
@@ -415,7 +543,7 @@ export function mergeUpdatedMessage(messages: UIChatMessage[], updatedMessage: U
 export function applyLocalToolOutput(
 	messages: UIChatMessage[],
 	toolCallId: string,
-	output: unknown,
+	output: JsonValue,
 	state: 'output-available' | 'output-error' = 'output-available',
 	errorText?: string
 ): UIChatMessage[] {
@@ -426,12 +554,13 @@ export function applyLocalToolOutput(
 				return part;
 			}
 
-			return {
+			const nextPart: UIToolPart = {
 				...part,
 				state,
-				output,
-				...(errorText ? { errorText } : {})
+				output
 			};
+			if (errorText) nextPart.errorText = errorText;
+			return nextPart;
 		})
 	}));
 }

@@ -1,7 +1,8 @@
 import { createMiddleware } from "hono/factory";
 import { setCookie } from "hono/cookie";
 import type { Context, Env as HonoEnv } from "hono";
-import type { Env, User } from "../types";
+import type { Env } from "../types";
+import type { SessionVariables } from "./session";
 import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 
 /**
@@ -303,7 +304,10 @@ export function verifyWsUpgrade(facts: {
  * once on `/api/*` (after authMiddleware) so newly added mutation routes are
  * covered by default rather than opted in one by one.
  */
-export const csrfProtect = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+export const csrfProtect = createMiddleware<{
+  Bindings: Env;
+  Variables: SessionVariables;
+}>(async (c, next) => {
   const method = c.req.method.toUpperCase();
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
     await next();
@@ -312,7 +316,7 @@ export const csrfProtect = createMiddleware<{ Bindings: Env }>(async (c, next) =
 
   // The session user is set by authMiddleware upstream. A mutation path with
   // no session in scope has no token to verify against and fails closed.
-  const user = (c as unknown as { get: (key: string) => unknown }).get("user") as User | undefined;
+  const user = c.get("user");
   const expected = user ? await getCsrfToken(c.env.SITE_STUDIO_BUCKET, user.id) : null;
 
   if (!verifyCsrf(c, { token: expected })) {

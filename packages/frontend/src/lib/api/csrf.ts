@@ -1,4 +1,6 @@
 import { resolvePath } from '$lib/utils/paths';
+import { browserWindow } from '$lib/contracts';
+import { z } from 'zod';
 
 /**
  * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
@@ -25,6 +27,7 @@ const CSRF_HEADER = 'X-CSRF-Token';
 const CSRF_ERROR_CODE = 'csrf_verification_failed';
 /** Name of the delivery cookie the server sets (server: lib/constants.ts). */
 const CSRF_COOKIE_NAME = 'cail_csrf_sitestudio';
+const csrfErrorEnvelopeSchema = z.object({ error: z.string().optional() });
 
 /** Methods that mutate server state and therefore require the CSRF header. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
@@ -38,7 +41,8 @@ let inFlight: Promise<string> | null = null;
  * Guards against a missing `document` (non-browser contexts).
  */
 function readCookie(name: string): string | null {
-	if (typeof document === 'undefined' || !document.cookie) {
+	const document = browserWindow()?.document;
+	if (!document?.cookie) {
 		return null;
 	}
 	const prefix = `${name}=`;
@@ -133,9 +137,7 @@ export async function refreshCsrfToken(): Promise<string> {
 function methodOf(input: RequestInfo | URL, init?: RequestInit): string {
 	const raw =
 		init?.method ??
-		(typeof input === 'object' && input !== null && 'method' in input
-			? (input as Request).method
-			: undefined) ??
+		(input instanceof Request ? input.method : undefined) ??
 		'GET';
 	return raw.toUpperCase();
 }
@@ -160,8 +162,8 @@ async function isCsrfFailure(response: Response): Promise<boolean> {
 		return false;
 	}
 	try {
-		const data = (await response.clone().json()) as { error?: unknown };
-		return data.error === CSRF_ERROR_CODE;
+		const parsed = csrfErrorEnvelopeSchema.safeParse(JSON.parse(await response.clone().text()));
+		return parsed.success && parsed.data.error === CSRF_ERROR_CODE;
 	} catch {
 		return false;
 	}

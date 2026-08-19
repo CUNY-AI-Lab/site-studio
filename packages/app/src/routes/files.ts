@@ -39,7 +39,7 @@ function sanitizeUploadName(name: string): string {
 }
 
 function isFileUpload(value: FormDataEntryValue | null): value is File {
-  return !!value && typeof value !== "string" && typeof value.arrayBuffer === "function";
+  return value instanceof File;
 }
 
 function fileExtension(fileName: string): string {
@@ -172,12 +172,9 @@ export function createFileRouter() {
       .filter((finding) => finding.rule === "placeholder-image")
       .map((finding) => {
         const src = extractPlaceholderSrc(htmlFiles[finding.file], finding.line);
-        return {
-          file: finding.file,
-          line: finding.line,
-          message: finding.message,
-          ...(src ? { src } : {})
-        };
+        return src
+          ? { file: finding.file, line: finding.line, message: finding.message, src }
+          : { file: finding.file, line: finding.line, message: finding.message };
       });
 
     return c.json({ images, placeholders });
@@ -277,7 +274,6 @@ export function createFileRouter() {
   });
 
   app.delete("/api/projects/:id/files", async (c) => {
-    const storage = c.get("storage");
     const user = getUser(c);
     const projectId = c.get("projectId");
     const filePath = sanitizeFilePath(c.req.query("path") || "");
@@ -339,7 +335,6 @@ export function createFileRouter() {
   });
 
   app.post("/api/projects/:id/upload", async (c) => {
-    const storage = c.get("storage");
     const user = getUser(c);
     const projectId = c.get("projectId");
 

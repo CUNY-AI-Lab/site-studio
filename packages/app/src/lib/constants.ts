@@ -59,7 +59,7 @@ export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 export const SNAPSHOT_KEEP_COUNT = 50;
 export { PROTECTED_FILE_NAMES } from "./protected-files";
 
-export const CONTENT_TYPES: Record<string, string> = {
+export const CONTENT_TYPES = {
   ".html": "text/html",
   ".htm": "text/html",
   ".css": "text/css",
@@ -88,8 +88,8 @@ export const CONTENT_TYPES: Record<string, string> = {
   ".webm": "video/webm",
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
-  ".ogg": "audio/ogg"
-};
+  ".ogg": "audio/ogg",
+} as const satisfies Readonly<Record<string, string>>;
 
 /**
  * `SERVED_CONTENT_TYPES` differs from `CONTENT_TYPES` above (which stays bare

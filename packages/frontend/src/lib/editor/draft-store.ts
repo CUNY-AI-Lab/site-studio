@@ -1,4 +1,5 @@
 import type { SaveSnapshot } from './autosave';
+import { z } from 'zod';
 
 export interface StoredDraft extends SaveSnapshot {
 	baseEtag: string | null;
@@ -10,6 +11,19 @@ type EncryptedDraft = {
 	iv: string;
 	ciphertext: string;
 };
+
+const encryptedDraftSchema = z.object({
+	version: z.literal(1),
+	iv: z.string().min(1),
+	ciphertext: z.string().min(1)
+});
+const storedDraftSchema = z.object({
+	projectId: z.string(),
+	filePath: z.string(),
+	content: z.string(),
+	baseEtag: z.string().nullable(),
+	updatedAt: z.string()
+});
 
 const PREFIX = 'site-studio:draft:v1:';
 const encoder = new TextEncoder();
@@ -23,7 +37,12 @@ function base64(bytes: Uint8Array): string {
 
 function fromBase64(value: string): ArrayBuffer {
 	const binary = atob(value);
-	return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer as ArrayBuffer;
+	const buffer = new ArrayBuffer(binary.length);
+	const bytes = new Uint8Array(buffer);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return buffer;
 }
 
 async function digest(value: string): Promise<ArrayBuffer> {
@@ -66,26 +85,21 @@ export async function loadDraft(
 	try {
 		const raw = storage.getItem(await storageKey(secret, projectId, filePath));
 		if (!raw) return null;
-		const envelope = JSON.parse(raw) as Partial<EncryptedDraft>;
-		if (envelope.version !== 1 || typeof envelope.iv !== 'string' || typeof envelope.ciphertext !== 'string') {
+		const parsedEnvelope = encryptedDraftSchema.safeParse(JSON.parse(raw));
+		if (!parsedEnvelope.success) {
 			return null;
 		}
+		const envelope: EncryptedDraft = parsedEnvelope.data;
 		const plaintext = await crypto.subtle.decrypt(
 			{ name: 'AES-GCM', iv: fromBase64(envelope.iv) },
 			await key(secret),
 			fromBase64(envelope.ciphertext)
 		);
-		const draft = JSON.parse(decoder.decode(plaintext)) as Partial<StoredDraft>;
-		if (
-			draft.projectId !== projectId ||
-			draft.filePath !== filePath ||
-			typeof draft.content !== 'string' ||
-			(draft.baseEtag !== null && typeof draft.baseEtag !== 'string') ||
-			typeof draft.updatedAt !== 'string'
-		) {
+		const parsedDraft = storedDraftSchema.safeParse(JSON.parse(decoder.decode(plaintext)));
+		if (!parsedDraft.success || parsedDraft.data.projectId !== projectId || parsedDraft.data.filePath !== filePath) {
 			return null;
 		}
-		return draft as StoredDraft;
+		return parsedDraft.data;
 	} catch {
 		return null;
 	}

@@ -56,7 +56,7 @@
 			toast.success('Project renamed.');
 		} catch (error) {
 			console.error('Error renaming project:', error);
-			toast.error(`Couldn't rename project. ${getErrorMessage(error)}`);
+			toast.error(`Couldn't rename project. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		} finally {
 			isRenaming = false;
 		}
@@ -77,7 +77,7 @@
 			toast.success('Project deleted.');
 		} catch (error) {
 			console.error('Error deleting project:', error);
-			toast.error(`Couldn't delete project. ${getErrorMessage(error)}`);
+			toast.error(`Couldn't delete project. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		} finally {
 			isDeleting = false;
 		}

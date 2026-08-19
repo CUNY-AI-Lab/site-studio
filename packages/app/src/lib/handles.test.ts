@@ -15,7 +15,7 @@ import {
 } from "./handles";
 import { createHandleRouter } from "../routes/handles";
 import { csrfProtect } from "./csrf";
-import { createMockKV, mintCsrfSession, type CsrfSession } from "./test-utils";
+import { createMockKV, createTestR2Object, mintCsrfSession, type CsrfSession } from "./test-utils";
 import { TEST_SUBJECTS, canonicalTestSubject } from "@cuny-ai-lab/cail-identity/testing";
 
 // Canonical test subjects (cail-identity/testing kit) used as owner ids.
@@ -27,41 +27,55 @@ const SELF_RACER = canonicalTestSubject("self-racer");
 const ROUTE_USER = canonicalTestSubject("route-user");
 const OTHER_USER = canonicalTestSubject("other-user");
 
+function testConditional(options?: R2PutOptions): R2Conditional | undefined {
+  const conditional = options?.onlyIf;
+  return conditional instanceof Headers ? undefined : conditional;
+}
+
+function testMetadata(options?: R2PutOptions): R2HTTPMetadata | undefined {
+  const metadata = options?.httpMetadata;
+  return metadata instanceof Headers ? undefined : metadata;
+}
+
 // Mock R2 bucket (same shape as storage/r2.test.ts / migration.test.ts).
 function createMockBucket() {
   let revision = 0;
-  const store = new Map<string, { data: ArrayBuffer | string; httpMetadata?: any; etag?: string }>();
+  const store = new Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }>();
+  // SAFETY: This fixture implements the R2 methods used by handle ownership;
+  // uncalled binding methods are outside this test boundary.
   return {
     store,
     head: vi.fn(async (key: string) => (store.has(key) ? { key, size: 0 } : null)),
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
       if (!entry) return null;
-      const data = entry.data;
       return {
         key,
         etag: entry.etag,
-        text: async () => (typeof data === "string" ? data : new TextDecoder().decode(data as ArrayBuffer))
+        text: async () => entry.data
       };
     }),
-    put: vi.fn(async (key: string, data: any, options?: any) => {
+    put: vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
       // key is empty; a failed condition returns null (no write, no throw).
-      if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
+      const conditional = testConditional(options);
+      if (conditional?.etagDoesNotMatch === "*" && store.has(key)) {
         return null;
       }
-      if (options?.onlyIf?.etagMatches && store.get(key)?.etag !== options.onlyIf.etagMatches) {
+      if (conditional?.etagMatches && store.get(key)?.etag !== conditional.etagMatches) {
         return null;
       }
       const etag = `etag-${++revision}`;
-      store.set(key, { data: typeof data === "string" ? data : String(data), httpMetadata: options?.httpMetadata, etag });
-      return { key, etag };
+      store.set(key, { data, httpMetadata: testMetadata(options), etag });
+      return createTestR2Object(key, etag, data.length);
     }),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
-    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] }))
-  } as unknown as R2Bucket & { store: Map<string, any> };
+    list: vi.fn(async () => ({ objects: [], truncated: false, delimitedPrefixes: [] })),
+    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
+    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
+  } as R2Bucket & { store: Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }> };
 }
 
 describe("validateHandle", () => {
@@ -272,10 +286,10 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (
         key === userHandleRecordKey(ownerId) &&
-        options?.onlyIf?.etagMatches &&
+        testConditional(options)?.etagMatches &&
         String(data).includes('"beta"') &&
         !injected
       ) {
@@ -284,7 +298,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
         expect(winner).toEqual({ ok: true, handle: "alpha", alreadyOwned: false });
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const res = await claimHandle(bucket, ownerId, "beta", () => "t2");
     expect(res).toEqual({ ok: false, status: 409, reason: expect.stringContaining("already have") });
@@ -293,7 +307,8 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
       .filter(([key]) => key.startsWith("handles/"))
       .map(([key, entry]) => ({
         key,
-        record: JSON.parse(entry.data as string) as HandleRecord
+        // SAFETY: Every forward handle entry in this fixture is a JSON record.
+        record: JSON.parse(entry.data) as HandleRecord
       }))
       .filter(({ record }) => record.ownerId === ownerId);
 
@@ -318,10 +333,10 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
 
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (
         key === userHandleRecordKey(ownerId) &&
-        options?.onlyIf?.etagMatches &&
+        testConditional(options)?.etagMatches &&
         String(data).includes('"1970-01-01T00:00:00.000Z"') &&
         !injected
       ) {
@@ -336,7 +351,7 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
         );
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const result = await claimHandle(
       bucket,
@@ -369,14 +384,14 @@ describe("claimHandle reverse-orphan reaper (SS-3 residual #2)", () => {
     const started = new Promise<void>((resolve) => (forwardStarted = resolve));
     const originalPut = bucket.put;
     let paused = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (key === handleRecordKey("alpha") && !paused) {
         paused = true;
         forwardStarted();
         await release;
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const first = claimHandle(bucket, ownerId, "alpha", () => "2026-07-14T12:00:00.000Z");
     await started;
@@ -420,7 +435,8 @@ describe("claimHandle races (SS-4)", () => {
     const loserId = owner === RACER_A ? RACER_B : RACER_A;
     expect(await getUserHandle(bucket, owner!)).toBe("shared-one");
     expect(await getUserHandle(bucket, loserId)).toBeNull();
-    expect(JSON.parse(bucket.store.get(userHandleRecordKey(loserId)).data as string)).toEqual({
+    // SAFETY: The loser reverse slot is a JSON handle record created by this fixture.
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(loserId))!.data)).toEqual({
       handle: "shared-one",
       claimedAt: "1970-01-01T00:00:00.000Z"
     });
@@ -442,10 +458,10 @@ describe("claimHandle races (SS-4)", () => {
 
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (
         key === userHandleRecordKey(OWNER) &&
-        options?.onlyIf?.etagMatches &&
+        testConditional(options)?.etagMatches &&
         String(data).includes('"1970-01-01T00:00:00.000Z"') &&
         !injected
       ) {
@@ -460,7 +476,7 @@ describe("claimHandle races (SS-4)", () => {
         );
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     const result = await claimHandle(
       bucket,
@@ -512,7 +528,19 @@ describe("createHandleRouter", () => {
   let app: Hono<{ Bindings: Env; Variables: { user: { id: string } } }>;
   let kv: ReturnType<typeof createMockKV>;
   let csrf: CsrfSession;
-  const env = (b: R2Bucket) => ({ CAIL_LOG_ENV: "test", SITE_STUDIO_BUCKET: b, SESSION_KV: kv }) as unknown as Env;
+  const env = (b: R2Bucket) => {
+    // SAFETY: Handle routes read only these bindings in this suite.
+    return {
+      CAIL_LOG_ENV: "test",
+      SITE_STUDIO_BUCKET: b,
+      SESSION_KV: kv,
+      // SAFETY: Handle route tests never call these bindings.
+      LOADER: {} as WorkerLoader,
+      SITE_BUILDER_AGENT: {} as Env["SITE_BUILDER_AGENT"],
+      MIGRATION_COORDINATOR: {} as Env["MIGRATION_COORDINATOR"],
+      ASSETS: undefined,
+    } as Env;
+  };
   // Every POST carries the session CSRF token + same-origin posture, matching
   // production where csrfProtect guards all /api mutations (lib/csrf.ts).
   const postHeaders = () => ({ "Content-Type": "application/json", ...csrf.headers });
@@ -642,7 +670,7 @@ describe("migrateHandle", () => {
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
     // The exact old generation is retired as an orphan marker rather than
     // unconditionally deleted; a concurrent newer anonymous claim must survive.
-    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON))!.data)).toEqual({
       handle: "anon-handle",
       claimedAt: "1970-01-01T00:00:00.000Z"
     });
@@ -684,7 +712,7 @@ describe("migrateHandle", () => {
 
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (key === userHandleRecordKey(SUBJECT) && !injected) {
         injected = true;
         // Lands in migrateHandle's check-to-write window: the subject's own
@@ -693,7 +721,7 @@ describe("migrateHandle", () => {
         expect(claim.ok).toBe(true);
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
 
@@ -704,7 +732,7 @@ describe("migrateHandle", () => {
     expect(await resolveHandleOwner(bucket, "anon-handle")).toBe(SUBJECT);
     // The old anonymous generation is retired without touching the subject's
     // concurrent primary claim.
-    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON)).data)).toEqual({
+    expect(JSON.parse(bucket.store.get(userHandleRecordKey(ANON))!.data)).toEqual({
       handle: "anon-handle",
       claimedAt: "1970-01-01T00:00:00.000Z"
     });
@@ -715,7 +743,7 @@ describe("migrateHandle", () => {
 
     const originalPut = bucket.put;
     let injected = false;
-    bucket.put = vi.fn(async (key: string, data: any, options?: any) => {
+    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
       if (key === userHandleRecordKey(SUBJECT) && !injected) {
         injected = true;
         const claim = await claimHandle(
@@ -727,7 +755,7 @@ describe("migrateHandle", () => {
         expect(claim).toEqual({ ok: true, handle: "new-handle", alreadyOwned: false });
       }
       return originalPut(key, data, options);
-    }) as typeof bucket.put;
+    });
 
     await migrateHandle({ bucket, anonUserId: ANON, subject: SUBJECT });
 

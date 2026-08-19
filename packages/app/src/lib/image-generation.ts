@@ -86,7 +86,7 @@ const DEFAULT_DIMENSION = 1024;
  * within [256, 1920]. Non-finite or missing input falls back to 1024.
  */
 export function clampDimension(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (value === undefined || !Number.isFinite(value)) {
     return DEFAULT_DIMENSION;
   }
   const rounded = Math.round(value / DIMENSION_STEP) * DIMENSION_STEP;
@@ -152,19 +152,17 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
  * the image fields arrive at the top level (`image` for flux; `image_b64` /
  * `b64_json` cover other Workers AI image ids).
  */
-function extractBase64Image(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const result = payload as Record<string, unknown>;
+const imagePayloadSchema = z.object({
+  image: z.string().optional(),
+  image_b64: z.string().optional(),
+  b64_json: z.string().optional(),
+});
 
-  const candidate =
-    (typeof result.image === "string" && result.image) ||
-    (typeof result.image_b64 === "string" && result.image_b64) ||
-    (typeof (result as Record<string, unknown>).b64_json === "string" &&
-      (result as Record<string, unknown>).b64_json);
-
-  return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
+function extractBase64Image(payload: z.input<typeof imagePayloadSchema>): string | null {
+  const parsed = imagePayloadSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  const candidate = parsed.data.image ?? parsed.data.image_b64 ?? parsed.data.b64_json;
+  return candidate && candidate.length > 0 ? candidate : null;
 }
 
 export type GenerateImageResult =
@@ -209,12 +207,12 @@ export async function generateImage(
 
   let response: Response;
   try {
-    const billedFetch = ((request: RequestInfo | URL, init?: RequestInit) => {
+    const billedFetch: typeof fetch = (request, init) => {
       // Keep the expiry check immediately before the one native billed POST;
       // the caller's verified token is never refreshed or replaced here.
       assertCailJwtFresh(jwt);
       return fetchImpl(request, init);
-    }) as typeof fetch;
+    };
     response = await cailClient(env.CAIL_API_BASE, billedFetch).run(
       { model, input: { prompt: input.prompt, width, height } },
       jwt,
@@ -244,7 +242,8 @@ export async function generateImage(
     return { ok: false, message: "Image generation returned a non-JSON response" };
   }
 
-  const base64 = extractBase64Image(payload);
+  const parsedPayload = imagePayloadSchema.safeParse(payload);
+  const base64 = parsedPayload.success ? extractBase64Image(parsedPayload.data) : null;
   if (!base64) {
     return { ok: false, message: "Image generation response did not contain an image" };
   }

@@ -13,6 +13,7 @@ import {
   SITE_STUDIO_ACTION_ROUTES,
 } from "./action-attempt";
 import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./fleet-projection";
+import { z } from "zod";
 
 export const OBSERVABILITY_CONTRACT_VERSION = 3;
 export const PRODUCT_ID = "site-studio";
@@ -30,7 +31,7 @@ export const CAIL_LOG_ENVIRONMENTS = Object.freeze([
  * Parse the deployment environment without normalization or a fallback.
  * Configuration typos must fail closed instead of relabeling telemetry.
  */
-export function parseCailLogEnvironment(value: unknown): CailLogEnvironment | undefined {
+export function parseCailLogEnvironment(value: string | null | undefined): CailLogEnvironment | undefined {
   switch (value) {
     case "production":
     case "staging":
@@ -390,7 +391,8 @@ export type TelemetryQualityIssue = Readonly<{
   id: string;
 }>;
 
-export type TelemetryRecord = Readonly<Record<string, unknown>>;
+export type TelemetryValue = string | number | boolean | null | undefined;
+export type TelemetryRecord = Readonly<Record<string, TelemetryValue>>;
 
 export type CloudflareHealthCheckSpec = Readonly<{
   address: string;
@@ -485,9 +487,11 @@ export function auditTelemetryLifecyclePairs(
         eventName !== definition.admittedEventName
         && eventName !== definition.terminalEventName
       ) continue;
-      const id = record[definition.joinKey];
-      const service = record["service.name"];
-      if (typeof id !== "string" || typeof service !== "string") continue;
+      const idResult = z.string().safeParse(record[definition.joinKey]);
+      const serviceResult = z.string().safeParse(record["service.name"]);
+      if (!idResult.success || !serviceResult.success) continue;
+      const id = idResult.data;
+      const service = serviceResult.data;
       const key = `${service}\u0000${id}`;
       const group = groups.get(key) ?? {
         id,
@@ -513,19 +517,19 @@ export function auditTelemetryLifecyclePairs(
         issues.push({ code: "terminal_duplicate", lifecycle, service: group.service, id: group.id });
       }
 
-      const admittedRoute = group.admissions[0]?.["url.template"];
-      const terminalRoute = group.terminals[0]?.["url.template"];
+      const admittedRouteResult = z.string().safeParse(group.admissions[0]?.["url.template"]);
+      const terminalRouteResult = z.string().safeParse(group.terminals[0]?.["url.template"]);
       if (
-        typeof admittedRoute === "string"
-        && typeof terminalRoute === "string"
-        && admittedRoute !== terminalRoute
+        admittedRouteResult.success
+        && terminalRouteResult.success
+        && admittedRouteResult.data !== terminalRouteResult.data
       ) {
         issues.push({ code: "route_mismatch", lifecycle, service: group.service, id: group.id });
       }
       if (
         lifecycle === "action"
-        && typeof terminalRoute === "string"
-        && !actionRoutes.has(terminalRoute)
+        && terminalRouteResult.success
+        && !actionRoutes.has(terminalRouteResult.data)
       ) {
         issues.push({
           code: "action_route_unrecognized",
@@ -535,8 +539,10 @@ export function auditTelemetryLifecyclePairs(
         });
       }
       for (const terminal of group.terminals) {
-        const duration = terminal["cail.operation.duration_ms"];
-        if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0) {
+        const durationResult = z.number().finite().nonnegative().safeParse(
+          terminal["cail.operation.duration_ms"],
+        );
+        if (!durationResult.success) {
           issues.push({
             code: "terminal_duration_invalid",
             lifecycle,
@@ -567,14 +573,14 @@ const CLOUDFLARE_VERSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GIT_SHA_VERSION_TAG_PATTERN = /^[0-9a-f]{40}$/;
 
-function cloudflareVersionId(value: unknown): string | null {
-  return typeof value === "string" && CLOUDFLARE_VERSION_ID_PATTERN.test(value)
+function cloudflareVersionId(value: string | undefined): string | null {
+  return value !== undefined && CLOUDFLARE_VERSION_ID_PATTERN.test(value)
     ? value
     : null;
 }
 
-function gitShaVersionTag(value: unknown): string | null {
-  return typeof value === "string" && GIT_SHA_VERSION_TAG_PATTERN.test(value)
+function gitShaVersionTag(value: string | undefined): string | null {
+  return value !== undefined && GIT_SHA_VERSION_TAG_PATTERN.test(value)
     ? value
     : null;
 }

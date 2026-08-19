@@ -52,14 +52,14 @@
 		window.addEventListener('keydown', handleKeyPress);
 
 		// Expose function to force tutorial from console
-		(window as any).showTutorial = () => {
+		window.showTutorial = () => {
 			const tour = createDashboardTour();
 			tour.drive();
 		};
 
 		return () => {
 			window.removeEventListener('keydown', handleKeyPress);
-			delete (window as any).showTutorial;
+			delete window.showTutorial;
 		};
 	});
 

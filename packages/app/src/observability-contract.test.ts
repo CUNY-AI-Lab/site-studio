@@ -332,6 +332,7 @@ describe("observability source contract", () => {
     const response = await createHealthRouter().request(
       "https://app.example/api/health",
       {},
+      // SAFETY: Health liveness only reads the optional logging environment.
       { CAIL_LOG_ENV: "test" } as Env,
     );
     expect(response.status).toBe(200);
@@ -356,6 +357,7 @@ describe("observability source contract", () => {
     const response = await createHealthRouter().request(
       "https://app.example/api/health",
       {},
+      // SAFETY: Version metadata fixture matches Cloudflare's binding shape.
       {
         CAIL_LOG_ENV: "test",
         CF_VERSION_METADATA: {
@@ -376,6 +378,7 @@ describe("observability source contract", () => {
     const response = await createHealthRouter().request(
       "https://app.example/api/health",
       {},
+      // SAFETY: Invalid metadata fixture is deliberately passed through the Env boundary.
       {
         CAIL_LOG_ENV: "test",
         CF_VERSION_METADATA: {

@@ -10,19 +10,19 @@
  * outage propagates so callers on a security/identity path can fail loud
  * (mirrors the migration claim-read posture, rule 5).
  */
-export async function readR2Json<T>(bucket: R2Bucket, key: string): Promise<T | null> {
+export async function readR2Json<T>(
+  bucket: R2Bucket,
+  key: string,
+  schema: z.ZodType<T>,
+): Promise<T | null> {
   const object = await bucket.get(key);
   if (!object) return null;
+  const text = await object.text();
   try {
-    return JSON.parse(await object.text()) as T;
+    const parsed = schema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
 }
-
-/** Write `value` as pretty-free JSON with an application/json content type. */
-export async function putR2Json(bucket: R2Bucket, key: string, value: unknown): Promise<void> {
-  await bucket.put(key, JSON.stringify(value), {
-    httpMetadata: { contentType: "application/json" }
-  });
-}
+import { z } from "zod";
