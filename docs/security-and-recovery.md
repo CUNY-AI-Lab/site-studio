@@ -13,7 +13,7 @@ email and profile names are display data only. The legacy session cookie is an
 import source only, never authentication or ownership proof. The app does not
 issue or consult a subject session cookie or subject session KV record.
 The browser handles that envelope by sending the user to Doorway's protected
-Site Studio path at `https://cail-doorway.ailab-452.workers.dev/site-studio/`.
+Site Studio path at `https://tools.ailab.gc.cuny.edu/site-studio/`.
 Doorway starts CUNY sign-in and returns the browser to the current Site Studio
 path.
 

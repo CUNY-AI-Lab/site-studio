@@ -83,7 +83,7 @@ export class ApiError extends Error {
  * is not a login page. Doorway owns the protected `/site-studio/` route; send
  * the browser there and let Doorway's route policy start CUNY sign-in.
  */
-const CAIL_DOORWAY_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
+const CAIL_DOORWAY_ORIGIN = 'https://tools.ailab.gc.cuny.edu';
 const SITE_STUDIO_DOORWAY_PATH = '/site-studio';
 
 function redirectToLogin(): void {

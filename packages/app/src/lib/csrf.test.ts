@@ -25,7 +25,7 @@ import {
 import { createTestR2Object, mintCsrfSession } from "./test-utils";
 
 const REQUEST_ORIGIN = "https://site-studio.example";
-const APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
+const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 const TOKEN = "a".repeat(64);
 
 it("uses a non-authority header that survives the shared Doorway", () => {
@@ -213,7 +213,7 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
 
   it("keeps the cookie out of a hostile published page's browser path scope", async () => {
     const setCookie = await setCookieHeader(
-      "https://cail-doorway.ailab-452.workers.dev/site-studio/api/csrf",
+      "https://tools.ailab.gc.cuny.edu/site-studio/api/csrf",
       SITE_STUDIO_CSRF_COOKIE_PATH
     );
     expect(setCookie).toMatch(/(?:^|;\s*)Path=\/site-studio(?:;|$)/);
@@ -279,7 +279,7 @@ describe("verifyWsUpgrade (rule 4)", () => {
   it("rejects a loopback browser origin when the worker origin is production", () => {
     expect(verifyWsUpgrade({
       ...base,
-      requestOrigin: "https://cail-doorway.ailab-452.workers.dev",
+      requestOrigin: "https://tools.ailab.gc.cuny.edu",
       origin: "http://localhost:5173"
     })).toBe(false);
   });

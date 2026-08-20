@@ -17,7 +17,7 @@ import type { MutationCoordinator } from "../agents/mutation-coordinator";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
-const PUBLISHED_BASE_URL = "https://cail-doorway.ailab-452.workers.dev/site-studio";
+const PUBLISHED_BASE_URL = "https://tools.ailab.gc.cuny.edu/site-studio";
 
 beforeAll(async () => {
   // Mint the exact production Doorway issuer configured by this suite.
@@ -150,7 +150,7 @@ function createCoordinatorNamespace(): MockCoordinator {
 function createEnv(overrides?: Partial<Env>): Env {
   const env: Env = {
     CAIL_LOG_ENV: "test",
-    APP_PUBLIC_DOMAIN: "https://cail-doorway.ailab-452.workers.dev",
+    APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
     PUBLISHED_BASE_URL,
     // SAFETY: Session tests never load a Worker module through this binding.
     LOADER: {} as WorkerLoader,
