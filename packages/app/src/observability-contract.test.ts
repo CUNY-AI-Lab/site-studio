@@ -57,7 +57,7 @@ describe("observability source contract", () => {
     // derivation, whose ownership subjects differ from every 4.x value. A
     // caret range here could silently move that contract.
     expect(source).toContain(
-      '"@cuny-ai-lab/cail-identity": "5.2.2"',
+      '"@cuny-ai-lab/cail-identity": "5.2.4"',
     );
     expect(source).toContain(
       '"@cuny-ai-lab/cail-client": "5.0.0"',

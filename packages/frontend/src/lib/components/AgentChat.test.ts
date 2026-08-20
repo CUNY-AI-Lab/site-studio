@@ -339,7 +339,7 @@ describe('AgentChat', () => {
 		mount();
 
 		await waitFor(() =>
-				expect(assignSpy).toHaveBeenCalledWith('https://cail-doorway.ailab-452.workers.dev/site-studio/')
+				expect(assignSpy).toHaveBeenCalledWith('https://tools.ailab.gc.cuny.edu/site-studio/')
 		);
 	});
 

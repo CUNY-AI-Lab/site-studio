@@ -40,7 +40,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
+			'https://tools.ailab.gc.cuny.edu/site-studio/editor/project-1?panel=code'
 		);
 	});
 
@@ -58,7 +58,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
+			'https://tools.ailab.gc.cuny.edu/site-studio/editor/project-1?panel=code'
 		);
 	});
 
@@ -80,7 +80,7 @@ describe('apiResponseFetch', () => {
 		await expect(apiResponseFetch('/api/projects')).rejects.toBeInstanceOf(ApiError);
 
 		expect(assignMock).toHaveBeenCalledWith(
-			'https://cail-doorway.ailab-452.workers.dev/site-studio/editor/project-1?panel=code'
+			'https://tools.ailab.gc.cuny.edu/site-studio/editor/project-1?panel=code'
 		);
 	});
 

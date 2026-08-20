@@ -36,7 +36,7 @@ never select ownership.
 
 When a browser session needs to sign in, Site Studio sends it to the protected
 Site Studio page on the standalone CAIL Doorway at
-`https://cail-doorway.ailab-452.workers.dev/site-studio/`; Doorway starts CUNY
+`https://tools.ailab.gc.cuny.edu/site-studio/`; Doorway starts CUNY
 sign-in and returns the browser to the current Site Studio page.
 
 Model traffic goes directly from the app Worker to the CAIL Gateway through
@@ -148,7 +148,7 @@ declared in `packages/app/wrangler.jsonc`, including:
 - R2, KV, Worker Loader, and Durable Object bindings
 
 The production frontend build uses `PUBLIC_BASE_PATH=/site-studio`, and the
-configured public base is `https://cail-doorway.ailab-452.workers.dev/site-studio`.
+configured public base is `https://tools.ailab.gc.cuny.edu/site-studio`.
 
 ## CI and production deploy
 

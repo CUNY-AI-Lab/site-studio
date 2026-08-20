@@ -16,7 +16,7 @@ const USER_ID = TEST_SUBJECTS.alice;
 const PROJECT_ID = "proj-1";
 const OPERATIONAL_SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 const OWN_ORIGIN = "https://site-studio.example";
-const APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
+const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 type AgentFetchState = { lastRequest: Request | null };
 const forwardedUrlSchema = z.object({ forwardedUrl: z.string() });
 

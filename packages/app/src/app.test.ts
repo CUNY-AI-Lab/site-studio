@@ -13,7 +13,7 @@ import type { MutationCoordinator } from "./agents/mutation-coordinator";
 import app from "./app";
 
 const BASE = "https://site-studio.example";
-const ALLOWED_ORIGIN = "https://cail-doorway.ailab-452.workers.dev";
+const ALLOWED_ORIGIN = "https://tools.ailab.gc.cuny.edu";
 
 function createStoredR2Object(key: string): R2Object {
   const object = {

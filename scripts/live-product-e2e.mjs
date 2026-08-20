@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { z } from 'zod';
 
 const PRODUCTION_SITE_URL = 'https://site-studio-app.ailab-452.workers.dev/site-studio/';
-const PRODUCTION_PUBLIC_ORIGIN = 'https://cail-doorway.ailab-452.workers.dev';
+const PRODUCTION_PUBLIC_ORIGIN = 'https://tools.ailab.gc.cuny.edu';
 const PRODUCTION_PUBLIC_PATH = '/site-studio';
 const PRODUCTION_IDENTITY_ISSUER = `${PRODUCTION_PUBLIC_ORIGIN}/cail-sso`;
 const CHAT_REQUEST = 'cf_agent_use_chat_request';

@@ -110,7 +110,7 @@ function createMockKV() {
 
 const ANON = "user_anon123";
 const SUBJECT = canonicalTestSubject("migration-owner");
-const PUBLISHED_BASE_URL = "https://cail-doorway.ailab-452.workers.dev/site-studio";
+const PUBLISHED_BASE_URL = "https://tools.ailab.gc.cuny.edu/site-studio";
 
 /** Copied objects are stored as strings by the mock. */
 function textOf(entry: { data: string } | undefined): string | undefined {

@@ -316,7 +316,7 @@ describe("route regressions", () => {
 
   it("links an unknown public site to the canonical Lab tools index", async () => {
     const env = createEnv(bucket);
-    env.APP_PUBLIC_DOMAIN = "https://cail-doorway.ailab-452.workers.dev";
+    env.APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 
     const response = await app.request(
       "https://site-studio-app.ailab-452.workers.dev/u/unknown/missing/",
@@ -327,7 +327,7 @@ describe("route regressions", () => {
     expect(response.status).toBe(404);
     const body = await response.text();
     expect(body).toContain("Explore CUNY AI Lab tools");
-    expect(body).toContain('href="https://cail-doorway.ailab-452.workers.dev/"');
+    expect(body).toContain('href="https://tools.ailab.gc.cuny.edu/"');
     expect(body).not.toContain("Go to site home");
   });
 
@@ -796,11 +796,11 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "https://cail-doorway.ailab-452.workers.dev/u/janedoe/prefixed-root?ref=x",
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-root?ref=x",
       { redirect: "manual" },
       {
         ...createEnv(bucket),
-        PUBLISHED_BASE_URL: "https://cail-doorway.ailab-452.workers.dev/site-studio"
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
       }
     );
 
@@ -817,11 +817,11 @@ describe("route regressions", () => {
     });
 
     const response = await app.request(
-      "https://cail-doorway.ailab-452.workers.dev/u/janedoe/prefixed-404/missing",
+      "https://tools.ailab.gc.cuny.edu/u/janedoe/prefixed-404/missing",
       { headers: { Accept: "text/html" } },
       {
         ...createEnv(bucket),
-        PUBLISHED_BASE_URL: "https://cail-doorway.ailab-452.workers.dev/site-studio"
+        PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
       }
     );
 
