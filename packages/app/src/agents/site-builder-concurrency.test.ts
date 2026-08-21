@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { z } from "zod";
 import type { OwnerMutation, OwnerMutationResult } from "../lib/owner-mutations";
@@ -144,6 +145,14 @@ describe("Site Builder event ID contract", () => {
     })).toThrow("invalid Site Studio action admission");
     expect(sql).not.toHaveBeenCalled();
 
+    expect(() => agent.recordActionAdmission({
+      actionId: UUID_V4,
+      action: "build",
+      route: "/api/agents/site-builder/{project_id}",
+      admittedAt: "2026-08-02",
+    })).toThrow("invalid Site Studio action admission");
+    expect(sql).not.toHaveBeenCalled();
+
     expect(() => agent.recordActionTerminal({
       actionId: UUID_V7,
       outcome: "cancelled",
@@ -152,6 +161,33 @@ describe("Site Builder event ID contract", () => {
       durationMs: 1_000,
     })).toThrow("invalid Site Studio action terminal");
     expect(sql).not.toHaveBeenCalled();
+
+    expect(() => agent.recordActionTerminal({
+      actionId: UUID_V4,
+      outcome: "error",
+      reason: "application_failure",
+      terminalAt: "2026-08-02T00:00:01.000Z",
+      durationMs: 1_000,
+      errorType: "Uppercase",
+    })).toThrow("invalid Site Studio action terminal");
+    expect(sql).not.toHaveBeenCalled();
+
+    expect(() => agent.recordActionTerminal({
+      actionId: UUID_V4,
+      outcome: "error",
+      reason: "completed",
+      terminalAt: "2026-08-02T00:00:01.000Z",
+      durationMs: 1_000,
+    })).toThrow("action terminal requires a durable admission");
+    expect(sql).toHaveBeenCalled();
+  });
+
+  it("keeps durable action recording off the browser-callable RPC surface", () => {
+    const source = readFileSync(new URL("./site-builder.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("callable()(SiteBuilderAgent.prototype.getObservability");
+    expect(source).not.toContain("callable()(SiteBuilderAgent.prototype.recordActionAdmission");
+    expect(source).not.toContain("callable()(SiteBuilderAgent.prototype.recordActionTerminal");
   });
 });
 
