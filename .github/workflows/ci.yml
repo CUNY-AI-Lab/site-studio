@@ -146,46 +146,58 @@ jobs:
           set -euo pipefail
           # The deploy API returns before the public Worker route has finished
           # propagating. Poll that real boundary at a two-second cadence for
-          # two minutes; a failed probe fails the deployment job.
+          # two minutes; stale responses keep polling and a failed final probe
+          # fails the deployment job.
+          worker_body="$(mktemp)"
+          worker_headers="$(mktemp)"
+          doorway_body="$(mktemp)"
+          doorway_headers="$(mktemp)"
+          trap 'rm -f "$worker_body" "$worker_headers" "$doorway_body" "$doorway_headers"' EXIT
+
+          probe_auth_envelope() {
+            local url="$1"
+            local body="$2"
+            local headers="$3"
+            local response_status
+
+            response_status="$(curl -sS --max-time 10 -D "$headers" -o "$body" -w '%{http_code}' "$url" || printf '000')"
+            if ! [[ "$response_status" == 401 ]]; then
+              return 1
+            fi
+            if ! jq -e '
+              .error.code == "authentication_required"
+              and .error.message == "Please sign in to continue."
+              and .error.launch == "/launch/site-studio"
+            ' "$body" >/dev/null 2>&1; then
+              return 1
+            fi
+            if ! grep -iq '^cache-control: no-store' "$headers"; then
+              return 1
+            fi
+          }
+
           for attempt in $(seq 1 60); do
             health="$(curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null || true)"
-            if jq -e --arg id "$EXPECTED_VERSION_ID" '
+            if ! jq -e --arg id "$EXPECTED_VERSION_ID" '
               .status == "ok"
               and .product_id == "site-studio"
               and .version_id == $id
-            ' <<<"$health" >/dev/null; then
-              curl -fsS --max-time 10 -o /dev/null "$ROOT_URL"
+            ' <<<"$health" >/dev/null 2>&1; then
+              sleep 2
+              continue
+            fi
 
-              worker_body="$(mktemp)"
-              worker_headers="$(mktemp)"
-              doorway_body="$(mktemp)"
-              doorway_headers="$(mktemp)"
-              trap 'rm -f "$worker_body" "$worker_headers" "$doorway_body" "$doorway_headers"' EXIT
+            if ! curl -fsS --max-time 10 -o /dev/null "$ROOT_URL"; then
+              sleep 2
+              continue
+            fi
 
-              worker_status="$(curl -sS --max-time 10 -D "$worker_headers" -o "$worker_body" -w '%{http_code}' "$API_URL")"
-              [[ "$worker_status" == 401 ]]
-              jq -e '
-                .error.code == "authentication_required"
-                and .error.message == "Please sign in to continue."
-                and .error.launch == "/launch/site-studio"
-              ' "$worker_body" >/dev/null
-              grep -iq '^cache-control: no-store' "$worker_headers"
-
-              # Doorway owns the browser auth boundary. Probe its exact JSON
-              # contract anonymously; this does not require an interactive SSO
-              # session and prevents a flat/redirected auth response from
-              # reaching the frontend after a release.
-              doorway_status="$(curl -sS --max-time 10 -D "$doorway_headers" -o "$doorway_body" -w '%{http_code}' "$DOORWAY_API_URL")"
-              [[ "$doorway_status" == 401 ]]
-              jq -e '
-                .error.code == "authentication_required"
-                and .error.message == "Please sign in to continue."
-                and .error.launch == "/launch/site-studio"
-              ' "$doorway_body" >/dev/null
-              grep -iq '^cache-control: no-store' "$doorway_headers"
+            if probe_auth_envelope "$API_URL" "$worker_body" "$worker_headers" \
+              && probe_auth_envelope "$DOORWAY_API_URL" "$doorway_body" "$doorway_headers"; then
               echo "production readiness passed for $EXPECTED_VERSION_ID"
               exit 0
             fi
+
             sleep 2
           done
           echo "production readiness did not serve the expected version" >&2

@@ -73,4 +73,15 @@ test("CI protects action and package credentials in one validation job", async (
   assert.match(deployJob, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
   assert.equal(validationJob.split("CLOUDFLARE_API_TOKEN:").length - 1, 0);
   assert.equal(deployJob.split("CLOUDFLARE_API_TOKEN:").length - 1, 3);
+  assert.match(deployJob, /probe_auth_envelope\(\) \{/);
+  assert.match(
+    deployJob,
+    /probe_auth_envelope "\$API_URL" "\$worker_body" "\$worker_headers" \\\n\s+&& probe_auth_envelope "\$DOORWAY_API_URL" "\$doorway_body" "\$doorway_headers"/,
+    "readiness must require exact direct-worker and Doorway auth envelopes",
+  );
+  assert.match(
+    deployJob,
+    /if ! jq -e --arg id "\$EXPECTED_VERSION_ID"[\s\S]*?sleep 2\n\s+continue\n\s+fi/,
+    "stale health must keep polling instead of failing the job",
+  );
 });
