@@ -159,7 +159,7 @@
 	</div>
 
 	{#if files.length === 0}
-		<p class="empty-state">No files yet. Ask the agent to create some!</p>
+		<p class="empty-state">No files</p>
 	{:else}
 		{#each files as file}
 			{@render FileTreeNode({ file, onSelect, onDownload: handleDownload, onRename: handleRename, onDelete: handleDelete })}
