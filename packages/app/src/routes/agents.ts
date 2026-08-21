@@ -3,6 +3,7 @@ import type { Env, SiteBuilderAgentProps } from "../types";
 import type { SiteBuilderObservabilitySnapshot } from "../agents/site-builder";
 import { CSRF_ERROR_BODY, getCsrfToken, verifyWsUpgrade } from "../lib/csrf";
 import { jsonError } from "../lib/http";
+import { cailAuthRequiredResponse } from "../lib/cail-identity";
 import { getCailGatewayJwt, getUser } from "../lib/session";
 import { sanitizeProjectId } from "../lib/path";
 import { R2ProjectStorage } from "../storage/r2";
@@ -195,13 +196,7 @@ export function createAgentRouter(resolveAgent: AgentResolver = resolveAgentByNa
   async function refreshAgentCredential(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
     const gatewayJwt = getCailGatewayJwt(c);
     if (!gatewayJwt) {
-      return new Response(JSON.stringify({ error: "authentication_required" }), {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-        },
-      });
+      return cailAuthRequiredResponse();
     }
 
     const user = getUser(c);

@@ -299,9 +299,16 @@ describe("authMiddleware", () => {
 
     const response = await app.request("http://site-studio.test/api/test", {}, env);
     expect(response.status).toBe(401);
-    // SAFETY: The authentication error response has a string error field.
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toBe("authentication_required");
+    // SAFETY: The authentication error response has the canonical nested CAIL
+    // error object and a fixed Doorway launch path.
+    const body = (await response.json()) as {
+      error: { code: string; message: string; launch: string };
+    };
+    expect(body.error).toEqual({
+      code: "authentication_required",
+      message: "Please sign in to continue.",
+      launch: "/launch/site-studio",
+    });
   });
 
   it("rejects a presented invalid identity token", async () => {

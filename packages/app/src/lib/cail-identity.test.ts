@@ -54,7 +54,7 @@ function requestWithToken(token: string): Request {
 // Hand-rolled negative-path fixture for the one shape the testing kit cannot
 // express: mintIdentityJwt only signs RS256, so the alg-tampering contract
 // violation needs a local signer. (The array-audience negative moved onto the
-// kit in cail-identity 5.2.2.)
+// kit in cail-identity 5.2.5.)
 // ---------------------------------------------------------------------------
 
 function base64url(bytes: Uint8Array): string {
@@ -316,9 +316,12 @@ describe("cailAuthRequiredResponse", () => {
     const response = cailAuthRequiredResponse();
     expect(response.status).toBe(401);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    await expect(response.json()).resolves.toMatchObject({
-      error: "authentication_required",
-      login_url: "/site-studio/",
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "authentication_required",
+        message: "Please sign in to continue.",
+        launch: "/launch/site-studio",
+      },
     });
   });
 });

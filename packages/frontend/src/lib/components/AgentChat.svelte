@@ -828,7 +828,7 @@ import {
 				return;
 			}
 			const caughtError = error instanceof Error ? error : undefined;
-			if (isApiError(caughtError) && caughtError.statusCode === 401 && caughtError.code === 'authentication_required') {
+			if (isApiError(caughtError) && caughtError.statusCode === 401 && caughtError.getRecoveryAction() === 'sign-in') {
 				return;
 			}
 

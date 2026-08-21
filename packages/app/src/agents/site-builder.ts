@@ -65,6 +65,7 @@ import {
   withCorrelationFetch,
 } from "../lib/logging";
 import { getAgentConnectionIdentityJwt } from "../lib/agent-identity";
+import { cailAuthRequiredResponse } from "../lib/cail-identity";
 import {
   executeOwnerMutation,
   type OwnerMutation,
@@ -1318,7 +1319,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const identityJwt = getAgentConnectionIdentityJwt(request);
     if (!identityJwt) {
-      return noStoreJson({ error: "authentication_required" }, 401);
+      return cailAuthRequiredResponse();
     }
 
     // The route has already enforced the verified app identity, project

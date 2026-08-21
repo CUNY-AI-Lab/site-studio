@@ -5,6 +5,7 @@ import type { Env } from "../types";
 import { getCailGatewayJwt } from "../lib/session";
 import { CAIL_APP_SLUG } from "../lib/model";
 import { jsonError } from "../lib/http";
+import { cailAuthRequiredResponse } from "../lib/cail-identity";
 
 export function createQuotaRouter() {
   const app = new Hono<{ Bindings: Env; Variables: { cailIdentityJwt: string } }>();
@@ -12,7 +13,7 @@ export function createQuotaRouter() {
   app.get("/api/quota", async (c) => {
     c.header("Cache-Control", "private, no-store");
     const jwt = getCailGatewayJwt(c);
-    if (!jwt) jsonError("authentication_required", 401);
+    if (!jwt) return cailAuthRequiredResponse();
     if (!c.env.CAIL_API_BASE) jsonError("Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu.", 503);
 
     try {

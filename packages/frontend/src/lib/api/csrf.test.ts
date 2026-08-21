@@ -72,6 +72,38 @@ describe('csrf token client', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
+	it('uses the shared canonical error handler for a Doorway authentication failure', async () => {
+		const assignMock = vi.fn();
+		vi.stubGlobal('window', {
+			document,
+			location: { assign: assignMock }
+		});
+		fetchMock.mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					error: {
+						code: 'authentication_required',
+						message: 'Please sign in to continue.',
+						launch: '/launch/site-studio'
+					}
+				}),
+				{
+				status: 401,
+				headers: { 'Content-Type': 'application/json' }
+				}
+			)
+		);
+
+		await expect(getCsrfToken()).rejects.toMatchObject({
+			statusCode: 401,
+			code: 'authentication_required',
+			message: 'Please sign in to continue.'
+		});
+		expect(assignMock).toHaveBeenCalledWith(
+			'https://tools.ailab.gc.cuny.edu/launch/site-studio'
+		);
+	});
+
 	it('dedupes concurrent fetches into a single in-flight request', async () => {
 		let resolveFetch!: (r: Response) => void;
 		fetchMock.mockReturnValue(

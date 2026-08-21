@@ -21,7 +21,7 @@
         "@cloudflare/ai-chat": "0.9.3",
         "@cloudflare/codemode": "0.5.1",
         "@cuny-ai-lab/cail-client": "5.0.0",
-        "@cuny-ai-lab/cail-identity": "5.2.4",
+        "@cuny-ai-lab/cail-identity": "5.2.5",
         "@cuny-ai-lab/cail-log": "0.6.0",
         "@modelcontextprotocol/sdk": "1.30.0",
         "agents": "0.20.1",
@@ -47,6 +47,7 @@
         "@codemirror/lang-html": "6.4.11",
         "@codemirror/lang-javascript": "6.2.5",
         "@codemirror/view": "6.43.6",
+        "@cuny-ai-lab/cail-identity": "5.2.5",
         "clsx": "2.1.1",
         "codemirror": "6.0.2",
         "diff": "9.0.0",
@@ -243,7 +244,7 @@
 
     "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@5.0.0", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-client/5.0.0/d30e458cfad45a15427c80a7e69741e0f064c239", {}, "sha512-KbkPOqYhme4HK0g2xn1Gv3ey47iHeYcsfX7M5poPGOhO9WEXFc3Tw9JnqXt42F4xXCLqGtcQlQRc6HEYH2/Tzw=="],
 
-    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@5.2.4", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-identity/5.2.4/490b795a23962fc8ac32bdc3392e136e5344e02d", { "dependencies": { "jose": "6.2.3", "zod": "4.4.3" } }, "sha512-/A0z1tpuadk/P1JQhVuduFu/Skw+qxTfg/6OjhlMyM9P3P2Y/jMKd0ZoXnze3FcVrRM6i9P1JxmNO/WwQZvl1g=="],
+    "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@5.2.5", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-identity/5.2.5/6c3b216acc750451eabb9ed9b32179460a8445d0", { "dependencies": { "jose": "6.2.3", "zod": "4.4.3" } }, "sha512-MqCXFwDCp2fO/m7RLPeKLg4mZSa/ArBoXt52Gl29YlWxiqM9YZMKdieV46/mrHPGbZkTEHHljZgHLUzvdnoGYQ=="],
 
     "@cuny-ai-lab/cail-log": ["@cuny-ai-lab/cail-log@0.6.0", "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-log/0.6.0/632c8a3d74bc4709c23b9636b73471c1291d7679", {}, "sha512-Hlj1K7TXL2XOI6nOkh5SKRafCldr87Zp+aHm73MqiV0hajAPMiqp7QuBlndzok7Vy0fIX7C6msi093s/a9Yesw=="],
 

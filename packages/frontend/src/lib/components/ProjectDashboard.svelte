@@ -4,6 +4,7 @@
 	import { base } from '$app/paths';
 	import { resolvePath } from '$lib/utils/paths';
 	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
+	import { getErrorMessage, isApiError } from '$lib/api/errors';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { MoreVertical, Plus, FolderOpen, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
@@ -18,6 +19,7 @@
 	let projects = $state<Project[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+	let errorRecovery = $state<'request-access' | 'retry' | null>(null);
 	let publishingProjectId = $state<string | null>(null);
 
 	let showNewProjectDialog = $state(false);
@@ -67,9 +69,17 @@
 		try {
 			loading = true;
 			error = null;
+			errorRecovery = null;
 			projects = await fetchProjects();
 		} catch (e) {
-			error = "We couldn't load your projects. Check your connection and try again.";
+			const caught = e instanceof Error ? e : undefined;
+			error = isApiError(caught)
+				? getErrorMessage(caught)
+				: "We couldn't load your projects. Check your connection and try again.";
+			if (isApiError(caught)) {
+				const action = caught.getRecoveryAction();
+				errorRecovery = action === 'request-access' || action === 'retry' ? action : null;
+			}
 			console.error('Error loading projects:', e);
 		} finally {
 			loading = false;
@@ -201,7 +211,16 @@
 	{:else if error}
 		<div class="error-state" role="alert">
 			<p>{error}</p>
-			<Button onclick={loadProjects}>Retry</Button>
+			<div class="error-actions">
+				{#if errorRecovery === 'request-access'}
+					<a class="request-access-link" href="https://ailab.gc.cuny.edu/request-access">Request access</a>
+				{:else}
+					<Button onclick={loadProjects}>Retry</Button>
+				{/if}
+				{#if errorRecovery === 'request-access'}
+					<Button variant="outline" onclick={loadProjects}>Retry</Button>
+				{/if}
+			</div>
 		</div>
 	{:else if projects.length === 0}
 		<div class="empty-state">
@@ -346,6 +365,27 @@
 		text-align: center;
 		max-width: 400px;
 		margin: 0 auto;
+	}
+
+	.error-actions {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.request-access-link {
+		padding: 0.5rem 0.875rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		color: var(--color-primary);
+		font-weight: 500;
+		text-decoration: none;
+	}
+
+	.request-access-link:hover {
+		background: var(--color-bg-secondary);
 	}
 
 	.empty-state {

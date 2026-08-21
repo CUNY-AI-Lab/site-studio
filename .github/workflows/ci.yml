@@ -123,11 +123,24 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+      - name: Read back identity configuration readiness
+        working-directory: packages/app
+        run: |
+          set -euo pipefail
+          # Secret values are never read back. The API exposes names only; the
+          # presence check catches a release with no verifier key configured.
+          secrets="$(bunx wrangler secret list --name site-studio-app --format json 2>/dev/null)"
+          jq -e 'any(.[]; .name == "CAIL_IDENTITY_JWKS")' <<<"$secrets" >/dev/null
+          echo "CAIL_IDENTITY_JWKS is configured"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Probe production readiness
         env:
           EXPECTED_VERSION_ID: ${{ steps.version.outputs.version_id }}
           HEALTH_URL: https://site-studio-app.ailab-452.workers.dev/site-studio/api/health
           API_URL: https://site-studio-app.ailab-452.workers.dev/site-studio/api/csrf
+          DOORWAY_API_URL: https://tools.ailab.gc.cuny.edu/site-studio/api/csrf
           ROOT_URL: https://site-studio-app.ailab-452.workers.dev/site-studio/
         run: |
           set -euo pipefail
@@ -142,9 +155,34 @@ jobs:
               and .version_id == $id
             ' <<<"$health" >/dev/null; then
               curl -fsS --max-time 10 -o /dev/null "$ROOT_URL"
-              api_response="$(curl -sS --max-time 10 -D - -o /dev/null -w '\n%{http_code}' "$API_URL")"
-              [[ "$(tail -n 1 <<<"$api_response")" == 401 ]]
-              grep -iq '^cache-control: no-store' <<<"$api_response"
+
+              worker_body="$(mktemp)"
+              worker_headers="$(mktemp)"
+              doorway_body="$(mktemp)"
+              doorway_headers="$(mktemp)"
+              trap 'rm -f "$worker_body" "$worker_headers" "$doorway_body" "$doorway_headers"' EXIT
+
+              worker_status="$(curl -sS --max-time 10 -D "$worker_headers" -o "$worker_body" -w '%{http_code}' "$API_URL")"
+              [[ "$worker_status" == 401 ]]
+              jq -e '
+                .error.code == "authentication_required"
+                and .error.message == "Please sign in to continue."
+                and .error.launch == "/launch/site-studio"
+              ' "$worker_body" >/dev/null
+              grep -iq '^cache-control: no-store' "$worker_headers"
+
+              # Doorway owns the browser auth boundary. Probe its exact JSON
+              # contract anonymously; this does not require an interactive SSO
+              # session and prevents a flat/redirected auth response from
+              # reaching the frontend after a release.
+              doorway_status="$(curl -sS --max-time 10 -D "$doorway_headers" -o "$doorway_body" -w '%{http_code}' "$DOORWAY_API_URL")"
+              [[ "$doorway_status" == 401 ]]
+              jq -e '
+                .error.code == "authentication_required"
+                and .error.message == "Please sign in to continue."
+                and .error.launch == "/launch/site-studio"
+              ' "$doorway_body" >/dev/null
+              grep -iq '^cache-control: no-store' "$doorway_headers"
               echo "production readiness passed for $EXPECTED_VERSION_ID"
               exit 0
             fi

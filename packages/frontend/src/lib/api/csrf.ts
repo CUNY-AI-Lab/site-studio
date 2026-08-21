@@ -1,6 +1,7 @@
 import { resolvePath } from '$lib/utils/paths';
 import { browserWindow } from '$lib/contracts';
 import { z } from 'zod';
+import { handleApiErrorResponse } from './error-handler';
 
 /**
  * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
@@ -89,7 +90,7 @@ export async function getCsrfToken(): Promise<string> {
 			});
 
 			if (!response.ok) {
-				throw new Error(`Failed to fetch CSRF token (status ${response.status})`);
+				await handleApiErrorResponse(response);
 			}
 
 			// The token is delivered as a Set-Cookie, not a body — re-read it.
@@ -124,7 +125,7 @@ export async function refreshCsrfToken(): Promise<string> {
 	invalidateCsrfToken();
 	const response = await fetch(resolvePath('/api/csrf'), { credentials: 'include' });
 	if (!response.ok) {
-		throw new Error(`Failed to refresh CSRF token (status ${response.status})`);
+		await handleApiErrorResponse(response);
 	}
 	const token = getCsrfTokenFromCookie();
 	if (!token) {

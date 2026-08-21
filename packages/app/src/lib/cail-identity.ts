@@ -18,7 +18,9 @@
 import {
   CAIL_CANONICAL_ISSUER,
   CAIL_GATEWAY_AUDIENCE,
+  createCailAuthError,
   readIdentityKeyring,
+  serializeCailAuthError,
   verifyKeyringGatewayJwt,
   type CailIdentity,
   type IdentityVerifierConfig,
@@ -41,9 +43,10 @@ export type RequestIdentityResolution =
 /** The header the SSO gate injects. Bare `X-CAIL-*` headers are never trusted. */
 export const CAIL_IDENTITY_HEADER = "X-CAIL-Identity-JWT";
 export const CAIL_IDENTITY_AUDIENCE = "cail:site-studio";
+export const SITE_STUDIO_LAUNCH_PATH = "/launch/site-studio" as const;
 
 /**
- * cail-identity 5.2.2 validates the canonical issuer, audience, and every JWKS key
+ * cail-identity 5.2.5 validates the canonical issuer, audience, and every JWKS key
  * once and returns a frozen snapshot. The snapshot is cached per (jwks, issuer)
  * so a request does not re-import keys; a configuration failure yields `null`
  * here and an "invalid" resolution, never a silently anonymous request.
@@ -119,13 +122,13 @@ export async function getRequestIdentity(
  * redirects to the protected Doorway Site Studio path.
  */
 export function cailAuthRequiredResponse(): Response {
+  const body = createCailAuthError(
+    "authentication_required",
+    "Please sign in to continue.",
+    SITE_STUDIO_LAUNCH_PATH,
+  );
   return new Response(
-    JSON.stringify({
-      error: "authentication_required",
-      message:
-        "Sign in with CUNY Login to use Site Studio.",
-      login_url: "/site-studio/",
-    }),
+    serializeCailAuthError(body),
     {
       status: 401,
       headers: {

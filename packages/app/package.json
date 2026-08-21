@@ -20,7 +20,7 @@
     "@cloudflare/ai-chat": "0.9.3",
     "@cloudflare/codemode": "0.5.1",
     "@cuny-ai-lab/cail-client": "5.0.0",
-    "@cuny-ai-lab/cail-identity": "5.2.4",
+    "@cuny-ai-lab/cail-identity": "5.2.5",
     "@cuny-ai-lab/cail-log": "0.6.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "agents": "0.20.1",
