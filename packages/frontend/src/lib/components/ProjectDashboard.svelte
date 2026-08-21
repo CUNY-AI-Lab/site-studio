@@ -196,7 +196,6 @@
 	<div class="dashboard-header">
 		<div>
 			<h1 class="dashboard-title">Site Studio</h1>
-			<p class="dashboard-subtitle">Create websites with your AI assistant</p>
 		</div>
 		<Button onclick={handleNewProject} data-tour="new-project">
 			<Plus size={18} />
@@ -226,7 +225,6 @@
 		<div class="empty-state">
 			<FolderOpen size={48} />
 			<h2>No projects yet</h2>
-			<p>Create your first project to get started</p>
 			<Button onclick={handleNewProject} data-tour="new-project">
 				<Plus size={20} />
 				Create Project
@@ -345,14 +343,6 @@
 		letter-spacing: -0.01em;
 	}
 
-	.dashboard-subtitle {
-		font-family: var(--font-sans);
-		font-size: 1rem;
-		color: var(--color-text-tertiary);
-		margin: 0;
-		font-weight: 400;
-	}
-
 	.loading-state,
 	.error-state,
 	.empty-state {
@@ -403,12 +393,6 @@
 		font-weight: 600;
 		color: var(--color-text-primary);
 		margin: 0;
-	}
-
-	.empty-state p {
-		color: var(--color-text-secondary);
-		font-size: 0.9375rem;
-		line-height: 1.5;
 	}
 
 	.projects-grid {
