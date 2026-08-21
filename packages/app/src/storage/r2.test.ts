@@ -1516,7 +1516,8 @@ describe("OwnerMutationService recovery journal", () => {
       type: "write-file",
       projectId: "site",
       path: "index.html",
-      content: "orphan"
+      content: "orphan",
+      baseEtag: "missing-project-etag"
     })).rejects.toBeInstanceOf(ProjectNotFoundError);
     expect(await storage.fileExists("user-a", "site", "index.html")).toBe(false);
   });

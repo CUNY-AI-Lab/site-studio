@@ -37,16 +37,4 @@ describe('buildKeepaliveSave', () => {
 		});
 	});
 
-	it.each([null, undefined])('omits a %s base etag', (baseEtag) => {
-		const { init } = buildKeepaliveSave(snapshot, {
-			csrfToken: 'csrf-token',
-			url: '/api/projects/project-1/file',
-			baseEtag
-		});
-
-		expect(parseBody(init)).toEqual({
-			path: 'index.html',
-			content: '<h1>Hello</h1>'
-		});
-	});
 });

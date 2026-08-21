@@ -17,7 +17,7 @@ type DraftPayload = {
 	projectId: string;
 	filePath: string;
 	content: string | number;
-	baseEtag: string | { value: string };
+	baseEtag: string | null | { value: string };
 	updatedAt: string | number;
 };
 
@@ -73,6 +73,23 @@ describe('draft-store', () => {
 				content: 42,
 				baseEtag: { value: 'etag-2' },
 				updatedAt: 20260714
+			})
+		);
+
+		expect(await loadDraft(storage, snapshot.projectId, snapshot.filePath, secret)).toBeNull();
+	});
+
+	it('rejects a legacy draft without a concurrency token', async () => {
+		const storage = memoryStorage();
+		await saveDraft(storage, snapshot, 'etag-1', secret);
+		const [storageKey] = [...storage.values.keys()];
+		if (!storageKey) throw new Error('draft storage key was not written');
+		storage.setItem(
+			storageKey,
+			await encryptedDraft(secret, {
+				...snapshot,
+				baseEtag: null,
+				updatedAt: '2026-07-14T12:00:00.000Z'
 			})
 		);
 

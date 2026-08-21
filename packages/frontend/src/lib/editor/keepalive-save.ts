@@ -3,13 +3,13 @@ import type { SaveSnapshot } from './autosave';
 interface KeepaliveSaveOptions {
 	csrfToken: string;
 	url: string;
-	baseEtag?: string | null;
+	baseEtag: string;
 }
 
 interface KeepalivePayload {
 	path: string;
 	content: string;
-	baseEtag?: string;
+	baseEtag: string;
 }
 
 interface KeepaliveRequest {
@@ -23,11 +23,9 @@ export function buildKeepaliveSave(
 ): KeepaliveRequest {
 	const payload: KeepalivePayload = {
 		path: snapshot.filePath,
-		content: snapshot.content
+		content: snapshot.content,
+		baseEtag: options.baseEtag
 	};
-	if (options.baseEtag) {
-		payload.baseEtag = options.baseEtag;
-	}
 
 	const init: RequestInit = {
 		method: 'POST',

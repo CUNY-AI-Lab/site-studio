@@ -2,7 +2,7 @@ import type { SaveSnapshot } from './autosave';
 import { z } from 'zod';
 
 export interface StoredDraft extends SaveSnapshot {
-	baseEtag: string | null;
+	baseEtag: string;
 	updatedAt: string;
 }
 
@@ -21,7 +21,7 @@ const storedDraftSchema = z.object({
 	projectId: z.string(),
 	filePath: z.string(),
 	content: z.string(),
-	baseEtag: z.string().nullable(),
+	baseEtag: z.string().min(1),
 	updatedAt: z.string()
 });
 
@@ -61,7 +61,7 @@ async function storageKey(secret: string, projectId: string, filePath: string): 
 export async function saveDraft(
 	storage: Pick<Storage, 'setItem'>,
 	snapshot: SaveSnapshot,
-	baseEtag: string | null,
+	baseEtag: string,
 	secret: string,
 	now: () => string = () => new Date().toISOString()
 ): Promise<void> {
@@ -119,7 +119,7 @@ export async function clearDraft(
 export async function rebaseDraft(
 	storage: Pick<Storage, 'getItem' | 'setItem'>,
 	snapshot: SaveSnapshot,
-	previousBaseEtag: string | null,
+	previousBaseEtag: string,
 	nextBaseEtag: string,
 	secret: string
 ): Promise<void> {
