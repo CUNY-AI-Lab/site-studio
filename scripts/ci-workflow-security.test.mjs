@@ -68,6 +68,9 @@ test("CI protects action and package credentials in one validation job", async (
   assert.match(deployJob, /deployments list --name site-studio-app --json/);
   assert.ok(deployJob.includes("workers/message"));
   assert.match(deployJob, /versions view "\$version_id" --name site-studio-app --json/);
+  assert.match(deployJob, /\.name == "CAIL_API_BASE"/);
+  assert.match(deployJob, /\.type == "plain_text"/);
+  assert.match(deployJob, /\.text == "https:\/\/tools\.ailab\.gc\.cuny\.edu"/);
   assert.match(deployJob, /\.versions\[0\]\.version_id == \$id and \.versions\[0\]\.percentage == 100/);
   assert.match(deployJob, /select\(\.annotations\["workers\/message"\] == \$message\)/);
   assert.match(deployJob, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);

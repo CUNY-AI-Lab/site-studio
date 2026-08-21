@@ -8,7 +8,8 @@ describe("quota route", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("proxies the verified JWT Cloudflare estimate without changing the wire shape", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Request(input).url).toBe("https://cail.example/v1/quota");
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBe("Bearer verified-jwt");
       expect(headers.get("X-CAIL-App")).toBe("site-studio");

@@ -41,7 +41,9 @@ sign-in and returns the browser to the current Site Studio page.
 
 Model traffic goes directly from the app Worker to the CAIL Gateway through
 `@cuny-ai-lab/cail-client` and `@ai-sdk/openai-compatible` at
-`{CAIL_API_BASE}/v1`. The app forwards only the separately verified,
+the canonical `https://tools.ailab.gc.cuny.edu/v1` API. The checked-in
+`CAIL_API_BASE` is the canonical origin; the shared client owns the `/v1`
+model and quota paths. The app forwards only the separately verified,
 subject-bound gateway identity and stamps `X-CAIL-App: site-studio`. Site Studio
 has no provider keys and does not impose an output-token or model-step cap.
 Billed model POSTs use `maxRetries: 0` because an uncertain automatic retry can
