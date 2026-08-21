@@ -43,6 +43,9 @@ import {
   ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
   ACTION_ATTEMPT_RETENTION_HOURS,
   ACTION_ATTEMPT_SCHEMA_VERSION,
+  isActionAttemptTimestamp,
+  isActionAttemptTerminalConsistent,
+  isActionAttemptTerminalWellFormed,
   type ActionAttemptAdmission,
   type ActionAttemptAdminRead,
   type ActionAttemptTerminal,
@@ -80,7 +83,6 @@ type Scope = {
 };
 
 type ChatHandler = AIChatAgent<Env>["onChatMessage"];
-type CompatibleReasonByOutcome = Readonly<Record<CailOutcome, ReadonlySet<CailTerminalReason>>>;
 
 type SiteBuilderObservabilityToolCall = {
   toolCallId: string;
@@ -1371,7 +1373,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     if (
       !SITE_STUDIO_EVENT_ID_RE.test(admission.actionId)
       || admission.route !== expectedRoute
-      || !Number.isFinite(Date.parse(admission.admittedAt))
+      || !isActionAttemptTimestamp(admission.admittedAt)
     ) {
       throw new TypeError("invalid Site Studio action admission");
     }
@@ -1393,11 +1395,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   recordActionTerminal(terminal: ActionAttemptTerminal): void {
     if (
       !SITE_STUDIO_EVENT_ID_RE.test(terminal.actionId)
-      || !Number.isFinite(Date.parse(terminal.terminalAt))
-      || !Number.isFinite(terminal.durationMs)
-      || terminal.durationMs < 0
-      || (terminal.errorType !== undefined
-        && !/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(terminal.errorType))
+      || !isActionAttemptTerminalWellFormed(terminal)
     ) {
       throw new TypeError("invalid Site Studio action terminal");
     }
@@ -1406,22 +1404,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       SELECT * FROM site_studio_action_attempts WHERE action_id = ${terminal.actionId}
     `][0];
     if (!existing) throw new TypeError("action terminal requires a durable admission");
-    const expectedDuration = Date.parse(terminal.terminalAt) - Date.parse(existing.admitted_at);
-    const compatibleReason = {
-      ok: new Set<CailTerminalReason>(["completed"]),
-      client_error: new Set<CailTerminalReason>(["client_error"]),
-      error: new Set<CailTerminalReason>(["application_failure", "upstream_failure"]),
-      denied: new Set<CailTerminalReason>(["denied", "quota_blocked", "rate_limited"]),
-      cancelled: new Set<CailTerminalReason>(["cancelled"]),
-      timeout: new Set<CailTerminalReason>(["timeout"]),
-      outcome_unknown: new Set<CailTerminalReason>(["unknown"]),
-    } satisfies CompatibleReasonByOutcome;
-    if (
-      expectedDuration < 0
-      || terminal.durationMs !== expectedDuration
-      || !compatibleReason[terminal.outcome].has(terminal.reason)
-      || (terminal.outcome === "ok" && terminal.errorType !== undefined)
-    ) {
+    if (!isActionAttemptTerminalConsistent({
+      ...terminal,
+      admittedAt: existing.admitted_at,
+    })) {
       throw new TypeError("action terminal contradicts its durable admission");
     }
     if (existing.terminal_at !== null) {
@@ -1977,30 +1963,6 @@ callable()(SiteBuilderAgent.prototype.getObservability, {
   access: {
     has: (object: SiteBuilderAgent) => "getObservability" in object,
     get: (object: SiteBuilderAgent) => object.getObservability,
-  },
-  addInitializer: () => undefined,
-  metadata: {},
-});
-callable()(SiteBuilderAgent.prototype.recordActionAdmission, {
-  kind: "method",
-  name: "recordActionAdmission",
-  static: false,
-  private: false,
-  access: {
-    has: (object: SiteBuilderAgent) => "recordActionAdmission" in object,
-    get: (object: SiteBuilderAgent) => object.recordActionAdmission,
-  },
-  addInitializer: () => undefined,
-  metadata: {},
-});
-callable()(SiteBuilderAgent.prototype.recordActionTerminal, {
-  kind: "method",
-  name: "recordActionTerminal",
-  static: false,
-  private: false,
-  access: {
-    has: (object: SiteBuilderAgent) => "recordActionTerminal" in object,
-    get: (object: SiteBuilderAgent) => object.recordActionTerminal,
   },
   addInitializer: () => undefined,
   metadata: {},
