@@ -107,6 +107,15 @@ jobs:
             .annotations["workers/tag"] == $tag
             and .annotations["workers/message"] == $message
           ' <<<"$version" >/dev/null
+          jq -e '
+            (.resources.bindings // []) as $bindings |
+            ([ $bindings[] | select(.name == "CAIL_API_BASE") ] | length) == 1 and
+            ([ $bindings[]
+              | select(.name == "CAIL_API_BASE"
+                and .type == "plain_text"
+                and .text == "https://tools.ailab.gc.cuny.edu")
+            ] | length) == 1
+          ' <<<"$version" >/dev/null
           deployments="$(bunx wrangler deployments list --name site-studio-app --json 2>/dev/null)"
           deployment_id="$(jq -r --arg id "$version_id" --arg message "main $GITHUB_SHA" '
             [ .[] ]
