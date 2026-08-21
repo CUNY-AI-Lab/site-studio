@@ -329,7 +329,13 @@ describe('AgentChat', () => {
 			}
 			if (url.endsWith('/get-messages')) {
 				return new Response(
-					JSON.stringify({ error: 'authentication_required', login_url: '/login' }),
+					JSON.stringify({
+						error: {
+							code: 'authentication_required',
+							message: 'Please sign in to continue.',
+							launch: '/launch/site-studio'
+						}
+					}),
 					{ status: 401, headers: { 'Content-Type': 'application/json' } }
 				);
 			}
@@ -339,7 +345,7 @@ describe('AgentChat', () => {
 		mount();
 
 		await waitFor(() =>
-				expect(assignSpy).toHaveBeenCalledWith('https://tools.ailab.gc.cuny.edu/site-studio/')
+				expect(assignSpy).toHaveBeenCalledWith('https://tools.ailab.gc.cuny.edu/launch/site-studio')
 		);
 	});
 

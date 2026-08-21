@@ -72,5 +72,5 @@ test("CI protects action and package credentials in one validation job", async (
   assert.match(deployJob, /select\(\.annotations\["workers\/message"\] == \$message\)/);
   assert.match(deployJob, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
   assert.equal(validationJob.split("CLOUDFLARE_API_TOKEN:").length - 1, 0);
-  assert.equal(deployJob.split("CLOUDFLARE_API_TOKEN:").length - 1, 2);
+  assert.equal(deployJob.split("CLOUDFLARE_API_TOKEN:").length - 1, 3);
 });

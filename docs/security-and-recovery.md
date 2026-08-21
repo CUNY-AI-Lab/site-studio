@@ -7,15 +7,15 @@ bindings, secrets, backups, or deployed versions.
 
 Product routes accept only a verified `X-CAIL-Identity-JWT`: RS256, required
 `kid`, configured public JWKS, one exact deployment issuer, and scalar audience
-`cail:site-studio`. Missing or invalid identity returns the CAIL
-`authentication_required` envelope. The JWT subject is the durable owner key;
+`cail:site-studio`. Missing or invalid identity returns the exact nested CAIL
+`authentication_required` envelope (`code`, `message`, and the fixed
+`/launch/site-studio` path). The JWT subject is the durable owner key;
 email and profile names are display data only. The legacy session cookie is an
 import source only, never authentication or ownership proof. The app does not
 issue or consult a subject session cookie or subject session KV record.
-The browser handles that envelope by sending the user to Doorway's protected
-Site Studio path at `https://tools.ailab.gc.cuny.edu/site-studio/`.
-Doorway starts CUNY sign-in and returns the browser to the current Site Studio
-path.
+The browser handles that envelope by sending the user to the fixed Doorway
+launch at `https://tools.ailab.gc.cuny.edu/launch/site-studio`; it never turns a
+response-provided URL or current-page query into a redirect target.
 
 The CAIL Gateway credential is a separate verified JWT with gateway audience,
 bound to the same subject. The Worker removes caller authority and routing
