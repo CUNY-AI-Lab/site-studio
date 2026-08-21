@@ -22,8 +22,8 @@ export type FileOpenStatus = 'idle' | 'loading' | 'loaded' | 'failed';
  * previous file, and after 'failed' it holds nothing trustworthy — a queued
  * save in either state would write stale (or empty) content over the newly
  * selected file: silent cross-file data destruction. A failed load also nulls
- * the file's etag, so nothing would even catch the overwrite as a conflict.
+ * the file's etag, which blocks the save here and at the API boundary.
  */
-export function canQueueFileSave(status: FileOpenStatus, isText: boolean): boolean {
-	return status === 'loaded' && isText;
+export function canQueueFileSave(status: FileOpenStatus, isText: boolean, etag: string | null): boolean {
+	return status === 'loaded' && isText && etag !== null;
 }

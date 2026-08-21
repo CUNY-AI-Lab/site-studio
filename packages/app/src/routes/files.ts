@@ -26,7 +26,7 @@ import { getLoggingContext, serializeSiteStudioLoggingContext, type LoggingVaria
 const saveFileSchema = z.object({
   path: z.string().min(1),
   content: z.string(),
-  baseEtag: z.string().optional()
+  baseEtag: z.string().min(1)
 });
 
 const renameFileSchema = z.object({
@@ -227,44 +227,27 @@ export function createFileRouter() {
       jsonError("Binary files cannot be saved through the text editor endpoint.", 415);
     }
 
-    // SS-40: editor saves can carry the ETag they loaded. A stale tab must get
-    // a conflict response instead of silently overwriting a newer agent/editor
-    // write. Legacy clients without an ETag retain the original write behavior.
-    if (baseEtag !== undefined) {
-      const result = await executeOwnerMutation(c.env, user.id, {
-        type: "write-file",
-        projectId,
-        path: filePath,
-        content,
-        baseEtag
-      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
-      if (!("etag" in result)) throw new Error("Unexpected mutation result");
-      const etag = result.etag;
-      if (etag === null) {
-        const current = await storage.readFileWithEtag(user.id, projectId, filePath);
-        return c.json({
-          error: "file_conflict",
-          message: "This file changed since you opened it. Reload to get the latest version.",
-          etag: current?.etag ?? null
-        }, 409);
-      }
-
-      return c.json({
-        success: true,
-        path: filePath,
-        message: "File saved successfully",
-        etag
-      });
-    }
-
+    // Editor saves always carry the ETag returned by the corresponding read.
+    // Creation is a separate write-file-if-absent mutation; this route never
+    // turns missing concurrency state into an unconditional overwrite.
     const result = await executeOwnerMutation(c.env, user.id, {
       type: "write-file",
       projectId,
       path: filePath,
-      content
+      content,
+      baseEtag
     }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
-    if (!("etag" in result) || result.etag === null) throw new Error("Unexpected mutation result");
+    if (!("etag" in result)) throw new Error("Unexpected mutation result");
     const etag = result.etag;
+    if (etag === null) {
+      const current = await storage.readFileWithEtag(user.id, projectId, filePath);
+      return c.json({
+        error: "file_conflict",
+        message: "This file changed since you opened it. Reload to get the latest version.",
+        etag: current?.etag ?? null
+      }, 409);
+    }
+
     return c.json({
       success: true,
       path: filePath,

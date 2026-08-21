@@ -20,7 +20,7 @@ export type OwnerMutation =
   | { type: "delete-project"; projectId: string }
   | { type: "publish-project"; projectId: string; desiredSlug: string; publishedBaseUrl: string; handle: string }
   | { type: "unpublish-project"; projectId: string; unpublishedAt: string }
-  | { type: "write-file"; projectId: string; path: string; content: string; baseEtag?: string }
+  | { type: "write-file"; projectId: string; path: string; content: string; baseEtag: string }
   | { type: "write-file-if-absent"; projectId: string; path: string; content: string }
   | { type: "delete-file"; projectId: string; path: string }
   | { type: "rename-file"; projectId: string; oldPath: string; newPath: string }
@@ -417,10 +417,15 @@ export class OwnerMutationService {
         return { ok: true };
       case "write-file": {
         await this.requireProject(ownerId, operation.projectId);
-        const etag = operation.baseEtag === undefined
-          ? await this.storage.writeFile(ownerId, operation.projectId, operation.path, operation.content)
-          : await this.storage.writeFileIfMatch(ownerId, operation.projectId, operation.path, operation.content, operation.baseEtag);
-        return { etag };
+        return {
+          etag: await this.storage.writeFileIfMatch(
+            ownerId,
+            operation.projectId,
+            operation.path,
+            operation.content,
+            operation.baseEtag,
+          ),
+        };
       }
       case "write-file-if-absent":
         await this.requireProject(ownerId, operation.projectId);

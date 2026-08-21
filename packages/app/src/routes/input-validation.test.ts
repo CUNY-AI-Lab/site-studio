@@ -266,9 +266,10 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     });
 
     it("valid body → still succeeds", async () => {
+      const baseEtag = await storage.writeFile(userId, "proj-x", "page.html", "<h1>Before</h1>");
       const res = await app.request(
         url,
-        jsonBody(JSON.stringify({ path: "page.html", content: "<h1>Hi</h1>" })),
+        jsonBody(JSON.stringify({ path: "page.html", content: "<h1>Hi</h1>", baseEtag })),
         createEnv(bucket)
       );
       expect(res.status).toBe(200);

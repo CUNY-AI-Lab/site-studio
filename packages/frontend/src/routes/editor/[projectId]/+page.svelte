@@ -33,7 +33,7 @@
 		content: string;
 		contentType?: string;
 		isText?: boolean;
-		etag?: string;
+		etag: string;
 	}
 
 	interface SaveConflictResponse {
@@ -41,23 +41,23 @@
 	}
 
 	interface SaveResponse {
-		etag?: string;
+		etag: string;
 	}
 
 	interface SavePayload {
 		path: string;
 		content: string;
-		baseEtag?: string;
+		baseEtag: string;
 	}
 
 	const loadedFileResponseSchema = z.object({
 		content: z.string(),
 		contentType: z.string().optional(),
 		isText: z.boolean().optional(),
-		etag: z.string().optional()
+		etag: z.string().min(1)
 	});
 	const saveConflictResponseSchema = z.object({ error: z.string().optional() });
-	const saveResponseSchema = z.object({ etag: z.string().optional() });
+	const saveResponseSchema = z.object({ etag: z.string().min(1) });
 
 	function parseLoadedFileResponse(payload: string): LoadedFileResponse {
 		const parsed = loadedFileResponseSchema.safeParse(JSON.parse(payload));
@@ -189,7 +189,7 @@
 
 		const handleBeforeUnload = () => {
 			const snapshot = autosave.pending();
-			if (!snapshot) return;
+			if (!snapshot || currentFileEtag === null) return;
 
 			const request = buildKeepaliveSave(snapshot, {
 				csrfToken: getCsrfTokenFromCookie() ?? '',
@@ -314,7 +314,7 @@
 				toast.error("We restored your unsaved changes. They won't replace a newer saved copy.");
 			} else {
 				fileContent = data.content;
-				currentFileEtag = data.etag ?? null;
+				currentFileEtag = data.etag;
 			}
 			currentFileOpenStatus = 'loaded';
 		} catch (error) {
@@ -337,7 +337,7 @@
 	function getCurrentSaveSnapshot(): SaveSnapshot | null {
 		// SS-47: only snapshot when the buffer provably holds the current file's
 		// loaded text (see $lib/editor/file-open-state.ts).
-		if (!projectId || !currentFile || !canQueueFileSave(currentFileOpenStatus, currentFileIsText)) {
+		if (!projectId || !currentFile || !canQueueFileSave(currentFileOpenStatus, currentFileIsText, currentFileEtag)) {
 			return null;
 		}
 
@@ -351,13 +351,14 @@
 	async function persistFile(snapshot: SaveSnapshot): Promise<boolean> {
 		const { projectId: targetProjectId, filePath, content } = snapshot;
 		const requestBaseEtag = currentFileEtag;
+		if (requestBaseEtag === null) return false;
 
 		try {
 			const savePayload: SavePayload = {
 				path: filePath,
-				content
+				content,
+				baseEtag: requestBaseEtag
 			};
-			if (currentFileEtag !== null) savePayload.baseEtag = currentFileEtag;
 
 			const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
@@ -376,18 +377,12 @@
 			if (!response.ok) throw new Error('Failed to save file');
 
 			const data = parseSaveResponse(await response.text());
-			if (
-				targetProjectId === projectId &&
-				filePath === currentFile &&
-				data.etag !== undefined
-			) {
+			if (targetProjectId === projectId && filePath === currentFile) {
 				currentFileEtag = data.etag;
 			}
 			await draftWriteQueue;
 			if (draftSecret) {
-				if (data.etag !== undefined) {
-					await rebaseDraft(localStorage, snapshot, requestBaseEtag, data.etag, draftSecret);
-				}
+				await rebaseDraft(localStorage, snapshot, requestBaseEtag, data.etag, draftSecret);
 				await clearDraft(localStorage, snapshot, draftSecret);
 			}
 
@@ -422,10 +417,10 @@
 	function onEditorChange(content: string) {
 		fileContent = content;
 		const snapshot = getCurrentSaveSnapshot();
-		if (!snapshot) return;
+		const baseEtag = currentFileEtag;
+		if (!snapshot || baseEtag === null) return;
 
 		if (draftSecret) {
-			const baseEtag = currentFileEtag;
 			draftWriteQueue = draftWriteQueue
 				.then(() => saveDraft(localStorage, snapshot, baseEtag, draftSecret))
 				.catch((error) => {

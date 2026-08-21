@@ -167,6 +167,32 @@ describe("Site Builder file write concurrency", () => {
     });
   });
 
+  it("SS-40: write_file creates an absent file only through put-if-absent", async () => {
+    storage.readFileWithEtag.mockResolvedValueOnce(null);
+    storage.writeFileIfAbsent.mockResolvedValueOnce("etag-1");
+
+    const result = await projectTool("write_file").execute({
+      path: "new.txt",
+      content: "new content",
+      mode: "replace"
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      path: "new.txt",
+      created: true,
+      changed: true
+    });
+    expect(storage.writeFileIfAbsent).toHaveBeenCalledWith(
+      "user-1",
+      "project-1",
+      "new.txt",
+      "new content"
+    );
+    expect(storage.writeFileIfMatch).not.toHaveBeenCalled();
+    expect(storage.createSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("SS-40: edit_file reapplies an exact replacement after a concurrent write", async () => {
     storage.readFileWithEtag
       .mockResolvedValueOnce({ content: "hello world", etag: "etag-1" })

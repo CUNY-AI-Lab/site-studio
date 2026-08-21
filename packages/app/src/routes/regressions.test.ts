@@ -425,7 +425,11 @@ describe("route regressions", () => {
       "http://site-studio.test/api/projects/protproj/file",
       {
         method: "POST",
-        body: JSON.stringify({ path: ".metadata.json", content: '{"published":true,"slug":"pwned"}' }),
+        body: JSON.stringify({
+          path: ".metadata.json",
+          content: '{"published":true,"slug":"pwned"}',
+          baseEtag: "protected-file-etag"
+        }),
         headers: { "Content-Type": "application/json", ...csrf.headers }
       },
       createEnv(bucket)
@@ -1241,6 +1245,47 @@ describe("served-bytes security headers (§3¾)", () => {
       etag: currentEtag
     });
     await expect(storage.readFile(userId, "editor-conflict", "index.html")).resolves.toBe("newer");
+  });
+
+  it("SS-40: POST file rejects a missing base ETag without overwriting", async () => {
+    await storage.createProject(userId, "editor-missing-etag", "Editor Missing ETag");
+    await storage.writeFile(userId, "editor-missing-etag", "index.html", "current");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/editor-missing-etag/file",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "index.html", content: "unguarded save" }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid file payload" });
+    await expect(storage.readFile(userId, "editor-missing-etag", "index.html")).resolves.toBe("current");
+  });
+
+  it("SS-40: POST file cannot create a file through a fabricated base ETag", async () => {
+    await storage.createProject(userId, "editor-no-create", "Editor No Create");
+
+    const response = await app.request(
+      "http://site-studio.test/api/projects/editor-no-create/file",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "new.html", content: "new", baseEtag: "not-an-existing-etag" }),
+        headers: { "Content-Type": "application/json", ...csrf.headers }
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "file_conflict",
+      message: "This file changed since you opened it. Reload to get the latest version.",
+      etag: null
+    });
+    await expect(storage.fileExists(userId, "editor-no-create", "new.html")).resolves.toBe(false);
   });
 
   it("SS-40: POST file accepts a matching base ETag and returns the new ETag", async () => {
