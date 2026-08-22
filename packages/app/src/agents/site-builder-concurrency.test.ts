@@ -8,6 +8,8 @@ import {
   createProjectTools,
   describeModelStreamError,
   SiteBuilderAgent,
+  SITE_STUDIO_CHAT_CANCELLED_TYPE,
+  SITE_STUDIO_CANCEL_TURN_TYPE,
   SITE_STUDIO_EVENT_ID_RE,
   summarizeError,
   type ProjectStorageLike,
@@ -381,6 +383,22 @@ describe("Site Builder connection logging concurrency", () => {
   function setConnections(agent: SiteBuilderAgent, connections: Iterable<ReturnType<typeof fakeConnection>>) {
     Object.assign(agent, { getConnections: () => connections });
   }
+
+  it("resets the full agent turn for the Site Studio stop frame", async () => {
+    const agent = createTestAgent();
+    const resetTurnState = vi.fn();
+    const broadcast = vi.fn();
+    Object.defineProperty(agent, "resetTurnState", { value: resetTurnState });
+    Object.defineProperty(agent, "broadcast", { value: broadcast });
+
+    await agent.onMessage(
+      fakeConnection(),
+      JSON.stringify({ type: SITE_STUDIO_CANCEL_TURN_TYPE }),
+    );
+
+    expect(resetTurnState).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
+  });
 
   it("retains socket A while missing and changed subjects clear/isolate later sockets", () => {
     const subjectA = "cail-v1-0123456789abcdef0123456789abcdef";

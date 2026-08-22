@@ -7,11 +7,16 @@ export const AgentMessageType = {
 	CF_AGENT_USE_CHAT_RESPONSE: 'cf_agent_use_chat_response',
 	CF_AGENT_CHAT_CLEAR: 'cf_agent_chat_clear',
 	CF_AGENT_CHAT_REQUEST_CANCEL: 'cf_agent_chat_request_cancel',
+	CF_AGENT_STREAM_RESUME_REQUEST: 'cf_agent_stream_resume_request',
 	CF_AGENT_STREAM_RESUMING: 'cf_agent_stream_resuming',
 	CF_AGENT_STREAM_RESUME_ACK: 'cf_agent_stream_resume_ack',
 	CF_AGENT_STREAM_RESUME_NONE: 'cf_agent_stream_resume_none',
+	CF_AGENT_STREAM_PENDING: 'cf_agent_stream_pending',
 	CF_AGENT_TOOL_RESULT: 'cf_agent_tool_result',
-	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated'
+	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated',
+	SITE_STUDIO_CANCEL_TURN: 'site_studio_cancel_turn',
+	SITE_STUDIO_CHAT_CANCELLED: 'site_studio_chat_cancelled',
+	SITE_STUDIO_CHAT_COMMITTED: 'site_studio_chat_committed'
 } as const;
 
 export type ToolPartState =
@@ -114,6 +119,8 @@ export interface AgentSocketMessage {
 	messages?: UIChatMessage[];
 	message?: UIChatMessage;
 	id?: string;
+	requestId?: string;
+	probeId?: string;
 	continuation?: boolean;
 	body?: string;
 	done?: boolean;
@@ -125,16 +132,27 @@ const agentSocketMessageSchema = z.object({
 	messages: uiChatMessagesSchema.optional(),
 	message: uiChatMessageSchema.optional(),
 	id: z.string().optional(),
+	requestId: z.string().optional(),
+	probeId: z.string().optional(),
 	continuation: z.boolean().optional(),
 	body: z.string().optional(),
 	done: z.boolean().optional(),
 	error: z.boolean().optional()
 }).catchall(jsonValueSchema);
 
+const siteStudioChatCommittedFrameSchema = z.object({
+	type: z.literal(AgentMessageType.SITE_STUDIO_CHAT_COMMITTED),
+	requestId: z.string().min(1),
+	messages: uiChatMessagesSchema
+}).strict();
+
+export type SiteStudioChatCommittedFrame = z.infer<typeof siteStudioChatCommittedFrameSchema>;
+
 export interface ActiveStreamMessage {
 	id: string;
 	messageId: string;
 	continuation: boolean;
+	hadError: boolean;
 	parts: UIMessagePart[];
 	metadata?: Record<string, JsonValue>;
 }
@@ -294,6 +312,17 @@ export function parseAgentSocketMessage(payload: string): AgentSocketMessage {
 	const parsed = agentSocketMessageSchema.safeParse(JSON.parse(payload));
 	if (!parsed.success) throw new Error('Invalid agent socket payload');
 	return parsed.data;
+}
+
+/**
+ * Parse the post-persistence Site Studio commit frame. A commit can replace
+ * the visible transcript, so it must not accept an ambiguous payload.
+ */
+export function parseSiteStudioChatCommittedFrame(
+	payload: AgentSocketMessage
+): SiteStudioChatCommittedFrame | null {
+	const parsed = siteStudioChatCommittedFrameSchema.safeParse(payload);
+	return parsed.success ? parsed.data : null;
 }
 
 /** Parse a streamed UI chunk, including the server's optional `data:` prefix. */
