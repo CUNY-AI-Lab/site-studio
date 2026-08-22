@@ -1486,12 +1486,40 @@ describe('AgentChat', () => {
 			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
 		expect(requestFrame).toBeTruthy();
 		const requestId: string = requestFrame.id;
+		const pendingQuestion = {
+			type: 'tool-ask_user_question' as const,
+			toolCallId: 'reconnect-question',
+			toolName: 'ask_user_question',
+			state: 'input-available' as const,
+			input: { question: 'Continue after reconnect?', options: ['Yes'] }
+		};
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 			id: requestId,
-			body: JSON.stringify({ type: 'tool-input-start', toolCallId: 'tool-1', toolName: 'write_file' })
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: pendingQuestion.toolCallId,
+				toolName: pendingQuestion.toolName,
+				input: pendingQuestion.input
+			})
 		});
-		await settle();
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId,
+			messages: [
+				{ id: 'reconnect-user', role: 'user', parts: [{ type: 'text', text: 'do a big task' }] },
+				{ id: 'reconnect-assistant', role: 'assistant', parts: [pendingQuestion] }
+			]
+		});
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Skip' }).click();
+		await waitFor(() =>
+			expect(
+				ws.sent.map((raw) => JSON.parse(raw)).filter(
+					(message) => message.type === AgentMessageType.CF_AGENT_TOOL_RESULT
+				)
+			).toHaveLength(1)
+		);
 		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
 
 		vi.useFakeTimers();
@@ -1513,6 +1541,13 @@ describe('AgentChat', () => {
 			expect(resumeRequests).toHaveLength(1);
 			expect(historyGets).toBe(initialHistoryGets);
 			expect(resumeRequests[0].probeId).toEqual(expect.any(String));
+
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_STREAM_PENDING,
+				id: 'pending-successor'
+			});
+			await settle();
+			expect(screen.getByTitle('Stop request')).toBeInTheDocument();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -1530,7 +1565,100 @@ describe('AgentChat', () => {
 		await waitFor(() => expect(screen.getByText('Finished')).toBeInTheDocument());
 		expect(historyGets).toBe(initialHistoryGets + 1);
 		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
-		expect(onUpdate).toHaveBeenCalledTimes(1);
+		expect(onUpdate).toHaveBeenCalledTimes(2);
+	});
+
+	it('ignores a pending resume frame that arrives after Stop and a fresh request', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		let ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('first request');
+		await settle();
+		const firstRequest = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(firstRequest).toBeTruthy();
+
+		vi.useFakeTimers();
+		try {
+			ws.serverClose();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			ws = FakeWebSocket.last();
+			ws.open();
+			await settle();
+			expect(
+				ws.sent
+					.map((raw) => JSON.parse(raw))
+					.filter((message) => message.type === AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST)
+			).toHaveLength(1);
+		} finally {
+			vi.useRealTimers();
+		}
+
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_PENDING, id: 'other-tab-request' });
+		await settle();
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_STREAM_RESUMING,
+			id: 'other-tab-request'
+		});
+		await settle();
+		expect(
+			ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter(
+					(message) =>
+						message.type === AgentMessageType.CF_AGENT_STREAM_RESUME_ACK &&
+						message.id === 'other-tab-request'
+				)
+		).toHaveLength(1);
+
+		vi.useFakeTimers();
+		try {
+			ws.serverClose();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			ws = FakeWebSocket.last();
+			ws.open();
+			await settle();
+		} finally {
+			vi.useRealTimers();
+		}
+
+		screen.getByTitle('Stop request').click();
+		await settle();
+		expect(
+			ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter(
+					(message) =>
+						message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL &&
+						message.id === 'other-tab-request'
+				)
+		).toHaveLength(1);
+		await component.sendPrompt('fresh request');
+		await settle();
+		const freshRequest = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.filter((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST)
+			.at(-1);
+
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_PENDING, id: 'stale-request' });
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: freshRequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'fresh-text', delta: 'fresh response' })
+		});
+		await waitFor(() => expect(screen.getByText('fresh response')).toBeInTheDocument());
 	});
 
 	it('schedules a reconnect with backoff after an unexpected socket close', async () => {

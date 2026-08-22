@@ -129,7 +129,7 @@ import {
 	// A reconnect probe belongs to one socket and one pending request. The server
 	// echoes its probe id on STREAM_RESUME_NONE; the acknowledged id suppresses
 	// duplicate proactive and probe-triggered STREAM_RESUMING frames.
-	let streamResumeProbe = $state<{ probeId: string; requestId: string } | null>(null);
+	let streamResumeProbe = $state<{ probeId: string; requestId: string | null } | null>(null);
 	let streamResumeAcknowledgedRequestId = $state<string | null>(null);
 	// SS-11: guard so we refresh the CSRF cookie at most once per reconnect cycle
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
@@ -268,6 +268,7 @@ import {
 		currentRequestId = null;
 		activeStream = null;
 		expectingContinuation = false;
+		streamResumeProbe = null;
 		requestStartedAt = null;
 		toolStartTimes = {};
 		isReconnecting = false;
@@ -802,7 +803,7 @@ import {
 					// any new model request can use this connection.
 					console.error('Error stopping pending agent turn:', error);
 				}
-				if (reconnecting && isLoading && currentRequestId) {
+				if (reconnecting && isLoading && (currentRequestId || expectingContinuation)) {
 					const requestId = currentRequestId;
 					const probeId = generateId();
 					streamResumeProbe = { probeId, requestId };
@@ -1104,6 +1105,22 @@ import {
 				resetRequestState();
 				break;
 			}
+			case AgentMessageType.CF_AGENT_STREAM_PENDING: {
+				const pendingResume = streamResumeProbe;
+				if (!pendingResume) break;
+				// @cloudflare/ai-chat 0.9.3 omits probeId when forwarding the
+				// request. Reject only an explicitly different correlation.
+				if (data.probeId && data.probeId !== pendingResume.probeId) break;
+				// A queued request from another tab can be the SDK's latest pending
+				// id. Keep this tab's known request; adopt the id only when waiting
+				// for a continuation whose successor was not known yet.
+				const requestId = pendingResume.requestId ?? data.id ?? null;
+				if (pendingResume.requestId === null && data.id) currentRequestId = data.id;
+				// Pending is not terminal. The SDK resolves this same handshake with
+				// STREAM_RESUMING or STREAM_RESUME_NONE, so retain its correlation.
+				streamResumeProbe = { ...pendingResume, requestId };
+				break;
+			}
 			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE: {
 				const pendingResume = streamResumeProbe;
 				if (!pendingResume || currentRequestId !== pendingResume.requestId) {
@@ -1116,7 +1133,9 @@ import {
 				}
 
 				streamResumeProbe = null;
-				settledRequestIds = new Set([...settledRequestIds, pendingResume.requestId].slice(-8));
+				if (pendingResume.requestId) {
+					settledRequestIds = new Set([...settledRequestIds, pendingResume.requestId].slice(-8));
+				}
 				expectingContinuation = false;
 				resetRequestState();
 				onUpdate();
@@ -1137,11 +1156,19 @@ import {
 					cancelResumedRequest(data.id);
 					break;
 				}
-				if (!expectingContinuation && currentRequestId && data.id !== currentRequestId) {
+				// A live resume probe is parked on the SDK's pre-stream queue, not
+				// bound to one request. If this tab's request settles without a stream,
+				// the next accepted request can legitimately resume this connection.
+				if (
+					!streamResumeProbe &&
+					!expectingContinuation &&
+					currentRequestId &&
+					data.id !== currentRequestId
+				) {
 					break;
 				}
 				if (settledRequestIds.has(data.id)) break;
-				if (streamResumeProbe?.requestId === data.id) {
+				if (streamResumeProbe) {
 					streamResumeProbe = null;
 				}
 				if (streamResumeAcknowledgedRequestId === data.id) break;
