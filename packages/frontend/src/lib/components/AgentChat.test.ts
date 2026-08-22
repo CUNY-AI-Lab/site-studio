@@ -1029,7 +1029,7 @@ describe('AgentChat', () => {
 		await settle();
 	});
 
-	it('clears an active view when the project turn is stopped in another tab', async () => {
+	it('clears and suppresses a pending continuation stopped in another tab', async () => {
 		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
@@ -1038,11 +1038,61 @@ describe('AgentChat', () => {
 
 		await component.sendPrompt('work in this tab');
 		await settle();
+		const requestId: string = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST).id;
+		const questionPart = {
+			type: 'tool-ask_user_question' as const,
+			toolCallId: 'other-tab-question',
+			toolName: 'ask_user_question',
+			state: 'input-available' as const,
+			input: { question: 'Continue?', options: ['Yes'] }
+		};
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: requestId,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: questionPart.toolCallId,
+				toolName: questionPart.toolName,
+				input: questionPart.input
+			})
+		});
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId,
+			messages: [
+				{ id: 'other-tab-user', role: 'user', parts: [{ type: 'text', text: 'work in this tab' }] },
+				{ id: 'other-tab-assistant', role: 'assistant', parts: [questionPart] }
+			]
+		});
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Skip' }).click();
+		await waitFor(() =>
+			expect(
+				ws.sent.map((raw) => JSON.parse(raw)).filter(
+					(message) => message.type === AgentMessageType.CF_AGENT_TOOL_RESULT
+				)
+			).toHaveLength(1)
+		);
 		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
 
 		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_CANCELLED });
 		await settle();
 		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+
+		const lateSuccessorId = 'other-tab-late-successor';
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: lateSuccessorId });
+		await settle();
+		expect(
+			ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter(
+					(message) =>
+						message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL &&
+						message.id === lateSuccessorId
+				)
+		).toHaveLength(1);
 	});
 
 	// SS-9: after the user hits Stop, a late CF_AGENT_USE_CHAT_RESPONSE frame for the

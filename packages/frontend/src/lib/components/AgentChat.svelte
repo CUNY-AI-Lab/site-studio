@@ -1082,6 +1082,7 @@ import {
 				if (currentRequestId) {
 					settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
 				}
+				cancelledContinuationPending = cancelledContinuationPending || expectingContinuation;
 				resetRequestState();
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
