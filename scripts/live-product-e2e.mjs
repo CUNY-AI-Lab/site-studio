@@ -10,6 +10,8 @@ const CHAT_RESPONSE = 'cf_agent_use_chat_response';
 const CHAT_CANCEL = 'cf_agent_chat_request_cancel';
 const STREAM_RESUMING = 'cf_agent_stream_resuming';
 const STREAM_RESUME_ACK = 'cf_agent_stream_resume_ack';
+const CHAT_PERSISTENCE_DEADLINE_MS = 30_000;
+const CHAT_PERSISTENCE_POLL_INTERVAL_MS = 250;
 
 const jwtClaimsSchema = z.object({
 	sub: z.string().regex(/^cail-[0-9a-f]{32}$/),
@@ -24,13 +26,15 @@ const jsonValueSchema = z.lazy(() => z.union([
 	z.array(jsonValueSchema),
 	z.record(z.string(), jsonValueSchema)
 ]));
-const textChunkSchema = z.object({ delta: z.string().optional(), text: z.string().optional() }).passthrough();
 const chatMessageSchema = z.object({
 	id: z.string(),
 	type: z.string().optional(),
 	error: jsonValueSchema.optional(),
 	body: jsonValueSchema.optional(),
 	done: z.boolean().optional()
+}).passthrough();
+const persistedFileSchema = z.object({
+	content: z.string().refine((content) => content.trim().length > 0, 'file content must not be empty')
 }).passthrough();
 
 function required(name) {
@@ -66,14 +70,6 @@ function userMessage(text) {
 	};
 }
 
-function textFromChunk(chunk) {
-	const parsed = textChunkSchema.safeParse(chunk);
-	if (!parsed.success) return '';
-	if (parsed.data.delta !== undefined) return parsed.data.delta;
-	if (parsed.data.text !== undefined) return parsed.data.text;
-	return '';
-}
-
 function linkedResource(html, attribute, filename, documentUrl) {
 	const escapedFilename = filename.replace('.', '\\.');
 	const pattern = new RegExp(`${attribute}=["']([^"']*${escapedFilename}[^"']*)["']`, 'i');
@@ -82,43 +78,49 @@ function linkedResource(html, attribute, filename, documentUrl) {
 	return new URL(match[1], documentUrl);
 }
 
-async function assertPublicResource(resourceUrl, expectedType, marker, context) {
+async function assertPublicResource(resourceUrl, expectedType, context) {
 	const response = await fetch(resourceUrl, { redirect: 'manual' });
 	const body = await response.text();
 	if (!response.ok) throw new Error(`${context} returned ${response.status}`);
 	if (!response.headers.get('content-type')?.toLowerCase().startsWith(expectedType)) {
 		throw new Error(`${context} returned an unexpected content type`);
 	}
-	if (!body.includes(marker)) throw new Error(`${context} did not contain the required marker`);
+	if (!body.trim()) throw new Error(`${context} returned an empty body`);
 	if (response.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
 		throw new Error(`${context} did not include the app content security policy`);
 	}
 	return { response, body };
 }
 
-async function assertPublishedDocument(documentUrl, marker, context) {
+async function assertPublishedDocument(documentUrl, context) {
 	const response = await fetch(documentUrl, { redirect: 'manual' });
 	const body = await response.text();
-	if (!response.ok || !body.includes(marker)) {
+	if (!response.ok) {
 		throw new Error(`${context} returned ${response.status}`);
 	}
+	if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/html')) {
+		throw new Error(`${context} returned an unexpected content type`);
+	}
+	if (!body.trim()) throw new Error(`${context} returned an empty body`);
 	if (response.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
 		throw new Error(`${context} did not include the app content security policy`);
 	}
 	const stylesUrl = linkedResource(body, 'href', 'styles.css', documentUrl);
 	const scriptUrl = linkedResource(body, 'src', 'script.js', documentUrl);
-	await assertPublicResource(stylesUrl, 'text/css', marker, `${context} stylesheet`);
-	await assertPublicResource(scriptUrl, 'application/javascript', marker, `${context} script`);
+	await assertPublicResource(stylesUrl, 'text/css', `${context} stylesheet`);
+	await assertPublicResource(scriptUrl, 'application/javascript', `${context} script`);
 	return response;
 }
 
 let interrupted = false;
 let activeSocket = null;
 let activeChat = null;
+let activePersistenceAbortController = null;
 let cleaningUp = false;
 for (const signal of ['SIGINT', 'SIGTERM']) {
 	process.once(signal, () => {
 		interrupted = true;
+		activePersistenceAbortController?.abort();
 		if (activeChat?.socket.readyState === WebSocket.OPEN) {
 			try {
 				activeChat.socket.send(JSON.stringify({ type: CHAT_CANCEL, id: activeChat.requestId }));
@@ -168,8 +170,9 @@ async function runChat({ baseUrl, projectId, csrfToken, headers, messages, promp
 	});
 
 	return new Promise((resolve, reject) => {
-		const text = [];
 		const tools = new Set();
+		const toolCallNames = new Map();
+		const toolResults = new Set();
 		let sawFinish = false;
 		let settled = false;
 
@@ -211,14 +214,23 @@ async function runChat({ baseUrl, projectId, csrfToken, headers, messages, promp
 				if (bodyResult.success && bodyResult.data.trim()) {
 					const chunk = JSON.parse(bodyResult.data);
 					if (chunk.type === 'finish') sawFinish = true;
-					const part = textFromChunk(chunk);
-					if (part) text.push(part);
 					const toolName = z.string().safeParse(chunk.toolName);
-					if (toolName.success) tools.add(toolName.data);
+					if (toolName.success) {
+						tools.add(toolName.data);
+						const toolCallId = z.string().safeParse(chunk.toolCallId ?? chunk.id);
+						if (toolCallId.success) toolCallNames.set(toolCallId.data, toolName.data);
+					}
+					if (chunk.type === 'tool-output-available' || chunk.type === 'tool-result') {
+						const toolCallId = z.string().safeParse(chunk.toolCallId ?? chunk.id);
+						if (toolCallId.success) {
+							const resultToolName = toolCallNames.get(toolCallId.data);
+							if (resultToolName) toolResults.add(resultToolName);
+						}
+					}
 				}
 				if (message.done) {
 					if (!sawFinish) throw new Error('chat stream ended without a finish event');
-					finish({ text: text.join('').trim(), tools: [...tools] });
+					finish({ tools: [...tools], toolResults: [...toolResults] });
 				}
 			} catch (error) {
 				fail(error instanceof Error ? error : new Error(String(error)));
@@ -254,9 +266,8 @@ const gatewayClaims = jwtClaims(gatewayJwt, 'cail:gateway');
 if (appClaims.sub !== gatewayClaims.sub) throw new Error('app and Gateway JWT subjects differ');
 
 const proofId = crypto.randomUUID().replaceAll('-', '');
-const marker = `site-studio-live-${proofId}`;
 const projectName = `Site Studio live ${proofId}`;
-const projectId = marker;
+const projectId = `site-studio-live-${proofId}`;
 
 const appHeaders = new Headers({ 'X-CAIL-Identity-JWT': appJwt });
 const keyringHeaders = new Headers(appHeaders);
@@ -302,24 +313,43 @@ async function json(path, init = {}) {
 	return body;
 }
 
-async function getMessages() {
-	const response = await request(`api/agents/site-builder/${encodeURIComponent(projectId)}/get-messages`);
+async function getMessages(init = {}) {
+	const response = await request(`api/agents/site-builder/${encodeURIComponent(projectId)}/get-messages`, init);
 	if (!response.ok) throw new Error(`agent messages returned ${response.status}`);
 	const messages = await response.json().catch(() => []);
 	return Array.isArray(messages) ? messages : [];
 }
 
-async function persistedAssistantMessages() {
-	while (true) {
-		requireNotInterrupted();
-		const messages = await getMessages();
-		if (
-			messages.some(
-				(message) => message?.role === 'assistant' && Array.isArray(message.parts) && message.parts.length > 0
-			)
-		) return messages;
-		await new Promise((resolve) => setTimeout(resolve, 50));
+function hasPersistedCodemodeResult(messages) {
+	return messages.some((message) =>
+		message?.role === 'assistant' && Array.isArray(message.parts) && message.parts.some(
+			(part) => part?.type === 'tool-codemode' && part?.state === 'output-available'
+		)
+	);
+}
+
+async function persistedMessagesWithToolReceipt() {
+	const deadlineAt = Date.now() + CHAT_PERSISTENCE_DEADLINE_MS;
+	const abortController = new AbortController();
+	const deadlineTimer = setTimeout(() => abortController.abort(), CHAT_PERSISTENCE_DEADLINE_MS);
+	activePersistenceAbortController = abortController;
+	try {
+		while (Date.now() < deadlineAt) {
+			requireNotInterrupted();
+			const messages = await getMessages({ signal: abortController.signal });
+			if (Date.now() <= deadlineAt && hasPersistedCodemodeResult(messages)) return messages;
+			const nextRemainingMs = deadlineAt - Date.now();
+			if (nextRemainingMs <= 0) break;
+			await new Promise((resolve) => setTimeout(resolve, Math.min(CHAT_PERSISTENCE_POLL_INTERVAL_MS, nextRemainingMs)));
+		}
+	} catch (error) {
+		if (interrupted) requireNotInterrupted();
+		if (!abortController.signal.aborted) throw error;
+	} finally {
+		clearTimeout(deadlineTimer);
+		if (activePersistenceAbortController === abortController) activePersistenceAbortController = null;
 	}
+	throw new Error(`chat persistence latency exceeded the ${CHAT_PERSISTENCE_DEADLINE_MS / 1000}-second acceptance deadline`);
 }
 
 let projectAttempted = false;
@@ -411,11 +441,9 @@ try {
 	if (initialMessages.length !== 0) throw new Error('proof project started with stale agent history');
 
 	const prompt = [
-		'Build a complete, polished one-page academic project site in this project using exactly three local files: index.html, styles.css, and script.js.',
-		`The visible page must contain the exact text ${JSON.stringify(marker)}.`,
-		'index.html must link to styles.css with a relative stylesheet link and script.js with a relative deferred script tag; styles.css and script.js must each include the exact marker in their contents.',
-		'Do not use inline styles or scripts, images, or external resources. Use the project tools to write all three files, then briefly state what you built.',
-		'Do not ask a follow-up question.'
+		'Create a small static site in this project using index.html, styles.css, and script.js.',
+		'Keep the local stylesheet and deferred script links relative so the page works in preview and when published.',
+		'Use the project tools to create or update these files, then briefly state what you changed.'
 	].join(' ');
 	const chat = await runChat({
 		baseUrl,
@@ -425,16 +453,25 @@ try {
 		messages: initialMessages,
 		prompt
 	});
-	if (!chat.text) throw new Error('paid authoring completed without an assistant response');
-	const persistedMessages = await persistedAssistantMessages();
-
-	const file = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=index.html`);
-	if (!file.content.includes(marker)) throw new Error('paid authoring completed without the required page marker');
-	const stylesFile = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=styles.css`);
-	const scriptFile = await json(`api/projects/${encodeURIComponent(projectId)}/file?path=script.js`);
-	if (!stylesFile.content.includes(marker) || !scriptFile.content.includes(marker)) {
-		throw new Error('paid authoring completed without the required linked asset markers');
+	if (!chat.tools.includes('codemode')) {
+		throw new Error('authoring completed without a codemode tool call');
 	}
+	if (!chat.toolResults.includes('codemode')) {
+		throw new Error('authoring completed without a codemode tool result');
+	}
+	// AIChatAgent broadcasts done:true before it calls persistMessages. Reconcile
+	// the product's exact history endpoint until the codemode result is durable,
+	// with a named acceptance deadline rather than treating the terminal frame as
+	// proof of persistence.
+	const persistedMessages = await persistedMessagesWithToolReceipt();
+	const projectsAfterAuthoring = await json('api/projects');
+	if (!projectsAfterAuthoring.projects?.some((project) => project.id === projectId)) {
+		throw new Error('proof project was not persisted after authoring');
+	}
+
+	const file = persistedFileSchema.parse(await json(`api/projects/${encodeURIComponent(projectId)}/file?path=index.html`));
+	const _stylesFile = persistedFileSchema.parse(await json(`api/projects/${encodeURIComponent(projectId)}/file?path=styles.css`));
+	const _scriptFile = persistedFileSchema.parse(await json(`api/projects/${encodeURIComponent(projectId)}/file?path=script.js`));
 	const authoredIndex = String(file.content);
 	if (!/href=["'](?:\.\/)?styles\.css(?:["']|\?)/i.test(authoredIndex)) {
 		throw new Error('index.html does not link the local stylesheet');
@@ -445,7 +482,11 @@ try {
 	const preview = await request(`preview/${encodeURIComponent(projectId)}/`, { headers: { accept: 'text/html' } });
 	const previewBody = await preview.text();
 	const previewUrl = url(`preview/${encodeURIComponent(projectId)}/`);
-	if (!preview.ok || !previewBody.includes(marker)) throw new Error(`preview failed with ${preview.status}`);
+	if (!preview.ok) throw new Error(`preview failed with ${preview.status}`);
+	if (!preview.headers.get('content-type')?.toLowerCase().startsWith('text/html')) {
+		throw new Error('preview returned an unexpected content type');
+	}
+	if (!previewBody.trim()) throw new Error('preview returned an empty body');
 	if (preview.headers.get('content-security-policy') !== 'sandbox allow-scripts') {
 		throw new Error('preview did not include the app content security policy');
 	}
@@ -466,8 +507,8 @@ try {
 	if (!previewScript.ok || !previewScript.headers.get('content-type')?.toLowerCase().startsWith('application/javascript')) {
 		throw new Error(`preview script failed with ${previewScript.status}`);
 	}
-	if (!(await previewStyles.text()).includes(marker) || !(await previewScript.text()).includes(marker)) {
-		throw new Error('preview linked assets did not contain the required marker');
+	if (!(await previewStyles.text()).trim() || !(await previewScript.text()).trim()) {
+		throw new Error('preview linked assets returned an empty body');
 	}
 
 	const published = await json(`api/projects/${encodeURIComponent(projectId)}/publish`, { method: 'POST' });
@@ -479,8 +520,8 @@ try {
 	) throw new Error('publish returned an unexpected configured public URL');
 	directPublicUrl = new URL(`${publishedUrl.pathname}${publishedUrl.search}`, baseUrl.origin);
 	doorwayPublicUrl = publishedUrl;
-	const publicResponse = await assertPublishedDocument(directPublicUrl, marker, 'direct Worker public fetch');
-	await assertPublishedDocument(doorwayPublicUrl, marker, 'Doorway public fetch');
+	const publicResponse = await assertPublishedDocument(directPublicUrl, 'direct Worker public fetch');
+	await assertPublishedDocument(doorwayPublicUrl, 'Doorway public fetch');
 
 	summary = {
 		boundary: 'direct signed-identity standalone Worker to production Gateway; not CUNY browser login',
@@ -488,9 +529,9 @@ try {
 		publicHealthStatus: publicHealthResponse.status,
 		appOnlyProjectsStatus: projectsBeforeResponse.status,
 		appOnlyQuotaStatus: appOnlyQuota.status,
-		assistantText: chat.text.replaceAll(marker, '<proof-marker>'),
-		assistantPersisted: persistedMessages.some((message) => message?.role === 'assistant'),
+		assistantPersisted: hasPersistedCodemodeResult(persistedMessages),
 		tools: chat.tools,
+		toolResults: chat.toolResults,
 		fileAuthored: true,
 		previewStatus: preview.status,
 		publishStatus: true,

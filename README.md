@@ -121,9 +121,14 @@ real Worker/resource boundary.
 `bun run e2e:live` exercises the standalone production Worker with short-lived
 app and Gateway identity JWTs supplied through the environment. It requires an
 admitted identity that already owns a public handle, creates one random project,
-runs an uncapped paid authoring turn, verifies persisted chat, preview, publish,
-and direct public serving (including linked CSS and JavaScript through both the
-standalone Worker and configured Doorway), then deletes the project through the
+runs an uncapped authoring turn through the real codemode tool, and verifies the
+tool receipt, persisted chat/project/files, preview, publish, and direct public
+serving (including linked CSS and JavaScript through both the standalone Worker
+and configured Doorway). Because the chat transport broadcasts its terminal
+frame before persistence completes, the check reconciles the exact persisted
+history endpoint until the codemode receipt appears or the named 30-second
+chat-persistence acceptance deadline is reached. This is a product propagation
+gate, not model-quality scoring. It then deletes the project through the
 product API and recreates it once to prove its chat history was cleared. It
 neither manages Cloudflare storage directly nor changes the identity's handle.
 This proves the signed-identity Worker-to-Gateway product path and the
