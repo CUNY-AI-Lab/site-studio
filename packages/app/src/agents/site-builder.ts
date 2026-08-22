@@ -1325,9 +1325,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     connection: Connection<SiteStudioConnectionLoggingState>,
     message: WSMessage,
   ): void | Promise<void> {
-    if (typeof message === "string") {
+    const encodedMessage = z.string().safeParse(message);
+    if (encodedMessage.success) {
       try {
-        const parsed = siteStudioCancelTurnSchema.safeParse(JSON.parse(message));
+        const parsed = siteStudioCancelTurnSchema.safeParse(JSON.parse(encodedMessage.data));
         if (parsed.success) {
           this.resetTurnState();
           return;
