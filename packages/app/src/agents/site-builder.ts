@@ -85,10 +85,21 @@ export { describeModelStreamError } from "../lib/model-stream-error";
  */
 export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
 export const SITE_STUDIO_CANCEL_TURN_TYPE = "site_studio_cancel_turn" as const;
+export const SITE_STUDIO_CHAT_CANCELLED_TYPE = "site_studio_chat_cancelled" as const;
 
 const siteStudioCancelTurnSchema = z.object({
   type: z.literal(SITE_STUDIO_CANCEL_TURN_TYPE),
 }).strict();
+
+function isSiteStudioCancelTurn(message: WSMessage): boolean {
+  const encodedMessage = z.string().safeParse(message);
+  if (!encodedMessage.success) return false;
+  try {
+    return siteStudioCancelTurnSchema.safeParse(JSON.parse(encodedMessage.data)).success;
+  } catch {
+    return false;
+  }
+}
 
 type Scope = {
   userId: string;
@@ -1325,17 +1336,14 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     connection: Connection<SiteStudioConnectionLoggingState>,
     message: WSMessage,
   ): void | Promise<void> {
-    const encodedMessage = z.string().safeParse(message);
-    if (encodedMessage.success) {
+    if (isSiteStudioCancelTurn(message)) {
+      this.resetTurnState();
       try {
-        const parsed = siteStudioCancelTurnSchema.safeParse(JSON.parse(encodedMessage.data));
-        if (parsed.success) {
-          this.resetTurnState();
-          return;
-        }
+        this.broadcast(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
       } catch {
-        // The parent agent owns all non-Site-Studio protocol handling.
+        console.error("Failed to broadcast Site Studio chat cancellation");
       }
+      return;
     }
     return super.onMessage(connection, message);
   }

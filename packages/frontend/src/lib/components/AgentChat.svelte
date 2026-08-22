@@ -1078,6 +1078,12 @@ import {
 				if (data.message) uiMessages = mergeUpdatedMessage(uiMessages, data.message);
 				scrollToBottom();
 				break;
+			case AgentMessageType.SITE_STUDIO_CHAT_CANCELLED:
+				if (currentRequestId) {
+					settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
+				}
+				resetRequestState();
+				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
 				const committed = parseSiteStudioChatCommittedFrame(data);
 				if (!committed || committed.requestId !== currentRequestId) {

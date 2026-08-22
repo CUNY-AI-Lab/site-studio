@@ -8,6 +8,7 @@ import {
   createProjectTools,
   describeModelStreamError,
   SiteBuilderAgent,
+  SITE_STUDIO_CHAT_CANCELLED_TYPE,
   SITE_STUDIO_CANCEL_TURN_TYPE,
   SITE_STUDIO_EVENT_ID_RE,
   summarizeError,
@@ -386,7 +387,9 @@ describe("Site Builder connection logging concurrency", () => {
   it("resets the full agent turn for the Site Studio stop frame", async () => {
     const agent = createTestAgent();
     const resetTurnState = vi.fn();
+    const broadcast = vi.fn();
     Object.defineProperty(agent, "resetTurnState", { value: resetTurnState });
+    Object.defineProperty(agent, "broadcast", { value: broadcast });
 
     await agent.onMessage(
       fakeConnection(),
@@ -394,6 +397,7 @@ describe("Site Builder connection logging concurrency", () => {
     );
 
     expect(resetTurnState).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
   });
 
   it("retains socket A while missing and changed subjects clear/isolate later sockets", () => {

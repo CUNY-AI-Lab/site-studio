@@ -968,6 +968,9 @@ describe('AgentChat', () => {
 				.map((raw) => JSON.parse(raw))
 				.filter((message) => message.type === AgentMessageType.SITE_STUDIO_CANCEL_TURN)
 		).toHaveLength(1);
+		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_CANCELLED });
+		await settle();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 
 		const successorId = 'continuation-stream';
 		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: successorId });
@@ -1024,6 +1027,22 @@ describe('AgentChat', () => {
 		expect(screen.queryByText('stale after new request')).not.toBeInTheDocument();
 		screen.getByTitle('Stop request').click();
 		await settle();
+	});
+
+	it('clears an active view when the project turn is stopped in another tab', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('work in this tab');
+		await settle();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_CANCELLED });
+		await settle();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 	});
 
 	// SS-9: after the user hits Stop, a late CF_AGENT_USE_CHAT_RESPONSE frame for the
