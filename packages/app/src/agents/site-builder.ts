@@ -77,6 +77,13 @@ import {
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
+/**
+ * Post-persistence chat commit frames are deliberately separate from the
+ * streaming response protocol.  The frame contains only the same persisted
+ * UI messages already exposed by `cf_agent_chat_messages`/`get-messages`.
+ */
+export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
+
 type Scope = {
   userId: string;
   projectId: string;
@@ -1273,7 +1280,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
-  private buildActionAwaitingPersistence: SiteStudioActionLifecycle | null = null;
+  private buildActionsAwaitingPersistence = new Map<string, SiteStudioActionLifecycle>();
   /**
    * Operational subject is deliberately not stored on the Durable Object.
    * Each connection receives the route's middleware-verified subject and JWT
@@ -1465,9 +1472,33 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.messages = [];
   }
 
-  /** Complete the build only after AIChatAgent has persisted its response. */
+  /**
+   * Complete the build only after AIChatAgent has persisted its response.
+   *
+   * When a successful assistant message was persisted, the commit frame is
+   * sent before the action-lifecycle early return: the UI uses it as the
+   * authoritative repair path when a streamed tool or terminal chunk was
+   * malformed or missed. Error frames remain transient, and aborted turns use
+   * the existing cancellation path. Do not include
+   * `result.message`, errors, attachments, or provider/model data here;
+   * `this.messages` is the already-sanitized persisted history exposed elsewhere.
+   */
   protected override onChatResponse(result: ChatResponseResult): void {
-    const pending = this.buildActionAwaitingPersistence;
+    // Only successful persisted turns get a commit; errors stay transient and
+    // aborted turns use the existing cancellation path.
+    if (result.status === "completed") {
+      try {
+        this.broadcast(JSON.stringify({
+          type: SITE_STUDIO_CHAT_COMMITTED_TYPE,
+          requestId: result.requestId,
+          messages: this.messages,
+        }));
+      } catch {
+        console.error("Failed to broadcast persisted chat commit");
+      }
+    }
+
+    const pending = this.buildActionsAwaitingPersistence.get(result.requestId);
     if (!pending) return;
     if (result.status === "completed") {
       pending.completeSuccess();
@@ -1479,7 +1510,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         "chat_response_failed",
       );
     }
-    this.buildActionAwaitingPersistence = null;
+    this.buildActionsAwaitingPersistence.delete(result.requestId);
   }
 
   async onChatMessage(
@@ -1614,7 +1645,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             rawFinishReason: event.rawFinishReason ?? null,
           });
           if (buildAction.wasAdmitted()) {
-            this.buildActionAwaitingPersistence = buildAction;
+            this.buildActionsAwaitingPersistence.set(requestId, buildAction);
           }
           if (onFinish) {
             onFinish(event);
@@ -1625,7 +1656,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
             steps: steps.length
           }, "warn");
           buildAction.completeFailure({ outcome: "cancelled", reason: "cancelled" });
-          this.buildActionAwaitingPersistence = null;
+          this.buildActionsAwaitingPersistence.delete(requestId);
         },
         onError: (error) => {
           const described = describeModelStreamError(error.error);
@@ -1638,7 +1669,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
               : { outcome: "error", reason: "upstream_failure" },
             described.quota ? "quota_exceeded" : errorCodeFrom(error.error),
           );
-          this.buildActionAwaitingPersistence = null;
+          this.buildActionsAwaitingPersistence.delete(requestId);
         }
       });
 
@@ -1658,7 +1689,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
               : { outcome: "error", reason: "upstream_failure" },
             described.quota ? "quota_exceeded" : errorCodeFrom(error),
           );
-          this.buildActionAwaitingPersistence = null;
+          this.buildActionsAwaitingPersistence.delete(requestId);
           return described.message;
         }
       });
@@ -1670,7 +1701,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         { outcome: "error", reason: "application_failure" },
         errorCodeFrom(error),
       );
-      this.buildActionAwaitingPersistence = null;
+      this.buildActionsAwaitingPersistence.delete(requestId);
       return new Response(JSON.stringify({ error: "Failed to process request" }), {
         status: 500,
         headers: { "Content-Type": "application/json" }

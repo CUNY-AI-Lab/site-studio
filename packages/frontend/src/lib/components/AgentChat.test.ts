@@ -15,6 +15,8 @@ interface AgentChatTestProps {
 interface FakeSocketMessage {
 	type: string;
 	id?: string;
+	requestId?: string;
+	probeId?: string;
 	messages?: UIChatMessage[];
 	body?: string;
 	done?: boolean;
@@ -498,6 +500,65 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Hello, world')).toBeInTheDocument();
 	});
 
+	it('repairs a malformed stream with the matching persisted commit without reload', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('run the project edits');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: 'tool-1',
+				toolName: 'codemode',
+				input: { code: 'return {}' }
+			})
+		});
+		// This malformed provider/output chunk is dropped and no terminal frame
+		// arrives. The commit below is the repair authority.
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: 'data: not-json\n\n'
+		});
+		await settle();
+
+		const committed: UIChatMessage[] = [
+			{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'run the project edits' }] },
+			{
+				id: 'assistant-1',
+				role: 'assistant',
+				parts: [{
+					type: 'tool-codemode',
+					toolCallId: 'tool-1',
+					toolName: 'codemode',
+					state: 'output-available',
+					input: { code: 'return {}' },
+					output: { ok: true, changedFiles: ['index.html'] }
+				}]
+			}
+		];
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId: request.id,
+			messages: committed
+		});
+		await settle();
+
+		expect(screen.getByText('Finished')).toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
 	it('refreshes the editor after a generated image is saved', async () => {
 		const { component, onUpdate } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
@@ -618,6 +679,7 @@ describe('AgentChat', () => {
 		expect(
 			screen.getByText('Something went wrong while generating this response.')
 		).toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 		warn.mockRestore();
 	});
 
@@ -894,6 +956,84 @@ describe('AgentChat', () => {
 		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 	});
 
+	it('resends cancellation when a stopped request resumes after disconnect', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		let ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('build something');
+		await settle();
+		const oldRequestId: string = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST).id;
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: oldRequestId,
+			body: JSON.stringify({ type: 'text-start', id: 'old-text' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: oldRequestId,
+			body: JSON.stringify({ type: 'text-delta', id: 'old-text', delta: 'Before disconnect' })
+		});
+		await settle();
+		expect(screen.getByText('Before disconnect')).toBeInTheDocument();
+
+		vi.useFakeTimers();
+		try {
+			ws.serverClose();
+			flushSync();
+			screen.getByTitle('Stop request').click();
+			await settle();
+			expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			ws = FakeWebSocket.last();
+			ws.open();
+			await settle();
+			ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: oldRequestId });
+			await settle();
+
+			const cancelFrames = ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter((message) => message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL);
+			expect(cancelFrames).toHaveLength(1);
+			expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+				id: oldRequestId,
+				body: JSON.stringify({ type: 'text-delta', id: 'old-text', delta: ' stale old stream' })
+			});
+			await settle();
+			expect(screen.queryByText(/stale old stream/)).not.toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
+
+		await component.sendPrompt('new task');
+		await settle();
+		const newRequestFrames = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.filter((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(newRequestFrames).toHaveLength(1);
+		const newRequestId: string = newRequestFrames[0].id;
+		expect(newRequestId).not.toBe(oldRequestId);
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: oldRequestId,
+			body: JSON.stringify({ type: 'text-delta', id: 'old-text', delta: ' stale after new request' })
+		});
+		await settle();
+		expect(screen.queryByText(/stale after new request/)).not.toBeInTheDocument();
+		screen.getByTitle('Stop request').click();
+		await settle();
+	});
+
 	// SS-11: a stale-CSRF handshake closes the socket before OPEN; the reconnect
 	// must force a fresh /api/csrf round-trip so the next handshake uses a new token,
 	// and must not infinite-loop.
@@ -1112,6 +1252,86 @@ describe('AgentChat', () => {
 
 		// There is no retry budget to exhaust while this project remains active.
 		expect(screen.queryByText(/The response was interrupted/)).not.toBeInTheDocument();
+	});
+
+	it('reconciles a pending turn when reconnect resume reports no active stream', async () => {
+		let historyGets = 0;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyGets += 1;
+				const history: UIChatMessage[] =
+					historyGets === 1
+						? []
+						: [{ id: 'finished', role: 'assistant', parts: [{ type: 'text', text: 'Finished' }] }];
+				return new Response(JSON.stringify(history), { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component, onUpdate } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		let ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		const initialHistoryGets = historyGets;
+
+		await component.sendPrompt('do a big task');
+		await settle();
+		const requestFrame = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(requestFrame).toBeTruthy();
+		const requestId: string = requestFrame.id;
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: requestId,
+			body: JSON.stringify({ type: 'tool-input-start', toolCallId: 'tool-1', toolName: 'write_file' })
+		});
+		await settle();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		vi.useFakeTimers();
+		try {
+			ws.serverClose();
+			flushSync();
+			await vi.advanceTimersByTimeAsync(1000);
+			flushSync();
+			await vi.advanceTimersByTimeAsync(0);
+			flushSync();
+			expect(FakeWebSocket.instances.length).toBe(2);
+
+			ws = FakeWebSocket.last();
+			ws.open();
+			await settle();
+			const resumeRequests = ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter((message) => message.type === AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST);
+			expect(resumeRequests).toHaveLength(1);
+			expect(historyGets).toBe(initialHistoryGets);
+			expect(resumeRequests[0].probeId).toEqual(expect.any(String));
+		} finally {
+			vi.useRealTimers();
+		}
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_STREAM_RESUME_NONE,
+			probeId: 'different-probe'
+		});
+		await settle();
+		expect(historyGets).toBe(initialHistoryGets);
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_STREAM_RESUME_NONE
+		});
+		await waitFor(() => expect(screen.getByText('Finished')).toBeInTheDocument());
+		expect(historyGets).toBe(initialHistoryGets + 1);
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		expect(onUpdate).toHaveBeenCalledTimes(1);
 	});
 
 	it('schedules a reconnect with backoff after an unexpected socket close', async () => {

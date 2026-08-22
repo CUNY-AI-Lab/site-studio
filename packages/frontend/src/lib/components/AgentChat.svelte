@@ -24,6 +24,7 @@ import {
 		isToolPart,
 		mergeUpdatedMessage,
 		parseAgentSocketMessage,
+		parseSiteStudioChatCommittedFrame,
 		parseUIChatMessages,
 		parseUIStreamChunk,
 		type AgentSocketMessage,
@@ -120,6 +121,14 @@ import {
 	// SS-9: request ids the user explicitly cancelled. Late CF_AGENT_USE_CHAT_RESPONSE
 	// frames for these ids must be dropped rather than resuming a stopped stream.
 	let cancelledRequestIds = $state<Set<string>>(new Set());
+	// Keep only a small recent window: late stream/terminal frames for committed
+	// turns must not recreate stale UI, without retaining request ids forever.
+	let settledRequestIds = $state<Set<string>>(new Set());
+	// A reconnect probe belongs to one socket and one pending request. The server
+	// echoes its probe id on STREAM_RESUME_NONE; the acknowledged id suppresses
+	// duplicate proactive and probe-triggered STREAM_RESUMING frames.
+	let streamResumeProbe = $state<{ probeId: string; requestId: string } | null>(null);
+	let streamResumeAcknowledgedRequestId = $state<string | null>(null);
 	// SS-11: guard so we refresh the CSRF cookie at most once per reconnect cycle
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
@@ -527,6 +536,11 @@ import {
 	// error bubble. Cleared when a connection succeeds or the component tears down.
 	let isReconnecting = $state(false);
 
+	function clearSocketResumeState() {
+		streamResumeProbe = null;
+		streamResumeAcknowledgedRequestId = null;
+	}
+
 	function closeSocket() {
 		connectionEpoch += 1;
 		if (reconnectTimer) {
@@ -549,6 +563,7 @@ import {
 		socketProjectId = null;
 		socketPromise = null;
 		socketPromiseProjectId = null;
+		clearSocketResumeState();
 	}
 
 	function handleSocketClose(event: Event) {
@@ -570,6 +585,7 @@ import {
 		socketProjectId = null;
 		socketPromise = null;
 		socketPromiseProjectId = null;
+		clearSocketResumeState();
 
 		// Clean up listeners on the closed socket
 		if (closedSocket) {
@@ -734,6 +750,7 @@ import {
 
 		const nextPromise = new Promise<WebSocket>((resolve, reject) => {
 			const onOpen = () => {
+				const reconnecting = reconnectAttempts > 0;
 				nextSocket.removeEventListener('error', onError);
 				if (
 					!isCurrentProjectContext(targetProjectId, targetEpoch) ||
@@ -758,6 +775,23 @@ import {
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
+				clearSocketResumeState();
+				if (reconnecting && isLoading && currentRequestId) {
+					const requestId = currentRequestId;
+					const probeId = generateId();
+					streamResumeProbe = { probeId, requestId };
+					try {
+						nextSocket.send(
+							JSON.stringify({
+								type: AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST,
+								probeId
+							})
+						);
+					} catch (error) {
+						streamResumeProbe = null;
+						console.error('Error requesting stream resume:', error);
+					}
+				}
 				resolve(nextSocket);
 			};
 
@@ -777,6 +811,7 @@ import {
 				if (socket === nextSocket) {
 					socket = null;
 					socketProjectId = null;
+					clearSocketResumeState();
 				}
 				reject(new Error('Unable to connect to the agent'));
 			};
@@ -1006,12 +1041,71 @@ import {
 				if (data.message) uiMessages = mergeUpdatedMessage(uiMessages, data.message);
 				scrollToBottom();
 				break;
-			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE:
-				expectingContinuation = false;
+			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
+				const committed = parseSiteStudioChatCommittedFrame(data);
+				if (!committed || committed.requestId !== currentRequestId) {
+					break;
+				}
+
+				if (streamResumeProbe?.requestId === committed.requestId) {
+					streamResumeProbe = null;
+				}
+				settledRequestIds = new Set([...settledRequestIds, committed.requestId].slice(-8));
+				uiMessages = committed.messages;
+				historyLoadFailed = false;
+				// The commit is also the authoritative repair signal for mutations
+				// whose streamed tool output was malformed or never reached the UI.
+				onUpdate();
+				scrollToBottom();
 				resetRequestState();
 				break;
+			}
+			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE: {
+				const pendingResume = streamResumeProbe;
+				if (!pendingResume || currentRequestId !== pendingResume.requestId) {
+					break;
+				}
+				// The SDK omits probeId on some resume-none paths; reject only an
+				// explicitly present probe that belongs to another request.
+				if (data.probeId && data.probeId !== pendingResume.probeId) {
+					break;
+				}
+
+				streamResumeProbe = null;
+				settledRequestIds = new Set([...settledRequestIds, pendingResume.requestId].slice(-8));
+				expectingContinuation = false;
+				resetRequestState();
+				onUpdate();
+				const targetProjectId = projectId;
+				const targetEpoch = projectContextEpoch;
+				if (targetProjectId) {
+					void loadChatHistory(targetProjectId, targetEpoch);
+				}
+				break;
+			}
 			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
 				if (!data.id) break;
+				if (cancelledRequestIds.has(data.id)) {
+					if (streamResumeProbe?.requestId === data.id) {
+						streamResumeProbe = null;
+					}
+					settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
+					try {
+						sendSocketMessage({
+							type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
+							id: data.id
+						});
+					} catch (error) {
+						console.error('Error resending cancelled request:', error);
+					}
+					break;
+				}
+				if (settledRequestIds.has(data.id)) break;
+				if (streamResumeProbe?.requestId === data.id) {
+					streamResumeProbe = null;
+				}
+				if (streamResumeAcknowledgedRequestId === data.id) break;
+				streamResumeAcknowledgedRequestId = data.id;
 				const continuation = expectingContinuation;
 				expectingContinuation = false;
 				currentRequestId = data.id;
@@ -1030,7 +1124,7 @@ import {
 				if (!data.id) break;
 				// SS-9: drop frames for a request the user stopped. Without this a late
 				// frame would recreate activeStream below and resume appending text.
-				if (data.id && cancelledRequestIds.has(data.id)) {
+				if (cancelledRequestIds.has(data.id) || settledRequestIds.has(data.id)) {
 					break;
 				}
 
@@ -1075,7 +1169,14 @@ import {
 					if (activeStream) {
 						flushActiveStreamToMessages(activeStream);
 					}
-					resetRequestState();
+					if (data.error) {
+						settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
+						resetRequestState();
+					} else {
+						// The post-persistence commit frame is the terminal authority. Keep
+						// the request id alive so a following commit can replace this partial
+						// stream even when the terminal chunk itself was invalid or missing.
+					}
 				}
 				break;
 			}
@@ -1157,6 +1258,7 @@ import {
 		// SS-9: remember the cancelled id so a late CF_AGENT_USE_CHAT_RESPONSE frame
 		// for it can't recreate activeStream and resume appending after the stop.
 		cancelledRequestIds.add(currentRequestId);
+		settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
 
 		try {
 			sendSocketMessage({
