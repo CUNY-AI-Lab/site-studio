@@ -993,6 +993,19 @@ describe('AgentChat', () => {
 		await settle();
 		expect(screen.queryByText('stale continuation')).not.toBeInTheDocument();
 
+		const laterSuccessorId = 'later-continuation-stream';
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: laterSuccessorId });
+		await settle();
+		expect(
+			ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter(
+					(message) =>
+						message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL &&
+						message.id === laterSuccessorId
+				)
+		).toHaveLength(1);
+
 		await component.sendPrompt('new task');
 		await settle();
 		const requestFrames = ws.sent

@@ -1127,7 +1127,6 @@ import {
 					break;
 				}
 				if (cancelledContinuationPending) {
-					cancelledContinuationPending = false;
 					cancelResumedRequest(data.id);
 					break;
 				}
@@ -1162,7 +1161,6 @@ import {
 					break;
 				}
 				if (cancelledContinuationPending) {
-					cancelledContinuationPending = false;
 					cancelResumedRequest(data.id);
 					break;
 				}
