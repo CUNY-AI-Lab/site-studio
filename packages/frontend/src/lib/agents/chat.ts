@@ -13,6 +13,7 @@ export const AgentMessageType = {
 	CF_AGENT_STREAM_RESUME_NONE: 'cf_agent_stream_resume_none',
 	CF_AGENT_TOOL_RESULT: 'cf_agent_tool_result',
 	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated',
+	SITE_STUDIO_CANCEL_TURN: 'site_studio_cancel_turn',
 	SITE_STUDIO_CHAT_COMMITTED: 'site_studio_chat_committed'
 } as const;
 
@@ -149,6 +150,7 @@ export interface ActiveStreamMessage {
 	id: string;
 	messageId: string;
 	continuation: boolean;
+	hadError: boolean;
 	parts: UIMessagePart[];
 	metadata?: Record<string, JsonValue>;
 }

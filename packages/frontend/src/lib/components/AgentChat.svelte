@@ -114,6 +114,8 @@ import {
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
 	let expectingContinuation = $state(false);
+	let cancelledContinuationPending = $state(false);
+	let cancelTurnDeliveryPending = false;
 	let ignoreNextSocketClose = $state(false);
 	let requestStartedAt = $state<number | null>(null);
 	let clockNow = $state(Date.now());
@@ -269,6 +271,22 @@ import {
 		requestStartedAt = null;
 		toolStartTimes = {};
 		isReconnecting = false;
+	}
+
+	function cancelResumedRequest(requestId: string) {
+		if (streamResumeProbe?.requestId === requestId) {
+			streamResumeProbe = null;
+		}
+		cancelledRequestIds.add(requestId);
+		settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
+		try {
+			sendSocketMessage({
+				type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
+				id: requestId
+			});
+		} catch (error) {
+			console.error('Error resending cancelled request:', error);
+		}
 	}
 
 	function getRunningToolFromParts(parts: UIMessagePart[]): RunningToolState | null {
@@ -493,6 +511,7 @@ import {
 			id: requestId,
 			messageId: lastAssistant?.id || generateId(),
 			continuation,
+			hadError: false,
 			parts: lastAssistant ? cloneParts(lastAssistant.parts) : []
 		};
 		if (lastAssistant?.metadata) stream.metadata = { ...lastAssistant.metadata };
@@ -776,6 +795,13 @@ import {
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
 				clearSocketResumeState();
+				try {
+					flushPendingTurnCancellation(nextSocket);
+				} catch (error) {
+					// Keep the marker pending. prepareSocketForModelTurn retries it before
+					// any new model request can use this connection.
+					console.error('Error stopping pending agent turn:', error);
+				}
 				if (reconnecting && isLoading && currentRequestId) {
 					const requestId = currentRequestId;
 					const probeId = generateId();
@@ -886,6 +912,12 @@ import {
 		socket.send(JSON.stringify(payload));
 	}
 
+	function flushPendingTurnCancellation(targetSocket: WebSocket) {
+		if (!cancelTurnDeliveryPending || targetSocket.readyState !== WebSocket.OPEN) return;
+		targetSocket.send(JSON.stringify({ type: AgentMessageType.SITE_STUDIO_CANCEL_TURN }));
+		cancelTurnDeliveryPending = false;
+	}
+
 	async function refreshAgentCredential(targetProjectId: string, targetEpoch: number): Promise<void> {
 		const response = await apiResponseFetch(
 			resolvePath(`/api/agents/site-builder/${targetProjectId}/refresh-credential`),
@@ -904,6 +936,7 @@ import {
 		targetEpoch: number
 	): Promise<WebSocket> {
 		const ws = await ensureSocket(targetProjectId, targetEpoch);
+		flushPendingTurnCancellation(ws);
 		await refreshAgentCredential(targetProjectId, targetEpoch);
 		if (
 			!isCurrentProjectContext(targetProjectId, targetEpoch) ||
@@ -933,6 +966,9 @@ import {
 		isLoading = true;
 		activeStream = null;
 		expectingContinuation = false;
+		// Any pending server-side turn reset was sent before this request. From
+		// here, request identity rejects late frames from the cancelled successor.
+		cancelledContinuationPending = false;
 		// SS-9: a genuinely new request starts fresh; drop stale cancellation markers.
 		cancelledRequestIds = new Set();
 
@@ -957,6 +993,7 @@ import {
 		}
 
 		if (chunk.type === 'error') {
+			activeStream.hadError = true;
 			activeStream.parts.push({ type: 'text', text: chunk.errorText, state: 'done' });
 			flushActiveStreamToMessages(activeStream);
 			return;
@@ -1086,18 +1123,15 @@ import {
 			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
 				if (!data.id) break;
 				if (cancelledRequestIds.has(data.id)) {
-					if (streamResumeProbe?.requestId === data.id) {
-						streamResumeProbe = null;
-					}
-					settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
-					try {
-						sendSocketMessage({
-							type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
-							id: data.id
-						});
-					} catch (error) {
-						console.error('Error resending cancelled request:', error);
-					}
+					cancelResumedRequest(data.id);
+					break;
+				}
+				if (cancelledContinuationPending) {
+					cancelledContinuationPending = false;
+					cancelResumedRequest(data.id);
+					break;
+				}
+				if (!expectingContinuation && currentRequestId && data.id !== currentRequestId) {
 					break;
 				}
 				if (settledRequestIds.has(data.id)) break;
@@ -1124,13 +1158,27 @@ import {
 				if (!data.id) break;
 				// SS-9: drop frames for a request the user stopped. Without this a late
 				// frame would recreate activeStream below and resume appending text.
-				if (cancelledRequestIds.has(data.id) || settledRequestIds.has(data.id)) {
+				if (cancelledRequestIds.has(data.id)) {
+					break;
+				}
+				if (cancelledContinuationPending) {
+					cancelledContinuationPending = false;
+					cancelResumedRequest(data.id);
+					break;
+				}
+				if (!expectingContinuation && currentRequestId && data.id !== currentRequestId) {
+					break;
+				}
+				if (settledRequestIds.has(data.id)) {
 					break;
 				}
 
 				if (!activeStream || activeStream.id !== data.id) {
 					const continuation = data.continuation === true || expectingContinuation;
 					activeStream = createStreamState(data.id, continuation);
+				}
+				if (data.error && activeStream) {
+					activeStream.hadError = true;
 				}
 
 				if (data.body?.trim()) {
@@ -1165,11 +1213,11 @@ import {
 					}
 				}
 
-				if (data.done || data.error) {
+				if (data.done) {
 					if (activeStream) {
 						flushActiveStreamToMessages(activeStream);
 					}
-					if (data.error) {
+					if (activeStream?.hadError) {
 						settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
 						resetRequestState();
 					} else {
@@ -1226,6 +1274,8 @@ import {
 		previousProjectId = targetProjectId;
 		input = '';
 		attachedFile = null;
+		cancelledContinuationPending = false;
+		cancelTurnDeliveryPending = false;
 		resetRequestState();
 		uiMessages = [];
 		closeSocket();
@@ -1249,24 +1299,39 @@ import {
 	});
 
 	function stopRequest() {
-		if (!currentRequestId) {
+		if (!currentRequestId && !expectingContinuation) {
 			return;
 		}
 		requestPreparationSequence += 1;
 		isPreparingRequest = false;
+		const stoppedRequestId = currentRequestId;
+		const wasAwaitingContinuation = expectingContinuation;
 
 		// SS-9: remember the cancelled id so a late CF_AGENT_USE_CHAT_RESPONSE frame
 		// for it can't recreate activeStream and resume appending after the stop.
-		cancelledRequestIds.add(currentRequestId);
-		settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
+		if (stoppedRequestId) {
+			cancelledRequestIds.add(stoppedRequestId);
+			settledRequestIds = new Set([...settledRequestIds, stoppedRequestId].slice(-8));
+		}
+		cancelledContinuationPending = wasAwaitingContinuation;
+		cancelTurnDeliveryPending = true;
 
 		try {
-			sendSocketMessage({
-				type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
-				id: currentRequestId
-			});
+			if (socket) flushPendingTurnCancellation(socket);
 		} catch (error) {
-			console.error('Error stopping request:', error);
+			// A reconnect will send the turn reset before any new request.
+			console.error('Error stopping agent turn:', error);
+		}
+
+		if (stoppedRequestId) {
+			try {
+				sendSocketMessage({
+					type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
+					id: stoppedRequestId
+				});
+			} catch (error) {
+				console.error('Error stopping request:', error);
+			}
 		}
 
 		resetRequestState();

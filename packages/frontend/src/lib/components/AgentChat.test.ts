@@ -853,6 +853,9 @@ describe('AgentChat', () => {
 		await component.sendPrompt('hello');
 		await settle();
 		expect(refreshCount).toBe(1);
+		const initialRequestId: string = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST).id;
 		expect(events.indexOf('refresh-1')).toBeLessThan(events.indexOf(`ws-${AgentMessageType.CF_AGENT_USE_CHAT_REQUEST}`));
 
 		function questionFrame(id: string, toolCallId: string) {
@@ -868,7 +871,7 @@ describe('AgentChat', () => {
 			});
 		}
 
-		questionFrame('stream-1', 'tool-1');
+		questionFrame(initialRequestId, 'tool-1');
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
 		const skipButton = screen.getByRole('button', { name: 'Skip' });
 		skipButton.click();
@@ -899,6 +902,115 @@ describe('AgentChat', () => {
 		expect(events.indexOf('refresh-2')).toBeLessThan(toolResultEvents[0]);
 		expect(events.indexOf('refresh-3')).toBeLessThan(toolResultEvents[1]);
 		expect(events.indexOf('refresh-3')).toBeGreaterThan(events.indexOf('refresh-2'));
+	});
+
+	it('cancels a successor after stopping before a tool continuation resumes', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('answer a question');
+		await settle();
+		const initialRequest = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(initialRequest).toBeTruthy();
+		const initialRequestId: string = initialRequest.id;
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: initialRequestId,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: 'question-1',
+				toolName: 'ask_user_question',
+				input: { question: 'Pick a path', options: ['A', 'B'] }
+			})
+		});
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId: initialRequestId,
+			messages: [
+				{ id: 'user-1', role: 'user', parts: [{ type: 'text', text: 'answer a question' }] },
+				{
+					id: 'assistant-1',
+					role: 'assistant',
+					parts: [
+						{
+							type: 'tool-ask_user_question',
+							toolCallId: 'question-1',
+							toolName: 'ask_user_question',
+							state: 'input-available',
+							input: { question: 'Pick a path', options: ['A', 'B'] }
+						}
+					]
+				}
+			]
+		});
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Skip' }).click();
+		await waitFor(() =>
+			expect(
+				ws.sent.map((raw) => JSON.parse(raw)).filter(
+					(message) => message.type === AgentMessageType.CF_AGENT_TOOL_RESULT
+				)
+			).toHaveLength(1)
+		);
+		await settle();
+
+		screen.getByTitle('Stop request').click();
+		await settle();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		expect(
+			ws.sent
+				.map((raw) => JSON.parse(raw))
+				.filter((message) => message.type === AgentMessageType.SITE_STUDIO_CANCEL_TURN)
+		).toHaveLength(1);
+
+		const successorId = 'continuation-stream';
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: successorId });
+		await settle();
+		const successorMessages = ws.sent.map((raw) => JSON.parse(raw));
+		expect(
+			successorMessages.filter(
+				(message) =>
+					message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL && message.id === successorId
+			)
+		).toHaveLength(1);
+		expect(
+			successorMessages.filter(
+				(message) => message.type === AgentMessageType.CF_AGENT_STREAM_RESUME_ACK && message.id === successorId
+			)
+		).toHaveLength(0);
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: successorId,
+			body: JSON.stringify({ type: 'text-delta', id: 'stale', delta: 'stale continuation' })
+		});
+		await settle();
+		expect(screen.queryByText('stale continuation')).not.toBeInTheDocument();
+
+		await component.sendPrompt('new task');
+		await settle();
+		const requestFrames = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.filter((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(requestFrames).toHaveLength(2);
+		expect(requestFrames[1].id).not.toBe(successorId);
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: successorId,
+			body: JSON.stringify({ type: 'text-delta', id: 'stale', delta: 'stale after new request' })
+		});
+		await settle();
+		expect(screen.queryByText('stale after new request')).not.toBeInTheDocument();
+		screen.getByTitle('Stop request').click();
+		await settle();
 	});
 
 	// SS-9: after the user hits Stop, a late CF_AGENT_USE_CHAT_RESPONSE frame for the
@@ -996,6 +1108,11 @@ describe('AgentChat', () => {
 			ws = FakeWebSocket.last();
 			ws.open();
 			await settle();
+			expect(
+				ws.sent
+					.map((raw) => JSON.parse(raw))
+					.filter((message) => message.type === AgentMessageType.SITE_STUDIO_CANCEL_TURN)
+			).toHaveLength(1);
 			ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: oldRequestId });
 			await settle();
 

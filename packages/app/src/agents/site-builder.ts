@@ -8,6 +8,7 @@ import {
   getCurrentAgent,
   type Connection,
   type ConnectionContext,
+  type WSMessage,
 } from "agents";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import { createCodeTool } from "@cloudflare/codemode/ai";
@@ -83,6 +84,11 @@ export { describeModelStreamError } from "../lib/model-stream-error";
  * UI messages already exposed by `cf_agent_chat_messages`/`get-messages`.
  */
 export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
+export const SITE_STUDIO_CANCEL_TURN_TYPE = "site_studio_cancel_turn" as const;
+
+const siteStudioCancelTurnSchema = z.object({
+  type: z.literal(SITE_STUDIO_CANCEL_TURN_TYPE),
+}).strict();
 
 type Scope = {
   userId: string;
@@ -1308,6 +1314,29 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
     connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt ?? undefined));
 
+  }
+
+  /**
+   * Stop is a turn-level operation, not merely a request-id cancellation.
+   * Resetting at the agent boundary also invalidates a queued client-tool
+   * continuation before it can mint and start a successor request.
+   */
+  override onMessage(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    message: WSMessage,
+  ): void | Promise<void> {
+    if (typeof message === "string") {
+      try {
+        const parsed = siteStudioCancelTurnSchema.safeParse(JSON.parse(message));
+        if (parsed.success) {
+          this.resetTurnState();
+          return;
+        }
+      } catch {
+        // The parent agent owns all non-Site-Studio protocol handling.
+      }
+    }
+    return super.onMessage(connection, message);
   }
 
   override onRequest(request: Request): Response | Promise<Response> {
