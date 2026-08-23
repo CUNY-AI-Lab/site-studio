@@ -20,7 +20,11 @@ import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
-import { rewriteRootRelativeCssUrls, rewriteRootRelativeHtmlUrls } from "../lib/path";
+import {
+  decodeServedPath,
+  rewriteRootRelativeCssUrls,
+  rewriteRootRelativeHtmlUrls
+} from "../lib/path";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
@@ -468,7 +472,9 @@ export function createPublishRouter() {
   app.get("/u/:handle/:slug/*", async (c) => {
     const base = `/u/${c.req.param("handle")}/${c.req.param("slug")}/`;
     const url = new URL(c.req.url);
-    const filePath = url.pathname.slice(base.length) || "index.html";
+    const rawPath = url.pathname.slice(base.length);
+    const filePath = decodeServedPath(rawPath);
+    if (filePath === null) return publishedNotFound(c, rawPath);
     return serveByHandle(c, filePath);
   });
 

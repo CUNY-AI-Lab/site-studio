@@ -134,6 +134,26 @@ describe("preview file resolution", () => {
     );
   }
 
+  it("redirects the root alias to a canonical index URL", async () => {
+    const response = await app.request(
+      "http://site-studio.test/preview/proj",
+      { redirect: "manual" },
+      createEnv(bucket, kv)
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/preview/proj/index.html");
+  });
+
+  it("keeps the configured ingress mount in the root-alias redirect", async () => {
+    const response = await app.request(
+      "http://site-studio.test/preview/proj?from=editor",
+      { redirect: "manual" },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/site-studio/preview/proj/index.html?from=editor");
+  });
+
   it("serves index.html at the project root", async () => {
     const res = await get("");
     expect(res.status).toBe(200);
@@ -227,10 +247,51 @@ describe("preview file resolution", () => {
     const response = await get("index.html", "text/html");
     const html = await response.text();
     expect(response.status).toBe(200);
-    expect(html).toContain('<script src="app.js"></script>');
-    const token = /\/preview\/proj\/logo\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(html).toContain('<base href="https://outside.example/">');
+    expect(html).toContain('<script src="app.js">');
+    expect(html).toContain('<img src="/logo.png">');
+    const effectiveBase = new URL(
+      /<base href="([^"]+)">/.exec(html)?.[1] ?? "",
+      "http://site-studio.test/preview/proj/index.html"
+    );
+    const script = /<script src="([^"]+)">/.exec(html)?.[1] ?? "";
+    const image = /<img src="([^"]+)">/.exec(html)?.[1] ?? "";
+    expect(effectiveBase.origin).toBe("https://outside.example");
+    expect(new URL(script, effectiveBase).origin).toBe("https://outside.example");
+    expect(new URL(image, effectiveBase).origin).toBe("https://outside.example");
+    expect([...kv.store.keys()].filter((key) => key.startsWith("preview-token:"))).toEqual([]);
+  });
+
+  it("serves a preview asset whose authored name contains a space", async () => {
+    await storage.writeFile(userId, "proj", "index.html", '<img src="my%20image.png"><img src="%C3%A9.png">');
+    await storage.writeFile(userId, "proj", "my image.png", "spaced asset");
+    await storage.writeFile(userId, "proj", "é.png", "unicode asset");
+
+    const page = await get("index.html", "text/html");
+    const html = await page.text();
+    const token = /my%20image\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(page.status).toBe(200);
     expect(token).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual(["logo.png"]);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "my image.png",
+      "é.png"
+    ]);
+
+    const asset = await app.request(
+      `http://site-studio.test/preview/proj/my%20image.png?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe("spaced asset");
+
+    const unicodeAsset = await app.request(
+      `http://site-studio.test/preview/proj/%C3%A9.png?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(unicodeAsset.status).toBe(200);
+    expect(await unicodeAsset.text()).toBe("unicode asset");
   });
 
   it("keeps the configured ingress mount on rewritten preview URLs", async () => {
@@ -669,6 +730,63 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     expect(publishedDirectory.status).toBe(200);
     expect(await publishedDirectory.text()).toContain("Docs");
+  });
+
+  it("preserves an external base and its governed URLs on published HTML", async () => {
+    await storage.writeFile(userId, slug, "index.html", [
+      '<base href="https://outside.example/">',
+      '<script src="app.js"></script>',
+      '<img src="/logo.png">'
+    ].join(""));
+
+    const page = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain('<base href="https://outside.example/">');
+    expect(html).toContain('<script src="app.js">');
+    expect(html).toContain('<img src="/logo.png">');
+
+    const documentUrl = new URL("http://site-studio.test/u/janedoe/site/index.html");
+    const base = new URL(/<base href="([^"]+)">/.exec(html)?.[1] ?? "", documentUrl);
+    const script = /<script src="([^"]+)">/.exec(html)?.[1] ?? "";
+    const image = /<img src="([^"]+)">/.exec(html)?.[1] ?? "";
+    expect(base.origin).toBe("https://outside.example");
+    expect(new URL(script, base).origin).toBe("https://outside.example");
+    expect(new URL(image, base).origin).toBe("https://outside.example");
+  });
+
+  it("serves a published asset whose authored name contains a space", async () => {
+    await storage.writeFile(userId, slug, "index.html", '<img src="/my%20image.png"><img src="/%C3%A9.png">');
+    await storage.writeFile(userId, slug, "my image.png", "spaced published asset");
+    await storage.writeFile(userId, slug, "é.png", "unicode published asset");
+
+    const page = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('src="/u/janedoe/site/my%20image.png"');
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/my%20image.png",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe("spaced published asset");
+
+    const unicodeAsset = await app.request(
+      "http://site-studio.test/u/janedoe/site/%C3%A9.png",
+      {},
+      createEnv(bucket)
+    );
+    expect(unicodeAsset.status).toBe(200);
+    expect(await unicodeAsset.text()).toBe("unicode published asset");
   });
 
   it("rewrites root-relative URLs in published CSS", async () => {

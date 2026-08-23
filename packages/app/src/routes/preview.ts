@@ -4,7 +4,8 @@ import {
   addCacheBusterToCss,
   addCacheBusterToHtml,
   collectPreviewCssResourcePaths,
-  collectPreviewResourcePaths
+  collectPreviewResourcePaths,
+  decodeServedPath
 } from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
@@ -45,14 +46,18 @@ function getPreviewRootPath(c: AppContext, projectId: string): string {
 export function createPreviewRouter() {
   const app = new Hono<{ Bindings: Env; Variables: LoggingVariables & { user: { id: string } } }>();
 
-  app.get("/preview/:id", async (c) => {
-    return servePreviewFile(c, "index.html");
+  app.get("/preview/:id", (c) => {
+    const url = new URL(c.req.url);
+    const projectId = c.req.param("id");
+    return c.redirect(`${getPreviewRootPath(c, projectId)}index.html${url.search}`, 308);
   });
 
   app.get("/preview/:id/*", async (c) => {
     const prefix = `/preview/${c.req.param("id")}/`;
     const url = new URL(c.req.url);
-    const filePath = url.pathname.slice(prefix.length) || "index.html";
+    const rawPath = url.pathname.slice(prefix.length);
+    const filePath = decodeServedPath(rawPath);
+    if (filePath === null) return previewNotFound(c, rawPath);
     return servePreviewFile(c, filePath);
   });
 
@@ -135,7 +140,7 @@ async function servePreviewFile(
     // non-owner. Opaque-origin sandbox documents cannot send the session cookie,
     // so carry this short-lived, project-scoped token on rewritten requests.
     const html = new TextDecoder().decode(content);
-    const allowedPaths = await collectPreviewResourcePaths(html, requestedPath);
+    const allowedPaths = await collectPreviewResourcePaths(html, requestedPath, siteRootPath);
     const previewToken = allowedPaths.length > 0
       ? await mintPreviewToken(
           c.env.SESSION_KV,
