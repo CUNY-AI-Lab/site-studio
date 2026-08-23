@@ -647,6 +647,75 @@ describe("Site Builder connection logging concurrency", () => {
     }
   });
 
+  it("keeps the owner through a server-tool result and persisted turn commit", () => {
+    const agentParent = siteBuilderTestParent();
+    const sends = new Map<string, (message: string) => void>();
+    const baseBroadcast = vi.fn((message: string, without?: string[]) => {
+      for (const [connectionId, send] of sends) {
+        if (!without?.includes(connectionId)) send(message);
+      }
+    });
+    Object.defineProperty(agentParent, "broadcast", {
+      configurable: true,
+      value: baseBroadcast,
+    });
+    try {
+      const agent = createTestAgent();
+      const connectionA = chatConnection("connection-a", "subject-a");
+      const connectionB = chatConnection("connection-b", "subject-b");
+      sends.set(connectionA.id, connectionA.send);
+      sends.set(connectionB.id, connectionB.send);
+      Object.assign(agent, {
+        getConnections: () => [connectionA, connectionB],
+        getConnection: (id: string) => [connectionA, connectionB].find((connection) => connection.id === id),
+        chatRequestConnections: new Map(),
+        detachedChatRequestConnections: new Map(),
+        chatToolRequestIds: new Map(),
+        buildActionsAwaitingPersistence: new Map(),
+        messages: [{ id: "assistant-a", role: "assistant", parts: [] }],
+      });
+
+      const hooks = siteBuilderTestHooks(agent);
+      hooks.rememberChatRequestConnection("request-a", connectionA);
+      agent.broadcast(JSON.stringify({
+        type: "cf_agent_use_chat_response",
+        id: "request-a",
+        body: JSON.stringify({ type: "tool-input-start", toolCallId: "tool-a" }),
+      }));
+      agent.broadcast(JSON.stringify({
+        type: "cf_agent_use_chat_response",
+        id: "request-a",
+        body: JSON.stringify({
+          type: "tool-output-available",
+          toolCallId: "tool-a",
+          output: { ok: true },
+        }),
+      }));
+
+      // A server tool result is not the end of the model turn. The final
+      // response and the post-persistence commit must still reach its owner.
+      expect(hooks.chatRequestConnections.has("request-a")).toBe(true);
+      agent.broadcast(JSON.stringify({
+        type: "cf_agent_use_chat_response",
+        id: "request-a",
+        body: JSON.stringify({ type: "text-delta", id: "text-a", delta: "finished answer" }),
+      }));
+      hooks.onChatResponse({
+        requestId: "request-a",
+        status: "completed",
+        continuation: false,
+        message: { id: "assistant-a", role: "assistant", parts: [] },
+      });
+
+      expect(connectionA.send).toHaveBeenCalledWith(expect.stringContaining("finished answer"));
+      expect(connectionA.send).toHaveBeenCalledWith(expect.stringContaining(SITE_STUDIO_CHAT_COMMITTED_TYPE));
+      expect(connectionB.send).not.toHaveBeenCalled();
+      expect(hooks.chatRequestConnections.has("request-a")).toBe(false);
+    } finally {
+      delete agentParent.broadcast;
+    }
+  });
+
   it("transfers a detached stream to the same-subject reconnect and rejects id reuse", () => {
     const agentParent = siteBuilderTestParent();
     const agent = createTestAgent();

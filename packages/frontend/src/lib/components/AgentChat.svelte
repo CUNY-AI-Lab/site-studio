@@ -1293,6 +1293,8 @@ import {
 			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
 				const committed = parseSiteStudioChatCommittedFrame(data);
 				if (!committed) break;
+				const isCurrentRequest = committed.requestId === currentRequestId;
+				const isActiveTransportRequest = activeRequestIds.has(committed.requestId);
 				const matchingReconciliation = pendingHistoryReconciliations.find(
 					(entry) =>
 						entry.requestId === committed.requestId ||
@@ -1302,8 +1304,15 @@ import {
 				const commitContainsCurrentAssistant = currentAssistantId
 					? committed.messages.some((message) => message.id === currentAssistantId)
 					: false;
-				if (isLoading && activeRequestIds.has(committed.requestId)) {
-					void chat.stop();
+				// The persisted commit is the authoritative terminal for this connection.
+				// The maintained transport removes its request id synchronously when it
+				// sees done:true, while the SDK may still be consuming the final tool
+				// message. Correlate against the component's current request as well; a
+				// commit that arrives in that gap must settle the UI immediately rather
+				// than waiting for an SDK finish callback that the tool stream may never
+				// reach.
+				if (isLoading && (isCurrentRequest || isActiveTransportRequest)) {
+					if (isActiveTransportRequest) void chat.stop();
 					chatTransport.handleServerTurnCompleted(committed.requestId);
 					resetRequestState();
 					setChatMessages(committed.messages);
