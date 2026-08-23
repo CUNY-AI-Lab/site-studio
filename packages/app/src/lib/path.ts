@@ -59,6 +59,7 @@ type MarkupOptions = {
 };
 
 type ResolvedUrl = { path: string; url: URL };
+type BaseResolution = ResolvedUrl & { alreadyMounted: boolean };
 type UrlRewrite = (url: string, resolved: ResolvedUrl) => string;
 
 export async function addCacheBusterToHtml(
@@ -103,7 +104,7 @@ async function rewriteMarkup(
           if (element.tagName.toLowerCase() === "base" && lowerName === "href") {
             if (state.baseSeen) continue;
             state.baseSeen = true;
-            const base = resolveBase(value, state.documentPath);
+            const base = resolveBase(value, state.documentPath, options.rootPath);
             if (base === "external" || base === null) {
               // Preserve an authored external base exactly. Browser URL
               // resolution makes both relative and root-relative references
@@ -111,10 +112,18 @@ async function rewriteMarkup(
               // preview mount or bearer token. Invalid or escaping base URLs
               // fail closed by the same rule.
               state.baseExternal = true;
+            } else if (base === "current") {
+              // Empty and fragment-only base URLs resolve to the current
+              // document URL. Preserve the authored value so the browser can
+              // keep applying its fragment/query semantics while local
+              // preview/publish rewriting continues from documentPath.
+              state.baseExternal = false;
             } else if (base !== null) {
               state.baseExternal = false;
               state.documentPath = base.path;
-              if (options.rootPath) element.setAttribute(name, mountPath(options.rootPath, base.url.pathname));
+              if (options.rootPath && !base.alreadyMounted) {
+                element.setAttribute(name, mountPath(options.rootPath, base.url.pathname));
+              }
             }
             continue;
           }
@@ -168,20 +177,30 @@ function rewriteMarkupUrl(
   if (state.baseExternal) return value;
   const resolved = resolveLocalUrl(core, state.documentPath, options.includeRootRelative);
   if (!resolved) return value;
-  state.paths?.add(resolved.path);
+  state.paths?.add(unmountRootPath(resolved.url.pathname, options.rootPath) ?? resolved.path);
   return `${leading}${rewrite(core, resolved)}${trailing}`;
 }
 
-function resolveBase(value: string, documentPath: string): ResolvedUrl | "external" | null {
+function resolveBase(
+  value: string,
+  documentPath: string,
+  rootPath?: string
+): BaseResolution | "current" | "external" | null {
   const trimmed = value.trim();
   if (!trimmed || trimmed.startsWith("#")) {
-    const path = resolveLocalUrl("", documentPath, true);
-    return path;
+    return "current";
   }
   if (trimmed.startsWith("//") || URI_SCHEME_RE.test(trimmed)) {
     return "external";
   }
-  return resolveLocalUrl(trimmed, documentPath, true);
+  const resolved = resolveLocalUrl(trimmed, documentPath, true);
+  if (!resolved) return null;
+  const unmountedPath = unmountRootPath(resolved.url.pathname, rootPath);
+  return {
+    ...resolved,
+    path: unmountedPath ?? resolved.path,
+    alreadyMounted: unmountedPath !== null
+  };
 }
 
 function resolveLocalUrl(value: string, documentPath: string, includeRootRelative: boolean): ResolvedUrl | null {
@@ -270,7 +289,20 @@ function rewriteRootRelativeUrl(value: string, rootPath?: string): string {
   if (!core.startsWith("/") || core.startsWith("//")) return value;
   const resolved = resolveLocalUrl(core, "index.html", true);
   if (!resolved) return value;
+  if (unmountRootPath(resolved.url.pathname, rootPath) !== null) return value;
   return `${leading}${mountPath(rootPath, resolved.url.pathname)}${resolved.url.search}${resolved.url.hash}${trailing}`;
+}
+
+function unmountRootPath(pathname: string, rootPath?: string): string | null {
+  if (!rootPath) return null;
+  const decodedPath = decodePath(pathname);
+  if (decodedPath === null) return null;
+  const root = rootPath.trim().replace(/\/+$/, "") || "/";
+  if (root === "/") return decodedPath.replace(/^\/+/, "") || "index.html";
+  const prefix = `${root}/`;
+  if (decodedPath !== root && !decodedPath.startsWith(prefix)) return null;
+  const suffix = decodedPath.slice(prefix.length);
+  return suffix || "index.html";
 }
 
 function mountPath(rootPath: string, pathname: string): string {
@@ -405,11 +437,15 @@ export function addCacheBusterToCss(
   });
 }
 
-export async function rewriteRootRelativeHtmlUrls(html: string, rootPath: string): Promise<string> {
+export async function rewriteRootRelativeHtmlUrls(
+  html: string,
+  rootPath: string,
+  documentPath = "index.html"
+): Promise<string> {
   return rewriteMarkup(
     html,
     (url) => rewriteRootRelativeUrl(url, rootPath),
-    { documentPath: "index.html", includeRootRelative: true, rootPath }
+    { documentPath, includeRootRelative: true, rootPath }
   );
 }
 
@@ -438,11 +474,15 @@ export async function collectPreviewResourcePaths(
   return [...paths].sort();
 }
 
-export function collectPreviewCssResourcePaths(css: string, documentPath: string): string[] {
+export function collectPreviewCssResourcePaths(
+  css: string,
+  documentPath: string,
+  rootPath?: string
+): string[] {
   const paths = new Set<string>();
   rewriteCssUrls(css, (url) => {
     const resolved = resolveLocalUrl(url, documentPath, true);
-    if (resolved) paths.add(resolved.path);
+    if (resolved) paths.add(unmountRootPath(resolved.url.pathname, rootPath) ?? resolved.path);
     return url;
   });
   return [...paths].sort();

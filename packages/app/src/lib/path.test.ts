@@ -8,6 +8,7 @@ import {
   addCacheBusterToHtml,
   collectPreviewCssResourcePaths,
   rewriteRootRelativeCssUrls,
+  rewriteRootRelativeHtmlUrls,
   buildFileTree,
   collectPreviewResourcePaths
 } from "./path";
@@ -216,6 +217,76 @@ describe("addCacheBusterToHtml", () => {
     expect(await collectPreviewResourcePaths(html, "docs/index.html")).toEqual(["docs/assets/app.js"]);
   });
 
+  it.each(["", "#section"])("keeps a %j base on the current local document", async (baseHref) => {
+    const html = `<base href="${baseHref}"><script src="app.js"></script><img src="/images/hero.png">`;
+    const rewritten = await addCacheBusterToHtml(
+      html,
+      "123",
+      { pt: "token" },
+      "/site-studio/preview/proj/",
+      "docs/index.html"
+    );
+
+    expect(rewritten).toContain(`<base href="${baseHref}">`);
+    expect(rewritten).toContain('src="app.js?v=123&pt=token"');
+    expect(rewritten).toContain('src="/site-studio/preview/proj/images/hero.png?v=123&pt=token"');
+    const documentUrl = new URL(
+      "/site-studio/preview/proj/docs/index.html",
+      "https://preview.example"
+    );
+    const effectiveBase = new URL(baseHref, documentUrl);
+    expect(effectiveBase.pathname).toBe("/site-studio/preview/proj/docs/index.html");
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/site-studio/preview/proj/docs/app.js"
+    );
+    expect(await collectPreviewResourcePaths(html, "docs/index.html", "/site-studio/preview/proj/")).toEqual([
+      "docs/app.js",
+      "images/hero.png"
+    ]);
+  });
+
+  it("does not double-mount an authored preview base or its child URLs", async () => {
+    const html = [
+      '<base href="/site-studio/preview/proj/docs/">',
+      '<script src="app.js"></script>',
+      '<img src="/site-studio/preview/proj/images/hero.png">'
+    ].join("");
+    const rewritten = await addCacheBusterToHtml(
+      html,
+      "123",
+      { pt: "token" },
+      "/site-studio/preview/proj/",
+      "index.html"
+    );
+
+    expect(rewritten).toContain('<base href="/site-studio/preview/proj/docs/">');
+    expect(rewritten).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/");
+    expect(rewritten).toContain('src="app.js?v=123&pt=token"');
+    expect(rewritten).toContain(
+      'src="/site-studio/preview/proj/images/hero.png?v=123&pt=token"'
+    );
+    expect(await collectPreviewResourcePaths(html, "index.html", "/site-studio/preview/proj/")).toEqual([
+      "docs/app.js",
+      "images/hero.png"
+    ]);
+  });
+
+  it("uses a nested document path when rewriting a published local base", async () => {
+    const html = '<base href="assets/"><script src="app.js"></script>';
+    const rewritten = await rewriteRootRelativeHtmlUrls(
+      html,
+      "/u/janedoe/site/",
+      "docs/index.html"
+    );
+    expect(rewritten).toContain('<base href="/u/janedoe/site/docs/assets/">');
+    expect(rewritten).toContain('<script src="app.js"></script>');
+    const documentUrl = new URL("/u/janedoe/site/docs/index.html", "https://published.example");
+    const effectiveBase = new URL("/u/janedoe/site/docs/assets/", documentUrl);
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/u/janedoe/site/docs/assets/app.js"
+    );
+  });
+
   it("rewrites and scopes local CSS URLs while preserving external and data URLs", () => {
     const css = [
       '@import "/theme.css";',
@@ -243,6 +314,11 @@ describe("addCacheBusterToHtml", () => {
       "images/hero.png",
       "theme.css"
     ]);
+    expect(collectPreviewCssResourcePaths(
+      ".hero { background: url(/site-studio/preview/proj/images/hero.png); }",
+      "docs/styles.css",
+      "/site-studio/preview/proj/"
+    )).toEqual(["images/hero.png"]);
   });
 
 });

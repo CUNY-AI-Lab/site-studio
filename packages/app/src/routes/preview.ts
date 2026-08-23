@@ -164,7 +164,7 @@ async function servePreviewFile(
   } else if (contentType.startsWith("text/css")) {
     const version = c.req.query("v") || undefined;
     const css = new TextDecoder().decode(content);
-    const allowedPaths = collectPreviewCssResourcePaths(css, requestedPath);
+    const allowedPaths = collectPreviewCssResourcePaths(css, requestedPath, siteRootPath);
     const previewToken = allowedPaths.length > 0
       ? await mintPreviewToken(
           c.env.SESSION_KV,

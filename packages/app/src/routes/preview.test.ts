@@ -262,6 +262,34 @@ describe("preview file resolution", () => {
     expect([...kv.store.keys()].filter((key) => key.startsWith("preview-token:"))).toEqual([]);
   });
 
+  it.each(["", "#section"])("keeps a %j preview base on the current document", async (baseHref) => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      `<base href="${baseHref}">`,
+      '<script src="app.js"></script>',
+      '<img src="/images/hero.png">'
+    ].join(""));
+    await storage.writeFile(userId, "proj", "app.js", "console.log('nested');");
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+
+    const response = await get("index.html", "text/html");
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain(`<base href="${baseHref}">`);
+    expect(html).toContain('src="app.js?v=');
+    expect(html).toContain('/preview/proj/images/hero.png?v=');
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "app.js",
+      "images/hero.png"
+    ]);
+
+    const effectiveBase = new URL(baseHref, "http://site-studio.test/preview/proj/index.html");
+    expect(effectiveBase.pathname).toBe("/preview/proj/index.html");
+    expect(new URL("app.js", effectiveBase).pathname).toBe("/preview/proj/app.js");
+  });
+
   it("serves a preview asset whose authored name contains a space", async () => {
     await storage.writeFile(userId, "proj", "index.html", '<img src="my%20image.png"><img src="%C3%A9.png">');
     await storage.writeFile(userId, "proj", "my image.png", "spaced asset");
@@ -307,6 +335,67 @@ describe("preview file resolution", () => {
 
     expect(res.status).toBe(200);
     expect(html).toMatch(/\/site-studio\/preview\/proj\/app\.js\?v=\d+&pt=[0-9a-f]{64}/);
+  });
+
+  it("keeps an authored mounted preview base and scopes its child paths correctly", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="/site-studio/preview/proj/docs/">',
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>',
+      '<img src="/site-studio/preview/proj/images/hero.png">'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      "proj",
+      "docs/styles.css",
+      ".hero { background: url(/site-studio/preview/proj/images/bg.png); }"
+    );
+    await storage.writeFile(userId, "proj", "docs/app.js", "console.log('nested');");
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+    await storage.writeFile(userId, "proj", "images/bg.png", "background");
+
+    const response = await app.request(
+      "http://site-studio.test/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<base href="/site-studio/preview/proj/docs/">');
+    expect(html).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/");
+    expect(html).toContain(`app.js?v=`);
+    expect(html).toContain(`/site-studio/preview/proj/images/hero.png?v=`);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "docs/app.js",
+      "docs/styles.css",
+      "images/hero.png"
+    ]);
+
+    const stylesheet = await app.request(
+      `http://site-studio.test/preview/proj/docs/styles.css?pt=${token}`,
+      { headers: { Accept: "text/css" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const css = await stylesheet.text();
+    const cssToken = /images\/bg\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(css)?.[1];
+    expect(stylesheet.status).toBe(200);
+    expect(css).toContain("/site-studio/preview/proj/images/bg.png?v=");
+    expect(css).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/");
+    expect(cssToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${cssToken}`) || "{}").allowedPaths).toEqual([
+      "images/bg.png"
+    ]);
+
+    const effectiveBase = new URL(
+      "/site-studio/preview/proj/docs/",
+      "https://site-studio.test/preview/proj/index.html"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/site-studio/preview/proj/docs/app.js"
+    );
   });
 
   it("does not add the production mount to loopback preview URLs", async () => {
@@ -757,6 +846,42 @@ describe("preview ↔ publish extensionless parity", () => {
     expect(base.origin).toBe("https://outside.example");
     expect(new URL(script, base).origin).toBe("https://outside.example");
     expect(new URL(image, base).origin).toBe("https://outside.example");
+  });
+
+  it("resolves a published nested document base from its real document path", async () => {
+    await storage.writeFile(
+      userId,
+      slug,
+      "docs/index.html",
+      '<base href="assets/"><script src="app.js"></script>'
+    );
+    await storage.writeFile(userId, slug, "docs/assets/app.js", "console.log('nested');");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/docs/index.html",
+      {},
+      createEnv(bucket)
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<base href="/u/janedoe/site/docs/assets/">');
+    expect(html).toContain('<script src="app.js"></script>');
+    const effectiveBase = new URL(
+      "/u/janedoe/site/docs/assets/",
+      "https://site-studio.test/u/janedoe/site/docs/index.html"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/u/janedoe/site/docs/assets/app.js"
+    );
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/docs/assets/app.js",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("console.log('nested');");
   });
 
   it("serves a published asset whose authored name contains a space", async () => {

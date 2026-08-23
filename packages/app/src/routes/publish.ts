@@ -124,7 +124,7 @@ async function missingPublishedFile(
           headers: publishedResponseHeaders("404.html", custom)
         });
       }
-      const html = await rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath);
+      const html = await rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath, "404.html");
       const headers = publishedResponseHeaders("404.html", custom);
       const transformed = html !== originalHtml;
       const content = transformed ? new TextEncoder().encode(html) : originalBytes;
@@ -556,7 +556,7 @@ async function servePublishedFile(
     try {
       const originalText = new TextDecoder("utf-8", { fatal: true }).decode(originalBytes);
       const rewritten = isMarkup
-        ? await rewriteRootRelativeHtmlUrls(originalText, siteRootPath)
+        ? await rewriteRootRelativeHtmlUrls(originalText, siteRootPath, resolved.filePath)
         : rewriteRootRelativeCssUrls(originalText, siteRootPath);
       if (rewritten !== originalText) {
         content = new TextEncoder().encode(rewritten);
