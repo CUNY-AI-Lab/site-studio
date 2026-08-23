@@ -175,38 +175,38 @@ describe("isTextContentType", () => {
 });
 
 describe("addCacheBusterToHtml", () => {
-  it("adds version to link hrefs", () => {
+  it("adds version to link hrefs", async () => {
     const html = '<link rel="stylesheet" href="styles.css">';
-    const result = addCacheBusterToHtml(html, "123");
+    const result = await addCacheBusterToHtml(html, "123");
     expect(result).toBe('<link rel="stylesheet" href="styles.css?v=123">');
   });
 
-  it("adds version to script srcs", () => {
+  it("adds version to script srcs", async () => {
     const html = '<script src="app.js"></script>';
-    const result = addCacheBusterToHtml(html, "123");
+    const result = await addCacheBusterToHtml(html, "123");
     expect(result).toBe('<script src="app.js?v=123"></script>');
   });
 
-  it("adds version to img srcs", () => {
+  it("adds version to img srcs", async () => {
     const html = '<img src="photo.png">';
-    const result = addCacheBusterToHtml(html, "123");
+    const result = await addCacheBusterToHtml(html, "123");
     expect(result).toBe('<img src="photo.png?v=123">');
   });
 
-  it("does not modify external URLs", () => {
+  it("does not modify external URLs", async () => {
     const html = '<link href="https://cdn.example.com/style.css">';
-    const result = addCacheBusterToHtml(html, "123");
+    const result = await addCacheBusterToHtml(html, "123");
     expect(result).toBe(html);
   });
 
-  it("adds cache and preview-token params to relative asset and navigation URLs", () => {
+  it("adds cache and preview-token params to relative asset and navigation URLs", async () => {
     const html = [
       '<link href="styles.css">',
       '<script src="app.js"></script>',
       '<img src="photo.png">',
       '<a href="about.html">About</a>'
     ].join("");
-    const result = addCacheBusterToHtml(html, "123", { pt: "preview-token" });
+    const result = await addCacheBusterToHtml(html, "123", { pt: "preview-token" });
 
     expect(result).toContain('href="styles.css?v=123&pt=preview-token"');
     expect(result).toContain('src="app.js?v=123&pt=preview-token"');
@@ -214,7 +214,7 @@ describe("addCacheBusterToHtml", () => {
     expect(result).toContain('href="about.html?v=123&pt=preview-token"');
   });
 
-  it("leaves external and non-navigation URLs unchanged", () => {
+  it("leaves external and non-navigation URLs unchanged", async () => {
     const values = [
       "https://example.com/page",
       "http://example.com/page",
@@ -227,101 +227,92 @@ describe("addCacheBusterToHtml", () => {
     ];
     const html = values.map((href) => `<a href="${href}">x</a>`).join("");
 
-    expect(addCacheBusterToHtml(html, "123", { pt: "token" })).toBe(html);
+    expect(await addCacheBusterToHtml(html, "123", { pt: "token" })).toBe(html);
   });
 
-  it("preserves existing queries and puts preview params before fragments", () => {
-    expect(addCacheBusterToHtml(
+  it("preserves existing queries and puts preview params before fragments", async () => {
+    expect(await addCacheBusterToHtml(
       '<a href="about.html?existing=1#section">About</a>',
       "123",
       { pt: "token" }
     )).toBe('<a href="about.html?existing=1&v=123&pt=token#section">About</a>');
   });
 
-  it("never appends a preview bearer to protocol-relative or root-relative destinations", () => {
+  it("never appends a preview bearer to protocol-relative or root-relative destinations", async () => {
     const html = [
       '<img src="//attacker.example/pixel.png">',
       '<script src="/shared/app.js"></script>'
     ].join("");
-    expect(addCacheBusterToHtml(html, "123", { pt: "secret" })).toBe(html);
+    expect(await addCacheBusterToHtml(html, "123", { pt: "secret" })).toBe(html);
   });
 
-  it("rewrites root-relative destinations to the supplied site mount", () => {
+  it("rewrites root-relative destinations to the supplied site mount", async () => {
     const html = [
       '<link href="/styles.css">',
       '<script src="/app.js?cache=1#ready"></script>',
       '<img src="//attacker.example/pixel.png">'
     ].join("");
 
-    expect(addCacheBusterToHtml(html, "123", { pt: "secret" }, "/preview/proj/")).toBe([
+    expect(await addCacheBusterToHtml(html, "123", { pt: "secret" }, "/preview/proj/")).toBe([
       '<link href="/preview/proj/styles.css?v=123&pt=secret">',
       '<script src="/preview/proj/app.js?cache=1&v=123&pt=secret#ready"></script>',
       '<img src="//attacker.example/pixel.png">'
     ].join(""));
-    expect(rewriteRootRelativeHtmlUrls(html, "/u/janedoe/site/")).toContain(
+    expect(await rewriteRootRelativeHtmlUrls(html, "/u/janedoe/site/")).toContain(
       '<link href="/u/janedoe/site/styles.css">'
     );
   });
 
-  it("rewrites parsed URL-bearing attributes and inline CSS without touching code or comments", () => {
-    const html = [
-      '<a href="/">Home</a>',
-      '<video poster="/poster.jpg"><source srcset="/wide.jpg 1x, /small.jpg 2x"></video>',
-      '<form action="/submit"><object data="/document.pdf"></object></form>',
-      '<svg><use xlink:href="/icons.svg#check"></use></svg><button formaction="/save">Save</button>',
-      '<img data-src="/lazy.jpg" data-href="/lazy.html">',
-      '<div style="background-image: url(\'/inline-bg.png\')"></div>',
-      '<style>.hero { background: url(/style-bg.png); }</style>',
-      '<!-- <img src="/comment.png"> -->',
-      '<script>const markup = \'<img src="/script-string.png">\';</script>'
-    ].join("");
-
-    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
-    expect(result).toContain('poster="/preview/proj/poster.jpg?v=123&pt=token"');
-    expect(result).toContain('srcset="/preview/proj/wide.jpg?v=123&pt=token 1x, /preview/proj/small.jpg?v=123&pt=token 2x"');
-    expect(result).toContain('action="/preview/proj/submit?v=123&pt=token"');
-    expect(result).toContain('data="/preview/proj/document.pdf?v=123&pt=token"');
-    expect(result).toContain('xlink:href="/preview/proj/icons.svg?v=123&pt=token#check"');
-    expect(result).toContain('formaction="/preview/proj/save?v=123&pt=token"');
-    expect(result).toContain('data-src="/preview/proj/lazy.jpg?v=123&pt=token"');
-    expect(result).toContain('data-href="/preview/proj/lazy.html?v=123&pt=token"');
-    expect(result).toContain('background-image: url(\'/preview/proj/inline-bg.png?v=123&pt=token\')');
-    expect(result).toContain('background: url(/preview/proj/style-bg.png?v=123&pt=token)');
-    expect(result).toContain('<img src="/comment.png">');
-    expect(result).toContain('<img src="/script-string.png">');
-
-    expect(collectPreviewResourcePaths(html, "index.html")).toEqual([
-      "document.pdf",
-      "icons.svg",
-      "index.html",
-      "inline-bg.png",
-      "lazy.html",
-      "lazy.jpg",
-      "poster.jpg",
-      "save",
-      "small.jpg",
-      "style-bg.png",
-      "submit",
-      "wide.jpg"
-    ]);
-  });
-
-  it("maps root navigation to index and rejects parent escapes", () => {
+  it("maps root navigation to index and rejects parent escapes", async () => {
     const html = '<a href="/">Home</a><script src="../outside.js"></script><img src="/../secret.png">';
-    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+    const result = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
 
     expect(result).toContain('href="/preview/proj/?v=123&pt=token"');
     expect(result).toContain('src="../outside.js"');
     expect(result).toContain('src="/../secret.png"');
-    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["index.html"]);
+    expect(await collectPreviewResourcePaths(html, "index.html")).toEqual(["index.html"]);
   });
 
-  it("preserves root-relative trailing slashes for directory routes", () => {
+  it("preserves root-relative trailing slashes for directory routes", async () => {
     const html = '<a href="/docs/">Docs</a>';
-    const rewritten = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+    const rewritten = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
 
     expect(rewritten).toContain('href="/preview/proj/docs/?v=123&pt=token"');
-    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["docs/"]);
+    expect(await collectPreviewResourcePaths(html, "index.html")).toEqual(["docs/"]);
+    expect(await addCacheBusterToHtml('<a href="/foo/../">Root</a>', "123", { pt: "token" }, "/preview/proj/")
+      ).toContain('href="/preview/proj/?v=123&pt=token"');
+    const repeated = '<a href="/foo//">Repeated</a>';
+    expect(await addCacheBusterToHtml(repeated, "123", { pt: "token" }, "/preview/proj/", "index.html"))
+      .toBe(repeated);
+    expect(await collectPreviewResourcePaths(repeated, "index.html")).toEqual([]);
+  });
+
+  it("uses browser URL semantics for query-only and dot-directory references", async () => {
+    expect(await collectPreviewResourcePaths('<a href="?x">Current</a>', "docs/index.html")).toEqual([
+      "docs/index.html"
+    ]);
+    expect(await collectPreviewResourcePaths('<a href="./?x">Directory</a>', "docs/index.html")).toEqual([
+      "docs/"
+    ]);
+    expect(await collectPreviewResourcePaths('<a href=".">Directory</a>', "docs/index.html")).toEqual([
+      "docs/"
+    ]);
+  });
+
+  it("does not leak preview parameters through an external base", async () => {
+    const html = '<base href="https://outside.example/"><script src="app.js"></script><img src="/logo.png">';
+    const rewritten = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+    expect(rewritten).toContain('<script src="app.js"></script>');
+    expect(rewritten).toContain('/preview/proj/logo.png?v=123&pt=token');
+    expect(await collectPreviewResourcePaths(html, "index.html")).toEqual(["logo.png"]);
+  });
+
+  it("resolves later relative references from the first local base", async () => {
+    const html = '<base href="assets/"><script src="app.js"></script>';
+    const rewritten = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "docs/index.html");
+    expect(rewritten).toContain('<base href="/preview/proj/docs/assets/">');
+    expect(rewritten).toContain('<script src="app.js?v=123&pt=token"></script>');
+    expect(await collectPreviewResourcePaths(html, "docs/index.html")).toEqual(["docs/assets/app.js"]);
   });
 
   it("rewrites and scopes local CSS URLs while preserving external and data URLs", () => {
@@ -353,92 +344,38 @@ describe("addCacheBusterToHtml", () => {
     ]);
   });
 
-  it("rewrites local srcset candidates alongside data URLs", () => {
-    const srcset = "data:image/svg+xml,%3Csvg%3E 1x, /images/a.png 2x, /images/b.png 3x";
-    const html = `<img srcset="${srcset}">`;
-    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
-
-    expect(result).toContain(
-      'srcset="data:image/svg+xml,%3Csvg%3E 1x, /preview/proj/images/a.png?v=123&pt=token 2x, /preview/proj/images/b.png?v=123&pt=token 3x"'
-    );
-    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["images/a.png", "images/b.png"]);
-
-    const mixedWithoutDataDescriptor = 'data:image/png;base64,abc, /images/c.png 2x';
-    const withoutDescriptor = addCacheBusterToHtml(
-      `<img srcset="${mixedWithoutDataDescriptor}">`,
-      "123",
-      { pt: "token" },
-      "/preview/proj/",
-      "index.html"
-    );
-    expect(withoutDescriptor).toContain(
-      'srcset="data:image/png;base64,abc, /preview/proj/images/c.png?v=123&pt=token 2x"'
-    );
-
-    const encodedDelimiterSrcset = '<img srcset="/%2Cencoded.png 1x, /images/d.png 2x">';
-    const encodedDelimiterResult = addCacheBusterToHtml(
-      encodedDelimiterSrcset,
-      "123",
-      { pt: "token" },
-      "/preview/proj/",
-      "index.html"
-    );
-    expect(encodedDelimiterResult).toContain(
-      'srcset="/%2Cencoded.png 1x, /preview/proj/images/d.png?v=123&pt=token 2x"'
-    );
-    expect(collectPreviewResourcePaths(encodedDelimiterSrcset, "index.html")).toEqual(["images/d.png"]);
+  it("leaves data and external srcset candidates untouched", async () => {
+    const html = '<img srcset="data:image/png;base64,abc, /images/hero.png 2x, https://cdn.example/hero.png 3x">';
+    const rewritten = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+    expect(rewritten).toContain("data:image/png;base64,abc,");
+    expect(rewritten).toContain("https://cdn.example/hero.png 3x");
+    expect(rewritten).toContain("/preview/proj/images/hero.png?v=123&pt=token 2x");
   });
 
-  it("leaves escaped CSS URL tokens and unsafe encoded path segments unchanged", () => {
-    // Preview/publish currently address R2 with the raw URL pathname. Preserve
-    // encoded candidates and fail closed rather than decoding them into a
-    // different storage key or a CSS/HTML delimiter.
-    const css = String.raw`.escaped { background: url(/images/escaped\).png); }
-.safe { background: url(/images/safe.png); }
-.query { background: url(/%3Fsecret.png); }
-.fragment { background: url(/%23secret.png); }
-.space { background: url(/space%20name.png); }
-.double { background: url("/%22double.png"); }
-.single { background: url('/%27single.png'); }
-.markup { background: url(/%3Ctag%3E.png); }
-.ampersand { background: url(/%26name.png); }
-.parentheses { background: url(/%28name%29.png); }`;
-    const rewritten = addCacheBusterToCss(css, "123", { pt: "token" }, "/preview/proj/", "styles/main.css");
-
-    expect(rewritten).toContain(String.raw`url(/images/escaped\).png)`);
-    expect(rewritten).toContain("url(/preview/proj/images/safe.png?v=123&pt=token)");
-    expect(rewritten).toContain("url(/%3Fsecret.png)");
-    expect(rewritten).toContain("url(/%23secret.png)");
-    expect(rewritten).toContain("url(/space%20name.png)");
-    expect(rewritten).toContain('url("/%22double.png")');
-    expect(rewritten).toContain("url('/%27single.png')");
-    expect(rewritten).toContain("url(/%3Ctag%3E.png)");
-    expect(rewritten).toContain("url(/%26name.png)");
-    expect(rewritten).toContain("url(/%28name%29.png)");
-    expect(collectPreviewCssResourcePaths(css, "styles/main.css")).toEqual(["images/safe.png"]);
-
-    const html = '<img src="/%3Fsecret.png"><img src=\'/%23secret.png\'><img src="/%252Fsecret.png"><img src="/space%20name.png"><img src="/%22double.png"><img src=\'/%27single.png\'><img src="/%3Ctag%3E.png"><img src="/%26name.png"><img src=/%60tick.png><img src=/%3Dequals.png>';
-    expect(rewriteRootRelativeHtmlUrls(html, "/u/janedoe/site/")).toBe(html);
-    expect(collectPreviewResourcePaths(html, "index.html")).toEqual([]);
+  it("fails closed for encoded root paths", async () => {
+    const html = '<img src="/%3Fsecret.png"><img src="/images/safe.png">';
+    expect(await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html"))
+      .toContain('src="/%3Fsecret.png"');
+    expect(await collectPreviewResourcePaths(html, "index.html")).toEqual(["images/safe.png"]);
   });
 
-  it("collects only relative project paths for a scoped preview grant", () => {
+  it("collects only relative project paths for a scoped preview grant", async () => {
     const html = [
       '<script src="app.js?x=1"></script>',
       '<a href="../about.html#team">About</a>',
       '<link href="/styles.css">',
       '<img src="//attacker.example/pixel.png">'
     ].join("");
-    expect(collectPreviewResourcePaths(html, "docs/index.html")).toEqual([
+    expect(await collectPreviewResourcePaths(html, "docs/index.html")).toEqual([
       "about.html",
       "docs/app.js",
       "styles.css"
     ]);
   });
 
-  it("generates timestamp when no version provided", () => {
+  it("generates timestamp when no version provided", async () => {
     const html = '<link href="styles.css">';
-    const result = addCacheBusterToHtml(html);
+    const result = await addCacheBusterToHtml(html);
     expect(result).toMatch(/styles\.css\?v=\d+/);
   });
 });

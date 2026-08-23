@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20260722.1",
+    "htmlrewriter": "0.0.13",
     "@types/node": "26.1.1",
     "typescript": "5.9.3",
     "vitest": "4.1.10",

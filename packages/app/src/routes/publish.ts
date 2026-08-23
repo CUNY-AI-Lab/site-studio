@@ -111,8 +111,16 @@ async function missingPublishedFile(
       // goes through the same header builder as a 200 so the content-type,
       // caching validators and CSP match normal published responses.
       const originalBytes = new Uint8Array(await custom.arrayBuffer());
-      const originalHtml = new TextDecoder().decode(originalBytes);
-      const html = rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath);
+      let originalHtml: string;
+      try {
+        originalHtml = new TextDecoder("utf-8", { fatal: true }).decode(originalBytes);
+      } catch {
+        return new Response(binaryBody(originalBytes), {
+          status: 404,
+          headers: publishedResponseHeaders("404.html", custom)
+        });
+      }
+      const html = await rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath);
       const headers = publishedResponseHeaders("404.html", custom);
       const transformed = html !== originalHtml;
       const content = transformed ? new TextEncoder().encode(html) : originalBytes;
@@ -537,16 +545,20 @@ async function servePublishedFile(
   let content = originalBytes;
   let transformed = false;
   const isMarkup = contentType.startsWith("text/html")
-    || contentType.startsWith("image/svg+xml")
-    || contentType.startsWith("application/xml");
+    || contentType.startsWith("image/svg+xml");
   if (isMarkup || contentType.startsWith("text/css")) {
-    const originalText = new TextDecoder().decode(originalBytes);
-    const rewritten = isMarkup
-      ? rewriteRootRelativeHtmlUrls(originalText, siteRootPath)
-      : rewriteRootRelativeCssUrls(originalText, siteRootPath);
-    if (rewritten !== originalText) {
-      content = new TextEncoder().encode(rewritten);
-      transformed = true;
+    try {
+      const originalText = new TextDecoder("utf-8", { fatal: true }).decode(originalBytes);
+      const rewritten = isMarkup
+        ? await rewriteRootRelativeHtmlUrls(originalText, siteRootPath)
+        : rewriteRootRelativeCssUrls(originalText, siteRootPath);
+      if (rewritten !== originalText) {
+        content = new TextEncoder().encode(rewritten);
+        transformed = true;
+      }
+    } catch {
+      // Preserve non-UTF-8 authored bytes exactly instead of corrupting them
+      // while attempting a mount rewrite.
     }
   }
   const headers = publishedResponseHeaders(resolved.filePath, resolved.object);

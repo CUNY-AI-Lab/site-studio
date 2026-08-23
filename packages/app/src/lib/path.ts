@@ -1,6 +1,9 @@
 import { CONTENT_TYPES } from "./constants";
 import type { ProjectTreeNode, StorageFile } from "../types";
 
+const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+const PREVIEW_ORIGIN = "https://preview.invalid";
+
 export function sanitizeProjectId(name: string): string {
   const projectId = name
     .trim()
@@ -50,253 +53,256 @@ export function isTextContentType(contentType: string): boolean {
   );
 }
 
-export function addCacheBusterToHtml(
+type MarkupState = {
+  basePath: string;
+  baseExternal: boolean;
+  baseSeen: boolean;
+  paths?: Set<string>;
+};
+
+type MarkupOptions = {
+  documentPath: string;
+  includeRootRelative: boolean;
+  rootPath?: string;
+};
+
+type UrlRewrite = (url: string, state: MarkupState) => string;
+type BaseResolution = { path: string | null; external: boolean };
+
+export async function addCacheBusterToHtml(
   html: string,
   version?: string,
   extraParams: Record<string, string> = {},
   rootPath?: string,
-  documentPath?: string
-): string {
-  const value = version || Date.now().toString();
-  const params = { v: value, ...extraParams };
-
-  return rewriteLocalHtmlUrls(
+  documentPath = "index.html"
+): Promise<string> {
+  const params = { v: version || Date.now().toString(), ...extraParams };
+  return rewriteMarkup(
     html,
     (url) => addQueryParams(rewriteRootRelativeUrl(url, rootPath), params),
-    { includeRootRelative: Boolean(rootPath), documentPath }
+    { documentPath, includeRootRelative: Boolean(rootPath), rootPath }
   );
 }
 
-const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const RAW_HTML_TAGS = new Set(["script", "style", "textarea", "title"]);
+async function rewriteMarkup(
+  markup: string,
+  rewrite: UrlRewrite,
+  options: MarkupOptions,
+  paths?: Set<string>
+): Promise<string> {
+  const state: MarkupState = {
+    basePath: options.documentPath,
+    baseExternal: false,
+    baseSeen: false,
+    paths
+  };
+  let styleText = "";
 
-type HtmlRewriteOptions = {
-  includeRootRelative?: boolean;
-  documentPath?: string;
-};
+  const rewriter = new HTMLRewriter()
+    .on("*", {
+      element(element) {
+        const tagName = element.tagName.toLowerCase();
+        const attributes = Array.from(element.attributes, (attribute) => {
+          if (Array.isArray(attribute)) {
+            return { name: attribute[0], value: attribute[1] };
+          }
+          return { name: attribute.name, value: attribute.value };
+        });
+        for (const attribute of attributes) {
+          const { name, value } = attribute;
+          const lowerName = name.toLowerCase();
+          if (tagName === "base" && lowerName === "href" && !state.baseSeen) {
+            state.baseSeen = true;
+            const base = resolveBaseHref(value, state.basePath);
+            if (base.external) {
+              state.baseExternal = true;
+            } else if (base.path !== null) {
+              state.basePath = base.path;
+              if (options.rootPath) {
+                element.setAttribute(name, mountPath(options.rootPath, base.path));
+              }
+            }
+            continue;
+          }
+          if (tagName === "base" && lowerName === "href") continue;
 
-type UrlRewrite = (url: string) => string;
+          const rewritten = rewriteMarkupAttribute(
+            name,
+            value,
+            state,
+            options,
+            rewrite
+          );
+          if (rewritten !== value) element.setAttribute(name, rewritten);
+        }
+      }
+    })
+    .on("style", {
+      text(text) {
+        styleText += text.text;
+        if (!text.lastInTextNode) {
+          text.remove();
+          return;
+        }
+        const rewritten = rewriteCssUrls(
+          styleText,
+          (url) => rewriteMarkupUrl(url, state, options, rewrite)
+        );
+        text.replace(rewritten, { html: true });
+        styleText = "";
+      }
+    });
+
+  return rewriter.transform(new Response(markup)).text();
+}
+
+function rewriteMarkupAttribute(
+  name: string,
+  value: string,
+  state: MarkupState,
+  options: MarkupOptions,
+  rewrite: UrlRewrite
+): string {
+  const lower = name.toLowerCase();
+  if (lower === "style") {
+    return rewriteCssUrls(value, (url) => rewriteMarkupUrl(url, state, options, rewrite));
+  }
+  if (isSrcsetAttribute(lower)) {
+    return rewriteSrcset(value, (url) => rewriteMarkupUrl(url, state, options, rewrite));
+  }
+  if (!isUrlAttribute(lower)) return value;
+  return rewriteMarkupUrl(value, state, options, rewrite);
+}
+
+function rewriteMarkupUrl(
+  value: string,
+  state: MarkupState,
+  options: MarkupOptions,
+  rewrite: UrlRewrite
+): string {
+  const { leading, core, trailing } = splitTrimmed(value);
+  if (!isLocalUrl(core, options.includeRootRelative)) return value;
+  if (state.baseExternal && !core.startsWith("/")) return value;
+  const path = resolvePreviewResourcePath(core, state.basePath);
+  if (!path) return value;
+  state.paths?.add(path);
+  return `${leading}${rewrite(core, state)}${trailing}`;
+}
 
 function isUrlAttribute(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (["href", "src", "xlink:href", "poster", "action", "formaction", "data"].includes(lower)) return true;
-  if (lower.startsWith("data-")) {
-    const suffix = lower.slice("data-".length);
-    return suffix === "background"
-      || suffix === "background-image"
-      || suffix === "image"
-      || /(?:^|[-_:])(?:href|poster|src|url)(?:$|[-_:])/.test(suffix);
+  if (["href", "src", "xlink:href", "poster", "action", "formaction", "data"].includes(name)) return true;
+  if (!name.startsWith("data-")) return false;
+  const suffix = name.slice(5);
+  return suffix === "background"
+    || suffix === "background-image"
+    || suffix === "image"
+    || /(?:^|[-_:])(?:href|poster|src|url)(?:$|[-_:])/.test(suffix);
+}
+
+function isSrcsetAttribute(name: string): boolean {
+  return name === "srcset" || name === "data-srcset" || name.endsWith("-srcset");
+}
+
+function isLocalUrl(value: string, includeRootRelative: boolean): boolean {
+  const trimmed = value.trim();
+  const rootRelative = trimmed.startsWith("/") && !trimmed.startsWith("//");
+  return trimmed.length > 0
+    && !trimmed.startsWith("#")
+    && !trimmed.startsWith("//")
+    && (!rootRelative || includeRootRelative)
+    && !URI_SCHEME_RE.test(trimmed);
+}
+
+function resolveBaseHref(value: string, documentPath: string): BaseResolution {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("//") || URI_SCHEME_RE.test(trimmed)) {
+    return { path: null, external: true };
+  }
+  if (!isLocalUrl(trimmed, true)) return { path: documentPath, external: false };
+  const pathPart = stripUrlPath(trimmed);
+  if (hasPathEscape(pathPart, documentPath)) return { path: null, external: false };
+  try {
+    const pathname = new URL(trimmed, `${PREVIEW_ORIGIN}/${documentPath}`).pathname;
+    if (pathname.includes("%")) return { path: null, external: false };
+    return { path: pathname === "/" ? "" : pathname.slice(1), external: false };
+  } catch {
+    return { path: null, external: false };
+  }
+}
+
+function resolvePreviewResourcePath(value: string, documentPath: string): string | null {
+  const trimmed = value.trim();
+  if (!isLocalUrl(trimmed, true)) return null;
+  const pathPart = stripUrlPath(trimmed);
+  if (hasPathEscape(pathPart, documentPath)) return null;
+  try {
+    const pathname = new URL(trimmed, `${PREVIEW_ORIGIN}/${documentPath}`).pathname;
+    if (pathname.includes("%")) return null;
+    return pathname === "/" ? "index.html" : pathname.slice(1);
+  } catch {
+    return null;
+  }
+}
+
+function stripUrlPath(value: string): string {
+  const hash = value.indexOf("#");
+  const beforeFragment = hash >= 0 ? value.slice(0, hash) : value;
+  const query = beforeFragment.indexOf("?");
+  return query >= 0 ? beforeFragment.slice(0, query) : beforeFragment;
+}
+
+function hasPathEscape(pathPart: string, documentPath?: string): boolean {
+  const pathWithoutRoot = pathPart.startsWith("/") ? pathPart.slice(1) : pathPart;
+  if (pathWithoutRoot.includes("//") || pathPart.includes("%")) return true;
+  let depth = pathPart.startsWith("/")
+    ? 0
+    : (documentPath?.split("/").slice(0, -1).filter(Boolean).length || 0);
+  for (const segment of pathPart.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      depth -= 1;
+      if (depth < 0) return true;
+      continue;
+    }
+    if (segment.includes("\\") || segment.includes("\0") || /[?#"'<> &]/.test(segment)) return true;
+    depth += 1;
   }
   return false;
 }
 
-function isSrcsetAttribute(name: string): boolean {
-  const lower = name.toLowerCase();
-  return lower === "srcset" || lower === "data-srcset" || lower.endsWith("-srcset");
-}
-
-function isLocalPreviewUrl(value: string, includeRootRelative = false): boolean {
+function rewriteRootRelativeUrl(value: string, rootPath?: string): string {
+  if (!rootPath) return value;
   const trimmed = value.trim();
-  const isProtocolRelative = trimmed.startsWith("//");
-  const isRootRelative = trimmed.startsWith("/") && !isProtocolRelative;
-  return (
-    trimmed.length > 0 &&
-    !trimmed.startsWith("#") &&
-    !isProtocolRelative &&
-    (!isRootRelative || includeRootRelative) &&
-    !URI_SCHEME_RE.test(trimmed)
-  );
-}
-
-function rewriteLocalHtmlUrls(
-  html: string,
-  rewrite: UrlRewrite,
-  options: HtmlRewriteOptions = {}
-): string {
-  let output = "";
-  let cursor = 0;
-
-  while (cursor < html.length) {
-    const tagStart = html.indexOf("<", cursor);
-    if (tagStart < 0) {
-      output += html.slice(cursor);
-      break;
-    }
-    output += html.slice(cursor, tagStart);
-
-    if (html.startsWith("<!--", tagStart)) {
-      const commentEnd = html.indexOf("-->", tagStart + 4);
-      if (commentEnd < 0) {
-        output += html.slice(tagStart);
-        break;
-      }
-      const end = commentEnd + 3;
-      output += html.slice(tagStart, end);
-      cursor = end;
-      continue;
-    }
-
-    const tagEnd = findHtmlTagEnd(html, tagStart + 1);
-    if (tagEnd < 0) {
-      output += html.slice(tagStart);
-      break;
-    }
-
-    const tag = html.slice(tagStart, tagEnd + 1);
-    const parsedTag = parseHtmlTag(tag);
-    output += parsedTag
-      ? rewriteHtmlTag(tag, rewrite, options)
-      : tag;
-    cursor = tagEnd + 1;
-
-    if (!parsedTag || parsedTag.closing || parsedTag.selfClosing || !RAW_HTML_TAGS.has(parsedTag.name)) {
-      continue;
-    }
-
-    const rawClose = findRawHtmlClosingTag(html, cursor, parsedTag.name);
-    if (rawClose < 0) {
-      const body = html.slice(cursor);
-      output += parsedTag.name === "style"
-        ? rewriteCssUrls(body, rewrite, options)
-        : body;
-      break;
-    }
-    const body = html.slice(cursor, rawClose);
-    output += parsedTag.name === "style"
-      ? rewriteCssUrls(body, rewrite, options)
-      : body;
-    cursor = rawClose;
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return value;
+  const leadingLength = value.length - value.trimStart().length;
+  const trailingLength = value.length - value.trimEnd().length;
+  const leading = value.slice(0, leadingLength);
+  const trailing = trailingLength > 0 ? value.slice(value.length - trailingLength) : "";
+  const core = trailingLength > 0
+    ? value.slice(leadingLength, value.length - trailingLength)
+    : value.slice(leadingLength);
+  const path = stripUrlPath(core);
+  if (hasPathEscape(path)) return value;
+  const hash = core.indexOf("#");
+  const fragment = hash >= 0 ? core.slice(hash) : "";
+  const beforeFragment = hash >= 0 ? core.slice(0, hash) : core;
+  const query = beforeFragment.indexOf("?");
+  const suffix = query >= 0
+    ? `${beforeFragment.slice(query)}${fragment}`
+    : fragment;
+  try {
+    const normalized = new URL(path, `${PREVIEW_ORIGIN}/`).pathname;
+    if (normalized.includes("%")) return value;
+    return `${leading}${mountPath(rootPath, normalized.slice(1))}${suffix}${trailing}`;
+  } catch {
+    return value;
   }
-
-  return output;
 }
 
-function findHtmlTagEnd(html: string, start: number): number {
-  let quote: string | null = null;
-  for (let index = start; index < html.length; index += 1) {
-    const character = html[index];
-    if (quote) {
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === "\"" || character === "'") {
-      quote = character;
-    } else if (character === ">") {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function findRawHtmlClosingTag(html: string, start: number, tagName: string): number {
-  const closing = new RegExp(`<\\/\\s*${tagName}\\b`, "ig");
-  closing.lastIndex = start;
-  const match = closing.exec(html);
-  return match?.index ?? -1;
-}
-
-function parseHtmlTag(tag: string): { name: string; closing: boolean; selfClosing: boolean } | null {
-  const match = /^<\s*(\/?|\?)\s*([A-Za-z][A-Za-z0-9:_-]*)/.exec(tag);
-  if (!match) return null;
-  return {
-    name: match[2].toLowerCase(),
-    closing: match[1] === "/",
-    selfClosing: match[1] === "?" || /\/\s*>$/.test(tag)
-  };
-}
-
-function rewriteHtmlTag(
-  tag: string,
-  rewrite: UrlRewrite,
-  options: HtmlRewriteOptions
-): string {
-  const tagMatch = /^<\s*(?:\/?|\?)\s*[A-Za-z][A-Za-z0-9:_-]*/.exec(tag);
-  if (!tagMatch) return tag;
-
-  let output = tag.slice(0, tagMatch[0].length);
-  let cursor = tagMatch[0].length;
-  while (cursor < tag.length) {
-    if (tag[cursor] === ">") {
-      output += tag.slice(cursor);
-      break;
-    }
-
-    const attributeStart = cursor;
-    while (cursor < tag.length && /\s/.test(tag[cursor])) cursor += 1;
-    if (cursor >= tag.length) {
-      output += tag.slice(attributeStart);
-      break;
-    }
-    if (tag[cursor] === "/") {
-      output += tag.slice(attributeStart);
-      break;
-    }
-
-    const nameStart = cursor;
-    while (cursor < tag.length && !/[\s=/>]/.test(tag[cursor])) cursor += 1;
-    if (cursor === nameStart) {
-      output += tag.slice(attributeStart, cursor + 1);
-      cursor += 1;
-      continue;
-    }
-
-    const attributeName = tag.slice(nameStart, cursor);
-    let equals = cursor;
-    while (equals < tag.length && /\s/.test(tag[equals])) equals += 1;
-    if (tag[equals] !== "=") {
-      output += tag.slice(attributeStart, equals);
-      cursor = equals;
-      continue;
-    }
-
-    let valueStart = equals + 1;
-    while (valueStart < tag.length && /\s/.test(tag[valueStart])) valueStart += 1;
-    if (valueStart >= tag.length) {
-      output += tag.slice(attributeStart);
-      break;
-    }
-
-    const quote = tag[valueStart] === "\"" || tag[valueStart] === "'" ? tag[valueStart] : null;
-    const contentStart = quote ? valueStart + 1 : valueStart;
-    let valueEnd = contentStart;
-    if (quote) {
-      while (valueEnd < tag.length && tag[valueEnd] !== quote) valueEnd += 1;
-    } else {
-      while (valueEnd < tag.length && !/[\s>]/.test(tag[valueEnd])) valueEnd += 1;
-    }
-
-    const rawValue = tag.slice(contentStart, valueEnd);
-    const rewritten = rewriteHtmlAttribute(attributeName, rawValue, rewrite, options);
-    output += tag.slice(attributeStart, contentStart);
-    output += rewritten;
-    if (quote && valueEnd < tag.length) output += quote;
-    cursor = quote && valueEnd < tag.length ? valueEnd + 1 : valueEnd;
-  }
-
-  return output;
-}
-
-function rewriteHtmlAttribute(
-  name: string,
-  value: string,
-  rewrite: UrlRewrite,
-  options: HtmlRewriteOptions
-): string {
-  if (isSrcsetAttribute(name)) {
-    return rewriteSrcset(value, rewrite, options);
-  }
-  if (name.toLowerCase() === "style") {
-    return rewriteCssUrls(value, rewrite, options);
-  }
-  if (!isUrlAttribute(name)) return value;
-  return rewriteLocalUrlValue(value, rewrite, options);
-}
-
-function rewriteLocalUrlValue(value: string, rewrite: UrlRewrite, options: HtmlRewriteOptions): string {
-  const { leading, core, trailing } = splitTrimmed(value);
-  if (!isLocalPreviewUrl(core, options.includeRootRelative)) return value;
-  if (options.documentPath && !resolvePreviewResourcePath(core, options.documentPath)) return value;
-  return `${leading}${rewrite(core)}${trailing}`;
+function mountPath(rootPath: string, filePath: string): string {
+  const root = rootPath.trim().replace(/\/+$/, "") || "/";
+  const suffix = filePath.replace(/^\/+/, "");
+  return root === "/" ? `/${suffix}` : `${root}/${suffix}`;
 }
 
 function splitTrimmed(value: string) {
@@ -311,63 +317,42 @@ function splitTrimmed(value: string) {
   };
 }
 
-function rewriteSrcset(value: string, rewrite: UrlRewrite, options: HtmlRewriteOptions): string {
-  const candidates = splitSrcsetCandidates(value);
-  return candidates.map((candidate) => {
+function rewriteSrcset(value: string, rewrite: (url: string) => string): string {
+  return splitSrcsetCandidates(value).map((candidate) => {
     const { leading, core, trailing } = splitTrimmed(candidate);
     if (!core) return candidate;
     const match = /^(?:"([^"]*)"|'([^']*)'|(\S+))([\s\S]*)$/.exec(core);
     if (!match) return candidate;
     const url = match[1] ?? match[2] ?? match[3];
     const quote = match[1] !== undefined ? '"' : match[2] !== undefined ? "'" : "";
-    const rewritten = rewriteLocalUrlValue(url, rewrite, options);
-    return `${leading}${quote}${rewritten}${quote}${match[4]}${trailing}`;
+    const next = rewrite(url);
+    return `${leading}${quote}${next}${quote}${match[4]}${trailing}`;
   }).join(",");
 }
 
 function splitSrcsetCandidates(value: string): string[] {
   const candidates: string[] = [];
   let start = 0;
-  let index = 0;
   let quote: string | null = null;
   let parentheses = 0;
-  let dataUrlStart = findDataUrlStart(value, start);
-  let dataUrl = dataUrlStart >= 0;
-  let dataUrlHasWhitespace = false;
-  while (index < value.length) {
+  let dataStart = findDataUrlStart(value, start);
+  let dataWhitespace = false;
+  for (let index = 0; index < value.length; index += 1) {
     const character = value[index];
     if (quote) {
       if (character === quote && !isEscapedAt(value, index)) quote = null;
-      index += 1;
       continue;
     }
-    if (character === "\"" || character === "'") {
-      quote = character;
-    } else if (character === "(") {
-      parentheses += 1;
-    } else if (character === ")") {
-      parentheses = Math.max(0, parentheses - 1);
-    } else if (dataUrl && index >= dataUrlStart && /\s/.test(character)) {
-      dataUrlHasWhitespace = true;
-    } else if (
-      character === ","
-      && parentheses === 0
-      && (!dataUrl || dataUrlHasWhitespace || /\s/.test(value[index + 1] ?? ""))
-    ) {
-      // A data URL owns its payload commas. A comma followed by whitespace
-      // still unambiguously starts the next candidate when the data URL has
-      // no descriptor.
+    if (character === "\"" || character === "'") quote = character;
+    else if (character === "(") parentheses += 1;
+    else if (character === ")") parentheses = Math.max(0, parentheses - 1);
+    else if (dataStart >= 0 && index >= dataStart && /\s/.test(character)) dataWhitespace = true;
+    else if (character === "," && parentheses === 0 && (dataStart < 0 || dataWhitespace || /\s/.test(value[index + 1] ?? ""))) {
       candidates.push(value.slice(start, index));
       start = index + 1;
-      index = start;
-      quote = null;
-      parentheses = 0;
-      dataUrlStart = findDataUrlStart(value, start);
-      dataUrl = dataUrlStart >= 0;
-      dataUrlHasWhitespace = false;
-      continue;
+      dataStart = findDataUrlStart(value, start);
+      dataWhitespace = false;
     }
-    index += 1;
   }
   candidates.push(value.slice(start));
   return candidates;
@@ -379,19 +364,16 @@ function findDataUrlStart(value: string, start: number): number {
   return value.slice(index, index + 5).toLowerCase() === "data:" ? index : -1;
 }
 
-function rewriteCssUrls(css: string, rewrite: UrlRewrite, options: HtmlRewriteOptions = {}): string {
+function rewriteCssUrls(css: string, rewrite: (url: string) => string): string {
   let output = "";
   let cursor = 0;
   while (cursor < css.length) {
     if (css.startsWith("/*", cursor)) {
       const end = css.indexOf("*/", cursor + 2);
-      if (end < 0) {
-        output += css.slice(cursor);
-        break;
-      }
-      const commentEnd = end + 2;
-      output += css.slice(cursor, commentEnd);
-      cursor = commentEnd;
+      if (end < 0) return output + css.slice(cursor);
+      const next = end + 2;
+      output += css.slice(cursor, next);
+      cursor = next;
       continue;
     }
     if (css[cursor] === "\"" || css[cursor] === "'") {
@@ -400,14 +382,12 @@ function rewriteCssUrls(css: string, rewrite: UrlRewrite, options: HtmlRewriteOp
       cursor = end;
       continue;
     }
-
-    const rewrittenImport = rewriteCssImportString(css, cursor, rewrite, options);
-    if (rewrittenImport) {
-      output += rewrittenImport.text;
-      cursor = rewrittenImport.end;
+    const imported = rewriteCssImportString(css, cursor, rewrite);
+    if (imported) {
+      output += imported.text;
+      cursor = imported.end;
       continue;
     }
-
     const open = findCssUrlOpen(css, cursor);
     if (open < 0) {
       output += css[cursor];
@@ -416,40 +396,29 @@ function rewriteCssUrls(css: string, rewrite: UrlRewrite, options: HtmlRewriteOp
     }
     output += css.slice(cursor, open + 1);
     const close = findCssFunctionEnd(css, open + 1);
-    if (close < 0) {
-      output += css.slice(open + 1);
-      break;
-    }
+    if (close < 0) return output + css.slice(open + 1);
     const inner = css.slice(open + 1, close);
-    output += rewriteCssUrlArgument(inner, rewrite, options);
+    output += rewriteCssUrlArgument(inner, rewrite);
     output += ")";
     cursor = close + 1;
   }
   return output;
 }
 
-function rewriteCssImportString(
-  css: string,
-  start: number,
-  rewrite: UrlRewrite,
-  options: HtmlRewriteOptions
-) {
+function rewriteCssImportString(css: string, start: number, rewrite: (url: string) => string) {
   if (css.slice(start, start + 7).toLowerCase() !== "@import") return null;
   const afterName = css[start + 7];
   if (afterName && /[A-Za-z0-9_-]/.test(afterName)) return null;
-
   let quoteStart = start + 7;
   while (quoteStart < css.length && /\s/.test(css[quoteStart])) quoteStart += 1;
   const quote = css[quoteStart];
   if (quote !== "\"" && quote !== "'") return null;
-
   const end = findCssStringEnd(css, quoteStart);
   if (end <= quoteStart || css[end - 1] !== quote) return null;
-  const rawUrl = css.slice(quoteStart + 1, end - 1);
-  const rewritten = rewriteLocalUrlValue(rawUrl, rewrite, options);
+  const url = css.slice(quoteStart + 1, end - 1);
   return {
     end,
-    text: `${css.slice(start, quoteStart + 1)}${rewritten}${quote}`
+    text: `${css.slice(start, quoteStart + 1)}${rewrite(url)}${quote}`
   };
 }
 
@@ -468,11 +437,8 @@ function findCssFunctionEnd(css: string, start: number): number {
     const character = css[index];
     if (quote) {
       if (character === quote && !isEscapedAt(css, index)) quote = null;
-    } else if (character === "\"" || character === "'") {
-      quote = character;
-    } else if (character === ")" && !isEscapedAt(css, index)) {
-      return index;
-    }
+    } else if (character === "\"" || character === "'") quote = character;
+    else if (character === ")" && !isEscapedAt(css, index)) return index;
   }
   return -1;
 }
@@ -486,24 +452,18 @@ function findCssStringEnd(css: string, start: number): number {
 }
 
 function isEscapedAt(value: string, index: number): boolean {
-  let slashCount = 0;
-  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
-    slashCount += 1;
-  }
-  return slashCount % 2 === 1;
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
 }
 
-function rewriteCssUrlArgument(inner: string, rewrite: UrlRewrite, options: HtmlRewriteOptions): string {
+function rewriteCssUrlArgument(inner: string, rewrite: (url: string) => string): string {
   const { leading, core, trailing } = splitTrimmed(inner);
-  if (!core) return inner;
-  // CSS escapes can change token boundaries (for example `\)` inside an
-  // unquoted URL). Leave those authored tokens byte-for-byte intact until a
-  // CSS tokenizer is available instead of guessing at their decoded path.
-  if (core.includes("\\") || hasUnsafeCssTokenCharacter(core)) return inner;
+  if (!core || core.includes("\\") || /[\p{Cc}\p{Zs}]/u.test(core)) return inner;
   const quote = core[0] === "\"" || core[0] === "'" ? core[0] : null;
   const url = quote && core.endsWith(quote) ? core.slice(1, -1) : core;
-  const rewritten = rewriteLocalUrlValue(url, rewrite, options);
-  const wrapped = quote && core.endsWith(quote) ? `${quote}${rewritten}${quote}` : rewritten;
+  const next = rewrite(url);
+  const wrapped = quote && core.endsWith(quote) ? `${quote}${next}${quote}` : next;
   return `${leading}${wrapped}${trailing}`;
 }
 
@@ -512,109 +472,26 @@ export function addCacheBusterToCss(
   version?: string,
   extraParams: Record<string, string> = {},
   rootPath?: string,
-  documentPath?: string
+  documentPath = "index.css"
 ): string {
-  const value = version || Date.now().toString();
-  const params = { v: value, ...extraParams };
-  return rewriteCssUrls(
-    css,
-    (url) => addQueryParams(rewriteRootRelativeUrl(url, rootPath), params),
-    { includeRootRelative: Boolean(rootPath), documentPath }
-  );
+  const params = { v: version || Date.now().toString(), ...extraParams };
+  return rewriteCssUrls(css, (url) => {
+    const path = resolvePreviewResourcePath(url, documentPath);
+    if (!path) return url;
+    return addQueryParams(rewriteRootRelativeUrl(url, rootPath), params);
+  });
 }
 
-function normalizeRootPath(rootPath: string): string {
-  const trimmed = rootPath.trim();
-  if (!trimmed) return "/";
-  const rooted = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return `${rooted.replace(/\/+$/, "")}/`;
-}
-
-function rewriteRootRelativeUrl(value: string, rootPath?: string): string {
-  if (!rootPath) return value;
-
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return value;
-
-  const leadingLength = value.length - value.trimStart().length;
-  const trailingLength = value.length - value.trimEnd().length;
-  const leading = value.slice(0, leadingLength);
-  const trailing = trailingLength > 0 ? value.slice(value.length - trailingLength) : "";
-  const core = trailingLength > 0
-    ? value.slice(leadingLength, value.length - trailingLength)
-    : value.slice(leadingLength);
-
-  const hashIndex = core.indexOf("#");
-  const fragment = hashIndex >= 0 ? core.slice(hashIndex) : "";
-  const beforeFragment = hashIndex >= 0 ? core.slice(0, hashIndex) : core;
-  const queryIndex = beforeFragment.indexOf("?");
-  const path = queryIndex >= 0 ? beforeFragment.slice(0, queryIndex) : beforeFragment;
-  const suffix = queryIndex >= 0
-    ? `${beforeFragment.slice(queryIndex)}${fragment}`
-    : fragment;
-  const normalizedPath = normalizeRootRelativePath(path);
-  if (normalizedPath === null) return value;
-  const trailingSlash = path.length > 1 && path.endsWith("/") ? "/" : "";
-  const root = normalizeRootPath(rootPath);
-  return `${leading}${root}${normalizedPath}${trailingSlash}${suffix}${trailing}`;
-}
-
-function normalizeRootRelativePath(path: string): string | null {
-  const segments: string[] = [];
-  for (const rawSegment of path.slice(1).split("/")) {
-    if (rawSegment.includes("%")) return null;
-    let segment: string;
-    try {
-      segment = decodeURIComponent(rawSegment);
-    } catch {
-      return null;
-    }
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      if (segments.length === 0) return null;
-      segments.pop();
-      continue;
-    }
-    if (isUnsafeDecodedPathSegment(segment)) return null;
-    segments.push(segment);
-  }
-  return segments.join("/");
-}
-
-function isUnsafeDecodedPathSegment(segment: string): boolean {
-  for (const character of segment) {
-    if ("\\/?#%\"'<> &".includes(character)) return true;
-    const code = character.charCodeAt(0);
-    if (code <= 0x20 || code === 0x7f) return true;
-  }
-  return false;
-}
-
-function hasUnsafeCssTokenCharacter(value: string): boolean {
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code <= 0x20 || code === 0x7f) return true;
-  }
-  return false;
-}
-
-/**
- * Rewrite root-relative authored URLs to the canonical site mount. A static
- * document's `/styles.css` means "from this site's root", not from the app
- * origin; without this boundary rewrite it falls through to the SPA shell.
- */
-export function rewriteRootRelativeHtmlUrls(html: string, rootPath: string): string {
-  return rewriteLocalHtmlUrls(
+export async function rewriteRootRelativeHtmlUrls(html: string, rootPath: string): Promise<string> {
+  return rewriteMarkup(
     html,
     (url) => rewriteRootRelativeUrl(url, rootPath),
-    { includeRootRelative: true }
+    { documentPath: "index.html", includeRootRelative: true, rootPath }
   );
 }
 
 export function rewriteRootRelativeCssUrls(css: string, rootPath: string): string {
-  return rewriteCssUrls(css, (url) => rewriteRootRelativeUrl(url, rootPath), {
-    includeRootRelative: true
-  });
+  return rewriteCssUrls(css, (url) => rewriteRootRelativeUrl(url, rootPath));
 }
 
 function addQueryParams(value: string, params: Record<string, string>): string {
@@ -624,82 +501,33 @@ function addQueryParams(value: string, params: Record<string, string>): string {
   const queryIndex = beforeFragment.indexOf("?");
   const pathname = queryIndex >= 0 ? beforeFragment.slice(0, queryIndex) : beforeFragment;
   const search = new URLSearchParams(queryIndex >= 0 ? beforeFragment.slice(queryIndex + 1) : "");
-  for (const [key, paramValue] of Object.entries(params)) {
-    search.set(key, paramValue);
-  }
+  for (const [key, paramValue] of Object.entries(params)) search.set(key, paramValue);
   return `${pathname}?${search.toString()}${fragment}`;
 }
 
-/**
- * Resolve the authored relative URLs that a preview document may request.
- * Preview bearer grants are scoped to this set so a token visible to authored
- * JavaScript cannot read arbitrary, unlinked project files.
- */
-export function collectPreviewResourcePaths(html: string, documentPath: string): string[] {
+export async function collectPreviewResourcePaths(html: string, documentPath: string): Promise<string[]> {
   const paths = new Set<string>();
-  rewriteLocalHtmlUrls(html, (value) => {
-    const path = resolvePreviewResourcePath(value, documentPath);
-    if (path) paths.add(path);
-    return value;
-  }, { includeRootRelative: true, documentPath });
+  await rewriteMarkup(html, (url) => url, { documentPath, includeRootRelative: true }, paths);
   return [...paths].sort();
 }
 
 export function collectPreviewCssResourcePaths(css: string, documentPath: string): string[] {
   const paths = new Set<string>();
-  rewriteCssUrls(css, (value) => {
-    const path = resolvePreviewResourcePath(value, documentPath);
+  rewriteCssUrls(css, (url) => {
+    const path = resolvePreviewResourcePath(url, documentPath);
     if (path) paths.add(path);
-    return value;
-  }, { includeRootRelative: true, documentPath });
+    return url;
+  });
   return [...paths].sort();
 }
 
-function resolvePreviewResourcePath(value: string, documentPath: string): string | null {
-  const trimmed = value.trim();
-  if (!isLocalPreviewUrl(trimmed, true)) return null;
-  const hashIndex = trimmed.indexOf("#");
-  const beforeFragment = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed;
-  const queryIndex = beforeFragment.indexOf("?");
-  const pathPart = queryIndex >= 0 ? beforeFragment.slice(0, queryIndex) : beforeFragment;
-  const rooted = pathPart.startsWith("/");
-  const baseSegments = rooted
-    ? []
-    : documentPath.replace(/\\/g, "/").split("/").slice(0, -1).filter(Boolean);
-  const segments = [...baseSegments];
-  for (const rawSegment of pathPart.split("/")) {
-    if (rawSegment.includes("%")) return null;
-    let segment: string;
-    try {
-      segment = decodeURIComponent(rawSegment);
-    } catch {
-      return null;
-    }
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      if (segments.length === 0) return null;
-      segments.pop();
-      continue;
-    }
-    if (isUnsafeDecodedPathSegment(segment)) return null;
-    segments.push(segment);
-  }
-  if (segments.length === 0) return "index.html";
-  const resolved = segments.join("/");
-  return pathPart.length > 1 && pathPart.endsWith("/") ? `${resolved}/` : resolved;
-}
-
-export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
-  type TreeNode = {
-    dirs: Record<string, TreeNode>;
-    files: ProjectTreeNode[];
-  };
+function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
+  type TreeNode = { dirs: Record<string, TreeNode>; files: ProjectTreeNode[] };
   const tree: TreeNode = { dirs: {}, files: [] };
 
   for (const file of files) {
     const parts = file.path.split("/");
     let current = tree;
-
     parts.forEach((part, index) => {
       if (index === parts.length - 1) {
         current.files.push({
@@ -711,7 +539,6 @@ export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
         });
         return;
       }
-
       current.dirs[part] ||= { dirs: {}, files: [] };
       current = current.dirs[part];
     });
@@ -719,21 +546,15 @@ export function buildFileTree(files: StorageFile[]): ProjectTreeNode[] {
 
   function toArray(node: TreeNode, parentPath = ""): ProjectTreeNode[] {
     const entries: ProjectTreeNode[] = [];
-
     for (const key of Object.keys(node.dirs)) {
       const dirPath = parentPath ? `${parentPath}/${key}` : key;
-      entries.push({
-        name: key,
-        path: dirPath,
-        type: "directory",
-        children: toArray(node.dirs[key], dirPath),
-      });
+      entries.push({ name: key, path: dirPath, type: "directory", children: toArray(node.dirs[key], dirPath) });
     }
-
     entries.push(...node.files);
-
     return entries;
   }
 
   return toArray(tree);
 }
+
+export { buildFileTree };

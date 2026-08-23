@@ -141,7 +141,7 @@ describe("preview file resolution", () => {
   });
 
   it("serves a directory's index.html for a trailing-slash path", async () => {
-    await storage.writeFile(userId, "proj", "docs/index.html", "<h1>Docs</h1>");
+    await storage.writeFile(userId, "proj", "docs/index.html", '<a href="./?x">Directory</a><h1>Docs</h1>');
     const res = await get("docs/");
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Docs");
@@ -212,7 +212,25 @@ describe("preview file resolution", () => {
       createEnv(bucket, kv)
     );
     expect(directory.status).toBe(200);
-    expect(await directory.text()).toContain("Docs");
+    const directoryHtml = await directory.text();
+    expect(directoryHtml).toContain("Docs");
+  });
+
+  it("does not leak a preview token through an external base URL", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="https://outside.example/">',
+      '<script src="app.js"></script>',
+      '<img src="/logo.png">'
+    ].join(""));
+    await storage.writeFile(userId, "proj", "logo.png", "logo");
+
+    const response = await get("index.html", "text/html");
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('<script src="app.js"></script>');
+    const token = /\/preview\/proj\/logo\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual(["logo.png"]);
   });
 
   it("keeps the configured ingress mount on rewritten preview URLs", async () => {
@@ -355,6 +373,38 @@ describe("preview token authentication", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("color: red");
     expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("scopes query-only and dot-directory links to their actual preview paths", async () => {
+    await storage.writeFile(userId, "proj", "docs/index.html", '<a href="?x">Current</a><a href="./?x">Directory</a>');
+    const parent = await mintPreviewToken(kv, userId, "proj", ["docs/index.html"]);
+    const page = await app.request(
+      `http://site-studio.test/preview/proj/docs/index.html?pt=${parent}`,
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv)
+    );
+
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const child = /[?&]v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(child).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${child}`) || "{}").allowedPaths).toEqual([
+      "docs/",
+      "docs/index.html"
+    ]);
+
+    const current = await app.request(
+      `http://site-studio.test/preview/proj/docs/index.html?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    const directory = await app.request(
+      `http://site-studio.test/preview/proj/docs/?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(current.status).toBe(200);
+    expect(directory.status).toBe(200);
   });
 
   it("does not authorize a different project with a valid token", async () => {
@@ -651,26 +701,6 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('href="/u/janedoe/site/images/icon.png"');
-  });
-
-  it("rewrites root-relative URLs in published XML", async () => {
-    await storage.writeFile(userId, slug, "manifest.xml", [
-      '<?xml version="1.0"?>',
-      '<?xml-stylesheet type="text/css" href="/style.css"?>',
-      '<manifest><asset href="/images/icon.png" /></manifest>'
-    ].join(""));
-    await storage.writeFile(userId, slug, "images/icon.png", "icon");
-    await storage.writeFile(userId, slug, "style.css", "manifest { display: block; }");
-
-    const response = await app.request(
-      "http://site-studio.test/u/janedoe/site/manifest.xml",
-      {},
-      createEnv(bucket)
-    );
-    expect(response.status).toBe(200);
-    const xml = await response.text();
-    expect(xml).toContain('href="/u/janedoe/site/images/icon.png"');
-    expect(xml).toContain('href="/u/janedoe/site/style.css"');
   });
 
   it("preserves published HTML bytes when no mount rewrite is needed", async () => {
