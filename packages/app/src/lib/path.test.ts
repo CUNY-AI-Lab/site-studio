@@ -4,7 +4,11 @@ import {
   sanitizeFilePath,
   getContentType,
   isTextContentType,
+  addCacheBusterToCss,
   addCacheBusterToHtml,
+  collectPreviewCssResourcePaths,
+  rewriteRootRelativeHtmlUrls,
+  rewriteRootRelativeCssUrls,
   buildFileTree,
   collectPreviewResourcePaths
 } from "./path";
@@ -242,15 +246,193 @@ describe("addCacheBusterToHtml", () => {
     expect(addCacheBusterToHtml(html, "123", { pt: "secret" })).toBe(html);
   });
 
+  it("rewrites root-relative destinations to the supplied site mount", () => {
+    const html = [
+      '<link href="/styles.css">',
+      '<script src="/app.js?cache=1#ready"></script>',
+      '<img src="//attacker.example/pixel.png">'
+    ].join("");
+
+    expect(addCacheBusterToHtml(html, "123", { pt: "secret" }, "/preview/proj/")).toBe([
+      '<link href="/preview/proj/styles.css?v=123&pt=secret">',
+      '<script src="/preview/proj/app.js?cache=1&v=123&pt=secret#ready"></script>',
+      '<img src="//attacker.example/pixel.png">'
+    ].join(""));
+    expect(rewriteRootRelativeHtmlUrls(html, "/u/janedoe/site/")).toContain(
+      '<link href="/u/janedoe/site/styles.css">'
+    );
+  });
+
+  it("rewrites parsed URL-bearing attributes and inline CSS without touching code or comments", () => {
+    const html = [
+      '<a href="/">Home</a>',
+      '<video poster="/poster.jpg"><source srcset="/wide.jpg 1x, /small.jpg 2x"></video>',
+      '<form action="/submit"><object data="/document.pdf"></object></form>',
+      '<svg><use xlink:href="/icons.svg#check"></use></svg><button formaction="/save">Save</button>',
+      '<img data-src="/lazy.jpg" data-href="/lazy.html">',
+      '<div style="background-image: url(\'/inline-bg.png\')"></div>',
+      '<style>.hero { background: url(/style-bg.png); }</style>',
+      '<!-- <img src="/comment.png"> -->',
+      '<script>const markup = \'<img src="/script-string.png">\';</script>'
+    ].join("");
+
+    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+    expect(result).toContain('poster="/preview/proj/poster.jpg?v=123&pt=token"');
+    expect(result).toContain('srcset="/preview/proj/wide.jpg?v=123&pt=token 1x, /preview/proj/small.jpg?v=123&pt=token 2x"');
+    expect(result).toContain('action="/preview/proj/submit?v=123&pt=token"');
+    expect(result).toContain('data="/preview/proj/document.pdf?v=123&pt=token"');
+    expect(result).toContain('xlink:href="/preview/proj/icons.svg?v=123&pt=token#check"');
+    expect(result).toContain('formaction="/preview/proj/save?v=123&pt=token"');
+    expect(result).toContain('data-src="/preview/proj/lazy.jpg?v=123&pt=token"');
+    expect(result).toContain('data-href="/preview/proj/lazy.html?v=123&pt=token"');
+    expect(result).toContain('background-image: url(\'/preview/proj/inline-bg.png?v=123&pt=token\')');
+    expect(result).toContain('background: url(/preview/proj/style-bg.png?v=123&pt=token)');
+    expect(result).toContain('<img src="/comment.png">');
+    expect(result).toContain('<img src="/script-string.png">');
+
+    expect(collectPreviewResourcePaths(html, "index.html")).toEqual([
+      "document.pdf",
+      "icons.svg",
+      "index.html",
+      "inline-bg.png",
+      "lazy.html",
+      "lazy.jpg",
+      "poster.jpg",
+      "save",
+      "small.jpg",
+      "style-bg.png",
+      "submit",
+      "wide.jpg"
+    ]);
+  });
+
+  it("maps root navigation to index and rejects parent escapes", () => {
+    const html = '<a href="/">Home</a><script src="../outside.js"></script><img src="/../secret.png">';
+    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+
+    expect(result).toContain('href="/preview/proj/?v=123&pt=token"');
+    expect(result).toContain('src="../outside.js"');
+    expect(result).toContain('src="/../secret.png"');
+    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["index.html"]);
+  });
+
+  it("preserves root-relative trailing slashes for directory routes", () => {
+    const html = '<a href="/docs/">Docs</a>';
+    const rewritten = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+
+    expect(rewritten).toContain('href="/preview/proj/docs/?v=123&pt=token"');
+    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["docs/"]);
+  });
+
+  it("rewrites and scopes local CSS URLs while preserving external and data URLs", () => {
+    const css = [
+      '@import "/theme.css";',
+      ".hero { background: url('/images/hero.png'); }",
+      ".font { src: url(../fonts/body.woff2) format('woff2'); }",
+      ".external { background: url(https://cdn.example.com/bg.png); }",
+      ".data { background: url(data:image/png;base64,abc); }",
+      "/* background: url(/comment.png); */",
+      ".string { content: \"url(/string.png)\"; }"
+    ].join("\n");
+    const rewritten = addCacheBusterToCss(css, "123", { pt: "token" }, "/preview/proj/", "styles/main.css");
+
+    expect(rewritten).toContain("url('/preview/proj/images/hero.png?v=123&pt=token')");
+    expect(rewritten).toContain("url(../fonts/body.woff2?v=123&pt=token)");
+    expect(rewritten).toContain("url(https://cdn.example.com/bg.png)");
+    expect(rewritten).toContain("url(data:image/png;base64,abc)");
+    expect(rewritten).toContain('@import "/preview/proj/theme.css?v=123&pt=token";');
+    expect(rewritten).toContain("url(/comment.png)");
+    expect(rewritten).toContain('content: "url(/string.png)"');
+    expect(rewriteRootRelativeCssUrls(css, "/u/janedoe/site/")).toContain(
+      "url('/u/janedoe/site/images/hero.png')"
+    );
+    expect(collectPreviewCssResourcePaths(css, "styles/main.css")).toEqual([
+      "fonts/body.woff2",
+      "images/hero.png",
+      "theme.css"
+    ]);
+  });
+
+  it("rewrites local srcset candidates alongside data URLs", () => {
+    const srcset = "data:image/svg+xml,%3Csvg%3E 1x, /images/a.png 2x, /images/b.png 3x";
+    const html = `<img srcset="${srcset}">`;
+    const result = addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
+
+    expect(result).toContain(
+      'srcset="data:image/svg+xml,%3Csvg%3E 1x, /preview/proj/images/a.png?v=123&pt=token 2x, /preview/proj/images/b.png?v=123&pt=token 3x"'
+    );
+    expect(collectPreviewResourcePaths(html, "index.html")).toEqual(["images/a.png", "images/b.png"]);
+
+    const mixedWithoutDataDescriptor = 'data:image/png;base64,abc, /images/c.png 2x';
+    const withoutDescriptor = addCacheBusterToHtml(
+      `<img srcset="${mixedWithoutDataDescriptor}">`,
+      "123",
+      { pt: "token" },
+      "/preview/proj/",
+      "index.html"
+    );
+    expect(withoutDescriptor).toContain(
+      'srcset="data:image/png;base64,abc, /preview/proj/images/c.png?v=123&pt=token 2x"'
+    );
+
+    const encodedDelimiterSrcset = '<img srcset="/%2Cencoded.png 1x, /images/d.png 2x">';
+    const encodedDelimiterResult = addCacheBusterToHtml(
+      encodedDelimiterSrcset,
+      "123",
+      { pt: "token" },
+      "/preview/proj/",
+      "index.html"
+    );
+    expect(encodedDelimiterResult).toContain(
+      'srcset="/%2Cencoded.png 1x, /preview/proj/images/d.png?v=123&pt=token 2x"'
+    );
+    expect(collectPreviewResourcePaths(encodedDelimiterSrcset, "index.html")).toEqual(["images/d.png"]);
+  });
+
+  it("leaves escaped CSS URL tokens and unsafe encoded path segments unchanged", () => {
+    // Preview/publish currently address R2 with the raw URL pathname. Preserve
+    // encoded candidates and fail closed rather than decoding them into a
+    // different storage key or a CSS/HTML delimiter.
+    const css = String.raw`.escaped { background: url(/images/escaped\).png); }
+.safe { background: url(/images/safe.png); }
+.query { background: url(/%3Fsecret.png); }
+.fragment { background: url(/%23secret.png); }
+.space { background: url(/space%20name.png); }
+.double { background: url("/%22double.png"); }
+.single { background: url('/%27single.png'); }
+.markup { background: url(/%3Ctag%3E.png); }
+.ampersand { background: url(/%26name.png); }
+.parentheses { background: url(/%28name%29.png); }`;
+    const rewritten = addCacheBusterToCss(css, "123", { pt: "token" }, "/preview/proj/", "styles/main.css");
+
+    expect(rewritten).toContain(String.raw`url(/images/escaped\).png)`);
+    expect(rewritten).toContain("url(/preview/proj/images/safe.png?v=123&pt=token)");
+    expect(rewritten).toContain("url(/%3Fsecret.png)");
+    expect(rewritten).toContain("url(/%23secret.png)");
+    expect(rewritten).toContain("url(/space%20name.png)");
+    expect(rewritten).toContain('url("/%22double.png")');
+    expect(rewritten).toContain("url('/%27single.png')");
+    expect(rewritten).toContain("url(/%3Ctag%3E.png)");
+    expect(rewritten).toContain("url(/%26name.png)");
+    expect(rewritten).toContain("url(/%28name%29.png)");
+    expect(collectPreviewCssResourcePaths(css, "styles/main.css")).toEqual(["images/safe.png"]);
+
+    const html = '<img src="/%3Fsecret.png"><img src=\'/%23secret.png\'><img src="/%252Fsecret.png"><img src="/space%20name.png"><img src="/%22double.png"><img src=\'/%27single.png\'><img src="/%3Ctag%3E.png"><img src="/%26name.png"><img src=/%60tick.png><img src=/%3Dequals.png>';
+    expect(rewriteRootRelativeHtmlUrls(html, "/u/janedoe/site/")).toBe(html);
+    expect(collectPreviewResourcePaths(html, "index.html")).toEqual([]);
+  });
+
   it("collects only relative project paths for a scoped preview grant", () => {
     const html = [
       '<script src="app.js?x=1"></script>',
       '<a href="../about.html#team">About</a>',
+      '<link href="/styles.css">',
       '<img src="//attacker.example/pixel.png">'
     ].join("");
     expect(collectPreviewResourcePaths(html, "docs/index.html")).toEqual([
       "about.html",
-      "docs/app.js"
+      "docs/app.js",
+      "styles.css"
     ]);
   });
 

@@ -20,6 +20,7 @@ import { lintProject, type A11yFinding } from "../lib/a11y-lint";
 import { R2ProjectStorage } from "../storage/r2";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { isLoopbackOrigin } from "../lib/csrf";
+import { rewriteRootRelativeCssUrls, rewriteRootRelativeHtmlUrls } from "../lib/path";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
   SiteStudioActionLifecycle,
@@ -109,9 +110,21 @@ async function missingPublishedFile(
       // on our origin — §3¾ containment applies (see lib/serving-headers.ts). It
       // goes through the same header builder as a 200 so the content-type,
       // caching validators and CSP match normal published responses.
-      return new Response(binaryBody(new Uint8Array(await custom.arrayBuffer())), {
+      const originalBytes = new Uint8Array(await custom.arrayBuffer());
+      const originalHtml = new TextDecoder().decode(originalBytes);
+      const html = rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath);
+      const headers = publishedResponseHeaders("404.html", custom);
+      const transformed = html !== originalHtml;
+      const content = transformed ? new TextEncoder().encode(html) : originalBytes;
+      if (transformed) {
+        // The served bytes now include the canonical site mount, so validators
+        // from the unrewritten R2 object no longer describe this response.
+        headers.delete("ETag");
+        headers.delete("Last-Modified");
+      }
+      return new Response(binaryBody(content), {
         status: 404,
-        headers: publishedResponseHeaders("404.html", custom)
+        headers
       });
     }
   }
@@ -519,12 +532,34 @@ async function servePublishedFile(
     return missingPublishedFile(c, storage, userId, projectId, rawPath, siteRootPath);
   }
 
+  const contentType = getServedContentType(resolved.filePath);
+  const originalBytes = new Uint8Array(await resolved.object.arrayBuffer());
+  let content = originalBytes;
+  let transformed = false;
+  const isMarkup = contentType.startsWith("text/html")
+    || contentType.startsWith("image/svg+xml")
+    || contentType.startsWith("application/xml");
+  if (isMarkup || contentType.startsWith("text/css")) {
+    const originalText = new TextDecoder().decode(originalBytes);
+    const rewritten = isMarkup
+      ? rewriteRootRelativeHtmlUrls(originalText, siteRootPath)
+      : rewriteRootRelativeCssUrls(originalText, siteRootPath);
+    if (rewritten !== originalText) {
+      content = new TextEncoder().encode(rewritten);
+      transformed = true;
+    }
+  }
   const headers = publishedResponseHeaders(resolved.filePath, resolved.object);
-  if (publishedObjectNotModified(c.req.raw, resolved.object)) {
+  if (transformed) {
+    // The served bytes now include the canonical site mount, so validators
+    // from the unrewritten R2 object no longer describe this response.
+    headers.delete("ETag");
+    headers.delete("Last-Modified");
+  } else if (publishedObjectNotModified(c.req.raw, resolved.object)) {
     return new Response(null, { status: 304, headers });
   }
 
-  return new Response(binaryBody(new Uint8Array(await resolved.object.arrayBuffer())), {
+  return new Response(binaryBody(content), {
     headers
   });
 }
