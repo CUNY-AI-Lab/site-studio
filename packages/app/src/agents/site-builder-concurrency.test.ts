@@ -9,6 +9,8 @@ import {
   describeModelStreamError,
   SiteBuilderAgent,
   SITE_STUDIO_CHAT_CANCELLED_TYPE,
+  SITE_STUDIO_CHAT_COMMITTED_TYPE,
+  SITE_STUDIO_CHAT_INVALIDATED_TYPE,
   SITE_STUDIO_CANCEL_TURN_TYPE,
   SITE_STUDIO_EVENT_ID_RE,
   summarizeError,
@@ -398,6 +400,75 @@ describe("Site Builder connection logging concurrency", () => {
 
     expect(resetTurnState).toHaveBeenCalledOnce();
     expect(broadcast).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
+  });
+
+  it("replaces transcript broadcasts with invalidation and targets stream frames", () => {
+    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
+      broadcast?: (...args: unknown[]) => void;
+    };
+    const sends = new Map<string, (message: string) => void>();
+    const baseBroadcast = vi.fn((message: string, without?: string[]) => {
+      for (const [connectionId, send] of sends) {
+        if (!without?.includes(connectionId)) send(message);
+      }
+    });
+    Object.defineProperty(agentParent, "broadcast", {
+      configurable: true,
+      value: baseBroadcast,
+    });
+    try {
+      const agent = createTestAgent();
+      const sendA = vi.fn();
+      const sendB = vi.fn();
+      const connectionA = Object.assign(fakeConnection(), { id: "connection-a", send: sendA });
+      const connectionB = Object.assign(fakeConnection(), { id: "connection-b", send: sendB });
+      sends.set(connectionA.id, sendA);
+      sends.set(connectionB.id, sendB);
+      Object.assign(agent, {
+        getConnections: () => [connectionA, connectionB],
+        getConnection: (id: string) => [connectionA, connectionB].find((connection) => connection.id === id),
+        chatRequestConnections: new Map([["request-a", "connection-a"]]),
+        buildActionsAwaitingPersistence: new Map(),
+        messages: [{ id: "persisted", role: "assistant", parts: [{ type: "text", text: "saved" }] }],
+      });
+
+      agent.broadcast(
+        JSON.stringify({
+          type: "cf_agent_chat_messages",
+          messages: [{ id: "private", role: "assistant", parts: [{ type: "text", text: "private" }] }],
+        }),
+        ["connection-a"],
+      );
+
+      expect(baseBroadcast).toHaveBeenCalledWith(
+        JSON.stringify({ type: SITE_STUDIO_CHAT_INVALIDATED_TYPE }),
+        ["connection-a"],
+      );
+      expect(sendA).not.toHaveBeenCalled();
+      expect(sendB).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_INVALIDATED_TYPE }));
+
+      agent.broadcast(
+        JSON.stringify({
+          type: "cf_agent_use_chat_response",
+          id: "request-a",
+          body: JSON.stringify({ type: "text-delta", id: "request-a", delta: "only tab A" }),
+        }),
+      );
+
+      expect(sendA).toHaveBeenCalledOnce();
+      expect(sendA).toHaveBeenCalledWith(expect.stringContaining("only tab A"));
+      expect(sendB).toHaveBeenCalledTimes(1);
+
+      (agent as unknown as { onChatResponse: (result: unknown) => void }).onChatResponse({
+        requestId: "request-a",
+        status: "completed",
+      });
+
+      expect(sendA).toHaveBeenCalledWith(expect.stringContaining(SITE_STUDIO_CHAT_COMMITTED_TYPE));
+      expect(sendB).toHaveBeenCalledTimes(1);
+    } finally {
+      delete agentParent.broadcast;
+    }
   });
 
   it("retains socket A while missing and changed subjects clear/isolate later sockets", () => {

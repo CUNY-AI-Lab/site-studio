@@ -75,17 +75,46 @@ import {
   type OwnerMutation,
   type OwnerMutationResult,
 } from "../lib/owner-mutations";
+import { SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS } from "../../../observability-core/src/chat-liveness";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
 /**
  * Post-persistence chat commit frames are deliberately separate from the
- * streaming response protocol.  The frame contains only the same persisted
- * UI messages already exposed by `cf_agent_chat_messages`/`get-messages`.
+ * streaming response protocol. The frame is sent only to the connection that
+ * initiated the request and contains the persisted UI messages that connection
+ * is already authorized to read through `get-messages`.
  */
 export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
+export const SITE_STUDIO_CHAT_INVALIDATED_TYPE = "site_studio_chat_invalidated" as const;
+export const SITE_STUDIO_CHAT_LIVENESS_TYPE = "site_studio_chat_liveness" as const;
 export const SITE_STUDIO_CANCEL_TURN_TYPE = "site_studio_cancel_turn" as const;
 export const SITE_STUDIO_CHAT_CANCELLED_TYPE = "site_studio_chat_cancelled" as const;
+
+const CF_AGENT_CHAT_MESSAGES_TYPE = "cf_agent_chat_messages" as const;
+const CF_AGENT_USE_CHAT_RESPONSE_TYPE = "cf_agent_use_chat_response" as const;
+const CF_AGENT_MESSAGE_UPDATED_TYPE = "cf_agent_message_updated" as const;
+
+type SiteStudioChatFrame = {
+  type: string;
+  id?: string;
+};
+
+function parseSiteStudioChatFrame(message: string): SiteStudioChatFrame | null {
+  try {
+    const parsed: unknown = JSON.parse(message);
+    if (typeof parsed !== "object" || parsed === null || !Object.hasOwn(parsed, "type")) {
+      return null;
+    }
+    const frame = parsed as Record<string, unknown>;
+    return {
+      type: typeof frame.type === "string" ? frame.type : "",
+      id: typeof frame.id === "string" ? frame.id : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const siteStudioCancelTurnSchema = z.object({
   type: z.literal(SITE_STUDIO_CANCEL_TURN_TYPE),
@@ -1294,10 +1323,19 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     sendIdentityOnConnect: true
   };
 
+  /**
+   * Let the platform abort a stream that has stopped producing chunks. The
+   * browser receives the same boundary on connect and re-arms it whenever a
+   * response frame arrives, so a lost terminal frame cannot leave a spinner
+   * alive indefinitely.
+   */
+  chatStreamStallTimeoutMs = SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS;
+
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
   private buildActionsAwaitingPersistence = new Map<string, SiteStudioActionLifecycle>();
+  private chatRequestConnections = new Map<string, string>();
   /**
    * Operational subject is deliberately not stored on the Durable Object.
    * Each connection receives the route's middleware-verified subject and JWT
@@ -1325,6 +1363,108 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
     connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt ?? undefined));
 
+    try {
+      connection.send(JSON.stringify({
+        type: SITE_STUDIO_CHAT_LIVENESS_TYPE,
+        streamStallTimeoutMs: this.chatStreamStallTimeoutMs,
+      }));
+    } catch {
+      // The platform can close a socket between accept and the first frame.
+      // The browser still has the shared contract value as a local fallback.
+    }
+  }
+
+  /**
+   * AIChatAgent persists the complete merged transcript through
+   * `cf_agent_chat_messages`. That frame is useful to generic clients but is
+   * an ownership violation for a shared project Durable Object: it reaches
+   * every other connection. Replace it with a bounded invalidation so each
+   * connection can re-fetch its own authorized history without receiving the
+   * other connection's transcript.
+   *
+   * Stream response frames are connection-owned as well. The SDK does not
+   * consistently pass the initiator's exclusion list to every stream branch,
+   * so route them directly using the connection context or the stable request
+   * id captured by `onChatMessage`.
+   */
+  override broadcast(
+    message: string | ArrayBuffer | ArrayBufferView,
+    without?: string[],
+  ): void {
+    if (typeof message !== "string") {
+      super.broadcast(message, without);
+      return;
+    }
+
+    const frame = parseSiteStudioChatFrame(message);
+    if (!frame) {
+      super.broadcast(message, without);
+      return;
+    }
+
+    if (frame.type === CF_AGENT_CHAT_MESSAGES_TYPE) {
+      super.broadcast(JSON.stringify({ type: SITE_STUDIO_CHAT_INVALIDATED_TYPE }), without);
+      return;
+    }
+
+    if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE || frame.type === CF_AGENT_MESSAGE_UPDATED_TYPE) {
+      const targetConnectionId = this.chatConnectionForFrame(frame.id);
+      this.broadcastChatFrame(message, targetConnectionId, without);
+      return;
+    }
+
+    super.broadcast(message, without);
+  }
+
+  /**
+   * Keep AIChatAgent's own broadcast interception (notably agent-tool
+   * forwarding) while restricting the actual WebSocket delivery to one
+   * connection. A missing target fails closed: the frame is still offered to
+   * the SDK's internal forwarders, but no Site Studio client receives it.
+   */
+  private broadcastChatFrame(
+    message: string,
+    targetConnectionId: string | undefined,
+    without?: string[],
+  ): void {
+    const excluded = new Set(without ?? []);
+    for (const connection of this.getConnections()) {
+      if (connection.id !== targetConnectionId) excluded.add(connection.id);
+    }
+    super.broadcast(message, [...excluded]);
+  }
+
+  private chatConnectionForFrame(requestId: string | undefined): string | undefined {
+    if (requestId) {
+      const mappedConnectionId = this.chatRequestConnections.get(requestId);
+      if (mappedConnectionId) return mappedConnectionId;
+    }
+
+    try {
+      return getCurrentAgent().connection?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private sendChatFrame(connectionId: string, frame: Record<string, unknown>): void {
+    const connection = this.getConnection<SiteStudioConnectionLoggingState>(connectionId);
+    if (!connection) return;
+    try {
+      connection.send(JSON.stringify(frame));
+    } catch {
+      // The target may have disconnected after the persistence commit. A
+      // reconnecting client will reconcile through its authorized history read.
+    }
+  }
+
+  private rememberChatRequestConnection(requestId: string, connectionId: string): void {
+    this.chatRequestConnections.set(requestId, connectionId);
+    if (this.chatRequestConnections.size <= 32) return;
+    const oldestRequestId = this.chatRequestConnections.keys().next().value;
+    if (typeof oldestRequestId === "string") {
+      this.chatRequestConnections.delete(oldestRequestId);
+    }
   }
 
   /**
@@ -1525,16 +1665,17 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // Only successful persisted turns get a commit; errors stay transient and
     // aborted turns use the existing cancellation path.
     if (result.status === "completed") {
-      try {
-        this.broadcast(JSON.stringify({
+      const targetConnectionId = this.chatRequestConnections.get(result.requestId);
+      if (targetConnectionId) {
+        this.sendChatFrame(targetConnectionId, {
           type: SITE_STUDIO_CHAT_COMMITTED_TYPE,
           requestId: result.requestId,
           messages: this.messages,
-        }));
-      } catch {
-        console.error("Failed to broadcast persisted chat commit");
+        });
       }
     }
+
+    this.chatRequestConnections.delete(result.requestId);
 
     const pending = this.buildActionsAwaitingPersistence.get(result.requestId);
     if (!pending) return;
@@ -1558,6 +1699,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const requestId = options?.requestId ?? "unknown";
 
     const connection = getCurrentAgent().connection;
+    if (connection && requestId !== "unknown") {
+      this.rememberChatRequestConnection(requestId, connection.id);
+    }
     const parsedConnectionState = connection?.state
       ? connectionStateSchema.safeParse(connection.state)
       : null;
