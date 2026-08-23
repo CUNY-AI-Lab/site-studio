@@ -537,6 +537,12 @@ import {
 		scrollToBottom();
 	}
 
+	function appendStreamError(stream: ActiveStreamMessage, text: string) {
+		if (!text || stream.errorText === text) return;
+		stream.errorText = text;
+		stream.parts.push({ type: 'text', text, state: 'done' });
+	}
+
 	function getCurrentMessagesForRequest(nextUserMessage?: UIChatMessage): UIChatMessage[] {
 		return nextUserMessage ? [...uiMessages, nextUserMessage] : [...uiMessages];
 	}
@@ -995,8 +1001,25 @@ import {
 
 		if (chunk.type === 'error') {
 			activeStream.hadError = true;
-			activeStream.parts.push({ type: 'text', text: chunk.errorText, state: 'done' });
+			appendStreamError(activeStream, chunk.errorText);
 			flushActiveStreamToMessages(activeStream);
+			return;
+		}
+
+		if (chunk.type === 'abort') {
+			const requestId = activeStream.id;
+			activeStream.hadError = true;
+			activeStream.parts.push({
+				type: 'text',
+				text: 'The response stopped partway. Send your message again.',
+				state: 'done'
+			});
+			flushActiveStreamToMessages(activeStream);
+			// An abort is terminal even when the transport never sends the usual
+			// done frame. Mark the request settled before clearing state so a late
+			// replay cannot recreate the Working indicator.
+			settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
+			resetRequestState();
 			return;
 		}
 
@@ -1007,13 +1030,16 @@ import {
 				activeStream.messageId = chunk.messageId;
 			}
 
-			if (
-				(chunk.type === 'start' || chunk.type === 'finish' || chunk.type === 'message-metadata') &&
-				chunk.messageMetadata
-			) {
-				activeStream.metadata = activeStream.metadata
-					? { ...activeStream.metadata, ...chunk.messageMetadata }
-					: { ...chunk.messageMetadata };
+			if (chunk.type === 'start' || chunk.type === 'finish' || chunk.type === 'message-metadata') {
+				// AI SDK v6 declares messageMetadata as unknown and permits scalar or
+				// null values. Site Studio's persisted message contract is an object;
+				// retain only object metadata at that application boundary.
+				const metadata = z.record(z.string(), jsonValueSchema).safeParse(chunk.messageMetadata);
+				if (metadata.success) {
+					activeStream.metadata = activeStream.metadata
+						? { ...activeStream.metadata, ...metadata.data }
+						: { ...metadata.data };
+				}
 			}
 		}
 
@@ -1232,16 +1258,17 @@ import {
 							!bodyText.startsWith('data:') &&
 							!bodyText.startsWith('{') &&
 							!bodyText.startsWith('[');
-						if (!(data.error && looksLikeProse)) {
-							console.warn('Failed to parse stream chunk', error);
-							if (data.error && activeStream) {
-								activeStream.parts.push({
-									type: 'text',
-									text: 'Something went wrong while generating this response.',
-									state: 'done'
-								});
+							if (data.error && activeStream && looksLikeProse) {
+								// Error frames may carry the provider's human-readable message as
+								// plain text rather than a UI chunk. Render it here; a later
+								// structured copy is deduplicated by appendStreamError.
+								appendStreamError(activeStream, bodyText);
+							} else {
+								console.warn('Failed to parse stream chunk', error);
+								if (data.error && activeStream) {
+									appendStreamError(activeStream, 'Something went wrong while generating this response.');
+								}
 							}
-						}
 					}
 				}
 

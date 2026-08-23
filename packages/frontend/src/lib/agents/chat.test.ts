@@ -4,6 +4,7 @@ import {
 	mergeUpdatedMessage,
 	cloneParts,
 	isToolPart,
+	parseUIStreamChunk,
 	type UIMessagePart,
 	type UIToolPart,
 	type UITextPart,
@@ -126,17 +127,19 @@ describe('applyChunkToParts — tool input lifecycle', () => {
 		]);
 	});
 
-	it('tool-input-delta updates input on the matching tool part', () => {
+	it('tool-input-delta accumulates official JSON text fragments', () => {
 		const parts: UIMessagePart[] = [
 			{ type: 'tool-codemode', toolCallId: 'c1', toolName: 'codemode', state: 'input-streaming' }
 		];
-		applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'c1', input: { code: 'x' } });
+		applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"co' });
+		expect(toolPart(parts, 'c1').input).toBe('{"co');
+		applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: 'de":"x"}' });
 		expect(toolPart(parts, 'c1').input).toEqual({ code: 'x' });
 	});
 
 	it('tool-input-delta for an unknown call id is a handled no-op', () => {
 		const parts: UIMessagePart[] = [];
-		const handled = applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'nope', input: {} });
+		const handled = applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'nope', inputTextDelta: '{}' });
 		expect(handled).toBe(true);
 		expect(parts).toEqual([]);
 	});
@@ -157,6 +160,30 @@ describe('applyChunkToParts — tool input lifecycle', () => {
 		expect(tp.input).toEqual({ code: 'run()' });
 		expect(tp.title).toBe('Final');
 		expect(parts).toHaveLength(1);
+	});
+
+	it('tool-input-available does not regress a settled tool part', () => {
+		const parts: UIMessagePart[] = [
+			{
+				type: 'tool-codemode',
+				toolCallId: 'c1',
+				toolName: 'codemode',
+				state: 'output-available',
+				input: { code: 'run()' },
+				output: { ok: true }
+			}
+		];
+		applyChunkToParts(parts, {
+			type: 'tool-input-available',
+			toolCallId: 'c1',
+			toolName: 'codemode',
+			input: { code: 'replayed()' }
+		});
+		expect(toolPart(parts, 'c1')).toMatchObject({
+			state: 'output-available',
+			input: { code: 'run()' },
+			output: { ok: true }
+		});
 	});
 
 	it('tool-input-available creates a new part when the call id is unseen', () => {
@@ -211,6 +238,31 @@ describe('applyChunkToParts — tool input lifecycle', () => {
 		expect(tp.state).toBe('output-error');
 		expect(tp.errorText).toBe('nope');
 	});
+
+	it('tool-input-error does not overwrite a settled output', () => {
+		const parts: UIMessagePart[] = [
+			{
+				type: 'tool-codemode',
+				toolCallId: 'c1',
+				toolName: 'codemode',
+				state: 'output-available',
+				input: { code: 'run()' },
+				output: { ok: true }
+			}
+		];
+		applyChunkToParts(parts, {
+			type: 'tool-input-error',
+			toolCallId: 'c1',
+			toolName: 'codemode',
+			input: { code: 'bad()' },
+			errorText: 'late error'
+		});
+		expect(toolPart(parts, 'c1')).toMatchObject({
+			state: 'output-available',
+			input: { code: 'run()' },
+			output: { ok: true }
+		});
+	});
 });
 
 describe('applyChunkToParts — tool approval + output lifecycle', () => {
@@ -263,6 +315,57 @@ describe('applyChunkToParts — tool approval + output lifecycle', () => {
 		expect(tp.errorText).toBe('failed');
 	});
 
+	it('the first terminal output wins when a replay changes success into an error', () => {
+		const parts = seededToolPart();
+		applyChunkToParts(parts, { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } });
+		applyChunkToParts(parts, { type: 'tool-output-error', toolCallId: 'c1', errorText: 'late failure' });
+		expect(toolPart(parts, 'c1')).toMatchObject({ state: 'output-available', output: { ok: true } });
+	});
+
+	it('the first terminal output wins when a replay changes an error into success', () => {
+		const parts = seededToolPart();
+		applyChunkToParts(parts, { type: 'tool-output-error', toolCallId: 'c1', errorText: 'first failure' });
+		applyChunkToParts(parts, { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } });
+		expect(toolPart(parts, 'c1')).toMatchObject({ state: 'output-error', errorText: 'first failure' });
+	});
+
+	it('a preliminary output can be replaced by the final output', () => {
+		const parts = seededToolPart();
+		applyChunkToParts(parts, {
+			type: 'tool-output-available',
+			toolCallId: 'c1',
+			output: { phase: 'working' },
+			preliminary: true
+		});
+		applyChunkToParts(parts, { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } });
+		expect(toolPart(parts, 'c1')).toMatchObject({ state: 'output-available', output: { ok: true } });
+		expect(toolPart(parts, 'c1').preliminary).toBeUndefined();
+	});
+
+	it('a preliminary output can be replaced by a final error', () => {
+		const parts = seededToolPart();
+		applyChunkToParts(parts, {
+			type: 'tool-output-available',
+			toolCallId: 'c1',
+			output: { phase: 'working' },
+			preliminary: true
+		});
+		applyChunkToParts(parts, { type: 'tool-output-error', toolCallId: 'c1', errorText: 'final failure' });
+		expect(toolPart(parts, 'c1')).toMatchObject({ state: 'output-error', errorText: 'final failure' });
+	});
+
+	it('a preliminary output can be replaced by an explicit denial', () => {
+		const parts = seededToolPart();
+		applyChunkToParts(parts, {
+			type: 'tool-output-available',
+			toolCallId: 'c1',
+			output: { phase: 'working' },
+			preliminary: true
+		});
+		applyChunkToParts(parts, { type: 'tool-output-denied', toolCallId: 'c1' });
+		expect(toolPart(parts, 'c1').state).toBe('output-denied');
+	});
+
 	it('tool-output-denied sets output-denied state', () => {
 		const parts = seededToolPart();
 		applyChunkToParts(parts, { type: 'tool-output-denied', toolCallId: 'c1' });
@@ -279,11 +382,99 @@ describe('applyChunkToParts — tool approval + output lifecycle', () => {
 });
 
 describe('applyChunkToParts — step markers, data parts, unknown chunks', () => {
+	it('parses the AI SDK v6 finish-step and file wire chunks', () => {
+		expect(parseUIStreamChunk('{"type":"finish-step"}')).toEqual({ type: 'finish-step' });
+		expect(parseUIStreamChunk('{"type":"file","mediaType":"text/plain","url":"data:text/plain,ok"}')).toEqual({
+			type: 'file',
+			mediaType: 'text/plain',
+			url: 'data:text/plain,ok'
+		});
+	});
+
 	it('start-step and step-start both push a step-start part', () => {
 		const parts: UIMessagePart[] = [];
 		applyChunkToParts(parts, { type: 'start-step' });
 		applyChunkToParts(parts, { type: 'step-start' });
 		expect(parts).toEqual([{ type: 'step-start' }, { type: 'step-start' }]);
+	});
+
+	it('finish-step and abort are recognized without changing message parts', () => {
+		const parts: UIMessagePart[] = [{ type: 'text', text: 'partial' }];
+		expect(applyChunkToParts(parts, { type: 'finish-step' })).toBe(true);
+		expect(applyChunkToParts(parts, { type: 'abort', reason: 'cancelled' })).toBe(true);
+		expect(parts).toEqual([{ type: 'text', text: 'partial' }]);
+	});
+
+	it('source and file chunks are retained as message parts', () => {
+		const parts: UIMessagePart[] = [];
+		applyChunkToParts(parts, { type: 'source-url', sourceId: 's1', url: 'https://example.test' });
+		applyChunkToParts(parts, { type: 'source-url', sourceId: 's1', url: 'https://example.test' });
+		applyChunkToParts(parts, {
+			type: 'source-document',
+			sourceId: 's2',
+			mediaType: 'text/plain',
+			title: 'Notes',
+			filename: 'notes.txt'
+		});
+		applyChunkToParts(parts, { type: 'file', mediaType: 'text/plain', url: 'data:text/plain,hello' });
+		applyChunkToParts(parts, { type: 'file', mediaType: 'text/plain', url: 'data:text/plain,hello' });
+		expect(parts).toEqual([
+			{ type: 'source-url', sourceId: 's1', url: 'https://example.test' },
+			{ type: 'source-document', sourceId: 's2', mediaType: 'text/plain', title: 'Notes', filename: 'notes.txt' },
+			{ type: 'file', mediaType: 'text/plain', url: 'data:text/plain,hello' }
+		]);
+	});
+
+	it('accepts official metadata values and tool provider fields at the stream boundary', () => {
+		expect(parseUIStreamChunk('{"type":"start","messageMetadata":null}')).toEqual({
+			type: 'start',
+			messageMetadata: null
+		});
+		expect(
+			parseUIStreamChunk(
+				JSON.stringify({
+					type: 'tool-input-start',
+					toolCallId: 'c1',
+					toolName: 'codemode',
+					providerExecuted: true,
+					providerMetadata: { gateway: { trace: 't1' } },
+					toolMetadata: { label: 'Code' },
+					dynamic: true
+				})
+			)
+		).toMatchObject({
+			type: 'tool-input-start',
+			providerExecuted: true,
+			providerMetadata: { gateway: { trace: 't1' } },
+			toolMetadata: { label: 'Code' },
+			dynamic: true
+		});
+	});
+
+	it('transient data chunks do not enter message parts', () => {
+		const parts: UIMessagePart[] = [];
+		expect(applyChunkToParts(parts, { type: 'data-progress', data: { phase: 'working' }, transient: true })).toBe(true);
+		expect(parts).toEqual([]);
+	});
+
+	it('replays an official tool input stream into a settled successful tool part', () => {
+		const parts: UIMessagePart[] = [];
+		applyChunkToParts(parts, { type: 'tool-input-start', toolCallId: 'c1', toolName: 'codemode' });
+		applyChunkToParts(parts, { type: 'tool-input-delta', toolCallId: 'c1', inputTextDelta: '{"code":"return {}"}' });
+		applyChunkToParts(parts, {
+			type: 'tool-input-available',
+			toolCallId: 'c1',
+			toolName: 'codemode',
+			input: { code: 'return {}' }
+		});
+		applyChunkToParts(parts, { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } });
+		applyChunkToParts(parts, { type: 'finish-step' });
+
+		expect(toolPart(parts, 'c1')).toMatchObject({
+			state: 'output-available',
+			input: { code: 'return {}' },
+			output: { ok: true }
+		});
 	});
 
 	it('data-* chunk without id is appended', () => {
