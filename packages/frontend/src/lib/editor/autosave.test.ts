@@ -18,8 +18,9 @@ function deferred<T>() {
 }
 
 async function flushMicrotasks() {
-	await Promise.resolve();
-	await Promise.resolve();
+	for (let index = 0; index < 8; index += 1) {
+		await Promise.resolve();
+	}
 }
 
 describe('createAutosave', () => {
@@ -45,7 +46,7 @@ describe('createAutosave', () => {
 		await vi.advanceTimersByTimeAsync(1);
 
 		expect(persist).toHaveBeenCalledTimes(1);
-		expect(persist).toHaveBeenCalledWith(snapshot('B'));
+		expect(persist).toHaveBeenCalledWith(snapshot('B'), expect.any(AbortSignal));
 	});
 
 	it('persists a newer edit queued during an in-flight successful save in the same drain', async () => {
@@ -65,7 +66,7 @@ describe('createAutosave', () => {
 		await flushMicrotasks();
 
 		expect(persist).toHaveBeenCalledTimes(2);
-		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'));
+		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'), expect.any(AbortSignal));
 		await expect(autosave.flush()).resolves.toBe(true);
 	});
 
@@ -87,7 +88,7 @@ describe('createAutosave', () => {
 		expect(persist).toHaveBeenCalledTimes(1);
 		await expect(autosave.flush()).resolves.toBe(true);
 		expect(persist).toHaveBeenCalledTimes(2);
-		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'));
+		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'), expect.any(AbortSignal));
 	});
 
 	it('retries a failed background save on later flush instead of returning true vacuously (SS-35 regression)', async () => {
@@ -104,11 +105,11 @@ describe('createAutosave', () => {
 
 		await expect(autosave.flush()).resolves.toBe(false);
 		expect(persist).toHaveBeenCalledTimes(2);
-		expect(persist).toHaveBeenNthCalledWith(2, snapshot('A'));
+		expect(persist).toHaveBeenNthCalledWith(2, snapshot('A'), expect.any(AbortSignal));
 
 		await expect(autosave.flush()).resolves.toBe(true);
 		expect(persist).toHaveBeenCalledTimes(3);
-		expect(persist).toHaveBeenNthCalledWith(3, snapshot('A'));
+		expect(persist).toHaveBeenNthCalledWith(3, snapshot('A'), expect.any(AbortSignal));
 	});
 
 	it('does not schedule an automatic retry after a failed background drain', async () => {
@@ -147,7 +148,7 @@ describe('createAutosave', () => {
 
 		await expect(autosave.flush()).resolves.toBe(true);
 		expect(persist).toHaveBeenCalledOnce();
-		expect(persist).toHaveBeenCalledWith(snapshot('A'));
+		expect(persist).toHaveBeenCalledWith(snapshot('A'), expect.any(AbortSignal));
 	});
 
 	it('flushes a pending snapshot after dispose', async () => {
@@ -159,7 +160,7 @@ describe('createAutosave', () => {
 
 		await expect(autosave.flush()).resolves.toBe(true);
 		expect(persist).toHaveBeenCalledOnce();
-		expect(persist).toHaveBeenCalledWith(snapshot('A'));
+		expect(persist).toHaveBeenCalledWith(snapshot('A'), expect.any(AbortSignal));
 	});
 
 	it('reports the queued snapshot until a successful drain completes', async () => {
@@ -183,5 +184,49 @@ describe('createAutosave', () => {
 		await vi.advanceTimersByTimeAsync(100);
 
 		expect(persist).not.toHaveBeenCalled();
+	});
+
+	it('bounds a never-resolving persist and keeps the snapshot pending', async () => {
+		const persist = vi.fn<(snapshot: SaveSnapshot, signal: AbortSignal) => Promise<boolean>>(
+			() => new Promise<boolean>(() => {})
+		);
+		const queued = snapshot('A');
+		const autosave = createAutosave({ persist, delayMs: 100, persistTimeoutMs: 50 });
+
+		autosave.queue(queued);
+		const flushPromise = autosave.flush();
+		await flushMicrotasks();
+
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(flushPromise).resolves.toBe(false);
+		expect(autosave.pending()).toEqual(queued);
+		expect(persist.mock.calls[0]?.[1]?.aborted).toBe(true);
+
+		// A non-cooperative operation remains owned by the first save and cannot
+		// make a later flush start a concurrent write.
+		await expect(autosave.flush()).resolves.toBe(false);
+		expect(persist).toHaveBeenCalledOnce();
+	});
+
+	it('does not duplicate a timed-out snapshot when its late persist succeeds', async () => {
+		const first = deferred<boolean>();
+		const persist = vi
+			.fn<(snapshot: SaveSnapshot, signal: AbortSignal) => Promise<boolean>>()
+			.mockReturnValueOnce(first.promise);
+		const queued = snapshot('A');
+		const autosave = createAutosave({ persist, delayMs: 100, persistTimeoutMs: 50 });
+
+		autosave.queue(queued);
+		const flushPromise = autosave.flush();
+		await flushMicrotasks();
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(flushPromise).resolves.toBe(false);
+		expect(autosave.pending()).toEqual(queued);
+
+		first.resolve(true);
+		await flushMicrotasks();
+		expect(autosave.pending()).toBeNull();
+		await expect(autosave.flush()).resolves.toBe(true);
+		expect(persist).toHaveBeenCalledOnce();
 	});
 });

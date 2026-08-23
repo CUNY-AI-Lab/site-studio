@@ -367,12 +367,13 @@
 		};
 	}
 
-	async function persistFile(snapshot: SaveSnapshot): Promise<boolean> {
+	async function persistFile(snapshot: SaveSnapshot, signal: AbortSignal): Promise<boolean> {
 		const { projectId: targetProjectId, filePath, content } = snapshot;
 		const requestBaseEtag = currentFileEtag;
 		if (requestBaseEtag === null) return false;
 
 		try {
+			signal.throwIfAborted();
 			const savePayload: SavePayload = {
 				path: filePath,
 				content,
@@ -382,7 +383,8 @@
 			const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/file`), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(savePayload)
+				body: JSON.stringify(savePayload),
+				signal
 			});
 
 			if (response.status === 409) {
@@ -396,13 +398,17 @@
 			if (!response.ok) throw new Error('Failed to save file');
 
 			const data = parseSaveResponse(await response.text());
+			signal.throwIfAborted();
 			if (targetProjectId === projectId && filePath === currentFile) {
 				currentFileEtag = data.etag;
 			}
 			await draftWriteQueue;
+			signal.throwIfAborted();
 			if (draftSecret) {
 				await rebaseDraft(localStorage, snapshot, requestBaseEtag, data.etag, draftSecret);
+				signal.throwIfAborted();
 				await clearDraft(localStorage, snapshot, draftSecret);
+				signal.throwIfAborted();
 			}
 
 			// Refresh preview after save

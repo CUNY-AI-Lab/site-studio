@@ -1516,6 +1516,8 @@ function createChatTools(
 }
 
 export class SiteBuilderAgent extends AIChatAgent<Env> {
+  override chatStreamStallTimeoutMs = 300_000;
+
   static options = {
     sendIdentityOnConnect: true
   };
