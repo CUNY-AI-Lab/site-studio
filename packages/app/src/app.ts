@@ -16,6 +16,7 @@ import { createQuotaRouter } from "./routes/quota";
 import { previewTokenAuth } from "./lib/preview-token";
 import { requireProject, type RequireProjectVariables } from "./lib/require-project";
 import { requestLogging, type LoggingVariables } from "./lib/logging";
+import { getServedContentType } from "./lib/constants";
 
 /**
  * App assembly lives here (separate from index.ts) so tests can exercise the
@@ -51,6 +52,17 @@ export function normalizeMountedRequest(
 
 function assetRequest(c: { req: { raw: Request; url: string }; env: Env }): Request {
   return normalizeMountedRequest(c.req.raw, c.env);
+}
+
+/**
+ * The asset binding is configured for SPA fallback so extensionless Svelte
+ * routes can load the app shell. A missing known static asset must not inherit
+ * that fallback: the browser needs a real 404 instead of HTML for a script,
+ * stylesheet, image, or other authored static resource.
+ */
+function isStandaloneStaticAsset(pathname: string): boolean {
+  const contentType = getServedContentType(pathname);
+  return contentType !== "application/octet-stream" && !contentType.startsWith("text/html");
 }
 
 // Fleet logging standard (cail-log): adopt/mint correlation at the fetch
@@ -153,7 +165,22 @@ app.notFound(async (c) => {
     || pathname.startsWith("/sites/");
 
   if (!isWorkerRoute && c.env.ASSETS) {
-    return c.env.ASSETS.fetch(assetRequest(c));
+    const assetResponse = await c.env.ASSETS.fetch(assetRequest(c));
+    const assetContentType = assetResponse.headers.get("content-type")?.toLowerCase() || "";
+    if (isStandaloneStaticAsset(pathname) && assetResponse.status === 200 && assetContentType.startsWith("text/html")) {
+      return c.json(
+        { error: "Not found" },
+        404,
+        {
+          "Cache-Control": "no-store",
+          "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+          "Referrer-Policy": "no-referrer",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY"
+        }
+      );
+    }
+    return assetResponse;
   }
 
   return c.json(

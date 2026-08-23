@@ -235,6 +235,28 @@ describe("mounted SPA assets", () => {
     expect(asset.headers.get("content-type")).toContain("application/javascript");
     expect(requestedPaths).toEqual(["/", "/_app/immutable/entry/start.js"]);
   });
+
+  it("does not turn missing static assets into the SPA fallback", async () => {
+    const assetFetch = vi.fn(async () => new Response("<html>Site Studio</html>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    }));
+    const env = createEnv();
+    env.ASSETS = asTestFetcher(assetFetch);
+
+    for (const path of [
+      "/site-studio/_app/immutable/chunks/missing.js",
+      "/site-studio/_app/immutable/assets/missing.css",
+      "/site-studio/icon-missing.png",
+    ]) {
+      const response = await app.request(`${BASE}${path}`, {}, env);
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).not.toContain("Site Studio");
+    }
+
+    expect(assetFetch).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("subject session retirement", () => {
