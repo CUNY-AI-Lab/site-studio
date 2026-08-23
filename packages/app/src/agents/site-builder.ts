@@ -1874,6 +1874,16 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
   private releaseSettledChatToolOwnership(frame: SiteStudioChatFrame): void {
     this.ensureChatBoundaryState();
+    // A server tool result is one step in the same model turn. Remove only the
+    // tool-call lookup from the response frame, leaving the request connection
+    // until onChatResponse sends the persisted commit and retires the turn.
+    // Otherwise the final model text and commit have no safe owner.
+    if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE) {
+      for (const toolCallId of settledToolCallIdsFromFrame(frame)) {
+        this.chatToolRequestIds.delete(toolCallId);
+      }
+      return;
+    }
     for (const toolCallId of settledToolCallIdsFromFrame(frame)) {
       const requestId = this.chatToolRequestIds.get(toolCallId);
       if (!requestId) continue;
