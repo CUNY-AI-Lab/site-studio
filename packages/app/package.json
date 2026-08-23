@@ -11,8 +11,9 @@
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",
+    "test:chat-boundary": "node --experimental-loader ./scripts/chat-runtime-contract-loader.mjs ./scripts/chat-runtime-contract.mjs",
     "test:watch": "vitest",
-    "check": "bun run prebuild && vitest run && tsc --noEmit"
+    "check": "bun run prebuild && vitest run && bun run test:chat-boundary && tsc --noEmit"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.59",

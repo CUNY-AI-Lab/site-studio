@@ -414,11 +414,30 @@ describe("Site Builder connection logging concurrency", () => {
     const agent = createTestAgent();
     const resetTurnState = vi.fn();
     const broadcast = vi.fn();
+    const connection = chatConnection("connection-a", "subject-a");
     Object.defineProperty(agent, "resetTurnState", { value: resetTurnState });
     Object.defineProperty(agent, "broadcast", { value: broadcast });
+    Object.assign(agent, {
+      getConnection: () => connection,
+      getConnections: () => [connection],
+      chatRequestConnections: new Map([[
+        "request-a",
+        {
+          connection,
+          connectionId: connection.id,
+          generation: 1,
+          subject: "subject-a",
+        },
+      ]]),
+      detachedChatRequestConnections: new Map(),
+      chatToolRequestIds: new Map(),
+      chatRequestClaims: new Map([["request-a", true]]),
+      chatConnectionGeneration: 1,
+      _activeRequestId: "request-a",
+    });
 
     await agent.onMessage(
-      fakeConnection(),
+      connection,
       JSON.stringify({ type: SITE_STUDIO_CANCEL_TURN_TYPE }),
     );
 
