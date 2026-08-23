@@ -81,6 +81,15 @@ import {
 		annotations?: JsonValue;
 	}
 
+	interface PendingHistoryReconciliation {
+		requestId: string;
+		assistantMessageId: string;
+		userMessageId: string | null;
+		generation: number;
+	}
+
+	type SuccessfulRequestReconciliation = Pick<PendingHistoryReconciliation, 'requestId' | 'generation'>;
+
 	import type { UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
@@ -113,6 +122,8 @@ import {
 	let socketPromiseProjectId: string | null = null;
 	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
+	let currentRequestUserMessageId = $state<string | null>(null);
+	let requestGeneration = $state(0);
 	let expectingContinuation = $state(false);
 	let cancelledContinuationPending = $state(false);
 	let cancelTurnDeliveryPending = false;
@@ -126,6 +137,13 @@ import {
 	// Keep only a small recent window: late stream/terminal frames for committed
 	// turns must not recreate stale UI, without retaining request ids forever.
 	let settledRequestIds = $state<Set<string>>(new Set());
+	// Successful terminal ids remain eligible for a late persisted commit even
+	// after the one history read has already repaired the visible transcript.
+	let successfulRequestReconciliations = $state<SuccessfulRequestReconciliation[]>([]);
+	// A successful stream settles the visible UI before the server's persistence
+	// hook runs. Keep its correlation and message anchors long enough for the one
+	// authenticated history read or the late custom commit to repair the transcript.
+	let pendingHistoryReconciliations = $state<PendingHistoryReconciliation[]>([]);
 	// A reconnect probe belongs to one socket and one pending request. The server
 	// echoes its probe id on STREAM_RESUME_NONE; the acknowledged id suppresses
 	// duplicate proactive and probe-triggered STREAM_RESUMING frames.
@@ -148,6 +166,59 @@ import {
 
 	function generateId(): string {
 		return crypto.randomUUID();
+	}
+
+	function rememberHistoryReconciliation(reconciliation: PendingHistoryReconciliation) {
+		pendingHistoryReconciliations = [
+			...pendingHistoryReconciliations.filter(({ requestId }) => requestId !== reconciliation.requestId),
+			reconciliation
+		].slice(-8);
+	}
+
+	function takeHistoryReconciliation(requestId: string): PendingHistoryReconciliation | undefined {
+		const reconciliation = pendingHistoryReconciliations.find((entry) => entry.requestId === requestId);
+		if (reconciliation) {
+			pendingHistoryReconciliations = pendingHistoryReconciliations.filter(
+				(entry) => entry.requestId !== requestId
+			);
+		}
+		return reconciliation;
+	}
+
+	function rememberSuccessfulRequest(requestId: string, generation: number) {
+		successfulRequestReconciliations = [
+			...successfulRequestReconciliations.filter((entry) => entry.requestId !== requestId),
+			{ requestId, generation }
+		].slice(-8);
+	}
+
+	function historyContainsCompletedTurn(
+		history: UIChatMessage[],
+		reconciliation: PendingHistoryReconciliation
+	): boolean {
+		const assistantIndex = history.findIndex(
+			(message) => message.role === 'assistant' && message.id === reconciliation.assistantMessageId
+		);
+		if (assistantIndex >= 0) {
+			if (!reconciliation.userMessageId) return true;
+			const userIndex = history.findIndex((message) => message.id === reconciliation.userMessageId);
+			return userIndex >= 0 && assistantIndex > userIndex;
+		}
+
+		// A stream without a `start` frame can use a client-generated assistant id,
+		// while the SDK assigns a different id when persisting. The request's user
+		// id is still an unambiguous anchor for a non-continuation turn; require an
+		// assistant after it so a read racing persistence cannot erase the visible
+		// completed stream with the pre-response history.
+		if (!reconciliation.userMessageId) return false;
+		const userIndex = history.findIndex((message) => message.id === reconciliation.userMessageId);
+		return userIndex >= 0 && history.slice(userIndex + 1).some((message) => message.role === 'assistant');
+	}
+
+	function clearReconciledHistoryEntries(history: UIChatMessage[]) {
+		pendingHistoryReconciliations = pendingHistoryReconciliations.filter(
+			(entry) => !historyContainsCompletedTurn(history, entry)
+		);
 	}
 
 	function getTextFromParts(parts: UIMessagePart[]): string {
@@ -266,6 +337,7 @@ import {
 		isLoading = false;
 		currentStatus = '';
 		currentRequestId = null;
+		currentRequestUserMessageId = null;
 		activeStream = null;
 		expectingContinuation = false;
 		streamResumeProbe = null;
@@ -520,12 +592,7 @@ import {
 	}
 
 	function flushActiveStreamToMessages(stream: ActiveStreamMessage) {
-		const nextMessage: UIChatMessage = {
-			id: stream.messageId,
-			role: 'assistant',
-			parts: cloneParts(stream.parts)
-		};
-		if (stream.metadata) nextMessage.metadata = { ...stream.metadata };
+		const nextMessage = streamToUIMessage(stream);
 
 		const existingIndex = uiMessages.findIndex((message) => message.id === nextMessage.id);
 		if (existingIndex >= 0) {
@@ -535,6 +602,16 @@ import {
 		}
 
 		scrollToBottom();
+	}
+
+	function streamToUIMessage(stream: ActiveStreamMessage): UIChatMessage {
+		const nextMessage: UIChatMessage = {
+			id: stream.messageId,
+			role: 'assistant',
+			parts: cloneParts(stream.parts)
+		};
+		if (stream.metadata) nextMessage.metadata = { ...stream.metadata };
+		return nextMessage;
 	}
 
 	function appendStreamError(stream: ActiveStreamMessage, text: string) {
@@ -858,11 +935,15 @@ import {
 		return nextPromise;
 	}
 
-	async function loadChatHistory(targetProjectId: string, targetEpoch = projectContextEpoch) {
+	async function loadChatHistory(
+		targetProjectId: string,
+		targetEpoch = projectContextEpoch,
+		reconciliation?: PendingHistoryReconciliation
+	) {
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			return;
 		}
-		historyLoadFailed = false;
+		if (!reconciliation) historyLoadFailed = false;
 		try {
 			const response = await apiResponseFetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
 				credentials: 'include'
@@ -873,6 +954,10 @@ import {
 			}
 
 			if (!response.ok) {
+				if (reconciliation) {
+					console.warn(`Failed to reconcile completed chat turn (${response.status})`);
+					return;
+				}
 				// SS-49: a non-ok response is a load FAILURE, not empty history — keep
 				// whatever transcript we have and surface a retry affordance instead
 				// of rendering a wiped conversation.
@@ -885,7 +970,28 @@ import {
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
 			}
+			if (
+				reconciliation &&
+				!pendingHistoryReconciliations.some((entry) => entry.requestId === reconciliation.requestId)
+			) {
+				// A socket commit or default history broadcast already repaired this turn
+				// while the read was in flight; never overwrite it with an older response.
+				return;
+			}
+			if (reconciliation && reconciliation.generation !== requestGeneration) {
+				// A newer model turn started while this read was in flight. Its local
+				// transcript must remain untouched by the older response.
+				return;
+			}
+			if (reconciliation && !historyContainsCompletedTurn(data, reconciliation)) {
+				// The SDK sends done:true before its persistence write. A single read can
+				// legitimately race that write; keep the visible completed stream and let
+				// a subsequent maintained commit/history broadcast repair it if available.
+				return;
+			}
 			uiMessages = data;
+			if (reconciliation) takeHistoryReconciliation(reconciliation.requestId);
+			historyLoadFailed = false;
 			await tick();
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
@@ -893,6 +999,10 @@ import {
 			scrollToBottom();
 		} catch (error) {
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				return;
+			}
+			if (reconciliation) {
+				console.warn('Failed to reconcile completed chat turn:', error);
 				return;
 			}
 			const caughtError = error instanceof Error ? error : undefined;
@@ -964,8 +1074,10 @@ import {
 		const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 		const requestId = generateId();
 		const startedAt = Date.now();
+		const lastUserMessage = [...messagesForRequest].reverse().find((message) => message.role === 'user');
 
 		currentRequestId = requestId;
+		currentRequestUserMessageId = lastUserMessage?.id ?? null;
 		requestStartedAt = startedAt;
 		clockNow = startedAt;
 		toolStartTimes = {};
@@ -1072,6 +1184,39 @@ import {
 		return parseUIStreamChunk(body);
 	}
 
+	function settleSuccessfulStream(requestId: string) {
+		const stream = activeStream;
+		let reconciliation: PendingHistoryReconciliation | undefined;
+		if (stream) {
+			for (const part of stream.parts) {
+				if ((part.type === 'text' || part.type === 'reasoning') && part.state === 'streaming') {
+					part.state = 'done';
+				}
+			}
+			flushActiveStreamToMessages(stream);
+			if (stream.parts.length > 0) {
+				reconciliation = {
+					requestId,
+					assistantMessageId: stream.messageId,
+					userMessageId: currentRequestUserMessageId,
+					generation: requestGeneration
+				};
+				rememberHistoryReconciliation(reconciliation);
+			}
+		}
+
+		settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
+		rememberSuccessfulRequest(requestId, requestGeneration);
+		resetRequestState();
+		if (reconciliation) {
+			const targetProjectId = projectId;
+			const targetEpoch = projectContextEpoch;
+			if (targetProjectId) {
+				void loadChatHistory(targetProjectId, targetEpoch, reconciliation);
+			}
+		}
+	}
+
 	function handleSocketMessage(event: MessageEvent<string>) {
 		if (event.currentTarget !== socket || socketProjectId !== projectId) {
 			return;
@@ -1095,14 +1240,30 @@ import {
 				uiMessages = [];
 				break;
 			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
-				uiMessages = data.messages ?? [];
+				{
+					const incomingHistory = data.messages ?? [];
+					const pendingTurnStillMissing = pendingHistoryReconciliations.some(
+						(entry) => !historyContainsCompletedTurn(incomingHistory, entry)
+					);
+					if (
+						(pendingHistoryReconciliations.length > 0 && pendingTurnStillMissing) ||
+						(isLoading && incomingHistory.length < uiMessages.length)
+					) {
+						break;
+					}
+					uiMessages = incomingHistory;
+					clearReconciledHistoryEntries(uiMessages);
+				}
 				// The agent socket just delivered the authoritative history, so a
 				// previously failed HTTP history load is moot (SS-49).
 				historyLoadFailed = false;
 				scrollToBottom();
 				break;
 			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
-				if (data.message) uiMessages = mergeUpdatedMessage(uiMessages, data.message);
+				if (data.message) {
+					uiMessages = mergeUpdatedMessage(uiMessages, data.message);
+					clearReconciledHistoryEntries(uiMessages);
+				}
 				scrollToBottom();
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_CANCELLED:
@@ -1114,13 +1275,45 @@ import {
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
 				const committed = parseSiteStudioChatCommittedFrame(data);
-				if (!committed || committed.requestId !== currentRequestId) {
+				if (!committed) {
+					break;
+				}
+				const isCurrentRequest = committed.requestId === currentRequestId;
+				const pendingReconciliation = pendingHistoryReconciliations.find(
+					(entry) => entry.requestId === committed.requestId
+				);
+				const successfulReconciliation = successfulRequestReconciliations.find(
+					(entry) => entry.requestId === committed.requestId
+				);
+				const isKnownSuccessfulRequest = successfulReconciliation !== undefined;
+				const matchingReconciliation = pendingReconciliation ?? successfulReconciliation;
+				// A successful terminal frame settles the visible stream before the
+				// post-persistence hook runs. Accept that matching commit while idle, but
+				// never let an old commit clobber a newer independent request already in
+				// progress. Once its successor stream is active, a client-tool continuation
+				// is still the same assistant turn; while handoff is pending, preserve the
+				// local tool result instead of replacing it with the older pre-answer commit.
+				const isContinuationForPendingTurn =
+					pendingReconciliation && activeStream?.continuation === true;
+				if (
+					!isCurrentRequest &&
+					(
+						(!pendingReconciliation && !isKnownSuccessfulRequest) ||
+						(matchingReconciliation && matchingReconciliation.generation !== requestGeneration && !isContinuationForPendingTurn) ||
+						(isLoading && !isContinuationForPendingTurn)
+					)
+				) {
+					break;
+				}
+				// A late commit from an older turn must not erase a newer visible turn.
+				if (!isCurrentRequest && committed.messages.length < uiMessages.length) {
 					break;
 				}
 
 				if (streamResumeProbe?.requestId === committed.requestId) {
 					streamResumeProbe = null;
 				}
+				takeHistoryReconciliation(committed.requestId);
 				settledRequestIds = new Set([...settledRequestIds, committed.requestId].slice(-8));
 				uiMessages = committed.messages;
 				historyLoadFailed = false;
@@ -1128,7 +1321,7 @@ import {
 				// whose streamed tool output was malformed or never reached the UI.
 				onUpdate();
 				scrollToBottom();
-				resetRequestState();
+				if (isCurrentRequest) resetRequestState();
 				break;
 			}
 			case AgentMessageType.CF_AGENT_STREAM_PENDING: {
@@ -1273,16 +1466,15 @@ import {
 				}
 
 				if (data.done) {
-					if (activeStream) {
-						flushActiveStreamToMessages(activeStream);
-					}
-					if (activeStream?.hadError) {
+					if (activeStream?.hadError || data.error) {
+						if (activeStream) flushActiveStreamToMessages(activeStream);
 						settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
 						resetRequestState();
 					} else {
-						// The post-persistence commit frame is the terminal authority. Keep
-						// the request id alive so a following commit can replace this partial
-						// stream even when the terminal chunk itself was invalid or missing.
+						// @cloudflare/ai-chat emits done:true before its persistence hook.
+						// Settle the visible response immediately; the one history read and
+						// late commit below repair the authoritative transcript when ready.
+						settleSuccessfulStream(data.id);
 					}
 				}
 				break;
@@ -1466,6 +1658,9 @@ import {
 
 		const preparation = beginRequestPreparation();
 		if (!preparation) return;
+		// Invalidate any in-flight history read as soon as a newer user turn is
+		// admitted, before upload/credential preparation can yield to the network.
+		requestGeneration += 1;
 
 		const fileToUpload = attachedFile;
 		try {
@@ -1544,6 +1739,7 @@ import {
 
 		const preparation = beginRequestPreparation(true);
 		if (!preparation) return;
+		requestGeneration += 1;
 
 		try {
 			const ready = await ensureReadyForRequest(preparation);
@@ -1607,6 +1803,7 @@ import {
 
 		const preparation = beginRequestPreparation(true);
 		if (!preparation) return;
+		requestGeneration += 1;
 
 		try {
 			const ready = await ensureReadyForRequest(preparation);

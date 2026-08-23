@@ -500,6 +500,317 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Hello, world')).toBeInTheDocument();
 	});
 
+	it('settles a successful terminal frame without waiting for a custom commit', async () => {
+		let historyGets = 0;
+		let authoritativeHistory: UIChatMessage[] = [];
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyGets += 1;
+				return new Response(JSON.stringify(authoritativeHistory), { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('finish this turn');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const requestBody = JSON.parse(request.init.body);
+		const userMessageId = requestBody.messages.at(-1).id;
+		authoritativeHistory = [
+			{ id: userMessageId, role: 'user', parts: [{ type: 'text', text: 'finish this turn' }] },
+			{ id: 'persisted-assistant', role: 'assistant', parts: [{ type: 'text', text: 'persisted answer' }] }
+		];
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-start', id: 'text-1' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'text-1', delta: 'stream answer' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-end', id: 'text-1' }),
+			done: true
+		});
+
+		await waitFor(() => expect(screen.getByText('stream answer')).toBeInTheDocument());
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(historyGets).toBeGreaterThanOrEqual(2));
+		await waitFor(() => expect(screen.getByText('persisted answer')).toBeInTheDocument());
+	});
+
+	it('accepts a matching custom commit after the terminal frame settled the UI', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('repair the saved turn');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const requestBody = JSON.parse(request.init.body);
+		const userMessageId = requestBody.messages.at(-1).id;
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-start', id: 'text-2' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'text-2', delta: 'partial answer' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-end', id: 'text-2' }),
+			done: true
+		});
+		await waitFor(() => expect(screen.getByText('partial answer')).toBeInTheDocument());
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId: request.id,
+			messages: [
+				{ id: userMessageId, role: 'user', parts: [{ type: 'text', text: 'repair the saved turn' }] },
+				{ id: 'persisted-after-late-commit', role: 'assistant', parts: [{ type: 'text', text: 'saved answer' }] }
+			]
+		});
+		await waitFor(() => expect(screen.getByText('saved answer')).toBeInTheDocument());
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
+	it('does not let a delayed completed-turn history read erase a newer request', async () => {
+		let historyGets = 0;
+		let oldHistoryRequested = false;
+		let resolveOldHistory!: (response: Response) => void;
+		const oldHistory = new Promise<Response>((resolve) => {
+			resolveOldHistory = resolve;
+		});
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyGets += 1;
+				if (historyGets === 2) {
+					oldHistoryRequested = true;
+					return oldHistory;
+				}
+				return new Response('[]', { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('finish before the next turn');
+		await settle();
+		const firstRequest = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(firstRequest).toBeTruthy();
+		const firstBody = JSON.parse(firstRequest.init.body);
+		const firstUserMessageId = firstBody.messages.at(-1).id;
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: firstRequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'first-text' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: firstRequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'first-text', delta: 'first answer' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: firstRequest.id,
+			body: JSON.stringify({ type: 'text-end', id: 'first-text' }),
+			done: true
+		});
+		await waitFor(() => expect(oldHistoryRequested).toBe(true));
+
+		// The user can start another turn as soon as the terminal frame settles the
+		// visible stream. Admit it before the old reconciliation response resolves.
+		await component.sendPrompt('new turn stays visible');
+		await waitFor(() => expect(screen.getByText('new turn stays visible')).toBeInTheDocument());
+		resolveOldHistory(
+			new Response(
+				JSON.stringify([
+					{ id: firstUserMessageId, role: 'user', parts: [{ type: 'text', text: 'finish before the next turn' }] },
+					{ id: 'first-assistant', role: 'assistant', parts: [{ type: 'text', text: 'stale historical overwrite' }] }
+				]),
+				{ status: 200 }
+			)
+		);
+		await settle();
+
+		expect(screen.getByText('new turn stays visible')).toBeInTheDocument();
+		expect(screen.queryByText('stale historical overwrite')).not.toBeInTheDocument();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+	});
+
+	it('does not let a delayed completed-turn read erase a client-tool continuation', async () => {
+		let historyGets = 0;
+		let oldHistoryRequested = false;
+		let resolveOldHistory!: (response: Response) => void;
+		const oldHistory = new Promise<Response>((resolve) => {
+			resolveOldHistory = resolve;
+		});
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyGets += 1;
+				if (historyGets === 2) {
+					oldHistoryRequested = true;
+					return oldHistory;
+				}
+				return new Response('[]', { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('answer the project question');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: 'question-1',
+				toolName: 'ask_user_question',
+				input: { question: 'Continue?', options: ['Yes'] }
+			})
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'finish-step' }),
+			done: true
+		});
+		await waitFor(() => expect(oldHistoryRequested).toBe(true));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Skip' })).toBeInTheDocument());
+
+		// Skip is a client-tool continuation of the same assistant turn. It must
+		// invalidate the old reconciliation before its delayed response resolves.
+		screen.getByRole('button', { name: 'Skip' }).click();
+		await waitFor(() =>
+			expect(
+				ws.sent
+					.map((raw) => JSON.parse(raw))
+					.filter((message) => message.type === AgentMessageType.CF_AGENT_TOOL_RESULT)
+			).toHaveLength(1)
+		);
+		resolveOldHistory(
+			new Response(
+				JSON.stringify([
+					{ id: 'old-user', role: 'user', parts: [{ type: 'text', text: 'answer the project question' }] },
+					{ id: 'old-assistant', role: 'assistant', parts: [{ type: 'text', text: 'stale continuation history' }] }
+				]),
+				{ status: 200 }
+			)
+		);
+		await settle();
+
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+		expect(screen.queryByText('stale continuation history')).not.toBeInTheDocument();
+	});
+
+	it('drops duplicate terminal and late stream frames after a successful turn', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('ignore duplicate frames');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-start', id: 'text-3' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'text-3', delta: 'only once' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-end', id: 'text-3' }),
+			done: true
+		});
+		await waitFor(() => expect(screen.getByText('only once')).toBeInTheDocument());
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: '',
+			done: true
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'text-3', delta: ' after done' })
+		});
+		await settle();
+
+		expect(screen.getAllByText('only once')).toHaveLength(1);
+		expect(screen.queryByText(/after done/)).not.toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
 	it('repairs a malformed stream with the matching persisted commit without reload', async () => {
 		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
