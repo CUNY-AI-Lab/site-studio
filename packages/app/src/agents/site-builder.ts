@@ -75,7 +75,6 @@ import {
   type OwnerMutation,
   type OwnerMutationResult,
 } from "../lib/owner-mutations";
-import { SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS } from "../../../observability-core/src/chat-liveness";
 
 export { describeModelStreamError } from "../lib/model-stream-error";
 
@@ -87,7 +86,6 @@ export { describeModelStreamError } from "../lib/model-stream-error";
  */
 export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
 export const SITE_STUDIO_CHAT_INVALIDATED_TYPE = "site_studio_chat_invalidated" as const;
-export const SITE_STUDIO_CHAT_LIVENESS_TYPE = "site_studio_chat_liveness" as const;
 export const SITE_STUDIO_CANCEL_TURN_TYPE = "site_studio_cancel_turn" as const;
 export const SITE_STUDIO_CHAT_CANCELLED_TYPE = "site_studio_chat_cancelled" as const;
 
@@ -1323,14 +1321,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     sendIdentityOnConnect: true
   };
 
-  /**
-   * Let the platform abort a stream that has stopped producing chunks. The
-   * browser receives the same boundary on connect and re-arms it whenever a
-   * response frame arrives, so a lost terminal frame cannot leave a spinner
-   * alive indefinitely.
-   */
-  chatStreamStallTimeoutMs = SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS;
-
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
@@ -1362,16 +1352,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // socket that is still mid-turn.
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
     connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt ?? undefined));
-
-    try {
-      connection.send(JSON.stringify({
-        type: SITE_STUDIO_CHAT_LIVENESS_TYPE,
-        streamStallTimeoutMs: this.chatStreamStallTimeoutMs,
-      }));
-    } catch {
-      // The platform can close a socket between accept and the first frame.
-      // The browser still has the shared contract value as a local fallback.
-    }
   }
 
   /**

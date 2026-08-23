@@ -1,8 +1,5 @@
 import { jsonValueSchema, type JsonValue } from '$lib/contracts';
-import { SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS } from '../../../../observability-core/src/chat-liveness';
 import { z } from 'zod';
-
-export { SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS } from '../../../../observability-core/src/chat-liveness';
 
 export const AgentMessageType = {
 	CF_AGENT_CHAT_MESSAGES: 'cf_agent_chat_messages',
@@ -18,7 +15,6 @@ export const AgentMessageType = {
 	CF_AGENT_TOOL_RESULT: 'cf_agent_tool_result',
 	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated',
 	SITE_STUDIO_CHAT_INVALIDATED: 'site_studio_chat_invalidated',
-	SITE_STUDIO_CHAT_LIVENESS: 'site_studio_chat_liveness',
 	SITE_STUDIO_CANCEL_TURN: 'site_studio_cancel_turn',
 	SITE_STUDIO_CHAT_CANCELLED: 'site_studio_chat_cancelled',
 	SITE_STUDIO_CHAT_COMMITTED: 'site_studio_chat_committed'
@@ -172,7 +168,6 @@ export interface AgentSocketMessage {
 	id?: string;
 	requestId?: string;
 	probeId?: string;
-	streamStallTimeoutMs?: number;
 	continuation?: boolean;
 	body?: string;
 	done?: boolean;
@@ -203,16 +198,9 @@ const siteStudioChatInvalidatedFrameSchema = z.object({
 	requestId: z.string().min(1).optional()
 }).strict();
 
-const siteStudioChatLivenessFrameSchema = z.object({
-	type: z.literal(AgentMessageType.SITE_STUDIO_CHAT_LIVENESS),
-	streamStallTimeoutMs: z.number().finite().positive()
-}).strict();
-
 export type SiteStudioChatCommittedFrame = z.infer<typeof siteStudioChatCommittedFrameSchema>;
 
 export type SiteStudioChatInvalidatedFrame = z.infer<typeof siteStudioChatInvalidatedFrameSchema>;
-
-export type SiteStudioChatLivenessFrame = z.infer<typeof siteStudioChatLivenessFrameSchema>;
 
 export interface ActiveStreamMessage {
 	id: string;
@@ -517,13 +505,6 @@ export function parseSiteStudioChatInvalidatedFrame(
 	payload: AgentSocketMessage
 ): SiteStudioChatInvalidatedFrame | null {
 	const parsed = siteStudioChatInvalidatedFrameSchema.safeParse(payload);
-	return parsed.success ? parsed.data : null;
-}
-
-export function parseSiteStudioChatLivenessFrame(
-	payload: AgentSocketMessage
-): SiteStudioChatLivenessFrame | null {
-	const parsed = siteStudioChatLivenessFrameSchema.safeParse(payload);
 	return parsed.success ? parsed.data : null;
 }
 

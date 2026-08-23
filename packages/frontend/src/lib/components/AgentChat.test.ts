@@ -4,7 +4,6 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import AgentChat from './AgentChat.svelte';
 import {
 	AgentMessageType,
-	SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS,
 	type UIChatMessage,
 	type UIStreamChunk
 } from '$lib/agents/chat';
@@ -977,45 +976,6 @@ describe('AgentChat', () => {
 		await settle();
 
 		expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
-	});
-
-	it('settles a dropped terminal frame at the platform stream boundary', async () => {
-		const { component } = renderExposed();
-		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
-		const ws = FakeWebSocket.last();
-		ws.open();
-		await settle();
-
-		vi.useFakeTimers();
-		try {
-			await component.sendPrompt('drop the terminal frame');
-			await settle();
-			const request = ws.sent
-				.map((raw) => JSON.parse(raw))
-				.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
-			expect(request).toBeTruthy();
-
-			ws.serverMessage({
-				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-				id: request.id,
-				body: JSON.stringify({ type: 'text-start', id: 'dropped-terminal-text' })
-			});
-			ws.serverMessage({
-				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-				id: request.id,
-				body: JSON.stringify({ type: 'text-delta', id: 'dropped-terminal-text', delta: 'partial answer' })
-			});
-			await settle();
-			expect(screen.getByTitle('Stop request')).toBeInTheDocument();
-
-			await vi.advanceTimersByTimeAsync(SITE_STUDIO_CHAT_STREAM_STALL_TIMEOUT_MS);
-			await settle();
-		} finally {
-			vi.useRealTimers();
-		}
-
-		expect(screen.getByText(/The response stopped before it finished/)).toBeInTheDocument();
 		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 	});
 
