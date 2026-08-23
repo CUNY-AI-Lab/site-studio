@@ -1,0 +1,6 @@
+diff --git a/dist/index.js b/dist/index.js
+index 28b5f6dbed6058cf1e170cdd83d4b7d0cfbf7427..7dfbf8638e53fb3df014ef1f0c7a1c72bdd3bc16 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3577,0 +3577,1 @@ var AIChatAgent = class AIChatAgent extends Agent {
++\t\t\t\t\tthis.abortRequest(chatMessageId ?? id, error);

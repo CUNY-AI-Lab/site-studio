@@ -79,6 +79,10 @@ assert.equal(aiChatPackage.version, "0.9.3", "the chat contract must use the pin
 const aiChatSource = readFileSync(new URL("../node_modules/@cloudflare/ai-chat/dist/index.js", import.meta.url), "utf8");
 assert.match(aiChatSource, /const stallTimeoutMs = this\.chatStreamStallTimeoutMs/);
 assert.match(aiChatSource, /reader\.cancel\(\)\.catch/);
+const stallAbortOffset = aiChatSource.indexOf("this.abortRequest(chatMessageId ?? id, error)");
+const stallRecoveryOffset = aiChatSource.indexOf("this._routeStallToBoundedRecovery", stallAbortOffset);
+assert.ok(stallAbortOffset >= 0, "the pinned SDK must abort the registered request on a stall");
+assert.ok(stallRecoveryOffset > stallAbortOffset, "the pinned SDK must abort before stall recovery routing");
 
 class InjectableStallAgent extends AIChatAgent {
   chatStreamStallTimeoutMs = 20;
@@ -106,6 +110,43 @@ await assert.rejects(
   /stalled/i,
 );
 assert.equal(upstreamCancelled, true, "the SDK-owned watchdog must cancel the upstream reader");
+
+class StalledReplyAgent extends AIChatAgent {
+  chatStreamStallTimeoutMs = 20;
+  keepAliveWhile(callback) { return callback(); }
+  _tryCatchChat(callback) { return callback(); }
+  _startStream() { return "stream-reply"; }
+  _completeStream() {}
+  _markStreamError() {}
+  _broadcastChatMessage() {}
+  _routeStallToBoundedRecovery() { return Promise.resolve("exhausted"); }
+  persistMessages() { return Promise.resolve(); }
+  _onStreamingTurnFinalized() {}
+}
+
+const stalledReplyAgent = new StalledReplyAgent(context, {});
+const registeredAbortSignal = stalledReplyAgent._abortRegistry.getSignal("request-reply-stall");
+let recoverySawAbortedSignal = false;
+StalledReplyAgent.prototype._routeStallToBoundedRecovery = () => {
+  recoverySawAbortedSignal = registeredAbortSignal.aborted;
+  return Promise.resolve("exhausted");
+};
+let replyReaderCancelled = false;
+const replyReader = {
+  read: () => new Promise(() => {}),
+  cancel: async () => { replyReaderCancelled = true; },
+  releaseLock() {},
+};
+const replyResult = await stalledReplyAgent._reply(
+  "request-reply-stall",
+  { body: { getReader: () => replyReader }, headers: new Headers({ "content-type": "text/event-stream" }) },
+  [],
+  { chatMessageId: "request-reply-stall" },
+);
+assert.equal(replyResult.status, "aborted", "stall routing must retain terminal aborted status");
+assert.equal(registeredAbortSignal.aborted, true, "stall routing must abort the provider signal through SDK ownership");
+assert.equal(recoverySawAbortedSignal, true, "stall recovery must run after the provider signal is aborted");
+assert.equal(replyReaderCancelled, true, "stall routing must still cancel the SDK response reader");
 
 const progressAgent = new InjectableStallAgent(context, {});
 let progressReads = 0;
