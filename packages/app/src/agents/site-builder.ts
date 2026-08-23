@@ -6,6 +6,7 @@ import {
 import {
   callable,
   getCurrentAgent,
+  type AgentContext,
   type Connection,
   type ConnectionContext,
   type WSMessage,
@@ -80,12 +81,237 @@ export { describeModelStreamError } from "../lib/model-stream-error";
 
 /**
  * Post-persistence chat commit frames are deliberately separate from the
- * streaming response protocol.  The frame contains only the same persisted
- * UI messages already exposed by `cf_agent_chat_messages`/`get-messages`.
+ * streaming response protocol. The frame is sent only to the connection that
+ * initiated the request and contains the persisted UI messages that connection
+ * is already authorized to read through `get-messages`.
  */
 export const SITE_STUDIO_CHAT_COMMITTED_TYPE = "site_studio_chat_committed" as const;
+export const SITE_STUDIO_CHAT_INVALIDATED_TYPE = "site_studio_chat_invalidated" as const;
 export const SITE_STUDIO_CANCEL_TURN_TYPE = "site_studio_cancel_turn" as const;
 export const SITE_STUDIO_CHAT_CANCELLED_TYPE = "site_studio_chat_cancelled" as const;
+
+const CF_AGENT_CHAT_MESSAGES_TYPE = "cf_agent_chat_messages" as const;
+const CF_AGENT_USE_CHAT_REQUEST_TYPE = "cf_agent_use_chat_request" as const;
+const CF_AGENT_USE_CHAT_RESPONSE_TYPE = "cf_agent_use_chat_response" as const;
+const CF_AGENT_MESSAGE_UPDATED_TYPE = "cf_agent_message_updated" as const;
+const CF_AGENT_TOOL_EVENT_TYPE = "agent-tool-event" as const;
+const CF_AGENT_TOOL_RESULT_TYPE = "cf_agent_tool_result" as const;
+const CF_AGENT_TOOL_APPROVAL_TYPE = "cf_agent_tool_approval" as const;
+const CF_AGENT_STREAM_RESUME_REQUEST_TYPE = "cf_agent_stream_resume_request" as const;
+const CF_AGENT_STREAM_RESUME_ACK_TYPE = "cf_agent_stream_resume_ack" as const;
+const CF_AGENT_STREAM_RESUMING_TYPE = "cf_agent_stream_resuming" as const;
+const CF_AGENT_STREAM_PENDING_TYPE = "cf_agent_stream_pending" as const;
+const CF_AGENT_CHAT_RECOVERING_TYPE = "cf_agent_chat_recovering" as const;
+const CF_AGENT_CHAT_REQUEST_CANCEL_TYPE = "cf_agent_chat_request_cancel" as const;
+
+type ChatJsonValue = string | number | boolean | null | ChatJsonValue[] | { [key: string]: ChatJsonValue };
+
+const chatJsonValueSchema: z.ZodType<ChatJsonValue> = z.lazy(() => z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(chatJsonValueSchema),
+  z.record(z.string(), chatJsonValueSchema),
+]));
+const chatJsonArraySchema = z.array(chatJsonValueSchema);
+const chatJsonRecordSchema = z.record(z.string(), chatJsonValueSchema);
+const chatFrameSchema = z.object({
+  type: z.string(),
+  id: z.string().optional(),
+  probeId: z.string().optional(),
+  body: z.string().optional(),
+  toolCallId: z.string().optional(),
+  parentToolCallId: z.string().optional(),
+  providerExecuted: z.boolean().optional(),
+  done: z.boolean().optional(),
+  error: z.boolean().optional(),
+  message: chatJsonValueSchema.optional(),
+  event: chatJsonValueSchema.optional(),
+});
+type SiteStudioChatFrame = z.infer<typeof chatFrameSchema>;
+
+function parseChatJsonText(value: string): ChatJsonValue | undefined {
+  try {
+    const parsed = chatJsonValueSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSiteStudioChatFrame(message: string): SiteStudioChatFrame | null {
+  const parsed = parseChatJsonText(message);
+  const frame = chatFrameSchema.safeParse(parsed);
+  return frame.success ? frame.data : null;
+}
+
+function chatFrameFromMessage(message: WSMessage): SiteStudioChatFrame | null {
+  const encoded = z.string().safeParse(message);
+  return encoded.success ? parseSiteStudioChatFrame(encoded.data) : null;
+}
+
+function parseChatJsonRecord(value: string): Record<string, ChatJsonValue> | undefined {
+  const parsed = parseChatJsonText(value);
+  const record = chatJsonRecordSchema.safeParse(parsed);
+  return record.success ? record.data : undefined;
+}
+
+/** Read only the stable subject claim from a server-verified connection JWT. */
+function connectionSubject(connection: Connection<SiteStudioConnectionLoggingState>): string | undefined {
+  const token = connection.state?.identityJwt;
+  const payload = token?.split(".")[1];
+  if (!payload) return undefined;
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
+    const decoded = atob(normalized);
+    const parsed = z.object({ sub: z.string().min(1) }).safeParse(JSON.parse(decoded));
+    return parsed.success ? parsed.data.sub : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function jsonString(value: ChatJsonValue | undefined): string | undefined {
+  const parsed = z.string().safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function toolCallIdsFromValue(value: ChatJsonValue, ids = new Set<string>()): Set<string> {
+  const array = chatJsonArraySchema.safeParse(value);
+  if (array.success) {
+    for (const item of array.data) toolCallIdsFromValue(item, ids);
+    return ids;
+  }
+
+  const record = chatJsonRecordSchema.safeParse(value);
+  if (!record.success) return ids;
+  for (const key of ["toolCallId", "parentToolCallId"]) {
+    const id = z.string().min(1).safeParse(record.data[key]);
+    if (id.success) ids.add(id.data);
+  }
+  for (const key of ["body", "event", "message", "parts"]) {
+    const nested = record.data[key];
+    if (nested === undefined) continue;
+    const nestedText = jsonString(nested);
+    const parsedText = nestedText ? parseChatJsonText(nestedText) : undefined;
+    toolCallIdsFromValue(parsedText ?? nested, ids);
+  }
+  return ids;
+}
+
+function toolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
+  const ids = new Set<string>();
+  for (const id of [frame.toolCallId, frame.parentToolCallId]) {
+    const parsed = z.string().min(1).safeParse(id);
+    if (parsed.success) ids.add(parsed.data);
+  }
+  if (frame.body) {
+    const parsed = parseChatJsonText(frame.body);
+    if (parsed) toolCallIdsFromValue(parsed, ids);
+  }
+  for (const nested of [frame.message, frame.event]) {
+    if (nested !== undefined) toolCallIdsFromValue(nested, ids);
+  }
+  return ids;
+}
+
+function parsedChatFrameBody(frame: SiteStudioChatFrame): Record<string, ChatJsonValue> | undefined {
+  return frame.body ? parseChatJsonRecord(frame.body) : undefined;
+}
+
+function clientToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
+  if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE) {
+    const body = parsedChatFrameBody(frame);
+    const bodyType = jsonString(body?.type);
+    if (
+      !body
+      || !bodyType
+      || body?.providerExecuted === true
+      || ![
+        "tool-input-start",
+        "tool-input-delta",
+        "tool-input-available",
+        "tool-call",
+        "tool-approval-request",
+      ].includes(bodyType)
+    ) return new Set();
+    return toolCallIdsFromValue(body);
+  }
+
+  if (frame.type !== CF_AGENT_MESSAGE_UPDATED_TYPE) return new Set();
+  const parsedMessage = chatJsonRecordSchema.safeParse(frame.message);
+  if (!parsedMessage.success) return new Set();
+  const parts = chatJsonArraySchema.safeParse(parsedMessage.data.parts);
+  if (!parts.success) return new Set();
+  const ids = new Set<string>();
+  for (const part of parts.data) {
+    const record = chatJsonRecordSchema.safeParse(part);
+    if (!record.success || record.data.providerExecuted === true) continue;
+    const state = jsonString(record.data.state);
+    const partType = jsonString(record.data.type);
+    if (
+      state === "input-streaming"
+      || state === "input-available"
+      || state === "approval-requested"
+      || state === "approval-responded"
+      || partType === "tool-call"
+      || partType === "tool-approval-request"
+    ) {
+      toolCallIdsFromValue(record.data, ids);
+    }
+  }
+  return ids;
+}
+
+function settledToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
+  const ids = new Set<string>();
+  if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE) {
+    const body = parsedChatFrameBody(frame);
+    const bodyType = jsonString(body?.type);
+    if (
+      body
+      && bodyType
+      && ["tool-input-error", "tool-output-available", "tool-output-error", "tool-output-denied"].includes(bodyType)
+    ) {
+      return toolCallIdsFromValue(body, ids);
+    }
+    return ids;
+  }
+  const parsedMessage = chatJsonRecordSchema.safeParse(frame.message);
+  if (!parsedMessage.success) return ids;
+  const parts = chatJsonArraySchema.safeParse(parsedMessage.data.parts);
+  if (!parts.success) return ids;
+  for (const part of parts.data) {
+    const record = chatJsonRecordSchema.safeParse(part);
+    if (!record.success) continue;
+    const toolCallId = jsonString(record.data.toolCallId);
+    const state = jsonString(record.data.state);
+    if (
+      toolCallId
+      && (state === "output-available"
+        || state === "output-error"
+        || state === "output-denied"
+        || state === "approval-responded")
+    ) {
+      ids.add(toolCallId);
+    }
+  }
+  return ids;
+}
+
+type SiteStudioChatConnectionOwnership = Readonly<{
+  connection: Connection<SiteStudioConnectionLoggingState>;
+  connectionId: string;
+  subject?: string;
+}>;
+
+type SiteStudioChatOutputFrame = {
+  type: string;
+  probeId?: string;
+  requestId?: string;
+  messages?: UIMessage[];
+};
 
 const siteStudioCancelTurnSchema = z.object({
   type: z.literal(SITE_STUDIO_CANCEL_TURN_TYPE),
@@ -1294,10 +1520,63 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     sendIdentityOnConnect: true
   };
 
+  constructor(ctx: AgentContext, env: Env) {
+    super(ctx, env);
+    const frameworkOnConnect = this.onConnect.bind(this);
+    this.onConnect = async (connection, connectionContext) => {
+      // SAFETY: AIChatAgent's generic state is narrowed to Site Studio's
+      // connection state at the Worker WebSocket boundary below.
+      const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
+      this.prepareChatConnection(siteStudioConnection, connectionContext);
+      this.installChatConnectionSendGuard(siteStudioConnection);
+      return frameworkOnConnect(connection, connectionContext);
+    };
+
+    const frameworkOnMessage = this.onMessage.bind(this);
+    this.onMessage = async (connection, message) => {
+      // SAFETY: The Site Studio route creates every connection with this
+      // connection state before the framework invokes the message handler.
+      const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
+      if (isSiteStudioCancelTurn(message)) {
+        this.handleSiteStudioCancel(siteStudioConnection);
+        return;
+      }
+      const frame = chatFrameFromMessage(message);
+      if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id) {
+        if (!this.claimChatRequestConnection(frame.id, siteStudioConnection)) {
+          this.sendChatRequestConflict(siteStudioConnection, frame.id);
+          return;
+        }
+      } else if (
+        frame
+        && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
+        && !this.transferChatToolFrameToConnection(frame, siteStudioConnection)
+      ) return;
+      if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(
+        siteStudioConnection,
+        frame,
+      )) return;
+      if (
+        frame
+        && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
+        && this.handleChatResumeFrame(siteStudioConnection, frame)
+      ) return;
+      return frameworkOnMessage(connection, message);
+    };
+    this.chatRuntimeBoundaryInstalled = true;
+  }
+
   private observabilityEvents: SiteBuilderObservabilityEvent[] = [];
   private observabilityRequests = new Map<string, SiteBuilderObservabilityRequest>();
   private observabilitySequence = 0;
   private buildActionsAwaitingPersistence = new Map<string, SiteStudioActionLifecycle>();
+  private chatRequestConnections = new Map<string, SiteStudioChatConnectionOwnership>();
+  private detachedChatRequestConnections = new Map<string, Pick<SiteStudioChatConnectionOwnership, "subject">>();
+  private chatToolRequestIds = new Map<string, string>();
+  private chatRequestClaims = new Map<string, true>();
+  private chatPreparedConnections = new WeakSet<object>();
+  private chatSendGuards = new WeakSet<object>();
+  private chatRuntimeBoundaryInstalled = false;
   /**
    * Operational subject is deliberately not stored on the Durable Object.
    * Each connection receives the route's middleware-verified subject and JWT
@@ -1319,12 +1598,583 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     connection: Connection<SiteStudioConnectionLoggingState>,
     ctx: ConnectionContext,
   ): void {
-    // Adopt the boundary's correlation into per-connection state. A second
-    // socket therefore cannot overwrite the trace/request id used by a first
-    // socket that is still mid-turn.
+    this.prepareChatConnection(connection, ctx);
+  }
+
+  private ensureChatBoundaryState(): void {
+    if (!this.chatRequestConnections) this.chatRequestConnections = new Map();
+    if (!this.detachedChatRequestConnections) this.detachedChatRequestConnections = new Map();
+    if (!this.chatToolRequestIds) this.chatToolRequestIds = new Map();
+    if (!this.chatRequestClaims) this.chatRequestClaims = new Map();
+    if (!this.chatPreparedConnections) this.chatPreparedConnections = new WeakSet();
+    if (!this.chatSendGuards) this.chatSendGuards = new WeakSet();
+  }
+
+  /**
+   * Establishes the connection's verified identity and owner before the
+   * framework's onConnect wrapper can emit any resume/recovery metadata.
+   */
+  private prepareChatConnection(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    ctx: ConnectionContext,
+  ): void {
+    this.ensureChatBoundaryState();
+    if (this.chatPreparedConnections.has(connection)) return;
+
     const identityJwt = getAgentConnectionIdentityJwt(ctx.request);
     connection.setState(createSiteStudioConnectionLoggingState(ctx.request, undefined, identityJwt ?? undefined));
 
+    const activeRequestId = this._activeRequestId;
+    if (activeRequestId) this.transferChatRequestToConnection(activeRequestId, connection);
+    this.transferDetachedInteractionToConnection(connection);
+    if (!activeRequestId) this.transferDetachedRequestToConnection(connection);
+    this.chatPreparedConnections.add(connection);
+  }
+
+  /**
+   * AIChatAgent sends resume state from its own onConnect wrapper. Install a
+   * connection-local guard before invoking that wrapper so control metadata is
+   * emitted only after this boundary has proved the request owner.
+   */
+  private installChatConnectionSendGuard(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): void {
+    this.ensureChatBoundaryState();
+    if (this.chatSendGuards.has(connection)) return;
+
+    const originalSend = connection.send.bind(connection);
+    const guardedSend = (message: Parameters<Connection<SiteStudioConnectionLoggingState>["send"]>[0]): void => {
+      const encoded = z.string().safeParse(message);
+      if (encoded.success && !this.authorizeFrameworkChatControl(connection, encoded.data)) return;
+      originalSend(message);
+    };
+
+    try {
+      Object.defineProperty(connection, "send", {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: guardedSend,
+      });
+      this.chatSendGuards.add(connection);
+    } catch {
+      // A non-extensible transport cannot be safely wrapped. Close it rather
+      // than allowing the framework to disclose another connection's state.
+      try {
+        connection.close(1008, "chat_connection_guard_unavailable");
+      } catch {
+        // The transport may already be gone.
+      }
+    }
+  }
+
+  private authorizeFrameworkChatControl(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    message: string,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const frame = parseSiteStudioChatFrame(message);
+    if (
+      !frame
+      || (
+        frame.type !== CF_AGENT_STREAM_RESUMING_TYPE
+        && frame.type !== CF_AGENT_STREAM_PENDING_TYPE
+        && frame.type !== CF_AGENT_CHAT_RECOVERING_TYPE
+      )
+    ) return true;
+
+    const requestId = frame.id
+      ?? this._activeRequestId
+      ?? this.requestIdForChatConnection(connection);
+    if (!requestId) return false;
+    const ownership = this.chatRequestConnections.get(requestId);
+    return Boolean(
+      ownership
+      && ownership.connection === connection
+      && ownership.connectionId === connection.id
+      && this.isCurrentChatConnection(ownership),
+    );
+  }
+
+  private requestIdForChatConnection(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): string | undefined {
+    this.ensureChatBoundaryState();
+    for (const [requestId, ownership] of this.chatRequestConnections) {
+      if (
+        ownership.connection === connection
+        && ownership.connectionId === connection.id
+        && this.isCurrentChatConnection(ownership)
+      ) return requestId;
+    }
+    return undefined;
+  }
+
+  private authorizeChatControlFrame(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    frame: SiteStudioChatFrame,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const requestId = frame.id ?? this._activeRequestId ?? this.requestIdForChatConnection(connection);
+    if (!requestId) return false;
+    const ownership = this.chatRequestConnections.get(requestId);
+    if (ownership && this.isCurrentChatConnection(ownership)) {
+      return ownership.connection === connection && ownership.connectionId === connection.id;
+    }
+    return this.transferChatRequestToConnection(requestId, connection);
+  }
+
+  /**
+   * AIChatAgent persists the complete merged transcript through
+   * `cf_agent_chat_messages`. That frame is useful to generic clients but is
+   * an ownership violation for a shared project Durable Object: it reaches
+   * every other connection. Replace it with a bounded invalidation so each
+   * connection can re-fetch its own authorized history without receiving the
+   * other connection's transcript.
+   *
+   * Stream response frames are connection-owned as well. The SDK does not
+   * consistently pass the initiator's exclusion list to every stream branch,
+   * so route them directly using the connection context or the stable request
+   * id captured by `onChatMessage`.
+   */
+  override broadcast(
+    message: string | ArrayBuffer | ArrayBufferView,
+    without?: string[],
+  ): void {
+    const encodedMessage = z.string().safeParse(message);
+    if (!encodedMessage.success) {
+      super.broadcast(message, without);
+      return;
+    }
+
+    const frame = parseSiteStudioChatFrame(encodedMessage.data);
+    if (!frame) {
+      super.broadcast(message, without);
+      return;
+    }
+
+    if (frame.type === CF_AGENT_CHAT_MESSAGES_TYPE) {
+      super.broadcast(JSON.stringify({ type: SITE_STUDIO_CHAT_INVALIDATED_TYPE }), without);
+      return;
+    }
+
+    if (
+      frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE
+      || frame.type === CF_AGENT_MESSAGE_UPDATED_TYPE
+      || frame.type === CF_AGENT_TOOL_EVENT_TYPE
+    ) {
+      const target = this.chatConnectionForFrame(frame.id, frame);
+      const targetRequestId = frame.id ?? this.requestIdForConnection(target);
+      this.rememberChatToolOwnership(frame, targetRequestId);
+      this.broadcastChatFrame(message, target, without);
+      this.releaseSettledChatToolOwnership(frame);
+      this.releaseErroredChatRequest(frame, targetRequestId);
+      return;
+    }
+
+    super.broadcast(message, without);
+  }
+
+  /**
+   * Keep AIChatAgent's own broadcast interception (notably agent-tool
+   * forwarding) while restricting the actual WebSocket delivery to one
+   * connection. A missing target fails closed: the frame is still offered to
+   * the SDK's internal forwarders, but no Site Studio client receives it.
+   */
+  private broadcastChatFrame(
+    message: WSMessage,
+    target: SiteStudioChatConnectionOwnership | undefined,
+    without?: string[],
+  ): void {
+    const excluded = new Set(without ?? []);
+    for (const connection of this.getConnections()) {
+      if (!target || connection !== target.connection || connection.id !== target.connectionId) {
+        excluded.add(connection.id);
+      }
+    }
+    super.broadcast(message, [...excluded]);
+  }
+
+  private chatConnectionForFrame(
+    requestId: string | undefined,
+    frame?: SiteStudioChatFrame,
+  ): SiteStudioChatConnectionOwnership | undefined {
+    this.ensureChatBoundaryState();
+    if (requestId) {
+      const ownership = this.chatRequestConnections.get(requestId);
+      if (ownership && this.isCurrentChatConnection(ownership)) return ownership;
+      if (ownership) this.detachChatRequest(requestId, ownership);
+    }
+
+    for (const toolCallId of toolCallIdsFromFrame(frame ?? { type: "", id: requestId })) {
+      const toolRequestId = this.chatToolRequestIds.get(toolCallId);
+      if (!toolRequestId) continue;
+      const ownership = this.chatRequestConnections.get(toolRequestId);
+      if (ownership && this.isCurrentChatConnection(ownership)) return ownership;
+      if (ownership) this.detachChatRequest(toolRequestId, ownership);
+    }
+
+    const activeRequestId = !requestId ? this._activeRequestId ?? undefined : undefined;
+    if (activeRequestId) {
+      const ownership = this.chatRequestConnections.get(activeRequestId);
+      if (ownership && this.isCurrentChatConnection(ownership)) return ownership;
+      if (ownership) this.detachChatRequest(activeRequestId, ownership);
+    }
+
+    try {
+      // SAFETY: getCurrentAgent() is populated by the Agent framework for an
+      // active WebSocket invocation; Site Studio owns that connection state.
+      const connection = getCurrentAgent().connection as Connection<SiteStudioConnectionLoggingState> | undefined;
+      if (!connection) return undefined;
+      for (const ownership of this.chatRequestConnections.values()) {
+        if (ownership.connection === connection && this.isCurrentChatConnection(ownership)) {
+          return ownership;
+        }
+      }
+      const ownership = activeRequestId ? this.chatRequestConnections.get(activeRequestId) : undefined;
+      if (ownership && ownership.connection === connection && this.isCurrentChatConnection(ownership)) {
+        return ownership;
+      }
+    } catch {
+      // No request context means the frame has no safe client owner.
+    }
+    return undefined;
+  }
+
+  private requestIdForConnection(ownership: SiteStudioChatConnectionOwnership | undefined): string | undefined {
+    if (!ownership) return undefined;
+    for (const [requestId, candidate] of this.chatRequestConnections) {
+      if (candidate === ownership) return requestId;
+    }
+    return undefined;
+  }
+
+  private rememberChatToolOwnership(frame: SiteStudioChatFrame, requestId: string | undefined): void {
+    this.ensureChatBoundaryState();
+    if (!requestId || !this.chatRequestConnections.has(requestId)) return;
+    for (const toolCallId of clientToolCallIdsFromFrame(frame)) {
+      this.chatToolRequestIds.set(toolCallId, requestId);
+    }
+    while (this.chatToolRequestIds.size > 128) {
+      const oldestToolCallId = z.string().safeParse(this.chatToolRequestIds.keys().next().value);
+      if (!oldestToolCallId.success) break;
+      this.chatToolRequestIds.delete(oldestToolCallId.data);
+    }
+  }
+
+  private requestHasToolOwnership(requestId: string): boolean {
+    this.ensureChatBoundaryState();
+    for (const mappedRequestId of this.chatToolRequestIds.values()) {
+      if (mappedRequestId === requestId) return true;
+    }
+    return false;
+  }
+
+  private releaseSettledChatToolOwnership(frame: SiteStudioChatFrame): void {
+    this.ensureChatBoundaryState();
+    for (const toolCallId of settledToolCallIdsFromFrame(frame)) {
+      const requestId = this.chatToolRequestIds.get(toolCallId);
+      if (!requestId) continue;
+      this.chatToolRequestIds.delete(toolCallId);
+      if (!this.requestHasToolOwnership(requestId)) this.forgetChatRequest(requestId);
+    }
+  }
+
+  private releaseErroredChatRequest(frame: SiteStudioChatFrame, requestId: string | undefined): void {
+    if (!requestId) return;
+    const bodyType = parsedChatFrameBody(frame)?.type;
+    if (frame.error === true || bodyType === "abort" || bodyType === "error") {
+      this.forgetChatRequest(requestId);
+    }
+  }
+
+  private forgetChatRequest(requestId: string): void {
+    this.ensureChatBoundaryState();
+    this.chatRequestConnections.delete(requestId);
+    this.detachedChatRequestConnections.delete(requestId);
+    for (const [toolCallId, mappedRequestId] of this.chatToolRequestIds) {
+      if (mappedRequestId === requestId) this.chatToolRequestIds.delete(toolCallId);
+    }
+  }
+
+  private sendChatFrame(
+    ownership: SiteStudioChatConnectionOwnership | undefined,
+    frame: SiteStudioChatOutputFrame,
+  ): void {
+    if (!ownership || !this.isCurrentChatConnection(ownership)) return;
+    try {
+      ownership.connection.send(JSON.stringify(frame));
+    } catch {
+      // The target may have disconnected after the persistence commit. A
+      // reconnecting client will reconcile through its authorized history read.
+    }
+  }
+
+  private isCurrentChatConnection(ownership: SiteStudioChatConnectionOwnership): boolean {
+    return this.getConnection(ownership.connectionId) === ownership.connection;
+  }
+
+  private rememberChatRequestConnection(
+    requestId: string,
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const existing = this.chatRequestConnections.get(requestId);
+    if (existing) {
+      if (this.isCurrentChatConnection(existing)) return existing.connection === connection;
+      this.detachChatRequest(requestId, existing);
+    }
+    if (this.detachedChatRequestConnections.has(requestId) || this.chatRequestClaims.has(requestId)) return false;
+
+    const ownership: SiteStudioChatConnectionOwnership = Object.freeze({
+      connection,
+      connectionId: connection.id,
+      subject: connectionSubject(connection),
+    });
+    this.chatRequestConnections.set(requestId, ownership);
+    this.chatRequestClaims.set(requestId, true);
+    this.detachedChatRequestConnections.delete(requestId);
+    while (this.chatRequestConnections.size > 128) {
+      const oldestRequestId = z.string().safeParse(this.chatRequestConnections.keys().next().value);
+      if (!oldestRequestId.success) break;
+      const oldestOwnership = this.chatRequestConnections.get(oldestRequestId.data);
+      if (oldestOwnership) this.detachChatRequest(oldestRequestId.data, oldestOwnership);
+    }
+    while (this.chatRequestClaims.size > 256) {
+      const oldestRequestId = z.string().safeParse(this.chatRequestClaims.keys().next().value);
+      if (!oldestRequestId.success) break;
+      if (
+        this.chatRequestConnections.has(oldestRequestId.data)
+        || this.detachedChatRequestConnections.has(oldestRequestId.data)
+      ) {
+        this.chatRequestClaims.delete(oldestRequestId.data);
+        this.chatRequestClaims.set(oldestRequestId.data, true);
+        continue;
+      }
+      this.chatRequestClaims.delete(oldestRequestId.data);
+    }
+    return true;
+  }
+
+  private claimChatRequestConnection(
+    requestId: string,
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const existing = this.chatRequestConnections.get(requestId);
+    if (existing && this.isCurrentChatConnection(existing)) return false;
+    return this.rememberChatRequestConnection(requestId, connection);
+  }
+
+  private sendChatRequestConflict(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    requestId: string,
+  ): void {
+    try {
+      connection.send(JSON.stringify({
+        type: CF_AGENT_USE_CHAT_RESPONSE_TYPE,
+        id: requestId,
+        body: JSON.stringify({ type: "error", errorText: "chat_request_conflict" }),
+        done: true,
+        error: true,
+      }));
+    } catch {
+      // The submitting socket may have closed while the conflict was emitted.
+    }
+  }
+
+  private detachChatRequest(requestId: string, ownership: SiteStudioChatConnectionOwnership): void {
+    this.ensureChatBoundaryState();
+    if (this.chatRequestConnections.get(requestId) !== ownership) return;
+    this.chatRequestConnections.delete(requestId);
+    this.detachedChatRequestConnections.set(requestId, Object.freeze({
+      subject: ownership.subject,
+    }));
+    if (this.detachedChatRequestConnections.size <= 32) return;
+    const oldestRequestId = z.string().safeParse(this.detachedChatRequestConnections.keys().next().value);
+    if (oldestRequestId.success) {
+      this.detachedChatRequestConnections.delete(oldestRequestId.data);
+    }
+  }
+
+  private detachChatRequestsForConnection(connection: Connection<SiteStudioConnectionLoggingState>): void {
+    this.ensureChatBoundaryState();
+    for (const [requestId, ownership] of this.chatRequestConnections) {
+      if (ownership.connection === connection) this.detachChatRequest(requestId, ownership);
+    }
+  }
+
+  private transferChatRequestToConnection(
+    requestId: string | null,
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    if (!requestId) return false;
+    const ownership = this.chatRequestConnections.get(requestId);
+    if (ownership && this.isCurrentChatConnection(ownership)) {
+      return ownership.connection === connection;
+    }
+
+    if (ownership) this.detachChatRequest(requestId, ownership);
+    const detached = this.detachedChatRequestConnections.get(requestId);
+    if (!detached) return false;
+    const subject = connectionSubject(connection);
+    if (!subject || !detached.subject || subject !== detached.subject) return false;
+
+    this.chatRequestConnections.set(requestId, Object.freeze({
+      connection,
+      connectionId: connection.id,
+      subject,
+    }));
+    this.detachedChatRequestConnections.delete(requestId);
+    return true;
+  }
+
+  private transferChatToolFrameToConnection(
+    frame: SiteStudioChatFrame,
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const requestIds = new Set<string>();
+    for (const toolCallId of toolCallIdsFromFrame(frame)) {
+      const requestId = this.chatToolRequestIds.get(toolCallId);
+      if (!requestId) return false;
+      requestIds.add(requestId);
+    }
+    if (requestIds.size !== 1) return false;
+    const [requestId] = requestIds;
+    return this.transferChatRequestToConnection(requestId, connection);
+  }
+
+  private transferDetachedInteractionToConnection(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): void {
+    this.ensureChatBoundaryState();
+    const subject = connectionSubject(connection);
+    if (!subject) return;
+    const candidates = [...this.detachedChatRequestConnections.entries()].filter(([requestId, detached]) => (
+      detached.subject === subject && this.requestHasToolOwnership(requestId)
+    ));
+    if (candidates.length !== 1) return;
+    const [requestId, detached] = candidates[0];
+    this.chatRequestConnections.set(requestId, Object.freeze({
+      connection,
+      connectionId: connection.id,
+      subject: detached.subject,
+    }));
+    this.detachedChatRequestConnections.delete(requestId);
+  }
+
+  /**
+   * A reconnect can arrive during AIChatAgent's pre-stream window, when its
+   * active request id is not exposed yet and no client-tool id exists. A
+   * single same-subject detached request is still an unambiguous resume proof;
+   * unrelated or ambiguous detached requests remain denied.
+   */
+  private transferDetachedRequestToConnection(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+  ): void {
+    this.ensureChatBoundaryState();
+    const subject = connectionSubject(connection);
+    if (!subject) return;
+    const candidates = [...this.detachedChatRequestConnections.entries()].filter(([, detached]) => (
+      detached.subject === subject
+    ));
+    if (candidates.length !== 1) return;
+    const [requestId, detached] = candidates[0];
+    this.chatRequestConnections.set(requestId, Object.freeze({
+      connection,
+      connectionId: connection.id,
+      subject: detached.subject,
+    }));
+    this.detachedChatRequestConnections.delete(requestId);
+  }
+
+  private sendResumeNone(connection: Connection, probeId?: string): void {
+    try {
+      const frame: SiteStudioChatOutputFrame = {
+        type: "cf_agent_stream_resume_none",
+      };
+      if (probeId) frame.probeId = probeId;
+      connection.send(JSON.stringify(frame));
+    } catch {
+      // The reconnecting socket may close between the request and this guard.
+    }
+  }
+
+  private handleSiteStudioCancel(connection?: Connection<SiteStudioConnectionLoggingState>): void {
+    if (connection && !this.authorizeChatControlFrame(connection, { type: SITE_STUDIO_CANCEL_TURN_TYPE })) return;
+    this.resetTurnState();
+    try {
+      this.broadcast(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
+    } catch {
+      console.error("Failed to broadcast Site Studio chat cancellation");
+    }
+  }
+
+  protected override resetTurnState(): void {
+    super.resetTurnState();
+    this.ensureChatBoundaryState();
+    this.chatRequestConnections.clear();
+    this.detachedChatRequestConnections.clear();
+    this.chatToolRequestIds.clear();
+    this.chatRequestClaims.clear();
+  }
+
+  override onClose(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    _code: number,
+    _reason: string,
+    _wasClean: boolean,
+  ): void {
+    this.detachChatRequestsForConnection(connection);
+  }
+
+  override onError(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    _error: Error,
+  ): void;
+  override onError(error: Error): void;
+  override onError(
+    connectionOrError: Connection<SiteStudioConnectionLoggingState> | Error,
+    _error?: Error,
+  ): void {
+    if (arguments.length > 1 && !(connectionOrError instanceof Error)) {
+      this.detachChatRequestsForConnection(connectionOrError);
+    }
+  }
+
+  private handleChatResumeFrame(
+    connection: Connection<SiteStudioConnectionLoggingState>,
+    frame: SiteStudioChatFrame,
+  ): boolean {
+    this.ensureChatBoundaryState();
+    const activeRequestId = this._activeRequestId;
+    const requestId = frame.id ?? activeRequestId ?? this.requestIdForChatConnection(connection);
+    if (!requestId || (activeRequestId && requestId !== activeRequestId)) {
+      if (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE) this.sendResumeNone(connection, frame.probeId);
+      return true;
+    }
+
+    const ownership = this.chatRequestConnections.get(requestId);
+    if (ownership && this.isCurrentChatConnection(ownership)) {
+      if (ownership.connection === connection) return false;
+      if (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE) {
+        this.sendResumeNone(connection, frame.probeId);
+        return true;
+      }
+      // An ACK from a different live connection must not replay another tab's
+      // active stream. The framework's owner remains authoritative.
+      return true;
+    }
+
+    if (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE) {
+      if (!this.transferChatRequestToConnection(requestId, connection)) {
+        if (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE) this.sendResumeNone(connection, frame.probeId);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1337,12 +2187,28 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     message: WSMessage,
   ): void | Promise<void> {
     if (isSiteStudioCancelTurn(message)) {
-      this.resetTurnState();
-      try {
-        this.broadcast(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
-      } catch {
-        console.error("Failed to broadcast Site Studio chat cancellation");
+      this.handleSiteStudioCancel(connection);
+      return;
+    }
+    const frame = chatFrameFromMessage(message);
+    if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id && !this.chatRuntimeBoundaryInstalled) {
+      if (!this.claimChatRequestConnection(frame.id, connection)) {
+        this.sendChatRequestConflict(connection, frame.id);
+        return;
       }
+    } else if (
+      frame
+      && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
+      && !this.transferChatToolFrameToConnection(frame, connection)
+    ) return;
+    if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(connection, frame)) {
+      return;
+    }
+    if (
+      frame
+      && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
+      && this.handleChatResumeFrame(connection, frame)
+    ) {
       return;
     }
     return super.onMessage(connection, message);
@@ -1525,15 +2391,18 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     // Only successful persisted turns get a commit; errors stay transient and
     // aborted turns use the existing cancellation path.
     if (result.status === "completed") {
-      try {
-        this.broadcast(JSON.stringify({
+      const target = this.chatRequestConnections.get(result.requestId);
+      if (target) {
+        this.sendChatFrame(target, {
           type: SITE_STUDIO_CHAT_COMMITTED_TYPE,
           requestId: result.requestId,
           messages: this.messages,
-        }));
-      } catch {
-        console.error("Failed to broadcast persisted chat commit");
+        });
       }
+    }
+
+    if (result.status !== "completed" || !this.requestHasToolOwnership(result.requestId)) {
+      this.forgetChatRequest(result.requestId);
     }
 
     const pending = this.buildActionsAwaitingPersistence.get(result.requestId);
@@ -1558,6 +2427,16 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const requestId = options?.requestId ?? "unknown";
 
     const connection = getCurrentAgent().connection;
+    if (connection && requestId !== "unknown") {
+      // SAFETY: getCurrentAgent().connection is the framework's active
+      // connection for this authenticated Site Studio request.
+      const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
+      const accepted = this.rememberChatRequestConnection(
+        requestId,
+        siteStudioConnection,
+      );
+      if (!accepted) return noStoreJson({ error: "chat_request_conflict" }, 409);
+    }
     const parsedConnectionState = connection?.state
       ? connectionStateSchema.safeParse(connection.state)
       : null;

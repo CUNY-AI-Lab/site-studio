@@ -14,6 +14,7 @@ export const AgentMessageType = {
 	CF_AGENT_STREAM_PENDING: 'cf_agent_stream_pending',
 	CF_AGENT_TOOL_RESULT: 'cf_agent_tool_result',
 	CF_AGENT_MESSAGE_UPDATED: 'cf_agent_message_updated',
+	SITE_STUDIO_CHAT_INVALIDATED: 'site_studio_chat_invalidated',
 	SITE_STUDIO_CANCEL_TURN: 'site_studio_cancel_turn',
 	SITE_STUDIO_CHAT_CANCELLED: 'site_studio_chat_cancelled',
 	SITE_STUDIO_CHAT_COMMITTED: 'site_studio_chat_committed'
@@ -192,7 +193,14 @@ const siteStudioChatCommittedFrameSchema = z.object({
 	messages: uiChatMessagesSchema
 }).strict();
 
+const siteStudioChatInvalidatedFrameSchema = z.object({
+	type: z.literal(AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED),
+	requestId: z.string().min(1).optional()
+}).strict();
+
 export type SiteStudioChatCommittedFrame = z.infer<typeof siteStudioChatCommittedFrameSchema>;
+
+export type SiteStudioChatInvalidatedFrame = z.infer<typeof siteStudioChatInvalidatedFrameSchema>;
 
 export interface ActiveStreamMessage {
 	id: string;
@@ -490,6 +498,13 @@ export function parseSiteStudioChatCommittedFrame(
 	payload: AgentSocketMessage
 ): SiteStudioChatCommittedFrame | null {
 	const parsed = siteStudioChatCommittedFrameSchema.safeParse(payload);
+	return parsed.success ? parsed.data : null;
+}
+
+export function parseSiteStudioChatInvalidatedFrame(
+	payload: AgentSocketMessage
+): SiteStudioChatInvalidatedFrame | null {
+	const parsed = siteStudioChatInvalidatedFrameSchema.safeParse(payload);
 	return parsed.success ? parsed.data : null;
 }
 

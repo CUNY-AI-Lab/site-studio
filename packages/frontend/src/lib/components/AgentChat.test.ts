@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { flushSync, tick } from 'svelte';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import AgentChat from './AgentChat.svelte';
-import { AgentMessageType, type UIChatMessage, type UIStreamChunk } from '$lib/agents/chat';
+import {
+	AgentMessageType,
+	type UIChatMessage,
+	type UIStreamChunk
+} from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
 import type { JsonValue } from '$lib/contracts';
 

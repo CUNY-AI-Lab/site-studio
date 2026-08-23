@@ -24,6 +24,7 @@ import {
 		isToolPart,
 		mergeUpdatedMessage,
 		parseAgentSocketMessage,
+		parseSiteStudioChatInvalidatedFrame,
 		parseSiteStudioChatCommittedFrame,
 		parseUIChatMessages,
 		parseUIStreamChunk,
@@ -144,6 +145,7 @@ import {
 	// hook runs. Keep its correlation and message anchors long enough for the one
 	// authenticated history read or the late custom commit to repair the transcript.
 	let pendingHistoryReconciliations = $state<PendingHistoryReconciliation[]>([]);
+	let historyRefreshPending = $state(false);
 	// A reconnect probe belongs to one socket and one pending request. The server
 	// echoes its probe id on STREAM_RESUME_NONE; the acknowledged id suppresses
 	// duplicate proactive and probe-triggered STREAM_RESUMING frames.
@@ -219,6 +221,19 @@ import {
 		pendingHistoryReconciliations = pendingHistoryReconciliations.filter(
 			(entry) => !historyContainsCompletedTurn(history, entry)
 		);
+	}
+
+	function schedulePendingHistoryRefresh() {
+		if (!historyRefreshPending || isLoading || isPreparingRequest || pendingHistoryReconciliations.length > 0) {
+			return;
+		}
+
+		historyRefreshPending = false;
+		const targetProjectId = projectId;
+		const targetEpoch = projectContextEpoch;
+		if (targetProjectId) {
+			void loadChatHistory(targetProjectId, targetEpoch);
+		}
 	}
 
 	function getTextFromParts(parts: UIMessagePart[]): string {
@@ -344,6 +359,7 @@ import {
 		requestStartedAt = null;
 		toolStartTimes = {};
 		isReconnecting = false;
+		schedulePendingHistoryRefresh();
 	}
 
 	function cancelResumedRequest(requestId: string) {
@@ -992,6 +1008,7 @@ import {
 			uiMessages = data;
 			if (reconciliation) takeHistoryReconciliation(reconciliation.requestId);
 			historyLoadFailed = false;
+			schedulePendingHistoryRefresh();
 			await tick();
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				return;
@@ -1239,6 +1256,20 @@ import {
 			case AgentMessageType.CF_AGENT_CHAT_CLEAR:
 				uiMessages = [];
 				break;
+			case AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED: {
+				const invalidated = parseSiteStudioChatInvalidatedFrame(data);
+				if (!invalidated) break;
+				if (isLoading || isPreparingRequest || pendingHistoryReconciliations.length > 0) {
+					historyRefreshPending = true;
+					break;
+				}
+				const invalidationProjectId = projectId;
+				const invalidationEpoch = projectContextEpoch;
+				if (invalidationProjectId) {
+					void loadChatHistory(invalidationProjectId, invalidationEpoch);
+				}
+				break;
+			}
 			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
 				{
 					const incomingHistory = data.messages ?? [];
@@ -1314,6 +1345,7 @@ import {
 					streamResumeProbe = null;
 				}
 				takeHistoryReconciliation(committed.requestId);
+				schedulePendingHistoryRefresh();
 				settledRequestIds = new Set([...settledRequestIds, committed.requestId].slice(-8));
 				uiMessages = committed.messages;
 				historyLoadFailed = false;
@@ -1423,7 +1455,6 @@ import {
 				if (settledRequestIds.has(data.id)) {
 					break;
 				}
-
 				if (!activeStream || activeStream.id !== data.id) {
 					const continuation = data.continuation === true || expectingContinuation;
 					activeStream = createStreamState(data.id, continuation);
