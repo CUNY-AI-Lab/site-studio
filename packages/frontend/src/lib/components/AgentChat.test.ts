@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { flushSync, tick } from 'svelte';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import AgentChat from './AgentChat.svelte';
-import { AgentMessageType, type UIChatMessage } from '$lib/agents/chat';
+import { AgentMessageType, type UIChatMessage, type UIStreamChunk } from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
 import type { JsonValue } from '$lib/contracts';
 
@@ -615,6 +615,116 @@ describe('AgentChat', () => {
 		expect(screen.getByText('Usage limit reached.')).toBeInTheDocument();
 	});
 
+	it('ends an aborted stream instead of leaving the request stuck in Working', async () => {
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'aborted-stream',
+			body: JSON.stringify({ type: 'abort', reason: 'upstream_closed' }),
+			done: false
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: 'aborted-stream',
+			body: '',
+			done: true
+		});
+		await settle();
+
+		expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
+	it('settles an abort immediately when no done frame follows', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('trigger an upstream abort');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'abort', reason: 'connection_closed' }),
+			done: false
+		});
+		await settle();
+
+		expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+	});
+
+	it('renders the official tool stream as Finished instead of Needs attention', async () => {
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('run the official tool stream');
+		await settle();
+
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const requestId = request.id;
+		const sendChunk = (chunk: UIStreamChunk) => {
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+				id: requestId,
+				body: JSON.stringify(chunk),
+				done: false
+			});
+		};
+		sendChunk({ type: 'tool-input-start', toolCallId: 'tool-1', toolName: 'codemode' });
+		sendChunk({ type: 'tool-input-delta', toolCallId: 'tool-1', inputTextDelta: '{"co' });
+		sendChunk({ type: 'tool-input-delta', toolCallId: 'tool-1', inputTextDelta: 'de":"return {}"}' });
+		sendChunk({
+			type: 'tool-input-available',
+			toolCallId: 'tool-1',
+			toolName: 'codemode',
+			input: { code: 'return {}' }
+		});
+		sendChunk({ type: 'tool-output-available', toolCallId: 'tool-1', output: { ok: true } });
+		sendChunk({ type: 'finish-step' });
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: requestId,
+			body: '',
+			done: true
+		});
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId,
+			messages: [{
+				id: 'assistant-1',
+				role: 'assistant',
+				parts: [{
+					type: 'tool-codemode',
+					toolCallId: 'tool-1',
+					toolName: 'codemode',
+					state: 'output-available',
+					input: { code: 'return {}' },
+					output: { ok: true }
+				}]
+			}]
+		});
+		await settle();
+
+		expect(screen.getByText('Finished')).toBeInTheDocument();
+		expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
+	});
+
 	it('handles a plain-text error frame body (CAIL quota) without noise or duplication', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		mount();
@@ -649,12 +759,42 @@ describe('AgentChat', () => {
 		});
 		await settle();
 
-		// Rendered exactly once (from the persisted message), no generic fallback,
+		// Rendered exactly once, no generic fallback,
 		// and no "Failed to parse stream chunk" console noise for this known shape.
 		expect(screen.getAllByText(quotaText)).toHaveLength(1);
 		expect(
 			screen.queryByText('Something went wrong while generating this response.')
 		).not.toBeInTheDocument();
+		expect(warn).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it('renders a sole plain-text error frame instead of clearing the request silently', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('trigger a provider error');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		const errorText = 'The provider returned a temporary error.';
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: errorText,
+			done: true,
+			error: true
+		});
+		await settle();
+
+		expect(screen.getByText(errorText)).toBeInTheDocument();
+		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
 		expect(warn).not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
