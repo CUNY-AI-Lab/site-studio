@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { Send, Loader2, X, Paperclip, Square } from 'lucide-svelte';
+	import { Chat } from '@ai-sdk/svelte';
+	import { WebSocketChatTransport, type AgentConnection } from 'agents/chat/transport';
+	import type { UIMessage as SDKUIMessage } from 'ai';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
 	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError } from '$lib/api/errors';
@@ -18,21 +21,15 @@ import {
 	import MessageContent from './MessageContent.svelte';
 	import {
 		AgentMessageType,
-		applyChunkToParts,
-		applyLocalToolOutput,
-		cloneParts,
 		isToolPart,
 		mergeUpdatedMessage,
 		parseAgentSocketMessage,
 		parseSiteStudioChatInvalidatedFrame,
 		parseSiteStudioChatCommittedFrame,
 		parseUIChatMessages,
-		parseUIStreamChunk,
 		type AgentSocketMessage,
-		type ActiveStreamMessage,
 		type UIChatMessage,
-		type UIMessagePart,
-		type UIStreamChunk
+		type UIMessagePart
 	} from '$lib/agents/chat';
 
 	interface ContentBlock {
@@ -89,8 +86,6 @@ import {
 		generation: number;
 	}
 
-	type SuccessfulRequestReconciliation = Pick<PendingHistoryReconciliation, 'requestId' | 'generation'>;
-
 	import type { UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
@@ -121,36 +116,28 @@ import {
 	let socketProjectId: string | null = null;
 	let socketPromise: Promise<WebSocket> | null = null;
 	let socketPromiseProjectId: string | null = null;
-	let activeStream = $state<ActiveStreamMessage | null>(null);
 	let currentRequestId = $state<string | null>(null);
 	let currentRequestUserMessageId = $state<string | null>(null);
 	let requestGeneration = $state(0);
 	let expectingContinuation = $state(false);
 	let cancelledContinuationPending = $state(false);
+	// Keep explicit cancellation identity across reconnects. The maintained
+	// transport owns active response streams; these markers cover server resume
+	// announcements that can arrive after the local stream has been stopped.
+	let cancelledRequestIds = $state<Set<string>>(new Set());
+	let settledRequestIds = $state<Set<string>>(new Set());
 	let cancelTurnDeliveryPending = false;
 	let ignoreNextSocketClose = $state(false);
 	let requestStartedAt = $state<number | null>(null);
 	let clockNow = $state(Date.now());
 	let toolStartTimes = $state<Record<string, number>>({});
-	// SS-9: request ids the user explicitly cancelled. Late CF_AGENT_USE_CHAT_RESPONSE
-	// frames for these ids must be dropped rather than resuming a stopped stream.
-	let cancelledRequestIds = $state<Set<string>>(new Set());
-	// Keep only a small recent window: late stream/terminal frames for committed
-	// turns must not recreate stale UI, without retaining request ids forever.
-	let settledRequestIds = $state<Set<string>>(new Set());
-	// Successful terminal ids remain eligible for a late persisted commit even
-	// after the one history read has already repaired the visible transcript.
-	let successfulRequestReconciliations = $state<SuccessfulRequestReconciliation[]>([]);
 	// A successful stream settles the visible UI before the server's persistence
 	// hook runs. Keep its correlation and message anchors long enough for the one
 	// authenticated history read or the late custom commit to repair the transcript.
 	let pendingHistoryReconciliations = $state<PendingHistoryReconciliation[]>([]);
+	let pendingCommit: { requestId: string; messages: UIChatMessage[] } | null = $state(null);
+	const completedMutatingToolCalls = new Set<string>();
 	let historyRefreshPending = $state(false);
-	// A reconnect probe belongs to one socket and one pending request. The server
-	// echoes its probe id on STREAM_RESUME_NONE; the acknowledged id suppresses
-	// duplicate proactive and probe-triggered STREAM_RESUMING frames.
-	let streamResumeProbe = $state<{ probeId: string; requestId: string | null } | null>(null);
-	let streamResumeAcknowledgedRequestId = $state<string | null>(null);
 	// SS-11: guard so we refresh the CSRF cookie at most once per reconnect cycle
 	// (a stale-token handshake 403 closes the socket before OPEN; refreshing once
 	// before the next attempt avoids a refresh-storm while still self-healing).
@@ -165,6 +152,82 @@ import {
 		'add_page',
 		'generate_image'
 	]);
+
+	type SiteChatMessage = SDKUIMessage<Record<string, JsonValue>>;
+	const activeRequestIds = new Set<string>();
+	const disconnectedAgent: AgentConnection = {
+		send() {
+			throw new Error('Agent connection is not open');
+		},
+		addEventListener() {},
+		removeEventListener() {}
+	};
+	const chatTransport = new WebSocketChatTransport<SiteChatMessage>({
+		agent: disconnectedAgent,
+		activeRequestIds,
+		cancelOnClientAbort: false
+	});
+	const chat = new Chat<SiteChatMessage>({
+		transport: chatTransport,
+		onError: handleChatError,
+		onFinish: handleChatFinish
+	});
+
+	function adaptChatMessage(message: SiteChatMessage): UIChatMessage {
+		const parts = message.parts.map((part) => {
+			if (part.type === 'dynamic-tool') {
+				return {
+					...part,
+					type: `tool-${part.toolName}`,
+					toolName: part.toolName
+				};
+			}
+
+			if (part.type.startsWith('tool-') && !('toolName' in part)) {
+				return {
+					...part,
+					toolName: part.type.slice('tool-'.length)
+				};
+			}
+
+			return part;
+		});
+		const [parsed] = parseUIChatMessages(
+			JSON.stringify([{ id: message.id, role: message.role === 'system' ? 'assistant' : message.role, parts, metadata: message.metadata }])
+		);
+		if (!parsed) throw new Error('Chat transport returned an empty message');
+		return parsed;
+	}
+
+	function syncChatMessages() {
+		uiMessages = chat.messages.map(adaptChatMessage);
+	}
+
+	function setChatMessages(messages: UIChatMessage[]) {
+		chat.messages = JSON.parse(JSON.stringify(messages));
+		syncChatMessages();
+	}
+
+	$effect(() => {
+		const currentMessages = chat.messages;
+		syncChatMessages();
+		if (isLoading) {
+			for (const message of currentMessages.map(adaptChatMessage)) {
+				for (const part of message.parts) {
+					if (
+						isToolPart(part) &&
+						part.state === 'output-available' &&
+						part.toolCallId &&
+						MUTATING_TOOLS.has(part.type.slice('tool-'.length)) &&
+						!completedMutatingToolCalls.has(part.toolCallId)
+					) {
+						completedMutatingToolCalls.add(part.toolCallId);
+						onUpdate();
+					}
+				}
+			}
+		}
+	});
 
 	function generateId(): string {
 		return crypto.randomUUID();
@@ -185,13 +248,6 @@ import {
 			);
 		}
 		return reconciliation;
-	}
-
-	function rememberSuccessfulRequest(requestId: string, generation: number) {
-		successfulRequestReconciliations = [
-			...successfulRequestReconciliations.filter((entry) => entry.requestId !== requestId),
-			{ requestId, generation }
-		].slice(-8);
 	}
 
 	function historyContainsCompletedTurn(
@@ -353,9 +409,7 @@ import {
 		currentStatus = '';
 		currentRequestId = null;
 		currentRequestUserMessageId = null;
-		activeStream = null;
 		expectingContinuation = false;
-		streamResumeProbe = null;
 		requestStartedAt = null;
 		toolStartTimes = {};
 		isReconnecting = false;
@@ -363,16 +417,10 @@ import {
 	}
 
 	function cancelResumedRequest(requestId: string) {
-		if (streamResumeProbe?.requestId === requestId) {
-			streamResumeProbe = null;
-		}
 		cancelledRequestIds.add(requestId);
 		settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
 		try {
-			sendSocketMessage({
-				type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
-				id: requestId
-			});
+			sendSocketMessage({ type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL, id: requestId });
 		} catch (error) {
 			console.error('Error resending cancelled request:', error);
 		}
@@ -384,7 +432,7 @@ import {
 			if (isToolPart(part) && isToolStateRunning(part.state)) {
 				return {
 					toolCallId: part.toolCallId,
-					name: part.toolName,
+					name: part.toolName || part.type.slice('tool-'.length),
 					title: part.title,
 					input: decodeToolInput(part.input)
 				};
@@ -394,17 +442,7 @@ import {
 		return null;
 	}
 
-	function getCurrentRunningTool(
-		stream: ActiveStreamMessage | null,
-		messages: UIChatMessage[]
-	): RunningToolState | null {
-		if (stream) {
-			const toolFromStream = getRunningToolFromParts(stream.parts);
-			if (toolFromStream) {
-				return toolFromStream;
-			}
-		}
-
+	function getCurrentRunningTool(messages: UIChatMessage[]): RunningToolState | null {
 		const lastAssistant = findLastAssistantMessage(messages);
 		if (!lastAssistant) {
 			return null;
@@ -544,14 +582,17 @@ import {
 					const startTime = part.toolCallId ? startTimes[part.toolCallId] : undefined;
 					currentTools.push({
 						id: part.toolCallId,
-						name: part.toolName,
+						name: part.toolName || part.type.slice('tool-'.length),
 						title: part.title,
 						input: decodeToolInput(part.input),
 						status,
-						output: serializeToolOutput(part.output, part.errorText, part.toolName),
+						output: serializeToolOutput(
+							part.output,
+							part.errorText,
+							part.toolName || part.type.slice('tool-'.length)
+						),
 						startTime,
-						elapsedTime:
-							status === 'running' && startTime ? (nowMs - startTime) / 1000 : undefined
+						elapsedTime: status === 'running' && startTime ? (nowMs - startTime) / 1000 : undefined
 					});
 				}
 			}
@@ -586,60 +627,13 @@ import {
 		if (questionPart && isToolPart(questionPart)) {
 			return {
 				toolCallId: questionPart.toolCallId,
-				toolName: questionPart.toolName,
+				toolName: questionPart.toolName || questionPart.type.slice('tool-'.length),
 				input: decodeToolInput(questionPart.input)
 			};
 		}
 
 		return null;
 	}
-
-	function createStreamState(requestId: string, continuation: boolean): ActiveStreamMessage {
-		const lastAssistant = continuation ? findLastAssistantMessage(uiMessages) : undefined;
-		const stream: ActiveStreamMessage = {
-			id: requestId,
-			messageId: lastAssistant?.id || generateId(),
-			continuation,
-			hadError: false,
-			parts: lastAssistant ? cloneParts(lastAssistant.parts) : []
-		};
-		if (lastAssistant?.metadata) stream.metadata = { ...lastAssistant.metadata };
-		return stream;
-	}
-
-	function flushActiveStreamToMessages(stream: ActiveStreamMessage) {
-		const nextMessage = streamToUIMessage(stream);
-
-		const existingIndex = uiMessages.findIndex((message) => message.id === nextMessage.id);
-		if (existingIndex >= 0) {
-			uiMessages = uiMessages.map((message, index) => (index === existingIndex ? nextMessage : message));
-		} else {
-			uiMessages = [...uiMessages, nextMessage];
-		}
-
-		scrollToBottom();
-	}
-
-	function streamToUIMessage(stream: ActiveStreamMessage): UIChatMessage {
-		const nextMessage: UIChatMessage = {
-			id: stream.messageId,
-			role: 'assistant',
-			parts: cloneParts(stream.parts)
-		};
-		if (stream.metadata) nextMessage.metadata = { ...stream.metadata };
-		return nextMessage;
-	}
-
-	function appendStreamError(stream: ActiveStreamMessage, text: string) {
-		if (!text || stream.errorText === text) return;
-		stream.errorText = text;
-		stream.parts.push({ type: 'text', text, state: 'done' });
-	}
-
-	function getCurrentMessagesForRequest(nextUserMessage?: UIChatMessage): UIChatMessage[] {
-		return nextUserMessage ? [...uiMessages, nextUserMessage] : [...uiMessages];
-	}
-
 	let reconnectAttempts = 0;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	// Bumped by closeSocket() (project switch / unmount). A reconnect attempt
@@ -654,10 +648,12 @@ import {
 	// we show a transient "reconnecting" state instead of a permanent dead-end
 	// error bubble. Cleared when a connection succeeds or the component tears down.
 	let isReconnecting = $state(false);
+	let reconnectResumeInFlight = $state(false);
+	let reconnectResumeNoneReceived = $state(false);
 
 	function clearSocketResumeState() {
-		streamResumeProbe = null;
-		streamResumeAcknowledgedRequestId = null;
+		chatTransport.resetResumeState();
+		currentRequestId = null;
 	}
 
 	function closeSocket() {
@@ -668,6 +664,8 @@ import {
 		}
 		reconnectAttempts = 0;
 		isReconnecting = false;
+		reconnectResumeInFlight = false;
+		reconnectResumeNoneReceived = false;
 		csrfRefreshedThisCycle = false;
 
 		if (socket) {
@@ -704,7 +702,6 @@ import {
 		socketProjectId = null;
 		socketPromise = null;
 		socketPromiseProjectId = null;
-		clearSocketResumeState();
 
 		// Clean up listeners on the closed socket
 		if (closedSocket) {
@@ -747,14 +744,14 @@ import {
 				// No project is active, so there is no connection to recover.
 				resetRequestState();
 				isReconnecting = false;
-				uiMessages = [
+				setChatMessages([
 					...uiMessages,
 					{
 						id: generateId(),
 						role: 'assistant',
 						parts: [{ type: 'text', text: 'The response was interrupted. Send your message again.' }]
 					}
-				];
+				]);
 			}
 		}
 
@@ -870,6 +867,7 @@ import {
 		const nextPromise = new Promise<WebSocket>((resolve, reject) => {
 			const onOpen = () => {
 				const reconnecting = reconnectAttempts > 0;
+				const shouldResume = reconnecting && isLoading;
 				nextSocket.removeEventListener('error', onError);
 				if (
 					!isCurrentProjectContext(targetProjectId, targetEpoch) ||
@@ -894,7 +892,11 @@ import {
 				reconnectAttempts = 0; // Reset on successful connection
 				csrfRefreshedThisCycle = false; // Fresh cycle next time we need one
 				isReconnecting = false; // SS-10: silent reconnect succeeded
-				clearSocketResumeState();
+				// Keep the transport's pending resume handshake alive across the
+				// replacement socket. setAgent() intentionally settles that handshake;
+				// this direct assignment lets retryPendingResume() retransmit it on the
+				// new connection without changing the server-side turn ownership.
+				chatTransport.agent = nextSocket;
 				try {
 					flushPendingTurnCancellation(nextSocket);
 				} catch (error) {
@@ -902,20 +904,13 @@ import {
 					// any new model request can use this connection.
 					console.error('Error stopping pending agent turn:', error);
 				}
-				if (reconnecting && isLoading && (currentRequestId || expectingContinuation)) {
-					const requestId = currentRequestId;
-					const probeId = generateId();
-					streamResumeProbe = { probeId, requestId };
-					try {
-						nextSocket.send(
-							JSON.stringify({
-								type: AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST,
-								probeId
-							})
-						);
-					} catch (error) {
-						streamResumeProbe = null;
-						console.error('Error requesting stream resume:', error);
+				if (shouldResume) {
+					const retriedResume = chatTransport.retryPendingResume();
+					if (!retriedResume) {
+						void resumeChatAfterReconnect(targetProjectId, targetEpoch);
+					} else {
+						reconnectResumeInFlight = true;
+						reconnectResumeNoneReceived = false;
 					}
 				}
 				resolve(nextSocket);
@@ -937,7 +932,6 @@ import {
 				if (socket === nextSocket) {
 					socket = null;
 					socketProjectId = null;
-					clearSocketResumeState();
 				}
 				reject(new Error('Unable to connect to the agent'));
 			};
@@ -1005,7 +999,7 @@ import {
 				// a subsequent maintained commit/history broadcast repair it if available.
 				return;
 			}
-			uiMessages = data;
+			setChatMessages(data);
 			if (reconciliation) takeHistoryReconciliation(reconciliation.requestId);
 			historyLoadFailed = false;
 			schedulePendingHistoryRefresh();
@@ -1083,222 +1077,214 @@ import {
 		return ws;
 	}
 
+	function handleChatError(error: Error) {
+		console.error('Agent chat transport error:', error);
+	}
+
+	function handleChatFinish({
+		message,
+		messages: finishedMessages,
+		isAbort,
+		isDisconnect,
+		isError
+	}: {
+		message: SiteChatMessage;
+		messages: SiteChatMessage[];
+		isAbort: boolean;
+		isDisconnect: boolean;
+		isError: boolean;
+	}) {
+		syncChatMessages();
+		if (isDisconnect && isReconnecting) {
+			return;
+		}
+
+		if (isAbort) {
+			resetRequestState();
+			return;
+		}
+
+		if (isError) {
+			const errorText = getErrorMessage(chat.error);
+			const lastMessage = uiMessages[uiMessages.length - 1];
+			if (
+				lastMessage?.role !== 'assistant' ||
+				getTextFromParts(lastMessage.parts) !== errorText
+			) {
+				setChatMessages([
+					...uiMessages,
+					{ id: generateId(), role: 'assistant', parts: [{ type: 'text', text: errorText }] }
+				]);
+			}
+			resetRequestState();
+			return;
+		}
+
+		if (isReconnecting) {
+			return;
+		}
+
+		const lastUserMessage = [...finishedMessages].reverse().find((entry) => entry.role === 'user');
+		const reconciliation: PendingHistoryReconciliation = {
+			requestId: currentRequestId ?? message.id,
+			assistantMessageId: message.id,
+			userMessageId: lastUserMessage?.id ?? currentRequestUserMessageId,
+			generation: requestGeneration
+		};
+		rememberHistoryReconciliation(reconciliation);
+		const committed = pendingCommit;
+		pendingCommit = null;
+		resetRequestState();
+		if (committed) {
+			setChatMessages(committed.messages);
+			takeHistoryReconciliation(reconciliation.requestId);
+			historyLoadFailed = false;
+			onUpdate();
+			scrollToBottom();
+			return;
+		}
+		const targetProjectId = projectId;
+		const targetEpoch = projectContextEpoch;
+		if (targetProjectId) {
+			void loadChatHistory(targetProjectId, targetEpoch, reconciliation);
+		}
+	}
+
+	async function resumeChatAfterReconnect(targetProjectId: string, targetEpoch: number) {
+		try {
+			await chat.resumeStream();
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) return;
+			if (isReconnecting) return;
+			// A resume-none response completes the SDK call without invoking the
+			// finish callback. Repair from authenticated history and clear the local
+			// activity state in that one terminal path.
+			if (isLoading && chat.status === 'ready') {
+				resetRequestState();
+				onUpdate();
+				void loadChatHistory(targetProjectId, targetEpoch);
+			}
+		} catch (error) {
+			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) return;
+			console.error('Failed to resume agent stream:', error);
+			resetRequestState();
+		}
+	}
+
 	async function sendChatRequest(
 		messagesForRequest: UIChatMessage[],
 		targetProjectId: string,
 		targetEpoch: number
 	) {
-		const ws = await prepareSocketForModelTurn(targetProjectId, targetEpoch);
-		const requestId = generateId();
+		await prepareSocketForModelTurn(targetProjectId, targetEpoch);
 		const startedAt = Date.now();
 		const lastUserMessage = [...messagesForRequest].reverse().find((message) => message.role === 'user');
 
-		currentRequestId = requestId;
+		currentRequestId = null;
 		currentRequestUserMessageId = lastUserMessage?.id ?? null;
 		requestStartedAt = startedAt;
 		clockNow = startedAt;
 		toolStartTimes = {};
 		currentStatus = 'Thinking...';
 		isLoading = true;
-		activeStream = null;
 		expectingContinuation = false;
-		// Any pending server-side turn reset was sent before this request. From
-		// here, request identity rejects late frames from the cancelled successor.
 		cancelledContinuationPending = false;
-		// SS-9: a genuinely new request starts fresh; drop stale cancellation markers.
 		cancelledRequestIds = new Set();
-
-		ws.send(
-			JSON.stringify({
-				type: AgentMessageType.CF_AGENT_USE_CHAT_REQUEST,
-				id: requestId,
-				init: {
-					method: 'POST',
-					body: JSON.stringify({
-						messages: messagesForRequest,
-						trigger: 'submit-message'
-					})
-				}
-			})
-		);
-	}
-
-	function handleStreamChunk(chunk: UIStreamChunk) {
-		if (!activeStream) {
-			return;
-		}
-
-		if (chunk.type === 'error') {
-			activeStream.hadError = true;
-			appendStreamError(activeStream, chunk.errorText);
-			flushActiveStreamToMessages(activeStream);
-			return;
-		}
-
-		if (chunk.type === 'abort') {
-			const requestId = activeStream.id;
-			activeStream.hadError = true;
-			activeStream.parts.push({
-				type: 'text',
-				text: 'The response stopped partway. Send your message again.',
-				state: 'done'
-			});
-			flushActiveStreamToMessages(activeStream);
-			// An abort is terminal even when the transport never sends the usual
-			// done frame. Mark the request settled before clearing state so a late
-			// replay cannot recreate the Working indicator.
-			settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
-			resetRequestState();
-			return;
-		}
-
-		const handled = applyChunkToParts(activeStream.parts, chunk);
-
-		if (!handled) {
-			if (chunk.type === 'start' && chunk.messageId && !activeStream.continuation) {
-				activeStream.messageId = chunk.messageId;
+		settledRequestIds = new Set();
+		void chat.sendMessage().catch((error) => {
+			if (isCurrentProjectContext(targetProjectId, targetEpoch)) {
+				console.error('Error sending chat request:', error);
 			}
-
-			if (chunk.type === 'start' || chunk.type === 'finish' || chunk.type === 'message-metadata') {
-				// AI SDK v6 declares messageMetadata as unknown and permits scalar or
-				// null values. Site Studio's persisted message contract is an object;
-				// retain only object metadata at that application boundary.
-				const metadata = z.record(z.string(), jsonValueSchema).safeParse(chunk.messageMetadata);
-				if (metadata.success) {
-					activeStream.metadata = activeStream.metadata
-						? { ...activeStream.metadata, ...metadata.data }
-						: { ...metadata.data };
-				}
-			}
-		}
-
-		switch (chunk.type) {
-			case 'text-start':
-			case 'text-delta':
-				currentStatus = 'Responding...';
-				break;
-			case 'tool-input-start':
-			case 'tool-input-available':
-				trackToolStart(chunk.toolCallId);
-				currentStatus = getToolStatusLabel(chunk.toolName);
-				break;
-			case 'tool-output-available': {
-				const toolPart = activeStream.parts.find(
-					(part) => isToolPart(part) && part.toolCallId === chunk.toolCallId
-				);
-
-				if (toolPart && isToolPart(toolPart) && MUTATING_TOOLS.has(toolPart.toolName)) {
-					onUpdate();
-				}
-				break;
-			}
-		}
-
-		flushActiveStreamToMessages(activeStream);
-	}
-
-	function parseStreamChunkBody(body: string): UIStreamChunk {
-		return parseUIStreamChunk(body);
-	}
-
-	function settleSuccessfulStream(requestId: string) {
-		const stream = activeStream;
-		let reconciliation: PendingHistoryReconciliation | undefined;
-		if (stream) {
-			for (const part of stream.parts) {
-				if ((part.type === 'text' || part.type === 'reasoning') && part.state === 'streaming') {
-					part.state = 'done';
-				}
-			}
-			flushActiveStreamToMessages(stream);
-			if (stream.parts.length > 0) {
-				reconciliation = {
-					requestId,
-					assistantMessageId: stream.messageId,
-					userMessageId: currentRequestUserMessageId,
-					generation: requestGeneration
-				};
-				rememberHistoryReconciliation(reconciliation);
-			}
-		}
-
-		settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
-		rememberSuccessfulRequest(requestId, requestGeneration);
-		resetRequestState();
-		if (reconciliation) {
-			const targetProjectId = projectId;
-			const targetEpoch = projectContextEpoch;
-			if (targetProjectId) {
-				void loadChatHistory(targetProjectId, targetEpoch, reconciliation);
-			}
-		}
+		});
+		currentRequestId = [...activeRequestIds].at(-1) ?? null;
 	}
 
 	function handleSocketMessage(event: MessageEvent<string>) {
-		if (event.currentTarget !== socket || socketProjectId !== projectId) {
-			return;
-		}
+		if (event.currentTarget !== socket || socketProjectId !== projectId) return;
 		try {
-			const data = parseAgentSocketMessage(event.data);
-			handleParsedSocketMessage(data);
+			handleParsedSocketMessage(parseAgentSocketMessage(event.data));
 		} catch {
-			// Malformed frame on the agent socket: a transport issue.
-			// Still drop the frame, but say so — silent drops made transport
-			// corruption invisible.
 			console.warn('Dropping malformed (non-JSON) agent-socket frame');
-			return;
 		}
 	}
 
 	function handleParsedSocketMessage(data: AgentSocketMessage) {
+		if (data.type === AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE && data.id && activeRequestIds.has(data.id)) {
+			// WebSocketChatTransport owns response frames for active SDK streams.
+			return;
+		}
+
+		if (data.type === AgentMessageType.CF_AGENT_STREAM_RESUMING && data.id) {
+			if (cancelledRequestIds.has(data.id) || cancelledContinuationPending) {
+				// Keep the continuation-cancel marker armed until a genuinely new
+				// request starts. A server can announce more than one successor while
+				// another tab is still unwinding the stopped turn.
+				cancelResumedRequest(data.id);
+				try {
+					chatTransport.cancelActiveServerTurn();
+				} catch (error) {
+					console.error('Error cancelling a late tool continuation:', error);
+				}
+				return;
+			}
+			if (chatTransport.handleStreamResuming({ id: data.id })) {
+				reconnectResumeInFlight = false;
+				reconnectResumeNoneReceived = false;
+				currentRequestId = data.id;
+				expectingContinuation = false;
+			}
+			return;
+		}
+		if (data.type === AgentMessageType.CF_AGENT_STREAM_RESUME_NONE) {
+			if (chatTransport.handleStreamResumeNone({ probeId: data.probeId })) {
+				reconnectResumeNoneReceived = true;
+			}
+			return;
+		}
+		if (data.type === AgentMessageType.CF_AGENT_STREAM_PENDING) {
+			chatTransport.handleStreamPending();
+			return;
+		}
 
 		switch (data.type) {
 			case AgentMessageType.CF_AGENT_CHAT_CLEAR:
-				uiMessages = [];
+				setChatMessages([]);
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED: {
-				const invalidated = parseSiteStudioChatInvalidatedFrame(data);
-				if (!invalidated) break;
+				if (!parseSiteStudioChatInvalidatedFrame(data)) break;
 				if (isLoading || isPreparingRequest || pendingHistoryReconciliations.length > 0) {
 					historyRefreshPending = true;
 					break;
 				}
-				const invalidationProjectId = projectId;
-				const invalidationEpoch = projectContextEpoch;
-				if (invalidationProjectId) {
-					void loadChatHistory(invalidationProjectId, invalidationEpoch);
-				}
+				if (projectId) void loadChatHistory(projectId, projectContextEpoch);
 				break;
 			}
-			case AgentMessageType.CF_AGENT_CHAT_MESSAGES:
-				{
-					const incomingHistory = data.messages ?? [];
-					const pendingTurnStillMissing = pendingHistoryReconciliations.some(
-						(entry) => !historyContainsCompletedTurn(incomingHistory, entry)
-					);
-					if (
-						(pendingHistoryReconciliations.length > 0 && pendingTurnStillMissing) ||
-						(isLoading && incomingHistory.length < uiMessages.length)
-					) {
-						break;
-					}
-					uiMessages = incomingHistory;
-					clearReconciledHistoryEntries(uiMessages);
+			case AgentMessageType.CF_AGENT_CHAT_MESSAGES: {
+				const incomingHistory = data.messages ?? [];
+				const pendingTurnStillMissing = pendingHistoryReconciliations.some(
+					(entry) => !historyContainsCompletedTurn(incomingHistory, entry)
+				);
+				if (
+					(pendingHistoryReconciliations.length > 0 && pendingTurnStillMissing) ||
+					(isLoading && incomingHistory.length < uiMessages.length)
+				) {
+					break;
 				}
-				// The agent socket just delivered the authoritative history, so a
-				// previously failed HTTP history load is moot (SS-49).
+				setChatMessages(incomingHistory);
+				clearReconciledHistoryEntries(incomingHistory);
 				historyLoadFailed = false;
 				scrollToBottom();
 				break;
+			}
 			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
 				if (data.message) {
-					uiMessages = mergeUpdatedMessage(uiMessages, data.message);
+					setChatMessages(mergeUpdatedMessage(uiMessages, data.message));
 					clearReconciledHistoryEntries(uiMessages);
 				}
 				scrollToBottom();
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_CANCELLED:
 				if (currentRequestId) {
+					cancelledRequestIds.add(currentRequestId);
 					settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
 				}
 				cancelledContinuationPending = cancelledContinuationPending || expectingContinuation;
@@ -1306,208 +1292,43 @@ import {
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_COMMITTED: {
 				const committed = parseSiteStudioChatCommittedFrame(data);
-				if (!committed) {
-					break;
-				}
-				const isCurrentRequest = committed.requestId === currentRequestId;
-				const pendingReconciliation = pendingHistoryReconciliations.find(
-					(entry) => entry.requestId === committed.requestId
+				if (!committed) break;
+				const matchingReconciliation = pendingHistoryReconciliations.find(
+					(entry) =>
+						entry.requestId === committed.requestId ||
+						committed.messages.some((message) => message.id === entry.assistantMessageId)
 				);
-				const successfulReconciliation = successfulRequestReconciliations.find(
-					(entry) => entry.requestId === committed.requestId
-				);
-				const isKnownSuccessfulRequest = successfulReconciliation !== undefined;
-				const matchingReconciliation = pendingReconciliation ?? successfulReconciliation;
-				// A successful terminal frame settles the visible stream before the
-				// post-persistence hook runs. Accept that matching commit while idle, but
-				// never let an old commit clobber a newer independent request already in
-				// progress. Once its successor stream is active, a client-tool continuation
-				// is still the same assistant turn; while handoff is pending, preserve the
-				// local tool result instead of replacing it with the older pre-answer commit.
-				const isContinuationForPendingTurn =
-					pendingReconciliation && activeStream?.continuation === true;
-				if (
-					!isCurrentRequest &&
-					(
-						(!pendingReconciliation && !isKnownSuccessfulRequest) ||
-						(matchingReconciliation && matchingReconciliation.generation !== requestGeneration && !isContinuationForPendingTurn) ||
-						(isLoading && !isContinuationForPendingTurn)
-					)
-				) {
+				const currentAssistantId = findLastAssistantMessage(uiMessages)?.id;
+				const commitContainsCurrentAssistant = currentAssistantId
+					? committed.messages.some((message) => message.id === currentAssistantId)
+					: false;
+				if (isLoading && activeRequestIds.has(committed.requestId)) {
+					void chat.stop();
+					chatTransport.handleServerTurnCompleted(committed.requestId);
+					resetRequestState();
+					setChatMessages(committed.messages);
+					historyLoadFailed = false;
+					onUpdate();
+					scrollToBottom();
 					break;
 				}
-				// A late commit from an older turn must not erase a newer visible turn.
-				if (!isCurrentRequest && committed.messages.length < uiMessages.length) {
+				if (isLoading) {
+					pendingCommit = { requestId: committed.requestId, messages: committed.messages };
+					historyRefreshPending = true;
 					break;
 				}
-
-				if (streamResumeProbe?.requestId === committed.requestId) {
-					streamResumeProbe = null;
+				if (!matchingReconciliation && committed.messages.length < uiMessages.length) {
+					historyRefreshPending = true;
+					break;
 				}
-				takeHistoryReconciliation(committed.requestId);
-				schedulePendingHistoryRefresh();
-				settledRequestIds = new Set([...settledRequestIds, committed.requestId].slice(-8));
-				uiMessages = committed.messages;
+				if (!matchingReconciliation && uiMessages.length > 0 && !commitContainsCurrentAssistant && committed.messages.length <= uiMessages.length) {
+					break;
+				}
+				if (matchingReconciliation) takeHistoryReconciliation(matchingReconciliation.requestId);
+				setChatMessages(committed.messages);
 				historyLoadFailed = false;
-				// The commit is also the authoritative repair signal for mutations
-				// whose streamed tool output was malformed or never reached the UI.
 				onUpdate();
 				scrollToBottom();
-				if (isCurrentRequest) resetRequestState();
-				break;
-			}
-			case AgentMessageType.CF_AGENT_STREAM_PENDING: {
-				const pendingResume = streamResumeProbe;
-				if (!pendingResume) break;
-				// @cloudflare/ai-chat 0.9.3 omits probeId when forwarding the
-				// request. Reject only an explicitly different correlation.
-				if (data.probeId && data.probeId !== pendingResume.probeId) break;
-				// A queued request from another tab can be the SDK's latest pending
-				// id. Keep this tab's known request; adopt the id only when waiting
-				// for a continuation whose successor was not known yet.
-				const requestId = pendingResume.requestId ?? data.id ?? null;
-				if (pendingResume.requestId === null && data.id) currentRequestId = data.id;
-				// Pending is not terminal. The SDK resolves this same handshake with
-				// STREAM_RESUMING or STREAM_RESUME_NONE, so retain its correlation.
-				streamResumeProbe = { ...pendingResume, requestId };
-				break;
-			}
-			case AgentMessageType.CF_AGENT_STREAM_RESUME_NONE: {
-				const pendingResume = streamResumeProbe;
-				if (!pendingResume || currentRequestId !== pendingResume.requestId) {
-					break;
-				}
-				// The SDK omits probeId on some resume-none paths; reject only an
-				// explicitly present probe that belongs to another request.
-				if (data.probeId && data.probeId !== pendingResume.probeId) {
-					break;
-				}
-
-				streamResumeProbe = null;
-				if (pendingResume.requestId) {
-					settledRequestIds = new Set([...settledRequestIds, pendingResume.requestId].slice(-8));
-				}
-				expectingContinuation = false;
-				resetRequestState();
-				onUpdate();
-				const targetProjectId = projectId;
-				const targetEpoch = projectContextEpoch;
-				if (targetProjectId) {
-					void loadChatHistory(targetProjectId, targetEpoch);
-				}
-				break;
-			}
-			case AgentMessageType.CF_AGENT_STREAM_RESUMING: {
-				if (!data.id) break;
-				if (cancelledRequestIds.has(data.id)) {
-					cancelResumedRequest(data.id);
-					break;
-				}
-				if (cancelledContinuationPending) {
-					cancelResumedRequest(data.id);
-					break;
-				}
-				// A live resume probe is parked on the SDK's pre-stream queue, not
-				// bound to one request. If this tab's request settles without a stream,
-				// the next accepted request can legitimately resume this connection.
-				if (
-					!streamResumeProbe &&
-					!expectingContinuation &&
-					currentRequestId &&
-					data.id !== currentRequestId
-				) {
-					break;
-				}
-				if (settledRequestIds.has(data.id)) break;
-				if (streamResumeProbe) {
-					streamResumeProbe = null;
-				}
-				if (streamResumeAcknowledgedRequestId === data.id) break;
-				streamResumeAcknowledgedRequestId = data.id;
-				const continuation = expectingContinuation;
-				expectingContinuation = false;
-				currentRequestId = data.id;
-				activeStream = createStreamState(data.id, continuation);
-				try {
-					sendSocketMessage({
-						type: AgentMessageType.CF_AGENT_STREAM_RESUME_ACK,
-						id: data.id
-					});
-				} catch (error) {
-					console.error('Error acknowledging resumed stream:', error);
-				}
-				break;
-			}
-			case AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE: {
-				if (!data.id) break;
-				// SS-9: drop frames for a request the user stopped. Without this a late
-				// frame would recreate activeStream below and resume appending text.
-				if (cancelledRequestIds.has(data.id)) {
-					break;
-				}
-				if (cancelledContinuationPending) {
-					cancelResumedRequest(data.id);
-					break;
-				}
-				if (!expectingContinuation && currentRequestId && data.id !== currentRequestId) {
-					break;
-				}
-				if (settledRequestIds.has(data.id)) {
-					break;
-				}
-				if (!activeStream || activeStream.id !== data.id) {
-					const continuation = data.continuation === true || expectingContinuation;
-					activeStream = createStreamState(data.id, continuation);
-				}
-				if (data.error && activeStream) {
-					activeStream.hadError = true;
-				}
-
-				if (data.body?.trim()) {
-					try {
-						handleStreamChunk(parseStreamChunkBody(data.body));
-					} catch (error) {
-						// Error frames legitimately carry the human-readable error text as a
-						// plain (non-JSON) body. Observed live with the CAIL quota message:
-						// the transport sends `{error:true, body:"<text>"}` first and then the
-						// SAME text as a proper `{"type":"error","errorText":…}` JSON chunk,
-						// which handleStreamChunk renders. So rendering the plain body here
-						// would show the error twice: recognize the shape and stay quiet.
-						// Only a body that looks encoded (broken JSON / SSE framing) is a
-						// genuinely malformed frame — warn and surface a visible fallback so
-						// the user is not left hanging.
-						const bodyText = data.body?.trim() ?? '';
-						const looksLikeProse =
-							!!bodyText &&
-							!bodyText.startsWith('data:') &&
-							!bodyText.startsWith('{') &&
-							!bodyText.startsWith('[');
-							if (data.error && activeStream && looksLikeProse) {
-								// Error frames may carry the provider's human-readable message as
-								// plain text rather than a UI chunk. Render it here; a later
-								// structured copy is deduplicated by appendStreamError.
-								appendStreamError(activeStream, bodyText);
-							} else {
-								console.warn('Failed to parse stream chunk', error);
-								if (data.error && activeStream) {
-									appendStreamError(activeStream, 'Something went wrong while generating this response.');
-								}
-							}
-					}
-				}
-
-				if (data.done) {
-					if (activeStream?.hadError || data.error) {
-						if (activeStream) flushActiveStreamToMessages(activeStream);
-						settledRequestIds = new Set([...settledRequestIds, data.id].slice(-8));
-						resetRequestState();
-					} else {
-						// @cloudflare/ai-chat emits done:true before its persistence hook.
-						// Settle the visible response immediately; the one history read and
-						// late commit below repair the authoritative transcript when ready.
-						settleSuccessfulStream(data.id);
-					}
-				}
 				break;
 			}
 		}
@@ -1517,7 +1338,7 @@ import {
 	let pendingToolInteraction = $derived(getPendingToolInteraction(uiMessages));
 	let requestElapsedMs = $derived(requestStartedAt ? Math.max(0, clockNow - requestStartedAt) : 0);
 	let requestElapsedLabel = $derived(formatElapsedTime(requestElapsedMs));
-	let currentRunningTool = $derived(getCurrentRunningTool(activeStream, uiMessages));
+	let currentRunningTool = $derived(getCurrentRunningTool(uiMessages));
 	let activitySummary = $derived(getActivitySummary(currentRunningTool, currentStatus, requestElapsedMs));
 	let activeToolTarget = $derived(getActivityTarget(currentRunningTool));
 
@@ -1542,6 +1363,27 @@ import {
 		};
 	});
 
+	$effect(() => {
+		const runningTool = getCurrentRunningTool(uiMessages);
+		const sdkStatus = chat.status;
+		if (reconnectResumeInFlight && reconnectResumeNoneReceived && sdkStatus === 'ready' && isLoading) {
+			reconnectResumeInFlight = false;
+			reconnectResumeNoneReceived = false;
+			resetRequestState();
+			onUpdate();
+			if (projectId) void loadChatHistory(projectId, projectContextEpoch);
+			return;
+		}
+		if (runningTool && isLoading) {
+			trackToolStart(runningTool.toolCallId);
+			currentStatus = getToolStatusLabel(runningTool.name);
+		} else if (sdkStatus === 'streaming') {
+			currentStatus = 'Responding...';
+		} else if (sdkStatus === 'submitted' && isLoading) {
+			currentStatus = expectingContinuation ? 'Continuing...' : 'Thinking...';
+		}
+	});
+
 	let previousProjectId = $state<string | null>(null);
 	$effect(() => {
 		if (!projectId || projectId === previousProjectId) {
@@ -1559,7 +1401,7 @@ import {
 		cancelledContinuationPending = false;
 		cancelTurnDeliveryPending = false;
 		resetRequestState();
-		uiMessages = [];
+		setChatMessages([]);
 		closeSocket();
 
 		void (async () => {
@@ -1581,16 +1423,13 @@ import {
 	});
 
 	function stopRequest() {
-		if (!currentRequestId && !expectingContinuation) {
+		if (!currentRequestId && !isLoading && !expectingContinuation) {
 			return;
 		}
 		requestPreparationSequence += 1;
 		isPreparingRequest = false;
 		const stoppedRequestId = currentRequestId;
 		const wasAwaitingContinuation = expectingContinuation;
-
-		// SS-9: remember the cancelled id so a late CF_AGENT_USE_CHAT_RESPONSE frame
-		// for it can't recreate activeStream and resume appending after the stop.
 		if (stoppedRequestId) {
 			cancelledRequestIds.add(stoppedRequestId);
 			settledRequestIds = new Set([...settledRequestIds, stoppedRequestId].slice(-8));
@@ -1605,12 +1444,11 @@ import {
 			console.error('Error stopping agent turn:', error);
 		}
 
-		if (stoppedRequestId) {
+		void chat.stop().catch((error) => console.error('Error stopping chat stream:', error));
+		const transportCancelled = chatTransport.cancelActiveServerTurn();
+		if (stoppedRequestId && !transportCancelled) {
 			try {
-				sendSocketMessage({
-					type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL,
-					id: stoppedRequestId
-				});
+				sendSocketMessage({ type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL, id: stoppedRequestId });
 			} catch (error) {
 				console.error('Error stopping request:', error);
 			}
@@ -1726,27 +1564,27 @@ import {
 				role: 'user',
 				parts: [{ type: 'text', text: messageContent }]
 			};
-			uiMessages = [...uiMessages, nextUserMessage];
+			setChatMessages([...uiMessages, nextUserMessage]);
 
 			scrollToBottom();
 			await sendChatRequest(
-				getCurrentMessagesForRequest(nextUserMessage),
+				[...uiMessages, nextUserMessage],
 				preparation.projectId,
 				preparation.projectEpoch
 			);
-			} catch (error) {
+		} catch (error) {
 			if (!isCurrentRequestPreparation(preparation)) return;
 			console.error('Error sending message:', error);
-				const message = getErrorMessage(error instanceof Error ? error : undefined);
+			const message = getErrorMessage(error instanceof Error ? error : undefined);
 			resetRequestState();
-			uiMessages = [
+			setChatMessages([
 				...uiMessages,
 				{
 					id: generateId(),
 					role: 'assistant',
 					parts: [{ type: 'text', text: message }]
 				}
-			];
+			]);
 		} finally {
 			isUploading = false;
 			finishRequestPreparation(preparation);
@@ -1764,6 +1602,47 @@ import {
 		await sendMessage();
 	}
 
+	async function continueAfterToolResult(
+		interaction: PendingToolInteraction,
+		output: UserQuestionToolOutput,
+		preparation: RequestPreparation
+	) {
+		const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
+		if (!isCurrentRequestPreparation(preparation)) return;
+
+		chatTransport.expectToolContinuation();
+		await chat.addToolOutput({
+			tool: interaction.toolName,
+			toolCallId: interaction.toolCallId,
+			state: 'output-available',
+			output
+		});
+		ws.send(
+			JSON.stringify({
+				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
+				toolCallId: interaction.toolCallId,
+				toolName: interaction.toolName,
+				output,
+				autoContinue: true
+			})
+		);
+
+		const startedAt = Date.now();
+		expectingContinuation = true;
+		currentRequestId = null;
+		isLoading = true;
+		requestStartedAt = startedAt;
+		clockNow = startedAt;
+		toolStartTimes = {};
+		currentStatus = 'Continuing...';
+		void chat.resumeStream().catch((error) => {
+			if (isCurrentRequestPreparation(preparation)) {
+				console.error('Error resuming tool continuation:', error);
+				resetRequestState();
+			}
+		});
+	}
+
 	async function rejectUserQuestion() {
 		const interaction = pendingToolInteraction;
 		if (!interaction) return;
@@ -1775,28 +1654,11 @@ import {
 		try {
 			const ready = await ensureReadyForRequest(preparation);
 			if (!ready || !isCurrentRequestPreparation(preparation)) return;
-			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
-			if (!isCurrentRequestPreparation(preparation)) return;
 			const output = {
 				answer: '',
 				declined: true
 			};
-			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
-			ws.send(JSON.stringify({
-				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
-				toolCallId: interaction.toolCallId,
-				toolName: interaction.toolName,
-				output,
-				autoContinue: true
-			}));
-
-			const startedAt = Date.now();
-			expectingContinuation = true;
-			isLoading = true;
-			requestStartedAt = startedAt;
-			clockNow = startedAt;
-			toolStartTimes = {};
-			currentStatus = 'Continuing...';
+			await continueAfterToolResult(interaction, output, preparation);
 		} catch (error) {
 			if (isCurrentRequestPreparation(preparation)) {
 				console.error('Error denying tool:', error);
@@ -1852,23 +1714,7 @@ import {
 				if (parsedAnnotations.success) output.annotations = parsedAnnotations.data;
 			}
 
-			const ws = await prepareSocketForModelTurn(preparation.projectId, preparation.projectEpoch);
-			if (!isCurrentRequestPreparation(preparation)) return;
-			uiMessages = applyLocalToolOutput(uiMessages, interaction.toolCallId, output);
-			ws.send(JSON.stringify({
-				type: AgentMessageType.CF_AGENT_TOOL_RESULT,
-				toolCallId: interaction.toolCallId,
-				toolName: interaction.toolName,
-				output,
-				autoContinue: true
-			}));
-			const startedAt = Date.now();
-			expectingContinuation = true;
-			isLoading = true;
-			requestStartedAt = startedAt;
-			clockNow = startedAt;
-			toolStartTimes = {};
-			currentStatus = 'Continuing...';
+				await continueAfterToolResult(interaction, output, preparation);
 		} catch (error) {
 			if (isCurrentRequestPreparation(preparation)) {
 				console.error('Error answering question:', error);

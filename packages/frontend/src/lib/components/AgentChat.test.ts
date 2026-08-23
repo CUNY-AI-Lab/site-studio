@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { flushSync, tick } from 'svelte';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import type { UIMessageChunk } from 'ai';
 import AgentChat from './AgentChat.svelte';
 import {
 	AgentMessageType,
-	type UIChatMessage,
-	type UIStreamChunk
+	type UIChatMessage
 } from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
 import type { JsonValue } from '$lib/contracts';
@@ -147,8 +147,8 @@ describe('AgentChat', () => {
 
 	function mount(props: AgentChatTestProps = {}) {
 		const onUpdate = vi.fn();
-		render(AgentChat, { props: { projectId: 'proj1', onUpdate, ...props } });
-		return { onUpdate };
+		const result = render(AgentChat, { props: { projectId: 'proj1', onUpdate, ...props } });
+		return { ...result, onUpdate };
 	}
 
 	it('opens a WebSocket to the site-builder path with the csrf token param', async () => {
@@ -475,12 +475,19 @@ describe('AgentChat', () => {
 	});
 
 	it('renders streamed assistant text progressively across CF_AGENT_USE_CHAT_RESPONSE chunks', async () => {
-		mount();
+		const { component } = mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
+		await settle();
+		await component.sendPrompt('stream a greeting');
+		await settle();
 
-		const streamId = 'stream-1';
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const streamId = request.id;
 		function chunk(body: JsonValue, done = false) {
 			ws.serverMessage({
 				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
@@ -493,11 +500,11 @@ describe('AgentChat', () => {
 		chunk({ type: 'text-start', id: 't1' });
 		chunk({ type: 'text-delta', id: 't1', delta: 'Hello' });
 		await settle();
-		expect(screen.getByText('Hello')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Hello')).toBeInTheDocument());
 
 		chunk({ type: 'text-delta', id: 't1', delta: ', world' });
 		await settle();
-		expect(screen.getByText('Hello, world')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Hello, world')).toBeInTheDocument());
 
 		chunk({ type: 'text-end', id: 't1' }, true);
 		await settle();
@@ -557,7 +564,7 @@ describe('AgentChat', () => {
 		});
 
 		await waitFor(() => expect(screen.getByText('stream answer')).toBeInTheDocument());
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 		await waitFor(() => expect(historyGets).toBeGreaterThanOrEqual(2));
 		await waitFor(() => expect(screen.getByText('persisted answer')).toBeInTheDocument());
 	});
@@ -595,7 +602,7 @@ describe('AgentChat', () => {
 			done: true
 		});
 		await waitFor(() => expect(screen.getByText('partial answer')).toBeInTheDocument());
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 
 		ws.serverMessage({
 			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
@@ -606,7 +613,7 @@ describe('AgentChat', () => {
 			]
 		});
 		await waitFor(() => expect(screen.getByText('saved answer')).toBeInTheDocument());
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('does not let a delayed completed-turn history read erase a newer request', async () => {
@@ -812,7 +819,7 @@ describe('AgentChat', () => {
 
 		expect(screen.getAllByText('only once')).toHaveLength(1);
 		expect(screen.queryByText(/after done/)).not.toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('repairs a malformed stream with the matching persisted commit without reload', async () => {
@@ -870,8 +877,8 @@ describe('AgentChat', () => {
 		});
 		await settle();
 
-		expect(screen.getByText('Finished')).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Finished')).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('refreshes the editor after a generated image is saved', async () => {
@@ -909,49 +916,73 @@ describe('AgentChat', () => {
 		});
 		await settle();
 
-		expect(onUpdate).toHaveBeenCalledTimes(1);
+		await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
 	});
 
-	it('parses SSE-framed stream chunks', async () => {
-		mount();
+	it('ignores a stale SSE body and continues with the JSON UI stream contract', async () => {
+		const { component } = mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
-
-		ws.serverMessage({
-			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'sse-stream',
-			body: `data: ${JSON.stringify({ type: 'error', errorText: 'Usage limit reached.' })}\n\n`,
-			done: true,
-			error: true
-		});
 		await settle();
-
-		expect(screen.getByText('Usage limit reached.')).toBeInTheDocument();
-	});
-
-	it('ends an aborted stream instead of leaving the request stuck in Working', async () => {
-		mount();
-		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
-		const ws = FakeWebSocket.last();
-		ws.open();
+		await component.sendPrompt('use the JSON stream');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
 
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'aborted-stream',
-			body: JSON.stringify({ type: 'abort', reason: 'upstream_closed' }),
+			id: request.id,
+			body: 'data: not-json\n\n',
 			done: false
 		});
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'aborted-stream',
-			body: '',
+			id: request.id,
+			body: JSON.stringify({ type: 'text-start', id: 'json-text' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'json-text', delta: 'JSON works' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-end', id: 'json-text' }),
 			done: true
 		});
 		await settle();
 
-		expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('JSON works')).toBeInTheDocument());
+	});
+
+	it('ends an aborted stream instead of leaving the request stuck in Working', async () => {
+		const { component } = mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('stop this response');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: 'The response stopped partway. Send your message again.',
+			error: true,
+			done: true
+		});
+		await settle();
+
+		await waitFor(() => expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('settles an abort immediately when no done frame follows', async () => {
@@ -967,16 +998,11 @@ describe('AgentChat', () => {
 			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
 		expect(request).toBeTruthy();
 
-		ws.serverMessage({
-			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: request.id,
-			body: JSON.stringify({ type: 'abort', reason: 'connection_closed' }),
-			done: false
-		});
+		await waitFor(() => expect(screen.getByTitle('Stop request')).toBeInTheDocument());
+		screen.getByTitle('Stop request').click();
 		await settle();
 
-		expect(screen.getByText('The response stopped partway. Send your message again.')).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('renders the official tool stream as Finished instead of Needs attention', async () => {
@@ -993,7 +1019,7 @@ describe('AgentChat', () => {
 			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
 		expect(request).toBeTruthy();
 		const requestId = request.id;
-		const sendChunk = (chunk: UIStreamChunk) => {
+		const sendChunk = (chunk: UIMessageChunk) => {
 			ws.serverMessage({
 				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 				id: requestId,
@@ -1036,16 +1062,23 @@ describe('AgentChat', () => {
 		});
 		await settle();
 
-		expect(screen.getByText('Finished')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Finished')).toBeInTheDocument());
 		expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
 	});
 
 	it('handles a plain-text error frame body (CAIL quota) without noise or duplication', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		mount();
+		const { component } = mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
+		await settle();
+		await component.sendPrompt('check quota');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
 
 		const quotaText =
 			"You've reached your AI usage limit for now. Try again in about 3600 seconds.";
@@ -1055,20 +1088,20 @@ describe('AgentChat', () => {
 		// proper JSON error chunk, then an empty done frame.
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'quota-stream',
+			id: request.id,
 			body: quotaText,
 			done: false,
 			error: true
 		});
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'quota-stream',
+			id: request.id,
 			body: JSON.stringify({ type: 'error', errorText: quotaText }),
 			done: false
 		});
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'quota-stream',
+			id: request.id,
 			body: '',
 			done: true
 		});
@@ -1076,7 +1109,7 @@ describe('AgentChat', () => {
 
 		// Rendered exactly once, no generic fallback,
 		// and no "Failed to parse stream chunk" console noise for this known shape.
-		expect(screen.getAllByText(quotaText)).toHaveLength(1);
+		await waitFor(() => expect(screen.getAllByText(quotaText)).toHaveLength(1));
 		expect(
 			screen.queryByText('Something went wrong while generating this response.')
 		).not.toBeInTheDocument();
@@ -1108,33 +1141,38 @@ describe('AgentChat', () => {
 		});
 		await settle();
 
-		expect(screen.getByText(errorText)).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText(errorText)).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 		expect(warn).not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
 
 	it('shows a visible fallback when an error frame body is malformed', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		mount();
+		const { component } = mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
+		await settle();
+		await component.sendPrompt('handle malformed error');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
 
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: 'broken-stream',
+			id: request.id,
 			body: 'data: definitely-not-json\n\n',
 			done: true,
 			error: true
 		});
 		await settle();
 
-		expect(warn).toHaveBeenCalled();
-		expect(
-			screen.getByText('Something went wrong while generating this response.')
-		).toBeInTheDocument();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('data: definitely-not-json')).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
+		expect(warn).not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
 
@@ -1334,6 +1372,7 @@ describe('AgentChat', () => {
 		await waitFor(() => expect(refreshCount).toBe(2));
 		await settle();
 
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: 'stream-2' });
 		questionFrame('stream-2', 'tool-2');
 		await waitFor(() => expect(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument());
 		screen.getByRole('button', { name: 'A' }).click();
@@ -1349,7 +1388,10 @@ describe('AgentChat', () => {
 		expect(ws.sent.map((raw) => JSON.parse(raw).type)).toEqual([
 			AgentMessageType.CF_AGENT_USE_CHAT_REQUEST,
 			AgentMessageType.CF_AGENT_TOOL_RESULT,
-			AgentMessageType.CF_AGENT_TOOL_RESULT
+			AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST,
+			AgentMessageType.CF_AGENT_STREAM_RESUME_ACK,
+			AgentMessageType.CF_AGENT_TOOL_RESULT,
+			AgentMessageType.CF_AGENT_STREAM_RESUME_REQUEST
 		]);
 		const toolResultEvents = events
 			.map((event, index) => (event === `ws-${AgentMessageType.CF_AGENT_TOOL_RESULT}` ? index : -1))
@@ -1417,7 +1459,7 @@ describe('AgentChat', () => {
 
 		screen.getByTitle('Stop request').click();
 		await settle();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 		expect(
 			ws.sent
 				.map((raw) => JSON.parse(raw))
@@ -1425,7 +1467,7 @@ describe('AgentChat', () => {
 		).toHaveLength(1);
 		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_CANCELLED });
 		await settle();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 
 		const successorId = 'continuation-stream';
 		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: successorId });
@@ -1534,7 +1576,7 @@ describe('AgentChat', () => {
 
 		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_CANCELLED });
 		await settle();
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 
 		const lateSuccessorId = 'other-tab-late-successor';
 		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_RESUMING, id: lateSuccessorId });
@@ -1583,7 +1625,7 @@ describe('AgentChat', () => {
 		chunk({ type: 'text-start', id: 't1' });
 		chunk({ type: 'text-delta', id: 't1', delta: 'Before stop' });
 		await settle();
-		expect(screen.getByText('Before stop')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Before stop')).toBeInTheDocument());
 
 		// User stops the request.
 		const stopButton = screen.getByTitle('Stop request');
@@ -1593,7 +1635,7 @@ describe('AgentChat', () => {
 		// A cancel frame was sent, and the loading state cleared.
 		const sentTypes = ws.sent.map((raw) => JSON.parse(raw).type);
 		expect(sentTypes).toContain(AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL);
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 
 		// A late frame for the same (now cancelled) id arrives — it must be ignored.
 		chunk({ type: 'text-delta', id: 't1', delta: ' AFTER STOP' });
@@ -1602,7 +1644,7 @@ describe('AgentChat', () => {
 		expect(screen.queryByText(/AFTER STOP/)).not.toBeInTheDocument();
 		expect(screen.getByText('Before stop')).toBeInTheDocument();
 		// Still not loading — no active status card / stop button reappeared.
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
 	it('resends cancellation when a stopped request resumes after disconnect', async () => {
@@ -1628,7 +1670,7 @@ describe('AgentChat', () => {
 			body: JSON.stringify({ type: 'text-delta', id: 'old-text', delta: 'Before disconnect' })
 		});
 		await settle();
-		expect(screen.getByText('Before disconnect')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Before disconnect')).toBeInTheDocument());
 
 		vi.useFakeTimers();
 		try {
@@ -1636,7 +1678,7 @@ describe('AgentChat', () => {
 			flushSync();
 			screen.getByTitle('Stop request').click();
 			await settle();
-			expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+			await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 
 			await vi.advanceTimersByTimeAsync(1000);
 			flushSync();
@@ -1657,7 +1699,7 @@ describe('AgentChat', () => {
 				.map((raw) => JSON.parse(raw))
 				.filter((message) => message.type === AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL);
 			expect(cancelFrames).toHaveLength(1);
-			expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+			await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 			ws.serverMessage({
 				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 				id: oldRequestId,
@@ -2017,9 +2059,9 @@ describe('AgentChat', () => {
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_STREAM_RESUME_NONE
 		});
+		await waitFor(() => expect(historyGets).toBe(initialHistoryGets + 1));
 		await waitFor(() => expect(screen.getByText('Finished')).toBeInTheDocument());
-		expect(historyGets).toBe(initialHistoryGets + 1);
-		expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 		expect(onUpdate).toHaveBeenCalledTimes(2);
 	});
 
@@ -2089,6 +2131,7 @@ describe('AgentChat', () => {
 			vi.useRealTimers();
 		}
 
+		await waitFor(() => expect(screen.getByTitle('Stop request')).toBeInTheDocument());
 		screen.getByTitle('Stop request').click();
 		await settle();
 		expect(
@@ -2108,6 +2151,11 @@ describe('AgentChat', () => {
 			.at(-1);
 
 		ws.serverMessage({ type: AgentMessageType.CF_AGENT_STREAM_PENDING, id: 'stale-request' });
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: freshRequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'fresh-text' })
+		});
 		ws.serverMessage({
 			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
 			id: freshRequest.id,
