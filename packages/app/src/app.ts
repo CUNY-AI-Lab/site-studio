@@ -167,7 +167,11 @@ app.notFound(async (c) => {
   if (!isWorkerRoute && c.env.ASSETS) {
     const assetResponse = await c.env.ASSETS.fetch(assetRequest(c));
     const assetContentType = assetResponse.headers.get("content-type")?.toLowerCase() || "";
-    if (isStandaloneStaticAsset(pathname) && assetResponse.status === 200 && assetContentType.startsWith("text/html")) {
+    if (
+      isStandaloneStaticAsset(pathname)
+      && (assetResponse.status === 200 || assetResponse.status === 304)
+      && assetContentType.startsWith("text/html")
+    ) {
       return c.json(
         { error: "Not found" },
         404,

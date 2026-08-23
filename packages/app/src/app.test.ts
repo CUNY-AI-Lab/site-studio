@@ -257,6 +257,47 @@ describe("mounted SPA assets", () => {
 
     expect(assetFetch).toHaveBeenCalledTimes(3);
   });
+
+  it("rejects a cached SPA fallback but preserves a valid hashed asset 304", async () => {
+    const assetFetch = vi.fn(async (request: Request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/missing.js")) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            etag: "\"spa-index-etag\"",
+          },
+        });
+      }
+      return new Response(null, {
+        status: 304,
+        headers: {
+          "content-type": "text/javascript; charset=utf-8",
+          etag: "\"hashed-asset-etag\"",
+        },
+      });
+    });
+    const env = createEnv();
+    env.ASSETS = asTestFetcher(assetFetch);
+
+    const missing = await app.request(
+      `${BASE}/site-studio/_app/immutable/chunks/missing.js`,
+      { headers: { "If-None-Match": '"spa-index-etag"' } },
+      env,
+    );
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toBe('{"error":"Not found"}');
+
+    const valid = await app.request(
+      `${BASE}/site-studio/_app/immutable/entry/start.js`,
+      { headers: { "If-None-Match": '"hashed-asset-etag"' } },
+      env,
+    );
+    expect(valid.status).toBe(304);
+    expect(valid.headers.get("content-type")).toContain("text/javascript");
+    expect(valid.headers.get("etag")).toBe('"hashed-asset-etag"');
+  });
 });
 
 describe("subject session retirement", () => {
