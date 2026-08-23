@@ -1,6 +1,12 @@
 import { Hono, type Context } from "hono";
 import type { Env } from "../types";
-import { addCacheBusterToHtml, collectPreviewResourcePaths } from "../lib/path";
+import {
+  addCacheBusterToCss,
+  addCacheBusterToHtml,
+  collectPreviewCssResourcePaths,
+  collectPreviewResourcePaths,
+  decodeServedPath
+} from "../lib/path";
 import { getServedContentType } from "../lib/constants";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
@@ -9,6 +15,7 @@ import { looksLikePageNavigation } from "../lib/page-navigation";
 import { resolveExtensionlessFile } from "../lib/extensionless";
 import { isProtectedServedPath } from "../lib/protected-files";
 import { getUser } from "../lib/session";
+import { isLoopbackOrigin } from "../lib/csrf";
 import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 import { getLoggingContext, type LoggingVariables } from "../lib/logging";
@@ -26,17 +33,31 @@ function previewNotFound(c: AppContext, filePath: string, siteRootPath?: string)
   return c.text("Not found", 404, headers);
 }
 
+function getPreviewRootPath(c: AppContext, projectId: string): string {
+  const requestOrigin = new URL(c.req.url).origin;
+  const configuredMount = c.env.CSRF_COOKIE_PATH?.trim().replace(/\/+$/, "") || "";
+  const normalizedMount = configuredMount && configuredMount !== "/"
+    ? (configuredMount.startsWith("/") ? configuredMount : `/${configuredMount}`)
+    : "";
+  const mountPath = isLoopbackOrigin(requestOrigin) ? "" : normalizedMount;
+  return `${mountPath}/preview/${projectId}/`;
+}
+
 export function createPreviewRouter() {
   const app = new Hono<{ Bindings: Env; Variables: LoggingVariables & { user: { id: string } } }>();
 
-  app.get("/preview/:id", async (c) => {
-    return servePreviewFile(c, "index.html");
+  app.get("/preview/:id", (c) => {
+    const url = new URL(c.req.url);
+    const projectId = c.req.param("id");
+    return c.redirect(`${getPreviewRootPath(c, projectId)}index.html${url.search}`, 308);
   });
 
   app.get("/preview/:id/*", async (c) => {
     const prefix = `/preview/${c.req.param("id")}/`;
     const url = new URL(c.req.url);
-    const filePath = url.pathname.slice(prefix.length) || "index.html";
+    const rawPath = url.pathname.slice(prefix.length);
+    const filePath = decodeServedPath(rawPath);
+    if (filePath === null) return previewNotFound(c, rawPath);
     return servePreviewFile(c, filePath);
   });
 
@@ -57,7 +78,7 @@ async function servePreviewFile(
     return previewNotFound(c, requestedPath);
   }
 
-  const siteRootPath = `/preview/${projectId}/`;
+  const siteRootPath = getPreviewRootPath(c, projectId);
 
   if (isProtectedServedPath(requestedPath)) {
     return previewNotFound(c, requestedPath, siteRootPath);
@@ -111,13 +132,15 @@ async function servePreviewFile(
   c.header("Cache-Control", "no-cache");
   c.header("Pragma", "no-cache");
 
-  if (contentType.startsWith("text/html")) {
+  const isMarkup = contentType.startsWith("text/html")
+    || contentType.startsWith("image/svg+xml");
+  if (isMarkup) {
     const version = c.req.query("v") || undefined;
     // The ownership check above ensures preview tokens are never minted for a
     // non-owner. Opaque-origin sandbox documents cannot send the session cookie,
     // so carry this short-lived, project-scoped token on rewritten requests.
     const html = new TextDecoder().decode(content);
-    const allowedPaths = collectPreviewResourcePaths(html, requestedPath);
+    const allowedPaths = await collectPreviewResourcePaths(html, requestedPath, siteRootPath);
     const previewToken = allowedPaths.length > 0
       ? await mintPreviewToken(
           c.env.SESSION_KV,
@@ -127,13 +150,39 @@ async function servePreviewFile(
           c.get("previewTokenExpiresAt") ?? undefined
         )
       : null;
-    content = new TextEncoder().encode(
-      addCacheBusterToHtml(html, version, previewToken ? { pt: previewToken } : {})
+    // Root-relative authored URLs belong to this project, not the app shell.
+    // Include the public mount so production ingress requests return to the
+    // same preview route after the Worker strips /site-studio internally.
+    const rewritten = await addCacheBusterToHtml(
+      html,
+      version,
+      previewToken ? { pt: previewToken } : {},
+      siteRootPath,
+      requestedPath
     );
+    if (rewritten !== html) content = new TextEncoder().encode(rewritten);
+  } else if (contentType.startsWith("text/css")) {
+    const version = c.req.query("v") || undefined;
+    const css = new TextDecoder().decode(content);
+    const allowedPaths = collectPreviewCssResourcePaths(css, requestedPath, siteRootPath);
+    const previewToken = allowedPaths.length > 0
+      ? await mintPreviewToken(
+          c.env.SESSION_KV,
+          user.id,
+          projectId,
+          allowedPaths,
+          c.get("previewTokenExpiresAt") ?? undefined
+        )
+      : null;
+    const rewritten = addCacheBusterToCss(
+      css,
+      version,
+      previewToken ? { pt: previewToken } : {},
+      siteRootPath,
+      requestedPath
+    );
+    if (rewritten !== css) content = new TextEncoder().encode(rewritten);
   }
-
-  // Known limitation: url(...) references inside CSS are not rewritten, so
-  // nested fonts/background images still need a future CSS-aware pass.
 
   // §3¾: the preview renders agent/student-authored HTML on our origin. The
   // opaque-origin CSP (see lib/serving-headers.ts) makes document.cookie /

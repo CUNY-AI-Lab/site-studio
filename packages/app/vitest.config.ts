@@ -26,6 +26,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["./src/lib/htmlrewriter-test-setup.ts"],
     include: ["src/**/*.test.ts"],
   },
 });

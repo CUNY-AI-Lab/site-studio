@@ -1,6 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { z } from "zod";
 import type { Env, User } from "../types";
+import { decodeServedPath } from "./path";
 
 const PREVIEW_TOKEN_TTL_SECONDS = 600;
 
@@ -114,7 +115,11 @@ export const previewTokenAuth = createMiddleware<{
   }
 
   const prefix = `${match[0]}${url.pathname.startsWith(`${match[0]}/`) ? "/" : ""}`;
-  const requestedPath = url.pathname.slice(prefix.length) || "index.html";
+  const requestedPath = decodeServedPath(url.pathname.slice(prefix.length));
+  if (requestedPath === null) {
+    await next();
+    return;
+  }
   const grant = await validatePreviewToken(
     c.env.SESSION_KV,
     token,

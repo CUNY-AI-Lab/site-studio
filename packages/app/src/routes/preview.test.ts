@@ -134,6 +134,26 @@ describe("preview file resolution", () => {
     );
   }
 
+  it("redirects the root alias to a canonical index URL", async () => {
+    const response = await app.request(
+      "http://site-studio.test/preview/proj",
+      { redirect: "manual" },
+      createEnv(bucket, kv)
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/preview/proj/index.html");
+  });
+
+  it("keeps the configured ingress mount in the root-alias redirect", async () => {
+    const response = await app.request(
+      "http://site-studio.test/preview/proj?from=editor",
+      { redirect: "manual" },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    expect(response.status).toBe(308);
+    expect(response.headers.get("location")).toBe("/site-studio/preview/proj/index.html?from=editor");
+  });
+
   it("serves index.html at the project root", async () => {
     const res = await get("");
     expect(res.status).toBe(200);
@@ -141,7 +161,7 @@ describe("preview file resolution", () => {
   });
 
   it("serves a directory's index.html for a trailing-slash path", async () => {
-    await storage.writeFile(userId, "proj", "docs/index.html", "<h1>Docs</h1>");
+    await storage.writeFile(userId, "proj", "docs/index.html", '<a href="./?x">Directory</a><h1>Docs</h1>');
     const res = await get("docs/");
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Docs");
@@ -181,6 +201,298 @@ describe("preview file resolution", () => {
     expect(html).toContain(`about.html?v=42&pt=${token}`);
     const stored = JSON.parse(kv.store.get(`preview-token:${token}`) || "{}");
     expect(stored.allowedPaths).toEqual(["about.html", "app.js", "photo.png", "styles.css"]);
+  });
+
+  it("rewrites root-relative HTML URLs to the project preview mount", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<link rel="stylesheet" href="/styles.css">',
+      '<script src="/app.js"></script>',
+      '<a href="/docs/">Docs</a>'
+    ].join(""));
+    await storage.writeFile(userId, "proj", "styles.css", "body { color: red; }");
+    await storage.writeFile(userId, "proj", "app.js", "console.log('ok');");
+    await storage.writeFile(userId, "proj", "docs/index.html", "<h1>Docs</h1>");
+
+    const res = await get("index.html?v=42", "text/html");
+    const html = await res.text();
+    const token = /\/preview\/proj\/styles\.css\?v=42&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    const directoryToken = /\/preview\/proj\/docs\/\?v=42&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(res.status).toBe(200);
+    expect(html).toContain(`/preview/proj/app.js?v=42&pt=${token}`);
+    expect(html).toContain(`/preview/proj/docs/?v=42&pt=${directoryToken}`);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(directoryToken).toMatch(/^[0-9a-f]{64}$/);
+    const stored = JSON.parse(kv.store.get(`preview-token:${token}`) || "{}");
+    expect(stored.allowedPaths).toEqual(["app.js", "docs/", "styles.css"]);
+
+    const directory = await app.request(
+      `http://site-studio.test/preview/proj/docs/?pt=${directoryToken}`,
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv)
+    );
+    expect(directory.status).toBe(200);
+    const directoryHtml = await directory.text();
+    expect(directoryHtml).toContain("Docs");
+  });
+
+  it("does not leak a preview token through an external base URL", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="https://outside.example/">',
+      '<script src="app.js"></script>',
+      '<img src="/logo.png">'
+    ].join(""));
+    await storage.writeFile(userId, "proj", "logo.png", "logo");
+
+    const response = await get("index.html", "text/html");
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('<base href="https://outside.example/">');
+    expect(html).toContain('<script src="app.js">');
+    expect(html).toContain('<img src="/logo.png">');
+    const effectiveBase = new URL(
+      /<base href="([^"]+)">/.exec(html)?.[1] ?? "",
+      "http://site-studio.test/preview/proj/index.html"
+    );
+    const script = /<script src="([^"]+)">/.exec(html)?.[1] ?? "";
+    const image = /<img src="([^"]+)">/.exec(html)?.[1] ?? "";
+    expect(effectiveBase.origin).toBe("https://outside.example");
+    expect(new URL(script, effectiveBase).origin).toBe("https://outside.example");
+    expect(new URL(image, effectiveBase).origin).toBe("https://outside.example");
+    expect([...kv.store.keys()].filter((key) => key.startsWith("preview-token:"))).toEqual([]);
+  });
+
+  it.each(["", "#section"])("keeps a %j preview base on the current document", async (baseHref) => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      `<base href="${baseHref}">`,
+      '<script src="app.js"></script>',
+      '<img src="/images/hero.png">'
+    ].join(""));
+    await storage.writeFile(userId, "proj", "app.js", "console.log('nested');");
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+
+    const response = await get("index.html", "text/html");
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain(`<base href="${baseHref}">`);
+    expect(html).toContain('src="app.js?v=');
+    expect(html).toContain('/preview/proj/images/hero.png?v=');
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "app.js",
+      "images/hero.png"
+    ]);
+
+    const effectiveBase = new URL(baseHref, "http://site-studio.test/preview/proj/index.html");
+    expect(effectiveBase.pathname).toBe("/preview/proj/index.html");
+    expect(new URL("app.js", effectiveBase).pathname).toBe("/preview/proj/app.js");
+  });
+
+  it("serves a preview asset whose authored name contains a space", async () => {
+    await storage.writeFile(userId, "proj", "index.html", '<img src="my%20image.png"><img src="%C3%A9.png">');
+    await storage.writeFile(userId, "proj", "my image.png", "spaced asset");
+    await storage.writeFile(userId, "proj", "é.png", "unicode asset");
+
+    const page = await get("index.html", "text/html");
+    const html = await page.text();
+    const token = /my%20image\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(page.status).toBe(200);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "my image.png",
+      "é.png"
+    ]);
+
+    const asset = await app.request(
+      `http://site-studio.test/preview/proj/my%20image.png?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe("spaced asset");
+
+    const unicodeAsset = await app.request(
+      `http://site-studio.test/preview/proj/%C3%A9.png?pt=${token}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(unicodeAsset.status).toBe(200);
+    expect(await unicodeAsset.text()).toBe("unicode asset");
+  });
+
+  it("keeps the configured ingress mount on rewritten preview URLs", async () => {
+    await storage.writeFile(userId, "proj", "index.html", '<script src="/app.js"></script>');
+    await storage.writeFile(userId, "proj", "app.js", "console.log('ok');");
+
+    const res = await app.request(
+      "http://site-studio.test/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toMatch(/\/site-studio\/preview\/proj\/app\.js\?v=\d+&pt=[0-9a-f]{64}/);
+  });
+
+  it("keeps an authored mounted preview base and scopes its child paths correctly", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="/site-studio/preview/proj/docs/">',
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>',
+      '<img src="/site-studio/preview/proj/images/hero.png">'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      "proj",
+      "docs/styles.css",
+      ".hero { background: url(/site-studio/preview/proj/images/bg.png); }"
+    );
+    await storage.writeFile(userId, "proj", "docs/app.js", "console.log('nested');");
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+    await storage.writeFile(userId, "proj", "images/bg.png", "background");
+
+    const response = await app.request(
+      "http://site-studio.test/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<base href="/site-studio/preview/proj/docs/">');
+    expect(html).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/");
+    expect(html).toContain(`app.js?v=`);
+    expect(html).toContain(`/site-studio/preview/proj/images/hero.png?v=`);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "docs/app.js",
+      "docs/styles.css",
+      "images/hero.png"
+    ]);
+
+    const stylesheet = await app.request(
+      `http://site-studio.test/preview/proj/docs/styles.css?pt=${token}`,
+      { headers: { Accept: "text/css" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const css = await stylesheet.text();
+    const cssToken = /images\/bg\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(css)?.[1];
+    expect(stylesheet.status).toBe(200);
+    expect(css).toContain("/site-studio/preview/proj/images/bg.png?v=");
+    expect(css).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/");
+    expect(cssToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${cssToken}`) || "{}").allowedPaths).toEqual([
+      "images/bg.png"
+    ]);
+
+    const effectiveBase = new URL(
+      "/site-studio/preview/proj/docs/",
+      "https://site-studio.test/preview/proj/index.html"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/site-studio/preview/proj/docs/app.js"
+    );
+  });
+
+  it("keeps relative project paths that collide with the configured ingress", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="site-studio/preview/proj/">',
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      "proj",
+      "site-studio/preview/proj/styles.css",
+      ".hero { background: url(images/bg.png); }"
+    );
+    await storage.writeFile(userId, "proj", "site-studio/preview/proj/app.js", "console.log('collision');");
+    await storage.writeFile(userId, "proj", "site-studio/preview/proj/images/bg.png", "background");
+
+    const response = await app.request(
+      "http://site-studio.test/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain(
+      '<base href="/site-studio/preview/proj/site-studio/preview/proj/">'
+    );
+    expect(html).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/site-studio/");
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "site-studio/preview/proj/app.js",
+      "site-studio/preview/proj/styles.css"
+    ]);
+
+    const stylesheet = await app.request(
+      `http://site-studio.test/preview/proj/site-studio/preview/proj/styles.css?pt=${token}`,
+      { headers: { Accept: "text/css" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const css = await stylesheet.text();
+    const cssToken = /images\/bg\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(css)?.[1];
+    expect(stylesheet.status).toBe(200);
+    expect(css).toContain("url(images/bg.png?v=");
+    expect(cssToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${cssToken}`) || "{}").allowedPaths).toEqual([
+      "site-studio/preview/proj/images/bg.png"
+    ]);
+  });
+
+  it("does not add the production mount to loopback preview URLs", async () => {
+    await storage.writeFile(userId, "proj", "index.html", '<script src="/app.js"></script>');
+    await storage.writeFile(userId, "proj", "app.js", "console.log('ok');");
+
+    const res = await app.request(
+      "http://localhost:8792/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(html).toMatch(/\/preview\/proj\/app\.js\?v=\d+&pt=[0-9a-f]{64}/);
+    expect(html).not.toContain("/site-studio/preview/");
+  });
+
+  it("propagates scoped preview access through nested CSS URLs", async () => {
+    await storage.writeFile(userId, "proj", "index.html", '<link rel="stylesheet" href="styles/main.css">');
+    await storage.writeFile(userId, "proj", "styles/main.css", [
+      '@import "/theme.css";',
+      ".hero { background: url(/images/hero.png); }",
+      "@font-face { src: url(../fonts/body.woff2); }"
+    ].join("\n"));
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+    await storage.writeFile(userId, "proj", "fonts/body.woff2", "font");
+    await storage.writeFile(userId, "proj", "theme.css", "body { color: blue; }");
+
+    const page = await get("index.html", "text/html");
+    const pageHtml = await page.text();
+    const pageToken = /styles\/main\.css\?v=\d+&pt=([0-9a-f]{64})/.exec(pageHtml)?.[1];
+    expect(pageToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${pageToken}`) || "{}").allowedPaths).toEqual([
+      "styles/main.css"
+    ]);
+
+    const css = await get(`styles/main.css?pt=${pageToken}`, "text/css");
+    const cssText = await css.text();
+    const cssToken = /\/preview\/proj\/images\/hero\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(cssText)?.[1];
+    expect(cssToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(cssText).toContain(`/preview/proj/theme.css?v=`);
+    expect(cssText).toContain(`../fonts/body.woff2?v=`);
+    expect(JSON.parse(kv.store.get(`preview-token:${cssToken}`) || "{}").allowedPaths).toEqual([
+      "fonts/body.woff2",
+      "images/hero.png",
+      "theme.css"
+    ]);
   });
 
   it("does not disclose a preview bearer to protocol-relative authored URLs", async () => {
@@ -262,6 +574,38 @@ describe("preview token authentication", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
   });
 
+  it("scopes query-only and dot-directory links to their actual preview paths", async () => {
+    await storage.writeFile(userId, "proj", "docs/index.html", '<a href="?x">Current</a><a href="./?x">Directory</a>');
+    const parent = await mintPreviewToken(kv, userId, "proj", ["docs/index.html"]);
+    const page = await app.request(
+      `http://site-studio.test/preview/proj/docs/index.html?pt=${parent}`,
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv)
+    );
+
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const child = /[?&]v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(child).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${child}`) || "{}").allowedPaths).toEqual([
+      "docs/",
+      "docs/index.html"
+    ]);
+
+    const current = await app.request(
+      `http://site-studio.test/preview/proj/docs/index.html?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    const directory = await app.request(
+      `http://site-studio.test/preview/proj/docs/?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(current.status).toBe(200);
+    expect(directory.status).toBe(200);
+  });
+
   it("does not authorize a different project with a valid token", async () => {
     const token = await mintPreviewToken(kv, userId, "proj", ["styles.css"]);
     const res = await app.request(
@@ -334,6 +678,89 @@ describe("preview token authentication", () => {
     expect(stored.expiresAt).toBe(expiresAt);
     expect(stored.allowedPaths).toEqual(["app.js"]);
   });
+
+  it("serves a root-relative asset through its scoped child preview grant", async () => {
+    await storage.writeFile(
+      userId,
+      "proj",
+      "index.html",
+      '<link rel="stylesheet" href="/styles.css"><script src="/app.js"></script>'
+    );
+    await storage.writeFile(userId, "proj", "app.js", "console.log('ok')");
+    const parent = await mintPreviewToken(kv, userId, "proj", ["index.html"]);
+    const page = await app.request(
+      `http://site-studio.test/preview/proj/index.html?pt=${parent}`,
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv)
+    );
+
+    expect(page.status).toBe(200);
+    const html = await page.text();
+    const child = /\/preview\/proj\/app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(child).toMatch(/^[0-9a-f]{64}$/);
+
+    const asset = await app.request(
+      `http://site-studio.test/preview/proj/app.js?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("console.log('ok')");
+  });
+
+  it("serves nested CSS assets through a scoped child preview grant", async () => {
+    await storage.writeFile(userId, "proj", "styles/main.css", [
+      ".hero { background: url(/images/hero.png); }",
+      "@font-face { src: url(../fonts/body.woff2); }"
+    ].join("\n"));
+    await storage.writeFile(userId, "proj", "images/hero.png", "hero");
+    await storage.writeFile(userId, "proj", "fonts/body.woff2", "font");
+    const parent = await mintPreviewToken(kv, userId, "proj", ["styles/main.css"]);
+
+    const page = await app.request(
+      `http://site-studio.test/preview/proj/styles/main.css?pt=${parent}`,
+      { headers: { Accept: "text/css" } },
+      createEnv(bucket, kv)
+    );
+    expect(page.status).toBe(200);
+    const css = await page.text();
+    const child = /\/preview\/proj\/images\/hero\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(css)?.[1];
+    expect(child).toMatch(/^[0-9a-f]{64}$/);
+
+    const asset = await app.request(
+      `http://site-studio.test/preview/proj/images/hero.png?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe("hero");
+  });
+
+  it("rewrites standalone SVG URLs with a scoped child preview grant", async () => {
+    await storage.writeFile(userId, "proj", "icon.svg", [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">',
+      '<image href="/images/icon.png" xlink:href="/images/icon.png" />',
+      "</svg>"
+    ].join(""));
+    await storage.writeFile(userId, "proj", "images/icon.png", "icon");
+    const parent = await mintPreviewToken(kv, userId, "proj", ["icon.svg"]);
+
+    const response = await app.request(
+      `http://site-studio.test/preview/proj/icon.svg?pt=${parent}`,
+      { headers: { Accept: "image/svg+xml" } },
+      createEnv(bucket, kv)
+    );
+    const svg = await response.text();
+    const token = /\/preview\/proj\/images\/icon\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(svg)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(svg).toContain(`/preview/proj/images/icon.png?v=`);
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "images/icon.png"
+    ]);
+  });
 });
 
 /**
@@ -398,4 +825,225 @@ describe("preview ↔ publish extensionless parity", () => {
       expect(marker(preview.body)).toBe(marker(publish.body));
     });
   }
+
+  it("rewrites root-relative assets on preview and published HTML", async () => {
+    await storage.writeFile(userId, slug, "index.html", [
+      '<link rel="stylesheet" href="/styles.css">',
+      '<script src="/app.js"></script>',
+      '<a href="/docs/">Docs</a>'
+    ].join(""));
+    await storage.writeFile(userId, slug, "styles.css", "body { color: red; }");
+    await storage.writeFile(userId, slug, "app.js", "console.log('ok');");
+    await storage.writeFile(userId, slug, "docs/index.html", "<h1>Docs</h1>");
+
+    const preview = await previewBody("index.html");
+    const publish = await publishBody("index.html");
+    expect(preview.status).toBe(200);
+    expect(publish.status).toBe(200);
+    expect(preview.body).toMatch(/\/preview\/site\/styles\.css\?v=\d+&pt=[0-9a-f]{64}/);
+    expect(preview.body).toMatch(/\/preview\/site\/app\.js\?v=\d+&pt=[0-9a-f]{64}/);
+    expect(publish.body).toContain('href="/u/janedoe/site/styles.css"');
+    expect(publish.body).toContain('src="/u/janedoe/site/app.js"');
+    expect(publish.body).toContain('href="/u/janedoe/site/docs/"');
+
+    const publishedPage = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    expect(publishedPage.headers.get("ETag")).toBeNull();
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/styles.css",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("color: red");
+
+    const publishedDirectory = await app.request(
+      "http://site-studio.test/u/janedoe/site/docs/",
+      {},
+      createEnv(bucket)
+    );
+    expect(publishedDirectory.status).toBe(200);
+    expect(await publishedDirectory.text()).toContain("Docs");
+  });
+
+  it("preserves an external base and its governed URLs on published HTML", async () => {
+    await storage.writeFile(userId, slug, "index.html", [
+      '<base href="https://outside.example/">',
+      '<script src="app.js"></script>',
+      '<img src="/logo.png">'
+    ].join(""));
+
+    const page = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain('<base href="https://outside.example/">');
+    expect(html).toContain('<script src="app.js">');
+    expect(html).toContain('<img src="/logo.png">');
+
+    const documentUrl = new URL("http://site-studio.test/u/janedoe/site/index.html");
+    const base = new URL(/<base href="([^"]+)">/.exec(html)?.[1] ?? "", documentUrl);
+    const script = /<script src="([^"]+)">/.exec(html)?.[1] ?? "";
+    const image = /<img src="([^"]+)">/.exec(html)?.[1] ?? "";
+    expect(base.origin).toBe("https://outside.example");
+    expect(new URL(script, base).origin).toBe("https://outside.example");
+    expect(new URL(image, base).origin).toBe("https://outside.example");
+  });
+
+  it("resolves a published nested document base from its real document path", async () => {
+    await storage.writeFile(
+      userId,
+      slug,
+      "docs/index.html",
+      '<base href="assets/"><script src="app.js"></script>'
+    );
+    await storage.writeFile(userId, slug, "docs/assets/app.js", "console.log('nested');");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/docs/index.html",
+      {},
+      createEnv(bucket)
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('<base href="/u/janedoe/site/docs/assets/">');
+    expect(html).toContain('<script src="app.js"></script>');
+    const effectiveBase = new URL(
+      "/u/janedoe/site/docs/assets/",
+      "https://site-studio.test/u/janedoe/site/docs/index.html"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/u/janedoe/site/docs/assets/app.js"
+    );
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/docs/assets/app.js",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("console.log('nested');");
+  });
+
+  it("resolves custom 404 assets from the requested nested browser path", async () => {
+    await storage.writeFile(
+      userId,
+      slug,
+      "404.html",
+      '<base href="assets/"><script src="app.js"></script>'
+    );
+    await storage.writeFile(userId, slug, "missing/assets/app.js", "console.log('missing');");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/missing/page",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(html).toContain('<base href="/u/janedoe/site/missing/assets/">');
+    expect(html).toContain('<script src="app.js"></script>');
+    expect(html).not.toContain('<base href="/u/janedoe/site/assets/">');
+    const effectiveBase = new URL(
+      "/u/janedoe/site/missing/assets/",
+      "https://site-studio.test/u/janedoe/site/missing/page"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/u/janedoe/site/missing/assets/app.js"
+    );
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/missing/assets/app.js",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("console.log('missing');");
+  });
+
+  it("serves a published asset whose authored name contains a space", async () => {
+    await storage.writeFile(userId, slug, "index.html", '<img src="/my%20image.png"><img src="/%C3%A9.png">');
+    await storage.writeFile(userId, slug, "my image.png", "spaced published asset");
+    await storage.writeFile(userId, slug, "é.png", "unicode published asset");
+
+    const page = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('src="/u/janedoe/site/my%20image.png"');
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/my%20image.png",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toBe("spaced published asset");
+
+    const unicodeAsset = await app.request(
+      "http://site-studio.test/u/janedoe/site/%C3%A9.png",
+      {},
+      createEnv(bucket)
+    );
+    expect(unicodeAsset.status).toBe(200);
+    expect(await unicodeAsset.text()).toBe("unicode published asset");
+  });
+
+  it("rewrites root-relative URLs in published CSS", async () => {
+    await storage.writeFile(userId, slug, "styles/main.css", [
+      '@import "/theme.css";',
+      ".hero { background: url(/images/hero.png); }"
+    ].join("\n"));
+    await storage.writeFile(userId, slug, "images/hero.png", "hero");
+    await storage.writeFile(userId, slug, "theme.css", "body { color: blue; }");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/styles/main.css",
+      {},
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    const css = await response.text();
+    expect(css).toContain("url(/u/janedoe/site/images/hero.png)");
+    expect(css).toContain('@import "/u/janedoe/site/theme.css";');
+  });
+
+  it("rewrites root-relative URLs in published SVG", async () => {
+    await storage.writeFile(userId, slug, "icon.svg", '<svg><image href="/images/icon.png" /></svg>');
+    await storage.writeFile(userId, slug, "images/icon.png", "icon");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/icon.svg",
+      {},
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('href="/u/janedoe/site/images/icon.png"');
+  });
+
+  it("preserves published HTML bytes when no mount rewrite is needed", async () => {
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x3c, 0x68, 0x31, 0x3e, 0xff, 0x3c, 0x2f, 0x68, 0x31, 0x3e]);
+    bucket.store.set(`projects/${userId}/${slug}/index.html`, {
+      data: bytes.buffer
+    });
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/index.html",
+      {},
+      createEnv(bucket)
+    );
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
 });
