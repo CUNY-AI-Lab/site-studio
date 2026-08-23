@@ -177,7 +177,10 @@ function rewriteMarkupUrl(
   if (state.baseExternal) return value;
   const resolved = resolveLocalUrl(core, state.documentPath, options.includeRootRelative);
   if (!resolved) return value;
-  state.paths?.add(unmountRootPath(resolved.url.pathname, options.rootPath) ?? resolved.path);
+  const mountedPath = isRootRelative(core)
+    ? unmountRootPath(resolved.url.pathname, options.rootPath)
+    : null;
+  state.paths?.add(mountedPath ?? resolved.path);
   return `${leading}${rewrite(core, resolved)}${trailing}`;
 }
 
@@ -195,7 +198,9 @@ function resolveBase(
   }
   const resolved = resolveLocalUrl(trimmed, documentPath, true);
   if (!resolved) return null;
-  const unmountedPath = unmountRootPath(resolved.url.pathname, rootPath);
+  const unmountedPath = isRootRelative(trimmed)
+    ? unmountRootPath(resolved.url.pathname, rootPath)
+    : null;
   return {
     ...resolved,
     path: unmountedPath ?? resolved.path,
@@ -291,6 +296,11 @@ function rewriteRootRelativeUrl(value: string, rootPath?: string): string {
   if (!resolved) return value;
   if (unmountRootPath(resolved.url.pathname, rootPath) !== null) return value;
   return `${leading}${mountPath(rootPath, resolved.url.pathname)}${resolved.url.search}${resolved.url.hash}${trailing}`;
+}
+
+function isRootRelative(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("/") && !trimmed.startsWith("//");
 }
 
 function unmountRootPath(pathname: string, rootPath?: string): string | null {
@@ -482,7 +492,12 @@ export function collectPreviewCssResourcePaths(
   const paths = new Set<string>();
   rewriteCssUrls(css, (url) => {
     const resolved = resolveLocalUrl(url, documentPath, true);
-    if (resolved) paths.add(unmountRootPath(resolved.url.pathname, rootPath) ?? resolved.path);
+    if (resolved) {
+      const mountedPath = isRootRelative(url)
+        ? unmountRootPath(resolved.url.pathname, rootPath)
+        : null;
+      paths.add(mountedPath ?? resolved.path);
+    }
     return url;
   });
   return [...paths].sort();

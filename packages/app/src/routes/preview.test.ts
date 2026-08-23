@@ -398,6 +398,55 @@ describe("preview file resolution", () => {
     );
   });
 
+  it("keeps relative project paths that collide with the configured ingress", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<base href="site-studio/preview/proj/">',
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      "proj",
+      "site-studio/preview/proj/styles.css",
+      ".hero { background: url(images/bg.png); }"
+    );
+    await storage.writeFile(userId, "proj", "site-studio/preview/proj/app.js", "console.log('collision');");
+    await storage.writeFile(userId, "proj", "site-studio/preview/proj/images/bg.png", "background");
+
+    const response = await app.request(
+      "http://site-studio.test/preview/proj/index.html",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const html = await response.text();
+    const token = /app\.js\?v=\d+&pt=([0-9a-f]{64})/.exec(html)?.[1];
+
+    expect(response.status).toBe(200);
+    expect(html).toContain(
+      '<base href="/site-studio/preview/proj/site-studio/preview/proj/">'
+    );
+    expect(html).not.toContain("/site-studio/preview/proj/site-studio/preview/proj/site-studio/");
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${token}`) || "{}").allowedPaths).toEqual([
+      "site-studio/preview/proj/app.js",
+      "site-studio/preview/proj/styles.css"
+    ]);
+
+    const stylesheet = await app.request(
+      `http://site-studio.test/preview/proj/site-studio/preview/proj/styles.css?pt=${token}`,
+      { headers: { Accept: "text/css" } },
+      createEnv(bucket, kv, { CSRF_COOKIE_PATH: "/site-studio" })
+    );
+    const css = await stylesheet.text();
+    const cssToken = /images\/bg\.png\?v=\d+&pt=([0-9a-f]{64})/.exec(css)?.[1];
+    expect(stylesheet.status).toBe(200);
+    expect(css).toContain("url(images/bg.png?v=");
+    expect(cssToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.parse(kv.store.get(`preview-token:${cssToken}`) || "{}").allowedPaths).toEqual([
+      "site-studio/preview/proj/images/bg.png"
+    ]);
+  });
+
   it("does not add the production mount to loopback preview URLs", async () => {
     await storage.writeFile(userId, "proj", "index.html", '<script src="/app.js"></script>');
     await storage.writeFile(userId, "proj", "app.js", "console.log('ok');");
@@ -882,6 +931,43 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     expect(asset.status).toBe(200);
     expect(await asset.text()).toContain("console.log('nested');");
+  });
+
+  it("resolves custom 404 assets from the requested nested browser path", async () => {
+    await storage.writeFile(
+      userId,
+      slug,
+      "404.html",
+      '<base href="assets/"><script src="app.js"></script>'
+    );
+    await storage.writeFile(userId, slug, "missing/assets/app.js", "console.log('missing');");
+
+    const response = await app.request(
+      "http://site-studio.test/u/janedoe/site/missing/page",
+      { headers: { Accept: "text/html" } },
+      createEnv(bucket)
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(404);
+    expect(html).toContain('<base href="/u/janedoe/site/missing/assets/">');
+    expect(html).toContain('<script src="app.js"></script>');
+    expect(html).not.toContain('<base href="/u/janedoe/site/assets/">');
+    const effectiveBase = new URL(
+      "/u/janedoe/site/missing/assets/",
+      "https://site-studio.test/u/janedoe/site/missing/page"
+    );
+    expect(new URL("app.js", effectiveBase).pathname).toBe(
+      "/u/janedoe/site/missing/assets/app.js"
+    );
+
+    const asset = await app.request(
+      "http://site-studio.test/u/janedoe/site/missing/assets/app.js",
+      {},
+      createEnv(bucket)
+    );
+    expect(asset.status).toBe(200);
+    expect(await asset.text()).toContain("console.log('missing');");
   });
 
   it("serves a published asset whose authored name contains a space", async () => {

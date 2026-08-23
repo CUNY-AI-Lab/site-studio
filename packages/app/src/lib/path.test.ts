@@ -271,6 +271,31 @@ describe("addCacheBusterToHtml", () => {
     ]);
   });
 
+  it("keeps relative paths that collide with the ingress mount in project storage", async () => {
+    const html = [
+      '<base href="site-studio/preview/proj/">',
+      '<link rel="stylesheet" href="styles.css">',
+      '<script src="app.js"></script>'
+    ].join("");
+    const rewritten = await addCacheBusterToHtml(
+      html,
+      "123",
+      { pt: "token" },
+      "/site-studio/preview/proj/",
+      "index.html"
+    );
+
+    expect(rewritten).toContain(
+      '<base href="/site-studio/preview/proj/site-studio/preview/proj/">'
+    );
+    expect(rewritten).toContain('href="styles.css?v=123&pt=token"');
+    expect(rewritten).toContain('src="app.js?v=123&pt=token"');
+    expect(await collectPreviewResourcePaths(html, "index.html", "/site-studio/preview/proj/")).toEqual([
+      "site-studio/preview/proj/app.js",
+      "site-studio/preview/proj/styles.css"
+    ]);
+  });
+
   it("uses a nested document path when rewriting a published local base", async () => {
     const html = '<base href="assets/"><script src="app.js"></script>';
     const rewritten = await rewriteRootRelativeHtmlUrls(

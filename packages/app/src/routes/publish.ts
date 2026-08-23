@@ -124,7 +124,7 @@ async function missingPublishedFile(
           headers: publishedResponseHeaders("404.html", custom)
         });
       }
-      const html = await rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath, "404.html");
+      const html = await rewriteRootRelativeHtmlUrls(originalHtml, siteRootPath, filePath);
       const headers = publishedResponseHeaders("404.html", custom);
       const transformed = html !== originalHtml;
       const content = transformed ? new TextEncoder().encode(html) : originalBytes;
