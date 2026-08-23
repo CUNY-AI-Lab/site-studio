@@ -26,6 +26,7 @@
 	import { toast } from '$lib/toast.svelte';
 	import { Pane } from 'paneforge';
 	import { z } from 'zod';
+	import type { Driver } from 'driver.js';
 
 	type OnboardingModule = typeof import('$lib/utils/onboarding');
 
@@ -84,6 +85,10 @@
 	let previousProjectId = $state<string | null>(null);
 	let stableProjectId = $state<string | null>(null);
 	let onboardingModulePromise: Promise<OnboardingModule> | null = null;
+	let editorTourTimer: ReturnType<typeof setTimeout> | null = null;
+	let editorTour: Driver | null = null;
+	let editorTourGeneration = 0;
+	let editorPageMounted = false;
 
 	// Get projectId from URL params
 	let projectId = $derived($page.params.projectId ?? '');
@@ -151,15 +156,20 @@
 	}
 
 	async function maybeStartEditorTour(force = false) {
+		const generation = editorTourGeneration;
 		const onboarding = await loadOnboardingModule();
+		if (!editorPageMounted || generation !== editorTourGeneration) return;
 		if (!force && onboarding.hasCompletedOnboarding()) {
 			return;
 		}
 
-		onboarding.createEditorTour().drive();
+		editorTour?.destroy();
+		editorTour = onboarding.createEditorTour();
+		editorTour.drive();
 	}
 
 	onMount(() => {
+		editorPageMounted = true;
 		void getCsrfToken()
 			.then((token) => {
 				draftSecret = token;
@@ -174,7 +184,8 @@
 		}
 
 		// Show onboarding tour for first-time users after the editor layout settles.
-		setTimeout(() => {
+		editorTourTimer = setTimeout(() => {
+			editorTourTimer = null;
 			void maybeStartEditorTour();
 		}, 1000);
 
@@ -206,6 +217,14 @@
 		};
 
 		return () => {
+			editorPageMounted = false;
+			editorTourGeneration += 1;
+			if (editorTourTimer !== null) {
+				clearTimeout(editorTourTimer);
+				editorTourTimer = null;
+			}
+			editorTour?.destroy();
+			editorTour = null;
 			window.removeEventListener('keydown', handleKeyPress);
 			window.removeEventListener('beforeunload', handleBeforeUnload);
 			delete window.showEditorTutorial;
@@ -958,6 +977,7 @@
 									class="publish-button published"
 									onclick={() => openPublishedSite(currentProject!.publishedUrl!)}
 									title="View published site"
+									aria-label={`View published site for ${currentProject.name}`}
 								>
 									<Check size={14} class="publish-icon" />
 									<span>Published</span>
@@ -968,6 +988,9 @@
 									class="publish-button"
 									onclick={handlePublishProject}
 									disabled={publishingProjectId === currentProject.id}
+									aria-label={publishingProjectId === currentProject.id
+										? `Publishing ${currentProject.name}`
+										: `Publish ${currentProject.name}`}
 								>
 									{#if publishingProjectId === currentProject.id}
 										<Loader2 size={14} class="publish-icon spinning" />
@@ -1044,7 +1067,9 @@
 		<!-- Center: Preview (always visible) -->
 		<Resizable.Pane defaultSize={70} minSize={30}>
 			<main class="preview-area">
-				<Preview bind:this={previewComponent} {projectId} />
+				{#key projectId}
+					<Preview bind:this={previewComponent} {projectId} />
+				{/key}
 			</main>
 		</Resizable.Pane>
 	</Resizable.PaneGroup>

@@ -13,6 +13,7 @@
 	import HandleClaimDialog from './HandleClaimDialog.svelte';
 	import { hasCompletedOnboarding, createDashboardTour } from '$lib/utils/onboarding';
 	import { toast } from '$lib/toast.svelte';
+	import type { Driver } from 'driver.js';
 	import 'driver.js/dist/driver.css';
 	import '$lib/styles/onboarding-tour.css';
 
@@ -31,14 +32,21 @@
 	// project whose publish triggered it, so we can retry after claiming.
 	let showHandleDialog = $state(false);
 	let pendingPublishProject = $state<Project | null>(null);
+	let dashboardTourTimer: ReturnType<typeof setTimeout> | null = null;
+	let dashboardTour: Driver | null = null;
+	let dashboardMounted = false;
 
 	onMount(() => {
+		dashboardMounted = true;
 		void loadProjects().then(() => {
 			// Show onboarding tour for first-time users with no projects
-			if (!loading && projects.length === 0 && !hasCompletedOnboarding()) {
-				setTimeout(() => {
-					const tour = createDashboardTour();
-					tour.drive();
+			if (dashboardMounted && !loading && projects.length === 0 && !hasCompletedOnboarding()) {
+				dashboardTourTimer = setTimeout(() => {
+					dashboardTourTimer = null;
+					if (!dashboardMounted) return;
+					dashboardTour?.destroy();
+					dashboardTour = createDashboardTour();
+					dashboardTour.drive();
 				}, 500);
 			}
 		});
@@ -47,19 +55,28 @@
 		const handleKeyPress = (e: KeyboardEvent) => {
 			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
 				e.preventDefault();
-				const tour = createDashboardTour();
-				tour.drive();
+				dashboardTour?.destroy();
+				dashboardTour = createDashboardTour();
+				dashboardTour.drive();
 			}
 		};
 		window.addEventListener('keydown', handleKeyPress);
 
 		// Expose function to force tutorial from console
 		window.showTutorial = () => {
-			const tour = createDashboardTour();
-			tour.drive();
+			dashboardTour?.destroy();
+			dashboardTour = createDashboardTour();
+			dashboardTour.drive();
 		};
 
 		return () => {
+			dashboardMounted = false;
+			if (dashboardTourTimer !== null) {
+				clearTimeout(dashboardTourTimer);
+				dashboardTourTimer = null;
+			}
+			dashboardTour?.destroy();
+			dashboardTour = null;
 			window.removeEventListener('keydown', handleKeyPress);
 			delete window.showTutorial;
 		};
