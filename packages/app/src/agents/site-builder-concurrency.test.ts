@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import type { ChatResponseResult } from "@cloudflare/ai-chat";
 import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { z } from "zod";
 import type { OwnerMutation, OwnerMutationResult } from "../lib/owner-mutations";
@@ -410,6 +411,47 @@ describe("Site Builder connection logging concurrency", () => {
     return connection;
   }
 
+  type TestChatConnection = ReturnType<typeof chatConnection>;
+  type TestResumeFrame = {
+    type: string;
+    id?: string;
+    probeId?: string;
+  };
+  type SiteBuilderTestCarrier = Pick<SiteBuilderAgent, "getConnections">;
+  type SiteBuilderTestHooks = SiteBuilderTestCarrier & {
+    rememberChatRequestConnection: (
+      requestId: string,
+      connection: TestChatConnection,
+    ) => boolean;
+    handleChatResumeFrame: (
+      connection: TestChatConnection,
+      frame: TestResumeFrame,
+    ) => boolean;
+    onChatResponse: (result: ChatResponseResult) => void | Promise<void>;
+    resetTurnState: () => void;
+    chatRequestConnections: Map<string, { connection: TestChatConnection }>;
+  };
+  type SiteBuilderTestParent = {
+    broadcast?: (message: string, without?: string[]) => void;
+    resetTurnState?: () => void;
+  };
+
+  function siteBuilderTestHooks(agent: SiteBuilderAgent): SiteBuilderTestHooks {
+    // SAFETY: Each test initializes these private runtime fields and invokes
+    // only the named hooks with the concrete fixture types declared above.
+    const carrier: SiteBuilderTestCarrier = agent;
+    // SAFETY: The carrier is the same SiteBuilderAgent object; its private
+    // runtime members are initialized by each fixture before invocation.
+    return carrier as SiteBuilderTestHooks;
+  }
+
+  function siteBuilderTestParent(): SiteBuilderTestParent {
+    const parent = Object.getPrototypeOf(SiteBuilderAgent.prototype);
+    // SAFETY: SiteBuilderAgent inherits these two framework hooks; tests
+    // temporarily replace them to observe the owned broadcast/reset boundary.
+    return parent as SiteBuilderTestParent;
+  }
+
   it("resets the full agent turn for the Site Studio stop frame", async () => {
     const agent = createTestAgent();
     const resetTurnState = vi.fn();
@@ -425,14 +467,12 @@ describe("Site Builder connection logging concurrency", () => {
         {
           connection,
           connectionId: connection.id,
-          generation: 1,
           subject: "subject-a",
         },
       ]]),
       detachedChatRequestConnections: new Map(),
       chatToolRequestIds: new Map(),
       chatRequestClaims: new Map([["request-a", true]]),
-      chatConnectionGeneration: 1,
       _activeRequestId: "request-a",
     });
 
@@ -446,9 +486,7 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("replaces transcript broadcasts with invalidation and targets stream frames", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      broadcast?: (...args: unknown[]) => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const sends = new Map<string, (message: string) => void>();
     const baseBroadcast = vi.fn((message: string, without?: string[]) => {
       for (const [connectionId, send] of sends) {
@@ -473,13 +511,10 @@ describe("Site Builder connection logging concurrency", () => {
         chatRequestConnections: new Map(),
         detachedChatRequestConnections: new Map(),
         chatToolRequestIds: new Map(),
-        chatConnectionGeneration: 0,
         buildActionsAwaitingPersistence: new Map(),
         messages: [{ id: "persisted", role: "assistant", parts: [{ type: "text", text: "saved" }] }],
       });
-      (agent as unknown as {
-        rememberChatRequestConnection: (requestId: string, connection: typeof connectionA) => void;
-      }).rememberChatRequestConnection("request-a", connectionA);
+      siteBuilderTestHooks(agent).rememberChatRequestConnection("request-a", connectionA);
 
       agent.broadcast(
         JSON.stringify({
@@ -508,9 +543,11 @@ describe("Site Builder connection logging concurrency", () => {
       expect(sendA).toHaveBeenCalledWith(expect.stringContaining("only tab A"));
       expect(sendB).toHaveBeenCalledTimes(1);
 
-      (agent as unknown as { onChatResponse: (result: unknown) => void }).onChatResponse({
+      siteBuilderTestHooks(agent).onChatResponse({
         requestId: "request-a",
         status: "completed",
+        continuation: false,
+        message: { id: "assistant-a", role: "assistant", parts: [] },
       });
 
       expect(sendA).toHaveBeenCalledWith(expect.stringContaining(SITE_STUDIO_CHAT_COMMITTED_TYPE));
@@ -521,9 +558,7 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("routes tool result updates only to the request owner", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      broadcast?: (...args: unknown[]) => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const sends = new Map<string, (message: string) => void>();
     const baseBroadcast = vi.fn((message: string, without?: string[]) => {
       for (const [connectionId, send] of sends) {
@@ -546,16 +581,13 @@ describe("Site Builder connection logging concurrency", () => {
         chatRequestConnections: new Map(),
         detachedChatRequestConnections: new Map(),
         chatToolRequestIds: new Map(),
-        chatConnectionGeneration: 0,
         buildActionsAwaitingPersistence: new Map(),
         messages: [],
       });
-      const remember = (agent as unknown as {
-        rememberChatRequestConnection: (requestId: string, connection: typeof connectionA) => void;
-      }).rememberChatRequestConnection;
-      remember.call(agent, "request-a", connectionA);
-      expect(remember.call(agent, "request-a", connectionB)).toBe(false);
-      expect((agent as unknown as { chatRequestConnections: Map<string, { connection: unknown }> }).chatRequestConnections.get("request-a")?.connection).toBe(connectionA);
+      const hooks = siteBuilderTestHooks(agent);
+      hooks.rememberChatRequestConnection("request-a", connectionA);
+      expect(hooks.rememberChatRequestConnection("request-a", connectionB)).toBe(false);
+      expect(hooks.chatRequestConnections.get("request-a")?.connection).toBe(connectionA);
 
       agent.broadcast(JSON.stringify({
         type: "cf_agent_use_chat_response",
@@ -585,9 +617,11 @@ describe("Site Builder connection logging concurrency", () => {
       expect(connectionA.send).toHaveBeenLastCalledWith(expect.stringContaining("private tool output"));
       expect(connectionB.send).not.toHaveBeenCalled();
 
-      (agent as unknown as { onChatResponse: (result: unknown) => void }).onChatResponse({
+      siteBuilderTestHooks(agent).onChatResponse({
         requestId: "request-a",
         status: "completed",
+        continuation: false,
+        message: { id: "assistant-a", role: "assistant", parts: [] },
       });
       agent.broadcast(JSON.stringify({
         type: "cf_agent_message_updated",
@@ -614,9 +648,7 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("transfers a detached stream to the same-subject reconnect and rejects id reuse", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      broadcast?: (...args: unknown[]) => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const agent = createTestAgent();
     const connectionA = chatConnection("connection-a", "subject-a");
     const connectionB = chatConnection("connection-b", "subject-a");
@@ -636,26 +668,22 @@ describe("Site Builder connection logging concurrency", () => {
       chatRequestConnections: new Map(),
       detachedChatRequestConnections: new Map(),
       chatToolRequestIds: new Map(),
-      chatConnectionGeneration: 0,
       _activeRequestId: "request-a",
     });
-    const remember = (agent as unknown as {
-      rememberChatRequestConnection: (requestId: string, connection: typeof connectionA) => void;
-      handleChatResumeFrame: (connection: typeof connectionA, frame: { type: string; id?: string; probeId?: string }) => boolean;
-    });
-    remember.rememberChatRequestConnection("request-a", connectionA);
+    const hooks = siteBuilderTestHooks(agent);
+    hooks.rememberChatRequestConnection("request-a", connectionA);
 
     liveConnections = [];
     agent.onClose(connectionA, 1006, "disconnect", false);
-    expect((agent as unknown as { chatRequestConnections: Map<string, unknown> }).chatRequestConnections.has("request-a")).toBe(false);
+    expect(hooks.chatRequestConnections.has("request-a")).toBe(false);
 
     liveConnections = [connectionB];
-    expect(remember.handleChatResumeFrame(connectionB, {
+    expect(hooks.handleChatResumeFrame(connectionB, {
       type: "cf_agent_stream_resume_request",
       id: "request-a",
       probeId: "probe-a",
     })).toBe(false);
-    expect((agent as unknown as { chatRequestConnections: Map<string, { connection: unknown }> }).chatRequestConnections.get("request-a")?.connection).toBe(connectionB);
+    expect(hooks.chatRequestConnections.get("request-a")?.connection).toBe(connectionB);
 
     const ownerSend = connectionB.send;
     agent.broadcast(JSON.stringify({
@@ -666,20 +694,18 @@ describe("Site Builder connection logging concurrency", () => {
     expect(ownerSend).toHaveBeenCalledWith(expect.stringContaining("resumed tail"));
 
     liveConnections = [connectionReused];
-    expect(remember.handleChatResumeFrame(connectionReused, {
+    expect(hooks.handleChatResumeFrame(connectionReused, {
       type: "cf_agent_stream_resume_request",
       id: "request-a",
       probeId: "probe-reused",
     })).toBe(true);
     expect(connectionReused.send).toHaveBeenCalledWith(expect.stringContaining("cf_agent_stream_resume_none"));
-    expect((agent as unknown as { chatRequestConnections: Map<string, { connection: unknown }> }).chatRequestConnections.has("request-a")).toBe(false);
+    expect(hooks.chatRequestConnections.has("request-a")).toBe(false);
     delete agentParent.broadcast;
   });
 
   it("transfers pending tool ownership to the authenticated reconnect after terminal", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      broadcast?: (...args: unknown[]) => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const agent = createTestAgent();
     const connectionA = chatConnection("connection-a", "subject-a");
     const connectionB = chatConnection("connection-b", "subject-a");
@@ -698,22 +724,21 @@ describe("Site Builder connection logging concurrency", () => {
       chatRequestConnections: new Map(),
       detachedChatRequestConnections: new Map(),
       chatToolRequestIds: new Map(),
-      chatConnectionGeneration: 0,
       buildActionsAwaitingPersistence: new Map(),
       messages: [],
     });
     try {
-      (agent as unknown as {
-        rememberChatRequestConnection: (requestId: string, connection: typeof connectionA) => void;
-      }).rememberChatRequestConnection("request-a", connectionA);
+      siteBuilderTestHooks(agent).rememberChatRequestConnection("request-a", connectionA);
       agent.broadcast(JSON.stringify({
         type: "cf_agent_use_chat_response",
         id: "request-a",
         body: JSON.stringify({ type: "tool-input-start", toolCallId: "tool-a" }),
       }));
-      (agent as unknown as { onChatResponse: (result: unknown) => void }).onChatResponse({
+      siteBuilderTestHooks(agent).onChatResponse({
         requestId: "request-a",
         status: "completed",
+        continuation: false,
+        message: { id: "assistant-a", role: "assistant", parts: [] },
       });
 
       liveConnections = [];
@@ -728,7 +753,7 @@ describe("Site Builder connection logging concurrency", () => {
           },
         }),
       });
-      expect((agent as unknown as { chatRequestConnections: Map<string, { connection: unknown }> }).chatRequestConnections.get("request-a")?.connection).toBe(connectionB);
+      expect(siteBuilderTestHooks(agent).chatRequestConnections.get("request-a")?.connection).toBe(connectionB);
 
       agent.broadcast(JSON.stringify({
         type: "cf_agent_message_updated",
@@ -745,9 +770,7 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("clears active, detached, and tool ownership on turn reset", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      resetTurnState?: () => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const baseReset = vi.fn();
     Object.defineProperty(agentParent, "resetTurnState", {
       configurable: true,
@@ -763,7 +786,7 @@ describe("Site Builder connection logging concurrency", () => {
         detachedChatRequestConnections: detached,
         chatToolRequestIds: tools,
       });
-      (agent as unknown as { resetTurnState: () => void }).resetTurnState();
+      siteBuilderTestHooks(agent).resetTurnState();
       expect(baseReset).toHaveBeenCalledOnce();
       expect(active).toHaveLength(0);
       expect(detached).toHaveLength(0);
@@ -774,9 +797,7 @@ describe("Site Builder connection logging concurrency", () => {
   });
 
   it("denies resume after a runtime restart when ownership proof is absent", () => {
-    const agentParent = Object.getPrototypeOf(SiteBuilderAgent.prototype) as {
-      broadcast?: (...args: unknown[]) => void;
-    };
+    const agentParent = siteBuilderTestParent();
     const agent = createTestAgent();
     const connection = chatConnection("connection-restarted", "subject-a");
     Object.assign(agent, {
@@ -785,7 +806,6 @@ describe("Site Builder connection logging concurrency", () => {
       chatRequestConnections: new Map(),
       detachedChatRequestConnections: new Map(),
       chatToolRequestIds: new Map(),
-      chatConnectionGeneration: 0,
       _activeRequestId: "request-after-restart",
     });
     Object.defineProperty(agentParent, "broadcast", {
@@ -793,9 +813,7 @@ describe("Site Builder connection logging concurrency", () => {
       value: () => undefined,
     });
     try {
-      expect((agent as unknown as {
-        handleChatResumeFrame: (socket: typeof connection, frame: { type: string; probeId?: string }) => boolean;
-      }).handleChatResumeFrame(connection, {
+      expect(siteBuilderTestHooks(agent).handleChatResumeFrame(connection, {
         type: "cf_agent_stream_resume_request",
         probeId: "probe-restarted",
       })).toBe(true);

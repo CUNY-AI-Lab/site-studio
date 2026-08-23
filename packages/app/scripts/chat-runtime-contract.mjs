@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AIChatAgent } from "@cloudflare/ai-chat";
+import { SiteBuilderAgent } from "../src/agents/site-builder.ts";
 
 function sqlResult(rows = []) {
   return Object.assign([...rows], { toArray: () => [...rows] });
@@ -33,55 +33,85 @@ const context = {
   acceptWebSocket() {},
 };
 
-const connection = {
-  id: "connection-a",
-  readyState: 1,
-  sent: [],
-  send(message) {
-    this.sent.push(message);
-  },
-  close() {},
-  setState() {},
-};
-
-class BoundaryProbeAgent extends AIChatAgent {
-  constructor(ctx, env) {
-    super(ctx, env);
-    assert.equal(Object.hasOwn(this, "onMessage"), true, "AIChatAgent must install an instance onMessage wrapper");
-    assert.equal(Object.hasOwn(this, "onConnect"), true, "AIChatAgent must install an instance onConnect wrapper");
-
-    const frameworkOnMessage = this.onMessage.bind(this);
-    const frameworkOnConnect = this.onConnect.bind(this);
-    this.gates = [];
-    this.onConnect = async (socket, connectContext) => {
-      this.gates.push("authorize");
-      return frameworkOnConnect(socket, connectContext);
-    };
-    this.onMessage = async (socket, message) => {
-      this.gates.push(`message:${message}`);
-      if (message === "foreign-tool-result") return;
-      return frameworkOnMessage(socket, message);
-    };
-  }
-
-  async onChatMessage() {
-    return new Response(null);
-  }
+function identityJwt(subject) {
+  const payload = Buffer.from(JSON.stringify({ sub: subject })).toString("base64url");
+  return `header.${payload}.signature`;
 }
 
-const agent = new BoundaryProbeAgent(context, {});
-await agent.onConnect(connection, { request: new Request("https://contract.example/agent") });
-await agent.onMessage(connection, "foreign-tool-result");
-await agent.onMessage(connection, JSON.stringify({
-  type: "cf_agent_stream_resume_request",
-  probeId: "probe-a",
-}));
+function connection(id, subject) {
+  let state = null;
+  const sent = [];
+  return {
+    id,
+    readyState: 1,
+    sent,
+    get state() {
+      return state;
+    },
+    setState(next) {
+      state = next instanceof Function ? next(state) : next;
+      return state;
+    },
+    send(message) {
+      sent.push(message);
+    },
+    close() {},
+    subject,
+  };
+}
 
-assert.deepEqual(agent.gates, [
-  "authorize",
-  "message:foreign-tool-result",
-  `message:{"type":"cf_agent_stream_resume_request","probeId":"probe-a"}`,
-]);
-assert.equal(connection.sent.some((message) => String(message).includes("cf_agent_identity")), true);
-assert.equal(connection.sent.some((message) => String(message).includes("cf_agent_stream_resume_none")), true);
-console.log("chat runtime contract: actual @cloudflare/ai-chat instance handlers wrapped and gated");
+const agent = new SiteBuilderAgent(context, {});
+const connectionA = connection("connection-a", "subject-a");
+const connectionB = connection("connection-b", "subject-a");
+const connections = [connectionA, connectionB];
+agent.getConnections = () => connections;
+agent.getConnection = (id) => connections.find((candidate) => candidate.id === id);
+
+assert.equal(Object.hasOwn(agent, "onMessage"), true, "SiteBuilderAgent must install its onMessage boundary wrapper");
+assert.equal(Object.hasOwn(agent, "onConnect"), true, "SiteBuilderAgent must install its onConnect boundary wrapper");
+
+const request = new Request("https://contract.example/agent", {
+  headers: {
+    "x-partykit-props": JSON.stringify({ identityJwt: identityJwt("subject-a") }),
+  },
+});
+await agent.onConnect(connectionA, { request });
+await agent.onConnect(connectionB, { request });
+
+const remember = agent.rememberChatRequestConnection.bind(agent);
+assert.equal(remember("request-a", connectionA), true);
+agent.chatToolRequestIds.set("tool-a", "request-a");
+
+let frameworkContinuationCalled = false;
+agent._enqueueInteractionApply = () => {
+  frameworkContinuationCalled = true;
+  return Promise.resolve();
+};
+
+await agent.onMessage(connectionB, JSON.stringify({
+  type: "cf_agent_tool_result",
+  toolCallId: "tool-a",
+  output: "foreign",
+}));
+assert.equal(frameworkContinuationCalled, false, "foreign tool result must stop at SiteBuilderAgent");
+
+await agent.onMessage(connectionA, JSON.stringify({
+  type: "cf_agent_tool_result",
+  toolCallId: "tool-a",
+  output: "owner",
+}));
+assert.equal(frameworkContinuationCalled, true, "owner tool result must reach AIChatAgent");
+
+await agent.onMessage(connectionB, JSON.stringify({
+  type: "cf_agent_use_chat_request",
+  id: "request-a",
+}));
+assert.equal(connectionB.sent.some((message) => String(message).includes("chat_request_conflict")), true);
+
+const controlFrame = JSON.stringify({ type: "cf_agent_stream_resuming", id: "request-a" });
+connectionB.send(controlFrame);
+assert.equal(connectionB.sent.includes(controlFrame), false, "foreign resume metadata must be suppressed");
+connectionA.send(controlFrame);
+assert.equal(connectionA.sent.includes(controlFrame), true, "owner resume metadata must pass");
+
+console.log("chat runtime contract: actual SiteBuilderAgent constructor boundary installed and gated");

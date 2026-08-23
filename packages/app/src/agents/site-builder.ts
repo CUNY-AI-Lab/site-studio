@@ -104,51 +104,58 @@ const CF_AGENT_STREAM_PENDING_TYPE = "cf_agent_stream_pending" as const;
 const CF_AGENT_CHAT_RECOVERING_TYPE = "cf_agent_chat_recovering" as const;
 const CF_AGENT_CHAT_REQUEST_CANCEL_TYPE = "cf_agent_chat_request_cancel" as const;
 
-type SiteStudioChatFrame = {
-  type: string;
-  id?: string;
-  probeId?: string;
-  body?: string;
-  toolCallId?: string;
-  parentToolCallId?: string;
-  providerExecuted?: boolean;
-  done?: boolean;
-  error?: boolean;
-  message?: unknown;
-  event?: unknown;
-};
+type ChatJsonValue = string | number | boolean | null | ChatJsonValue[] | { [key: string]: ChatJsonValue };
 
-function parseSiteStudioChatFrame(message: string): SiteStudioChatFrame | null {
+const chatJsonValueSchema: z.ZodType<ChatJsonValue> = z.lazy(() => z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(chatJsonValueSchema),
+  z.record(z.string(), chatJsonValueSchema),
+]));
+const chatJsonArraySchema = z.array(chatJsonValueSchema);
+const chatJsonRecordSchema = z.record(z.string(), chatJsonValueSchema);
+const chatFrameSchema = z.object({
+  type: z.string(),
+  id: z.string().optional(),
+  probeId: z.string().optional(),
+  body: z.string().optional(),
+  toolCallId: z.string().optional(),
+  parentToolCallId: z.string().optional(),
+  providerExecuted: z.boolean().optional(),
+  done: z.boolean().optional(),
+  error: z.boolean().optional(),
+  message: chatJsonValueSchema.optional(),
+  event: chatJsonValueSchema.optional(),
+});
+type SiteStudioChatFrame = z.infer<typeof chatFrameSchema>;
+
+function parseChatJsonText(value: string): ChatJsonValue | undefined {
   try {
-    const parsed: unknown = JSON.parse(message);
-    if (typeof parsed !== "object" || parsed === null || !Object.hasOwn(parsed, "type")) {
-      return null;
-    }
-    const frame = parsed as Record<string, unknown>;
-    return {
-      type: typeof frame.type === "string" ? frame.type : "",
-      id: typeof frame.id === "string" ? frame.id : undefined,
-      probeId: typeof frame.probeId === "string" ? frame.probeId : undefined,
-      body: typeof frame.body === "string" ? frame.body : undefined,
-      toolCallId: typeof frame.toolCallId === "string" ? frame.toolCallId : undefined,
-      parentToolCallId: typeof frame.parentToolCallId === "string" ? frame.parentToolCallId : undefined,
-      providerExecuted: typeof frame.providerExecuted === "boolean" ? frame.providerExecuted : undefined,
-      done: typeof frame.done === "boolean" ? frame.done : undefined,
-      error: typeof frame.error === "boolean" ? frame.error : undefined,
-      message: frame.message,
-      event: frame.event,
-    };
+    const parsed = chatJsonValueSchema.safeParse(JSON.parse(value));
+    return parsed.success ? parsed.data : undefined;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-type SiteStudioChatConnectionOwnership = Readonly<{
-  connection: Connection<SiteStudioConnectionLoggingState>;
-  connectionId: string;
-  generation: number;
-  subject?: string;
-}>;
+function parseSiteStudioChatFrame(message: string): SiteStudioChatFrame | null {
+  const parsed = parseChatJsonText(message);
+  const frame = chatFrameSchema.safeParse(parsed);
+  return frame.success ? frame.data : null;
+}
+
+function chatFrameFromMessage(message: WSMessage): SiteStudioChatFrame | null {
+  const encoded = z.string().safeParse(message);
+  return encoded.success ? parseSiteStudioChatFrame(encoded.data) : null;
+}
+
+function parseChatJsonRecord(value: string): Record<string, ChatJsonValue> | undefined {
+  const parsed = parseChatJsonText(value);
+  const record = chatJsonRecordSchema.safeParse(parsed);
+  return record.success ? record.data : undefined;
+}
 
 /** Read only the stable subject claim from a server-verified connection JWT. */
 function connectionSubject(connection: Connection<SiteStudioConnectionLoggingState>): string | undefined {
@@ -158,60 +165,68 @@ function connectionSubject(connection: Connection<SiteStudioConnectionLoggingSta
   try {
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(payload.length / 4) * 4, "=");
     const decoded = atob(normalized);
-    const parsed: unknown = JSON.parse(decoded);
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const subject = (parsed as Record<string, unknown>).sub;
-    return typeof subject === "string" && subject.length > 0 ? subject : undefined;
+    const parsed = z.object({ sub: z.string().min(1) }).safeParse(JSON.parse(decoded));
+    return parsed.success ? parsed.data.sub : undefined;
   } catch {
     return undefined;
   }
 }
 
-function toolCallIdsFromValue(value: unknown, ids = new Set<string>()): Set<string> {
-  if (typeof value === "string") {
-    try {
-      return toolCallIdsFromValue(JSON.parse(value), ids);
-    } catch {
-      return ids;
-    }
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) toolCallIdsFromValue(item, ids);
+function jsonString(value: ChatJsonValue | undefined): string | undefined {
+  const parsed = z.string().safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function toolCallIdsFromValue(value: ChatJsonValue, ids = new Set<string>()): Set<string> {
+  const array = chatJsonArraySchema.safeParse(value);
+  if (array.success) {
+    for (const item of array.data) toolCallIdsFromValue(item, ids);
     return ids;
   }
-  if (typeof value !== "object" || value === null) return ids;
-  const record = value as Record<string, unknown>;
+
+  const record = chatJsonRecordSchema.safeParse(value);
+  if (!record.success) return ids;
   for (const key of ["toolCallId", "parentToolCallId"]) {
-    const id = record[key];
-    if (typeof id === "string" && id.length > 0) ids.add(id);
+    const id = z.string().min(1).safeParse(record.data[key]);
+    if (id.success) ids.add(id.data);
   }
   for (const key of ["body", "event", "message", "parts"]) {
-    if (key in record) toolCallIdsFromValue(record[key], ids);
+    const nested = record.data[key];
+    if (nested === undefined) continue;
+    const nestedText = jsonString(nested);
+    const parsedText = nestedText ? parseChatJsonText(nestedText) : undefined;
+    toolCallIdsFromValue(parsedText ?? nested, ids);
   }
   return ids;
 }
 
 function toolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
-  return toolCallIdsFromValue(frame);
+  const ids = new Set<string>();
+  for (const id of [frame.toolCallId, frame.parentToolCallId]) {
+    const parsed = z.string().min(1).safeParse(id);
+    if (parsed.success) ids.add(parsed.data);
+  }
+  if (frame.body) {
+    const parsed = parseChatJsonText(frame.body);
+    if (parsed) toolCallIdsFromValue(parsed, ids);
+  }
+  for (const nested of [frame.message, frame.event]) {
+    if (nested !== undefined) toolCallIdsFromValue(nested, ids);
+  }
+  return ids;
 }
 
-function parsedChatFrameBody(frame: SiteStudioChatFrame): Record<string, unknown> | undefined {
-  if (!frame.body) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(frame.body);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
-    return parsed as Record<string, unknown>;
-  } catch {
-    return undefined;
-  }
+function parsedChatFrameBody(frame: SiteStudioChatFrame): Record<string, ChatJsonValue> | undefined {
+  return frame.body ? parseChatJsonRecord(frame.body) : undefined;
 }
 
 function clientToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
   if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE) {
     const body = parsedChatFrameBody(frame);
-    const bodyType = body?.type;
+    const bodyType = jsonString(body?.type);
     if (
-      typeof bodyType !== "string"
+      !body
+      || !bodyType
       || body?.providerExecuted === true
       || ![
         "tool-input-start",
@@ -224,18 +239,17 @@ function clientToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
     return toolCallIdsFromValue(body);
   }
 
-  if (frame.type !== CF_AGENT_MESSAGE_UPDATED_TYPE || typeof frame.message !== "object" || frame.message === null) {
-    return new Set();
-  }
-  const parts = (frame.message as Record<string, unknown>).parts;
-  if (!Array.isArray(parts)) return new Set();
+  if (frame.type !== CF_AGENT_MESSAGE_UPDATED_TYPE) return new Set();
+  const parsedMessage = chatJsonRecordSchema.safeParse(frame.message);
+  if (!parsedMessage.success) return new Set();
+  const parts = chatJsonArraySchema.safeParse(parsedMessage.data.parts);
+  if (!parts.success) return new Set();
   const ids = new Set<string>();
-  for (const part of parts) {
-    if (typeof part !== "object" || part === null) continue;
-    const record = part as Record<string, unknown>;
-    if (record.providerExecuted === true) continue;
-    const state = record.state;
-    const partType = record.type;
+  for (const part of parts.data) {
+    const record = chatJsonRecordSchema.safeParse(part);
+    if (!record.success || record.data.providerExecuted === true) continue;
+    const state = jsonString(record.data.state);
+    const partType = jsonString(record.data.type);
     if (
       state === "input-streaming"
       || state === "input-available"
@@ -244,7 +258,7 @@ function clientToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
       || partType === "tool-call"
       || partType === "tool-approval-request"
     ) {
-      toolCallIdsFromValue(record, ids);
+      toolCallIdsFromValue(record.data, ids);
     }
   }
   return ids;
@@ -254,26 +268,27 @@ function settledToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
   const ids = new Set<string>();
   if (frame.type === CF_AGENT_USE_CHAT_RESPONSE_TYPE) {
     const body = parsedChatFrameBody(frame);
-    const bodyType = body?.type;
+    const bodyType = jsonString(body?.type);
     if (
-      typeof bodyType === "string"
+      body
+      && bodyType
       && ["tool-input-error", "tool-output-available", "tool-output-error", "tool-output-denied"].includes(bodyType)
     ) {
       return toolCallIdsFromValue(body, ids);
     }
     return ids;
   }
-  const message = frame.message;
-  if (typeof message !== "object" || message === null) return ids;
-  const parts = (message as Record<string, unknown>).parts;
-  if (!Array.isArray(parts)) return ids;
-  for (const part of parts) {
-    if (typeof part !== "object" || part === null) continue;
-    const record = part as Record<string, unknown>;
-    const toolCallId = record.toolCallId;
-    const state = record.state;
+  const parsedMessage = chatJsonRecordSchema.safeParse(frame.message);
+  if (!parsedMessage.success) return ids;
+  const parts = chatJsonArraySchema.safeParse(parsedMessage.data.parts);
+  if (!parts.success) return ids;
+  for (const part of parts.data) {
+    const record = chatJsonRecordSchema.safeParse(part);
+    if (!record.success) continue;
+    const toolCallId = jsonString(record.data.toolCallId);
+    const state = jsonString(record.data.state);
     if (
-      typeof toolCallId === "string"
+      toolCallId
       && (state === "output-available"
         || state === "output-error"
         || state === "output-denied"
@@ -284,6 +299,19 @@ function settledToolCallIdsFromFrame(frame: SiteStudioChatFrame): Set<string> {
   }
   return ids;
 }
+
+type SiteStudioChatConnectionOwnership = Readonly<{
+  connection: Connection<SiteStudioConnectionLoggingState>;
+  connectionId: string;
+  subject?: string;
+}>;
+
+type SiteStudioChatOutputFrame = {
+  type: string;
+  probeId?: string;
+  requestId?: string;
+  messages?: UIMessage[];
+};
 
 const siteStudioCancelTurnSchema = z.object({
   type: z.literal(SITE_STUDIO_CANCEL_TURN_TYPE),
@@ -1496,6 +1524,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     super(ctx, env);
     const frameworkOnConnect = this.onConnect.bind(this);
     this.onConnect = async (connection, connectionContext) => {
+      // SAFETY: AIChatAgent's generic state is narrowed to Site Studio's
+      // connection state at the Worker WebSocket boundary below.
       const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
       this.prepareChatConnection(siteStudioConnection, connectionContext);
       this.installChatConnectionSendGuard(siteStudioConnection);
@@ -1504,43 +1534,33 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const frameworkOnMessage = this.onMessage.bind(this);
     this.onMessage = async (connection, message) => {
+      // SAFETY: The Site Studio route creates every connection with this
+      // connection state before the framework invokes the message handler.
       const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
       if (isSiteStudioCancelTurn(message)) {
         this.handleSiteStudioCancel(siteStudioConnection);
         return;
       }
-      if (typeof message === "string") {
-        const frame = parseSiteStudioChatFrame(message);
-        if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id) {
-          if (!this.claimChatRequestConnection(
-            frame.id,
-            siteStudioConnection,
-          )) {
-            this.sendChatRequestConflict(
-              siteStudioConnection,
-              frame.id,
-            );
-            return;
-          }
-        } else if (
-          frame
-          && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
-        ) {
-          if (!this.transferChatToolFrameToConnection(
-            frame,
-            siteStudioConnection,
-          )) return;
+      const frame = chatFrameFromMessage(message);
+      if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id) {
+        if (!this.claimChatRequestConnection(frame.id, siteStudioConnection)) {
+          this.sendChatRequestConflict(siteStudioConnection, frame.id);
+          return;
         }
-        if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(
-          siteStudioConnection,
-          frame,
-        )) return;
-        if (
-          frame
-          && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
-          && this.handleChatResumeFrame(siteStudioConnection, frame)
-        ) return;
-      }
+      } else if (
+        frame
+        && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
+        && !this.transferChatToolFrameToConnection(frame, siteStudioConnection)
+      ) return;
+      if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(
+        siteStudioConnection,
+        frame,
+      )) return;
+      if (
+        frame
+        && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
+        && this.handleChatResumeFrame(siteStudioConnection, frame)
+      ) return;
       return frameworkOnMessage(connection, message);
     };
     this.chatRuntimeBoundaryInstalled = true;
@@ -1551,10 +1571,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   private observabilitySequence = 0;
   private buildActionsAwaitingPersistence = new Map<string, SiteStudioActionLifecycle>();
   private chatRequestConnections = new Map<string, SiteStudioChatConnectionOwnership>();
-  private detachedChatRequestConnections = new Map<string, Pick<SiteStudioChatConnectionOwnership, "generation" | "subject">>();
+  private detachedChatRequestConnections = new Map<string, Pick<SiteStudioChatConnectionOwnership, "subject">>();
   private chatToolRequestIds = new Map<string, string>();
   private chatRequestClaims = new Map<string, true>();
-  private chatConnectionGeneration = 0;
   private chatPreparedConnections = new WeakSet<object>();
   private chatSendGuards = new WeakSet<object>();
   private chatRuntimeBoundaryInstalled = false;
@@ -1625,7 +1644,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const originalSend = connection.send.bind(connection);
     const guardedSend = (message: Parameters<Connection<SiteStudioConnectionLoggingState>["send"]>[0]): void => {
-      if (typeof message === "string" && !this.authorizeFrameworkChatControl(connection, message)) return;
+      const encoded = z.string().safeParse(message);
+      if (encoded.success && !this.authorizeFrameworkChatControl(connection, encoded.data)) return;
       originalSend(message);
     };
 
@@ -1721,12 +1741,13 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     message: string | ArrayBuffer | ArrayBufferView,
     without?: string[],
   ): void {
-    if (typeof message !== "string") {
+    const encodedMessage = z.string().safeParse(message);
+    if (!encodedMessage.success) {
       super.broadcast(message, without);
       return;
     }
 
-    const frame = parseSiteStudioChatFrame(message);
+    const frame = parseSiteStudioChatFrame(encodedMessage.data);
     if (!frame) {
       super.broadcast(message, without);
       return;
@@ -1761,7 +1782,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
    * the SDK's internal forwarders, but no Site Studio client receives it.
    */
   private broadcastChatFrame(
-    message: string,
+    message: WSMessage,
     target: SiteStudioChatConnectionOwnership | undefined,
     without?: string[],
   ): void {
@@ -1801,6 +1822,8 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     }
 
     try {
+      // SAFETY: getCurrentAgent() is populated by the Agent framework for an
+      // active WebSocket invocation; Site Studio owns that connection state.
       const connection = getCurrentAgent().connection as Connection<SiteStudioConnectionLoggingState> | undefined;
       if (!connection) return undefined;
       for (const ownership of this.chatRequestConnections.values()) {
@@ -1833,9 +1856,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       this.chatToolRequestIds.set(toolCallId, requestId);
     }
     while (this.chatToolRequestIds.size > 128) {
-      const oldestToolCallId = this.chatToolRequestIds.keys().next().value;
-      if (typeof oldestToolCallId !== "string") break;
-      this.chatToolRequestIds.delete(oldestToolCallId);
+      const oldestToolCallId = z.string().safeParse(this.chatToolRequestIds.keys().next().value);
+      if (!oldestToolCallId.success) break;
+      this.chatToolRequestIds.delete(oldestToolCallId.data);
     }
   }
 
@@ -1874,7 +1897,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     }
   }
 
-  private sendChatFrame(ownership: SiteStudioChatConnectionOwnership | undefined, frame: Record<string, unknown>): void {
+  private sendChatFrame(
+    ownership: SiteStudioChatConnectionOwnership | undefined,
+    frame: SiteStudioChatOutputFrame,
+  ): void {
     if (!ownership || !this.isCurrentChatConnection(ownership)) return;
     try {
       ownership.connection.send(JSON.stringify(frame));
@@ -1903,30 +1929,29 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     const ownership: SiteStudioChatConnectionOwnership = Object.freeze({
       connection,
       connectionId: connection.id,
-      generation: ++this.chatConnectionGeneration,
       subject: connectionSubject(connection),
     });
     this.chatRequestConnections.set(requestId, ownership);
     this.chatRequestClaims.set(requestId, true);
     this.detachedChatRequestConnections.delete(requestId);
     while (this.chatRequestConnections.size > 128) {
-      const oldestRequestId = this.chatRequestConnections.keys().next().value;
-      if (typeof oldestRequestId !== "string") break;
-      const oldestOwnership = this.chatRequestConnections.get(oldestRequestId);
-      if (oldestOwnership) this.detachChatRequest(oldestRequestId, oldestOwnership);
+      const oldestRequestId = z.string().safeParse(this.chatRequestConnections.keys().next().value);
+      if (!oldestRequestId.success) break;
+      const oldestOwnership = this.chatRequestConnections.get(oldestRequestId.data);
+      if (oldestOwnership) this.detachChatRequest(oldestRequestId.data, oldestOwnership);
     }
     while (this.chatRequestClaims.size > 256) {
-      const oldestRequestId = this.chatRequestClaims.keys().next().value;
-      if (typeof oldestRequestId !== "string") break;
+      const oldestRequestId = z.string().safeParse(this.chatRequestClaims.keys().next().value);
+      if (!oldestRequestId.success) break;
       if (
-        this.chatRequestConnections.has(oldestRequestId)
-        || this.detachedChatRequestConnections.has(oldestRequestId)
+        this.chatRequestConnections.has(oldestRequestId.data)
+        || this.detachedChatRequestConnections.has(oldestRequestId.data)
       ) {
-        this.chatRequestClaims.delete(oldestRequestId);
-        this.chatRequestClaims.set(oldestRequestId, true);
+        this.chatRequestClaims.delete(oldestRequestId.data);
+        this.chatRequestClaims.set(oldestRequestId.data, true);
         continue;
       }
-      this.chatRequestClaims.delete(oldestRequestId);
+      this.chatRequestClaims.delete(oldestRequestId.data);
     }
     return true;
   }
@@ -1963,13 +1988,12 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     if (this.chatRequestConnections.get(requestId) !== ownership) return;
     this.chatRequestConnections.delete(requestId);
     this.detachedChatRequestConnections.set(requestId, Object.freeze({
-      generation: ownership.generation,
       subject: ownership.subject,
     }));
     if (this.detachedChatRequestConnections.size <= 32) return;
-    const oldestRequestId = this.detachedChatRequestConnections.keys().next().value;
-    if (typeof oldestRequestId === "string") {
-      this.detachedChatRequestConnections.delete(oldestRequestId);
+    const oldestRequestId = z.string().safeParse(this.detachedChatRequestConnections.keys().next().value);
+    if (oldestRequestId.success) {
+      this.detachedChatRequestConnections.delete(oldestRequestId.data);
     }
   }
 
@@ -2000,7 +2024,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.chatRequestConnections.set(requestId, Object.freeze({
       connection,
       connectionId: connection.id,
-      generation: ++this.chatConnectionGeneration,
       subject,
     }));
     this.detachedChatRequestConnections.delete(requestId);
@@ -2037,7 +2060,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.chatRequestConnections.set(requestId, Object.freeze({
       connection,
       connectionId: connection.id,
-      generation: ++this.chatConnectionGeneration,
       subject: detached.subject,
     }));
     this.detachedChatRequestConnections.delete(requestId);
@@ -2063,7 +2085,6 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.chatRequestConnections.set(requestId, Object.freeze({
       connection,
       connectionId: connection.id,
-      generation: ++this.chatConnectionGeneration,
       subject: detached.subject,
     }));
     this.detachedChatRequestConnections.delete(requestId);
@@ -2071,10 +2092,11 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
   private sendResumeNone(connection: Connection, probeId?: string): void {
     try {
-      connection.send(JSON.stringify({
+      const frame: SiteStudioChatOutputFrame = {
         type: "cf_agent_stream_resume_none",
-        ...(probeId ? { probeId } : {}),
-      }));
+      };
+      if (probeId) frame.probeId = probeId;
+      connection.send(JSON.stringify(frame));
     } catch {
       // The reconnecting socket may close between the request and this guard.
     }
@@ -2110,15 +2132,15 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
   override onError(
     connection: Connection<SiteStudioConnectionLoggingState>,
-    error: unknown,
+    _error: Error,
   ): void;
-  override onError(error: unknown): void;
+  override onError(error: Error): void;
   override onError(
-    connectionOrError: Connection<SiteStudioConnectionLoggingState> | unknown,
-    _error?: unknown,
+    connectionOrError: Connection<SiteStudioConnectionLoggingState> | Error,
+    _error?: Error,
   ): void {
-    if (arguments.length > 1) {
-      this.detachChatRequestsForConnection(connectionOrError as Connection<SiteStudioConnectionLoggingState>);
+    if (arguments.length > 1 && !(connectionOrError instanceof Error)) {
+      this.detachChatRequestsForConnection(connectionOrError);
     }
   }
 
@@ -2168,38 +2190,26 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       this.handleSiteStudioCancel(connection);
       return;
     }
-    if (typeof message === "string") {
-      const frame = parseSiteStudioChatFrame(message);
-      if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id && !this.chatRuntimeBoundaryInstalled) {
-        if (!this.claimChatRequestConnection(
-          frame.id,
-          connection as Connection<SiteStudioConnectionLoggingState>,
-        )) {
-          this.sendChatRequestConflict(
-            connection as Connection<SiteStudioConnectionLoggingState>,
-            frame.id,
-          );
-          return;
-        }
-      } else if (
-        frame
-        && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
-      ) {
-        if (!this.transferChatToolFrameToConnection(
-          frame,
-          connection as Connection<SiteStudioConnectionLoggingState>,
-        )) return;
-      }
-      if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(connection, frame)) {
+    const frame = chatFrameFromMessage(message);
+    if (frame?.type === CF_AGENT_USE_CHAT_REQUEST_TYPE && frame.id && !this.chatRuntimeBoundaryInstalled) {
+      if (!this.claimChatRequestConnection(frame.id, connection)) {
+        this.sendChatRequestConflict(connection, frame.id);
         return;
       }
-      if (
-        frame
-        && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
-        && this.handleChatResumeFrame(connection, frame)
-      ) {
-        return;
-      }
+    } else if (
+      frame
+      && (frame.type === CF_AGENT_TOOL_RESULT_TYPE || frame.type === CF_AGENT_TOOL_APPROVAL_TYPE)
+      && !this.transferChatToolFrameToConnection(frame, connection)
+    ) return;
+    if (frame?.type === CF_AGENT_CHAT_REQUEST_CANCEL_TYPE && !this.authorizeChatControlFrame(connection, frame)) {
+      return;
+    }
+    if (
+      frame
+      && (frame.type === CF_AGENT_STREAM_RESUME_REQUEST_TYPE || frame.type === CF_AGENT_STREAM_RESUME_ACK_TYPE)
+      && this.handleChatResumeFrame(connection, frame)
+    ) {
+      return;
     }
     return super.onMessage(connection, message);
   }
@@ -2418,9 +2428,12 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
 
     const connection = getCurrentAgent().connection;
     if (connection && requestId !== "unknown") {
+      // SAFETY: getCurrentAgent().connection is the framework's active
+      // connection for this authenticated Site Studio request.
+      const siteStudioConnection = connection as Connection<SiteStudioConnectionLoggingState>;
       const accepted = this.rememberChatRequestConnection(
         requestId,
-        connection as Connection<SiteStudioConnectionLoggingState>,
+        siteStudioConnection,
       );
       if (!accepted) return noStoreJson({ error: "chat_request_conflict" }, 409);
     }
