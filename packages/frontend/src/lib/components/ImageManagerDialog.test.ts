@@ -16,6 +16,10 @@ interface DialogOverrides {
 	uploadProjectImage?: typeof uploadProjectImage;
 }
 
+declare global {
+	var bitsDismissableLayers: Map<unknown, unknown> | undefined;
+}
+
 const imagesResult: ProjectImagesResult = {
 	images: [
 		{ path: 'images/one.png', size: 1024 },
@@ -29,7 +33,7 @@ const imagesResult: ProjectImagesResult = {
 function open(overrides: DialogOverrides = {}) {
 	const onOpenChange = vi.fn();
 	const onAskAssistant = vi.fn();
-	render(ImageManagerDialog, {
+	const view = render(ImageManagerDialog, {
 		props: {
 			open: true,
 			projectId: 'proj1',
@@ -40,13 +44,19 @@ function open(overrides: DialogOverrides = {}) {
 			...overrides
 		}
 	});
-	return { onOpenChange, onAskAssistant };
+	return { onOpenChange, onAskAssistant, unmount: view.unmount };
 }
 
 function labeledInput(label: RegExp): HTMLInputElement {
 	const input = screen.getByLabelText(label);
 	if (!(input instanceof HTMLInputElement)) throw new Error('expected input');
 	return input;
+}
+
+function dismissibleLayerCount(): number {
+	const layers = globalThis.bitsDismissableLayers;
+	if (!(layers instanceof Map)) throw new Error('expected the dialog layer registry');
+	return layers.size;
 }
 
 async function waitForImages() {
@@ -76,6 +86,27 @@ describe('ImageManagerDialog', () => {
 	beforeEach(() => {
 		mockFetch.mockReset();
 		mockFetch.mockResolvedValue(imagesResult);
+	});
+
+	it('fully tears down an immediately unmounted dialog', async () => {
+		vi.useFakeTimers();
+		try {
+			const { onOpenChange, unmount } = open();
+			unmount();
+
+			// Settle both the mocked image request and the dialog primitive's
+			// deferred teardown before exercising a later outside interaction.
+			await Promise.resolve();
+			await vi.advanceTimersByTimeAsync(25);
+			expect(dismissibleLayerCount()).toBe(0);
+			document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+			await vi.advanceTimersByTimeAsync(11);
+
+			expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull();
+			expect(onOpenChange).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('loads and lists the project images when opened', async () => {

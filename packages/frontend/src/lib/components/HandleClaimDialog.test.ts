@@ -12,10 +12,20 @@ interface DialogOverrides {
 	claimHandle?: typeof claimHandle;
 }
 
+declare global {
+	var bitsDismissableLayers: Map<unknown, unknown> | undefined;
+}
+
 function addressInput(): HTMLInputElement {
 	const input = screen.getByLabelText('Address');
 	if (!(input instanceof HTMLInputElement)) throw new Error('expected address input');
 	return input;
+}
+
+function dismissibleLayerCount(): number {
+	const layers = globalThis.bitsDismissableLayers;
+	if (!(layers instanceof Map)) throw new Error('expected the dialog layer registry');
+	return layers.size;
 }
 
 describe('HandleClaimDialog', () => {
@@ -27,7 +37,7 @@ describe('HandleClaimDialog', () => {
 	function open(overrides: DialogOverrides = {}) {
 		const onOpenChange = vi.fn();
 		const onClaimed = vi.fn();
-		render(HandleClaimDialog, {
+		const view = render(HandleClaimDialog, {
 			props: {
 				open: true,
 				onOpenChange,
@@ -37,8 +47,29 @@ describe('HandleClaimDialog', () => {
 				...overrides
 			}
 		});
-		return { onOpenChange, onClaimed };
+		return { onOpenChange, onClaimed, unmount: view.unmount };
 	}
+
+	it('fully tears down an immediately unmounted dialog', async () => {
+		vi.useFakeTimers();
+		try {
+			const { onOpenChange, unmount } = open();
+			unmount();
+
+			// Flush the dialog primitive's deferred listener setup and body-lock
+			// cleanup, then prove a later outside interaction cannot reach the
+			// destroyed dialog.
+			await vi.advanceTimersByTimeAsync(25);
+			expect(dismissibleLayerCount()).toBe(0);
+			document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+			await vi.advanceTimersByTimeAsync(11);
+
+			expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull();
+			expect(onOpenChange).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 
 	it('has an aria-live status region wired to the input', () => {
 		open();
