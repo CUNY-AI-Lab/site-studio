@@ -124,6 +124,19 @@ Local ports:
 
 ## Important Constraints
 
+### Test value
+
+Tests should prove actions a person can take and the boundaries those actions
+depend on. Keep unit tests for pure helpers, process tests for the Hono route
+and storage contract, Worker tests for Cloudflare binding behavior, and browser
+acceptance for visible navigation, project creation, editing, preview execution,
+version recovery, downloads, reload, and cleanup. Browser tests use accessible
+controls and assert executed preview outcomes; they do not inspect CSS classes,
+component internals, or exact model prose. Use deterministic model or service
+fakes at the smallest boundary needed for a repeatable run, and inject failures
+only when a deliberate recovery path is being tested. Model prose and response
+quality are advisory; a green test must not be presented as evidence of either.
+
 - Prefer editing the Worker app, not inventing parallel backend code
 - Keep preview, publishing, and public serving in that same Worker
 - Keep the app static-file oriented; runtime build tools are out of scope

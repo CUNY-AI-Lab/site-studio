@@ -145,12 +145,24 @@ Useful checks:
 
 ```bash
 bun run check
+bun run e2e:local
 bun run --cwd packages/app deploy --dry-run
 ```
 
-The test suite contains unit, component, and in-process route tests. It is not
-labelled E2E. Acceptance of authoring or publishing requires a real browser and
-real Worker/resource boundary.
+`bun run e2e:local` builds the frontend, starts a real local Bun process with
+the production Hono app, and uses Playwright to create, edit, upload, preview,
+version, restore, download, export, reload, and delete a project. The browser
+asserts authored HTML, CSS, and a nested JavaScript module actually execute.
+The process uses deterministic in-memory R2/KV bindings so the product's
+conditional CSRF/CAS paths remain active; Wrangler's local R2 emulator does not
+implement the required conditional first-write operation. It does not start a
+Durable Object or call a model/provider, so chat, model behavior, and native
+Cloudflare binding semantics remain separate checks. The test cleans up its
+project before exiting.
+
+The remaining test suite contains unit, component, in-process route, and
+Worker-boundary tests. Those labels are intentional: acceptance of authoring
+or publishing requires a real browser and real Worker/resource boundary.
 
 `bun run e2e:live` exercises the standalone production Worker with short-lived
 app and Gateway identity JWTs supplied through the environment. It requires an

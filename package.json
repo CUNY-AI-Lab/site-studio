@@ -15,6 +15,7 @@
     "dev": "bun run --parallel --filter @site-studio/app --filter @site-studio/frontend dev",
     "clean": "rm -rf packages/*/dist packages/*/node_modules node_modules",
     "lint": "biome lint . && oxlint .",
+    "e2e:local": "bun run build && python3 scripts/local-browser-e2e.py",
     "e2e:live": "node scripts/live-product-e2e.mjs",
     "test:workflow": "node --test scripts/ci-workflow-security.test.mjs",
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
