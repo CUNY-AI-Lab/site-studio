@@ -43,7 +43,9 @@ Model traffic goes directly from the app Worker to the CAIL Gateway through
 `@cuny-ai-lab/cail-client` and `@ai-sdk/openai-compatible` at
 the canonical `https://tools.ailab.gc.cuny.edu/v1` API. The checked-in
 `CAIL_API_BASE` is the canonical origin; the shared client owns the `/v1`
-model and quota paths. The app forwards only the separately verified,
+model and quota paths. The active default is the Workers AI catalog model
+`@cf/zai-org/glm-5.2`; any configured override must also be a `@cf/...` model.
+The app forwards only the separately verified,
 subject-bound gateway identity and stamps `X-CAIL-App: site-studio`. Site Studio
 has no provider keys and does not impose an output-token or model-step cap.
 Billed model POSTs use `maxRetries: 0` because an uncertain automatic retry can
@@ -94,6 +96,38 @@ Slashless public roots redirect to the trailing-slash form so relative assets
 resolve beneath the site root. When public ingress mounts the Worker under the
 path in `PUBLISHED_BASE_URL`, redirects and styled 404 home links retain that
 path; loopback development remains rooted at `/`.
+
+## Browser lifecycle ownership
+
+The preview component owns one iframe navigation at a time. Authored pages run
+under `Content-Security-Policy: sandbox allow-scripts` without
+`allow-same-origin`, so they have an opaque origin even though the app Worker
+serves their bytes. The Worker rewrites linked project resources with
+short-lived, project-and-path-scoped preview capabilities; successful authored
+JavaScript and font responses allow uncredentialed wildcard CORS so those
+resources can load from the opaque document. A preview becomes ready only when
+the active resolved child reports its matching navigation token. A failed or
+stalled navigation remains retryable.
+
+The browser download helper owns Blob URL cleanup. It removes the temporary
+anchor immediately but delays URL revocation until the browser has had time to
+commit the download; do not replace that with same-stack revocation.
+
+The chat component and the maintained WebSocket transport jointly own a model
+turn. Stop cancels the full server turn, suppresses its late frames and queued
+continuations, and leaves a later request independent. An unexpected disconnect
+reconnects with bounded backoff while the project remains active, refreshes the
+CSRF token once per reconnect cycle, and resumes only a request still
+owned by the same authenticated subject. A post-persistence commit or an
+authenticated history read repairs a stream that ended before the saved turn
+arrived. Responses from an older project, request generation, or superseded
+history read cannot overwrite newer visible work.
+
+Version-history create and restore are single-flight operations owned by the
+history dialog. Ownership is taken before any pending editor save is awaited;
+while one operation is pending, its create and restore controls stay disabled.
+Snapshot-list responses are latest-wins so a slow response from an earlier open
+or project cannot replace the current list.
 
 ## Local development
 

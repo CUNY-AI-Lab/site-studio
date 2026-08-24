@@ -46,7 +46,8 @@ site-studio/
 
 - Cloudflare Worker + Hono
 - Native R2, KV, and Durable Object bindings
-- Same-origin preview and public-site serving
+- Preview and public-site bytes served by the app Worker; authored documents
+  execute in an opaque-origin sandbox and cannot rely on app-origin authority
 - Verified CAIL identity on every product route
 - One-time first-login import from a resolvable legacy R2 session
 
@@ -57,6 +58,8 @@ site-studio/
 - Project-scoped instance identity: `userId:projectId`
 - `codemode` wraps project operations so the model can write JavaScript that orchestrates multi-step work in a Dynamic Worker sandbox
 - `ask_user_question` remains available for structured clarification
+- The active default model is the Workers AI catalog id
+  `@cf/zai-org/glm-5.2`; any `CAIL_MODEL` override must remain a `@cf/...` id
 
 ## Frontend Transport
 
@@ -136,6 +139,10 @@ Local ports:
   root, and unauthenticated no-store-401 probes are release gates. There is no
   checked-in staging Worker/storage topology, so there is no PR production
   preview.
-- Preserve same-origin assumptions for preview and thumbnail capture unless deliberately redesigned
+- Preserve the opaque-origin preview boundary. Authored documents never receive
+  `allow-same-origin`; linked preview resources use short-lived,
+  project-and-path-scoped capabilities, and successful authored JavaScript and
+  font responses use uncredentialed wildcard CORS so they can load from that
+  opaque origin.
 - Use Svelte 5 runes patterns in frontend code
 - Default to execute-plus-clarify, not approval-first UX
