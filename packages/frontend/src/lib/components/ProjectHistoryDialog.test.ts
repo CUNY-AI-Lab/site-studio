@@ -91,6 +91,7 @@ describe('ProjectHistoryDialog', () => {
 
 		expect(onBeforeCreateSnapshot).toHaveBeenCalledOnce();
 		expect(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		flush.resolve(true);
@@ -128,6 +129,7 @@ describe('ProjectHistoryDialog', () => {
 
 		expect(onBeforeRestore).toHaveBeenCalledOnce();
 		expect(screen.getByRole('button', { name: 'Restoring...' })).toBeDisabled();
+		expect(screen.getByRole('button', { name: 'Save version' })).toBeDisabled();
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		flush.resolve(true);

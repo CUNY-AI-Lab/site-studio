@@ -169,10 +169,10 @@
 					id="snapshot-label"
 					bind:value={snapshotLabel}
 					placeholder="Optional note for this checkpoint"
-					disabled={isCreating}
+					disabled={isCreating || restoringSnapshotId !== null}
 				/>
 			</div>
-			<Button onclick={handleCreateSnapshot} disabled={isCreating}>
+			<Button onclick={handleCreateSnapshot} disabled={isCreating || restoringSnapshotId !== null}>
 				{#if isCreating}
 					<Loader2 size={14} class="animate-spin" />
 					Creating...
@@ -215,7 +215,7 @@
 							variant="outline"
 							size="sm"
 							onclick={() => handleRestore(snapshot.id)}
-							disabled={restoringSnapshotId !== null}
+							disabled={isCreating || restoringSnapshotId !== null}
 						>
 							{#if restoringSnapshotId === snapshot.id}
 								<Loader2 size={14} class="animate-spin" />
