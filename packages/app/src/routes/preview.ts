@@ -216,7 +216,7 @@ async function servePreviewFile(
       "X-Frame-Options": "SAMEORIGIN",
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
-      ...servedContentHeaders()
+      ...servedContentHeaders(contentType)
     }
   });
 }

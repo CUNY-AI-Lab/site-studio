@@ -630,7 +630,7 @@ export function publishedResponseHeaders(filePath: string, object: R2ObjectBody)
   // containment (sandbox allow-scripts + nosniff + no-referrer). These COMPOSE
   // with the caching validators above — the CSP/security keys and the caching
   // keys are disjoint, so neither clobbers the other.
-  for (const [key, value] of Object.entries(servedContentHeaders())) {
+  for (const [key, value] of Object.entries(servedContentHeaders(contentType))) {
     headers.set(key, value);
   }
   return headers;
