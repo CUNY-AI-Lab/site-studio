@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { HTMLRewriter as NodeHTMLRewriter } from "htmlrewriter";
 import { z } from "zod";
 import { createPreviewRouter } from "../src/routes/preview.ts";
@@ -117,9 +118,14 @@ function createEnvironment() {
       '<source srcset="/images/small.png 1x, /images/large.png 2x">',
       '<script type="module" src="/scripts/main.js"></script>'
     ].join(""),
-    [`${prefix}/scripts/main.js`]: "import './nested.js'; void import('/lazy.js');",
-    [`${prefix}/scripts/nested.js`]: "import './deep.js';",
-    [`${prefix}/scripts/deep.js`]: "export const ready = true;",
+    [`${prefix}/scripts/main.js`]: [
+      "import { nestedMarker } from './nested.js';",
+      "globalThis.entryMarker = 'entry-module-ok';",
+      "globalThis.nestedMarker = nestedMarker;",
+      "if (globalThis.loadLazy) void import('/lazy.js');"
+    ].join("\n"),
+    [`${prefix}/scripts/nested.js`]: "import { deepMarker } from './deep.js'; export const nestedMarker = `nested-${deepMarker}`;",
+    [`${prefix}/scripts/deep.js`]: "export const deepMarker = 'module-ok';",
     [`${prefix}/lazy.js`]: "export const lazy = true;",
     [`${prefix}/images/small.png`]: "small",
     [`${prefix}/images/large.png`]: "large",
@@ -139,6 +145,15 @@ function createEnvironment() {
 
 function createApp() {
   const app = new Hono();
+  app.get("/boundary/no-cors.js", (context) =>
+    context.body("globalThis.entryMarker = 'must-not-run';", 200, {
+      "Content-Type": "application/javascript"
+    })
+  );
+  app.use("/preview/*", cors({
+    origin: (origin) => origin === "https://tools.ailab.gc.cuny.edu" ? origin : null,
+    credentials: true
+  }));
   app.use("/preview/*", previewTokenAuth);
   app.use("/preview/:id", previewTokenAuth);
   app.use("/preview/*", async (context, next) => {
@@ -194,6 +209,26 @@ async function readServerPort(child) {
   }
 }
 
+async function runOpaqueModuleClient(entryUrl) {
+  const client = Bun.spawn([
+    "node",
+    "--no-warnings",
+    "--experimental-vm-modules",
+    `${import.meta.dir}/opaque-module-client.mjs`,
+    entryUrl
+  ], {
+    cwd: import.meta.dir,
+    stdout: "pipe",
+    stderr: "pipe"
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(client.stdout).text(),
+    new Response(client.stderr).text(),
+    client.exited
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 async function runContract() {
   const child = Bun.spawn([process.execPath, import.meta.path, "--server"], {
     cwd: import.meta.dir,
@@ -210,6 +245,28 @@ async function runContract() {
     const pageToken = requireMatch(page, /scripts\/main\.js\?v=42&pt=([0-9a-f]{64})/, "page token");
     if (!page.includes(`images/large.png?v=42&pt=${pageToken} 2x`)) {
       throw new Error("Preview page did not rewrite every srcset candidate");
+    }
+
+    const rejectedExecution = await runOpaqueModuleClient(`${origin}/boundary/no-cors.js`);
+    if (
+      rejectedExecution.exitCode === 0
+      || !rejectedExecution.stderr.includes("Opaque-origin module CORS rejected")
+    ) {
+      throw new Error("Opaque module client did not reject the no-CORS negative control");
+    }
+
+    const opaqueClient = await runOpaqueModuleClient(
+      `${origin}/preview/${PROJECT_ID}/scripts/main.js?v=42&pt=${pageToken}`
+    );
+    if (opaqueClient.exitCode !== 0) {
+      throw new Error(`Opaque module client failed: ${opaqueClient.stderr || opaqueClient.stdout}`);
+    }
+    const opaqueExecution = JSON.parse(opaqueClient.stdout);
+    if (
+      opaqueExecution.entryMarker !== "entry-module-ok"
+      || opaqueExecution.nestedMarker !== "nested-module-ok"
+    ) {
+      throw new Error("Opaque-origin module graph did not execute through the preview capability");
     }
 
     const main = await expectResponse(
@@ -272,7 +329,7 @@ async function runContract() {
     if (!publishedModule.includes('import("/site-studio/u/janedoe/site/lazy.js")')) {
       throw new Error("Published root-relative module import missed the configured mount");
     }
-    if (!publishedModule.includes("import './nested.js'")) {
+    if (!publishedModule.includes("from './nested.js'")) {
       throw new Error("Published relative module import changed unexpectedly");
     }
     await expectResponse(
@@ -286,7 +343,7 @@ async function runContract() {
       "published dynamic module"
     );
 
-    console.log("preview route contract: nested preview capabilities and public mount rewriting crossed a child HTTP process");
+    console.log("preview route contract: opaque-origin modules, nested capabilities, and public mounts crossed child HTTP/process boundaries");
   } finally {
     child.kill();
     await child.exited;

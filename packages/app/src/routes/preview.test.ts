@@ -516,6 +516,7 @@ describe("preview file resolution", () => {
     const html = await page.text();
     const pageToken = /scripts\/main\.js\?v=42&pt=([0-9a-f]{64})/.exec(html)?.[1];
     expect(page.status).toBe(200);
+    expect(page.headers.get("Access-Control-Allow-Origin")).toBeNull();
     expect(pageToken).toMatch(/^[0-9a-f]{64}$/);
     expect(html).toContain(`images/small.png?v=42&pt=${pageToken} 1x`);
     expect(html).toContain(`images/large.png?v=42&pt=${pageToken} 2x`);
@@ -534,6 +535,8 @@ describe("preview file resolution", () => {
     const mainSource = await main.text();
     const moduleToken = /nested\.js\?v=42&pt=([0-9a-f]{64})/.exec(mainSource)?.[1];
     expect(main.status).toBe(200);
+    expect(main.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(main.headers.get("Access-Control-Allow-Credentials")).toBeNull();
     expect(moduleToken).toMatch(/^[0-9a-f]{64}$/);
     expect(mainSource).toContain(`/preview/proj/lazy.js?v=42&pt=${moduleToken}`);
     expect(JSON.parse(kv.store.get(`preview-token:${moduleToken}`) || "{}").allowedPaths).toEqual([
@@ -564,6 +567,7 @@ describe("preview file resolution", () => {
     expect(deep.status).toBe(200);
     expect(await deep.text()).toContain("ready = true");
     expect(responsiveImage.status).toBe(200);
+    expect(responsiveImage.headers.get("Access-Control-Allow-Origin")).toBeNull();
     expect(await responsiveImage.text()).toBe("large");
   });
 
@@ -977,6 +981,8 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     const source = await module.text();
     expect(module.status).toBe(200);
+    expect(module.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(module.headers.get("Access-Control-Allow-Credentials")).toBeNull();
     expect(source).toContain("import '/site-studio/u/janedoe/site/scripts/nested.js'");
     expect(source).toContain("import('./relative.js')");
     expect(module.headers.get("ETag")).toBeNull();

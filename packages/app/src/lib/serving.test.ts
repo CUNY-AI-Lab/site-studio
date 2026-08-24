@@ -65,13 +65,20 @@ describe("app serving content-types (SS-8)", () => {
 
 describe("app serving security headers", () => {
   it("emits the load-bearing opaque-origin CSP (sandbox, NO allow-same-origin)", () => {
-    const headers = servedContentHeaders();
+    const headers = servedContentHeaders("text/html; charset=utf-8");
     expect(headers["Content-Security-Policy"]).toBe("sandbox allow-scripts");
     expect(headers["Content-Security-Policy"]).not.toContain("allow-same-origin");
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(headers["Referrer-Policy"]).toBe("no-referrer");
     expect(headers).not.toHaveProperty("Content-Disposition");
     expect(headers["Content-Security-Policy"]).not.toContain("default-src");
+    expect(headers).not.toHaveProperty("Access-Control-Allow-Origin");
+  });
+
+  it("allows only authored JavaScript to satisfy opaque-origin module CORS", () => {
+    const headers = servedContentHeaders("application/javascript; charset=utf-8");
+    expect(headers).toMatchObject({ "Access-Control-Allow-Origin": "*" });
+    expect(headers).not.toHaveProperty("Access-Control-Allow-Credentials");
   });
 
   it("keeps generated public 404s revalidated and non-embeddable", () => {
