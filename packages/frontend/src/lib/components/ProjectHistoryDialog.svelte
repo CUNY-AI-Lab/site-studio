@@ -101,22 +101,21 @@
 			isLoading = false;
 			snapshotLabel = '';
 			errorMessage = '';
-			restoringSnapshotId = null;
 		}
 	});
 
 	async function handleCreateSnapshot() {
-		if (!projectId || isCreating) {
+		if (!projectId || isCreating || restoringSnapshotId !== null) {
 			return;
 		}
 
+		isCreating = true;
 		try {
 			const canCreate = onBeforeCreateSnapshot ? await onBeforeCreateSnapshot() : true;
 			if (!canCreate) {
 				return;
 			}
 
-			isCreating = true;
 			errorMessage = '';
 			const snapshot = await createProjectSnapshot(projectId, snapshotLabel.trim() || undefined);
 			snapshots = [snapshot, ...snapshots];
@@ -129,17 +128,17 @@
 	}
 
 	async function handleRestore(snapshotId: string) {
-		if (!projectId || restoringSnapshotId) {
+		if (!projectId || isCreating || restoringSnapshotId !== null) {
 			return;
 		}
 
+		restoringSnapshotId = snapshotId;
 		try {
 			const canRestore = onBeforeRestore ? await onBeforeRestore() : true;
 			if (!canRestore) {
 				return;
 			}
 
-			restoringSnapshotId = snapshotId;
 			errorMessage = '';
 			await restoreProjectSnapshot(projectId, snapshotId);
 			await loadSnapshots();

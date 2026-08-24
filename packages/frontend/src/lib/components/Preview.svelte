@@ -2,15 +2,22 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { RefreshCw } from 'lucide-svelte';
+	import { z } from 'zod';
 
 	let { projectId }: { projectId: string } = $props();
 
 	const PREVIEW_NAVIGATION_TIMEOUT_MS = 15_000;
+	const previewReadyMessageSchema = z.object({
+		type: z.literal('site-studio-preview-ready'),
+		token: z.string()
+	});
 
 	let previewUrl = $derived(resolvePath(`/preview/${projectId}/index.html`));
 	let previewVersion = $state(0);
-	let previewSource = $derived(`${previewUrl}?v=${previewVersion}`);
+	let previewReadyToken = $derived(String(previewVersion));
+	let previewSource = $derived(`${previewUrl}?v=${previewVersion}&ready=${previewReadyToken}`);
 	let navigationState = $state<'loading' | 'ready' | 'failed'>('loading');
+	let previewFrame = $state<HTMLIFrameElement>();
 
 	$effect(() => {
 		const activeSource = previewSource;
@@ -24,12 +31,21 @@
 		return () => clearTimeout(timeout);
 	});
 
+	$effect(() => {
+		const activeToken = previewReadyToken;
+		function handlePreviewReady(event: MessageEvent): void {
+			if (event.source !== previewFrame?.contentWindow) return;
+			const message = previewReadyMessageSchema.safeParse(event.data);
+			if (!message.success || message.data.token !== activeToken) return;
+			navigationState = 'ready';
+		}
+
+		window.addEventListener('message', handlePreviewReady);
+		return () => window.removeEventListener('message', handlePreviewReady);
+	});
+
 	export function refresh() {
 		previewVersion += 1;
-	}
-
-	function handleIframeLoad(): void {
-		navigationState = 'ready';
 	}
 
 	function handleIframeError(): void {
@@ -63,11 +79,11 @@
 		longer read `contentDocument` (it is cross-origin once opaque).
 	-->
 	<iframe
+		bind:this={previewFrame}
 		src={previewSource}
 		title="Site Preview"
 		sandbox="allow-scripts"
 		style="width: 100%; height: 100%; border: none;"
-		onload={handleIframeLoad}
 		onerror={handleIframeError}
 	></iframe>
 </div>

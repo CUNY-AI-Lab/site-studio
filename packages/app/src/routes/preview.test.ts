@@ -160,6 +160,20 @@ describe("preview file resolution", () => {
     expect(await res.text()).toContain("Home");
   });
 
+  it("adds a successful child readiness signal only to resolved preview HTML", async () => {
+    const resolved = await get("index.html?ready=7", "text/html");
+    const missing = await get("missing.html?ready=7", "text/html");
+    const invalid = await get("index.html?ready=not-a-token", "text/html");
+
+    expect(resolved.status).toBe(200);
+    expect(await resolved.text()).toContain(
+      'parent.postMessage({"type":"site-studio-preview-ready","token":"7"},"*")'
+    );
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).not.toContain("site-studio-preview-ready");
+    expect(await invalid.text()).not.toContain("site-studio-preview-ready");
+  });
+
   it("serves a directory's index.html for a trailing-slash path", async () => {
     await storage.writeFile(userId, "proj", "docs/index.html", '<a href="./?x">Directory</a><h1>Docs</h1>');
     const res = await get("docs/");
@@ -810,6 +824,15 @@ describe("preview token authentication", () => {
     );
     expect(asset.status).toBe(200);
     expect(await asset.text()).toBe("hero");
+
+    const font = await app.request(
+      `http://site-studio.test/preview/proj/fonts/body.woff2?pt=${child}`,
+      {},
+      createEnv(bucket, kv)
+    );
+    expect(font.status).toBe(200);
+    expect(font.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(font.headers.get("Access-Control-Allow-Credentials")).toBeNull();
   });
 
   it("rewrites standalone SVG URLs with a scoped child preview grant", async () => {
@@ -959,6 +982,7 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     await storage.writeFile(userId, slug, "scripts/nested.js", "export const nested = true;");
     await storage.writeFile(userId, slug, "scripts/relative.js", "export const relative = true;");
+    await storage.writeFile(userId, slug, "fonts/body.woff2", "font");
     const env = createEnv(bucket, createMockKV(), {
       PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
     });
@@ -994,6 +1018,23 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     expect(nested.status).toBe(200);
     expect(await nested.text()).toContain("nested = true");
+
+    const font = await app.request(
+      "https://site-studio.test/u/janedoe/site/fonts/body.woff2",
+      {},
+      env
+    );
+    expect(font.status).toBe(200);
+    expect(font.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(font.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+
+    const missingFont = await app.request(
+      "https://site-studio.test/u/janedoe/site/fonts/missing.woff2",
+      {},
+      env
+    );
+    expect(missingFont.status).toBe(404);
+    expect(missingFont.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
   it("preserves an external base and its governed URLs on published HTML", async () => {

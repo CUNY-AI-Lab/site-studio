@@ -71,11 +71,14 @@ deletes it after import closes. No subject continuity cookie is minted.
 Preview and published responses use an opaque sandbox origin
 (`Content-Security-Policy: sandbox allow-scripts` without
 `allow-same-origin`), `nosniff`, and `no-referrer`. System objects are never
-served. Authored JavaScript responses allow wildcard, uncredentialed CORS so
-module graphs can load from that opaque origin; other authored resource types
-do not receive that header. Preview grants remain the read boundary: they are
-random, short-lived, project-bound, and limited to normalized resources linked
-by the rendered document. Chat Markdown strips images and sanitizes links.
+served. Successfully resolved authored JavaScript and font responses allow
+wildcard, uncredentialed CORS so module graphs and fonts can load from that
+opaque origin; missing responses and other authored resource types do not
+receive that header. Preview grants remain the read boundary: they are random,
+short-lived, project-bound, and limited to normalized resources linked by the
+rendered document. Resolved preview HTML reports its navigation token after the
+child load completes, so a browser-generated error document cannot clear the
+preview failure state. Chat Markdown strips images and sanitizes links.
 
 ## Storage admission and mutation recovery
 

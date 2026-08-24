@@ -21,6 +21,7 @@ import { isLoopbackOrigin } from "../lib/csrf";
 import { mintPreviewToken } from "../lib/preview-token";
 import { FileNotFoundError, R2ProjectStorage } from "../storage/r2";
 import { getLoggingContext, type LoggingVariables } from "../lib/logging";
+import { addPreviewReadySignal } from "../lib/preview-ready";
 
 type AppContext = Context<{
   Bindings: Env;
@@ -162,7 +163,10 @@ async function servePreviewFile(
       siteRootPath,
       requestedPath
     );
-    if (rewritten !== html) content = new TextEncoder().encode(rewritten);
+    const signaled = contentType.startsWith("text/html")
+      ? await addPreviewReadySignal(rewritten, c.req.query("ready") || undefined)
+      : rewritten;
+    if (signaled !== html) content = new TextEncoder().encode(signaled);
   } else if (contentType.startsWith("text/css")) {
     const version = c.req.query("v") || undefined;
     const css = new TextDecoder().decode(content);

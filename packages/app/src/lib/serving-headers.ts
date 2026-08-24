@@ -13,11 +13,15 @@ export function servedContentHeaders(contentType: string) {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer"
   } satisfies Record<string, string>;
-  if (contentType.includes("javascript")) {
+  const needsOpaqueOriginCors = contentType.includes("javascript")
+    || contentType.startsWith("font/")
+    || contentType === "application/vnd.ms-fontobject";
+  if (needsOpaqueOriginCors) {
     // A sandboxed authored document has an opaque origin, so its module graph
-    // is a cross-origin CORS fetch even when the URLs share the app host. The
-    // preview capability in the URL remains the authorization boundary; the
-    // wildcard permits only the resulting uncredentialed response to be read.
+    // and authored fonts are cross-origin CORS fetches even when their URLs
+    // share the app host. The preview capability in the URL remains the
+    // authorization boundary; the wildcard permits only the resulting
+    // uncredentialed response to be read.
     return { ...headers, "Access-Control-Allow-Origin": "*" };
   }
   return headers;

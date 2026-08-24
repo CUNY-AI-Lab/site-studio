@@ -15,6 +15,7 @@
 	import { csrfFetch } from '$lib/api/csrf';
 	import { apiResponseFetch, getErrorMessage, handleApiError } from '$lib/api/errors';
 	import { toast } from '$lib/toast.svelte';
+	import { downloadBlob } from '$lib/browser/download';
 
 	let {
 		files = [],
@@ -72,14 +73,7 @@
 			if (!response.ok) throw new Error('Download failed');
 
 			const blob = await response.blob();
-			const url = window.URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = filePath.split('/').pop() || 'download';
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			window.URL.revokeObjectURL(url);
+			downloadBlob(blob, filePath.split('/').pop() || 'download');
 		} catch (error) {
 			console.error('Error downloading file:', error);
 			toast.error('Failed to download file. Please try again.');

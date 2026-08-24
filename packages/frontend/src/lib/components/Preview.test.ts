@@ -14,27 +14,48 @@ describe('Preview lifecycle', () => {
 		return frame;
 	}
 
-	it('owns the loading state with the active iframe load', async () => {
+	it('becomes ready only after the active successful child reports its HTTP-backed token', async () => {
 		const rendered = render(Preview, { props: { projectId: 'project-a' } });
 		const frame = previewFrame(rendered.container);
 		expect(rendered.container.querySelectorAll('iframe')).toHaveLength(1);
+		expect(frame.src).toContain('?v=0&ready=0');
 
 		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
 		await fireEvent.load(frame);
+		flushSync();
+		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
+
+		window.dispatchEvent(new MessageEvent('message', {
+			data: { type: 'site-studio-preview-ready', token: 'wrong' },
+			source: frame.contentWindow
+		}));
+		flushSync();
+		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
+
+		window.dispatchEvent(new MessageEvent('message', {
+			data: { type: 'site-studio-preview-ready', token: '0' },
+			source: frame.contentWindow
+		}));
 		flushSync();
 		expect(rendered.container.querySelector('.loading-overlay')).toBeNull();
 
 		rendered.component.refresh();
 		flushSync();
-		expect(frame.src).toContain('?v=1');
+		expect(frame.src).toContain('?v=1&ready=1');
 		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
 
 		// A second refresh supersedes the first without creating a second frame
 		// whose load event could strand the overlay over the usable preview.
 		rendered.component.refresh();
 		flushSync();
-		expect(frame.src).toContain('?v=2');
+		expect(frame.src).toContain('?v=2&ready=2');
 		await fireEvent.load(frame);
+		flushSync();
+		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
+		window.dispatchEvent(new MessageEvent('message', {
+			data: { type: 'site-studio-preview-ready', token: '2' },
+			source: frame.contentWindow
+		}));
 		flushSync();
 		expect(rendered.container.querySelector('.loading-overlay')).toBeNull();
 	});
@@ -49,7 +70,7 @@ describe('Preview lifecycle', () => {
 
 		await fireEvent.click(rendered.getByRole('button', { name: 'Retry preview' }));
 		flushSync();
-		expect(frame.src).toContain('?v=1');
+		expect(frame.src).toContain('?v=1&ready=1');
 		expect(rendered.container.querySelector('.loading-overlay')).not.toBeNull();
 		expect(rendered.queryByRole('alert')).toBeNull();
 	});
