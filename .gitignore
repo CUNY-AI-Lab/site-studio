@@ -16,6 +16,8 @@ build/
 # Generated JS files from TS
 *.js
 !*.config.js
+# Checked-in browser preview fixtures are authored test inputs, not generated JS.
+!scripts/fixtures/*.js
 
 # Logs
 *.log

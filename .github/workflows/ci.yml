@@ -30,6 +30,10 @@ jobs:
       - name: Audit high-severity dependencies
         run: bun audit --audit-level=high
       - run: bun run check
+      - name: Install Chromium for local browser acceptance
+        run: bun run e2e:install:ci
+      - name: Run local browser acceptance
+        run: bun run e2e:local
       - name: Validate Worker bundle and config
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
 
