@@ -5,13 +5,8 @@ import { createServer, type AddressInfo } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  chromium,
-  expect,
-  type BrowserContext,
-  type FrameLocator,
-  type Page,
-} from "@playwright/test";
+import { chromium, expect, type BrowserContext, type FrameLocator, type Page } from "@playwright/test";
+import { unzipSync } from "../packages/app/node_modules/fflate";
 import { z } from "zod";
 
 /**
@@ -32,16 +27,70 @@ const WORKER_SCRIPT = resolve(APP_DIR, "scripts/local-browser-worker.ts");
 const CHILD_FIXTURE = resolve(ROOT, "scripts/fixtures/browser-child.js");
 const MODULE_FIXTURE = resolve(ROOT, "scripts/fixtures/browser-preview-script.js");
 
+type BrowserSocketFrame = {
+  type: string;
+  id?: string;
+  requestId?: string;
+  init?: { body?: string };
+  messages?: BrowserSocketMessage[];
+};
+
+type BrowserSocketMessage = {
+  role: "user" | "assistant";
+  parts: Array<{ type: string; text?: string }>;
+};
+
+const browserSocketFrameSchema = z
+  .object({
+    type: z.string(),
+    id: z.string().optional(),
+    requestId: z.string().optional(),
+    init: z.object({ body: z.string().optional() }).optional(),
+    messages: z
+      .array(
+        z.object({
+          role: z.enum(["user", "assistant"]),
+          parts: z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()),
+        }).passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+type BrowserSocketEvent = {
+  payload: string | Buffer;
+};
+
+function parseBrowserSocketFrame(payload: BrowserSocketEvent): BrowserSocketFrame | null {
+  const stringPayload = z.string().safeParse(payload.payload);
+  let text: string;
+  if (stringPayload.success) {
+    text = stringPayload.data;
+  } else {
+    const bufferPayload = z.instanceof(Buffer).safeParse(payload.payload);
+    if (!bufferPayload.success) return null;
+    text = bufferPayload.data.toString();
+  }
+  try {
+    const parsed = browserSocketFrameSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 type Identity = {
   readonly jwks: string;
   readonly issuer: string;
   readonly token: string;
+  readonly gatewayToken: string;
 };
 
 const identitySchema = z.object({
   jwks: z.string(),
   issuer: z.string(),
   token: z.string(),
+  gatewayToken: z.string(),
 });
 
 type WorkerHandle = {
@@ -98,7 +147,7 @@ async function runIdentity(): Promise<Identity> {
   return identitySchema.parse(JSON.parse(output));
 }
 
-function startWorker(jwks: string, issuer: string, port: number): WorkerHandle {
+function startWorker(jwks: string, issuer: string, token: string, gatewayToken: string, port: number): WorkerHandle {
   const output: string[] = [];
   const environment = {
     ...process.env,
@@ -106,6 +155,8 @@ function startWorker(jwks: string, issuer: string, port: number): WorkerHandle {
     SITE_STUDIO_FRONTEND_BUILD: BUILD_DIR,
     CAIL_IDENTITY_JWKS: jwks,
     CAIL_IDENTITY_ISSUER: issuer,
+    CAIL_LOCAL_BROWSER_IDENTITY_JWT: token,
+    CAIL_LOCAL_BROWSER_GATEWAY_JWT: gatewayToken,
   };
   const child = spawn("bun", [WORKER_SCRIPT], {
     cwd: APP_DIR,
@@ -128,7 +179,9 @@ async function waitForWorker(baseUrl: string, child: ChildProcessWithoutNullStre
       throw new Error(`local Site Studio process exited ${String(child.exitCode)}`);
     }
     try {
-      const response = await fetch(`${baseUrl}/`, { signal: AbortSignal.timeout(1_000) });
+      const response = await fetch(`${baseUrl}/`, {
+        signal: AbortSignal.timeout(1_000),
+      });
       if (response.status === 200) return;
     } catch {
       // The process can need a few retries while Bun loads the Worker module.
@@ -187,7 +240,8 @@ async function waitForPreview(page: Page, text: string): Promise<void> {
     await page.screenshot({ path: debugPath, fullPage: true });
     console.error(`preview debug screenshot: ${debugPath}`);
     console.error(
-      `preview frames: ${page.frames()
+      `preview frames: ${page
+        .frames()
         .map((frame) => `${frame.url()} (${frame.name()})`)
         .join("; ")}`,
     );
@@ -211,7 +265,10 @@ async function waitForPreview(page: Page, text: string): Promise<void> {
 async function waitForPreviewBackground(page: Page, expected: string): Promise<void> {
   await expect
     .poll(
-      async () => await previewFrame(page).locator("body").evaluate((element) => getComputedStyle(element).backgroundColor),
+      async () =>
+        await previewFrame(page)
+          .locator("body")
+          .evaluate((element) => getComputedStyle(element).backgroundColor),
       { timeout: 15_000 },
     )
     .toBe(expected);
@@ -229,15 +286,29 @@ async function closeCodeEditor(page: Page): Promise<void> {
 
 async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
   const browser = await chromium.launch({ headless: true });
-  const context: BrowserContext = await browser.newContext({ acceptDownloads: true });
+  const context: BrowserContext = await browser.newContext({
+    acceptDownloads: true,
+  });
   try {
     await context.addInitScript({
       content: "localStorage.setItem('site-studio-onboarding-completed', 'true');",
     });
     const page = await context.newPage();
+    const receivedSocketFrames: BrowserSocketFrame[] = [];
+    const sentSocketFrames: BrowserSocketFrame[] = [];
+    page.on("websocket", (websocket) => {
+      websocket.on("framereceived", (payload) => {
+        const frame = parseBrowserSocketFrame(payload);
+        if (frame) receivedSocketFrames.push(frame);
+      });
+      websocket.on("framesent", (payload) => {
+        const frame = parseBrowserSocketFrame(payload);
+        if (frame) sentSocketFrames.push(frame);
+      });
+    });
     await installAuthRoute(page, baseUrl, token);
 
-    await page.goto(`${baseUrl}/`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Site Studio" })).toBeVisible();
     await expect(page.getByText("No projects yet", { exact: true })).toBeVisible();
 
@@ -252,15 +323,81 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await expect(page.getByText(projectName, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Show code editor" })).toBeVisible();
 
+    // The browser now crosses the real app route into a local
+    // SITE_BUILDER_AGENT binding. The binding emits one deterministic tool
+    // turn and a post-persistence commit frame; no model or provider call is
+    // involved.
+    const chatInput = page.getByRole("textbox", {
+      name: "Message to the assistant",
+    });
+    await expect(chatInput).toBeVisible();
+    const completionMessages = () =>
+      page.getByText("The local tool completed successfully.", {
+        exact: false,
+      });
+    const completionText = () => completionMessages().first();
+    await chatInput.fill("Run the local tool.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(completionText()).toBeVisible();
+    await expect(page.getByRole("button", { name: /Working on your site/ })).toBeVisible();
+    const completedTurn = () => receivedSocketFrames.some((frame) =>
+      frame.type === "site_studio_chat_committed"
+      && frame.messages?.some((message) =>
+        message.role === "assistant"
+        && message.parts.some((part) => part.text?.includes("The local tool completed successfully.")),
+      ) === true,
+    );
+    await expect.poll(completedTurn).toBe(true);
+
+    // Stop a held turn from the visible control, then prove a later request is
+    // independent. The held local agent waits for the cancel frame; there is
+    // no sleep or model timeout in this path.
+    const completedMessagesBeforeStop = await completionMessages().count();
+    await chatInput.fill("Hold this turn so I can stop it.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByRole("button", { name: "Stop request" })).toBeVisible();
+    const heldRequestId = () =>
+      sentSocketFrames
+        .filter((frame) => frame.type === "cf_agent_use_chat_request")
+        .map((frame) => {
+          const body = frame.init?.body ?? "";
+          return frame.id && body.includes("Hold this turn") ? frame.id : null;
+        })
+        .find((id): id is string => id !== null) ?? null;
+    await expect.poll(heldRequestId).not.toBeNull();
+    await page.getByRole("button", { name: "Stop request" }).click();
+    await expect(page.getByRole("button", { name: "Stop request" })).not.toBeVisible();
+    await expect.poll(() => completionMessages().count()).toBe(completedMessagesBeforeStop);
+    const cancelledRequestId = heldRequestId();
+    if (cancelledRequestId === null) throw new Error("held local chat request was not captured");
+    await expect
+      .poll(() => receivedSocketFrames.some((frame) => frame.type === "site_studio_chat_cancelled"))
+      .toBe(true);
+    await expect
+      .poll(() =>
+        receivedSocketFrames.some(
+          (frame) => frame.type === "site_studio_chat_committed" && frame.requestId === cancelledRequestId,
+        ),
+      )
+      .toBe(false);
+
+    await chatInput.fill("Run the recovery turn.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect.poll(() => completionMessages().count()).toBe(completedMessagesBeforeStop + 1);
+
     // A blank project is visibly useful only once authored assets execute.
     await page.getByRole("button", { name: "Show code editor" }).click();
     await expect(page.getByRole("button", { name: "Upload file" })).toBeVisible();
-    const filePanel = page.getByRole("complementary").filter({ hasText: "Files" });
-    const upload = filePanel.locator('input[type="file"]');
+    const upload = page.locator('.file-tree input[type="file"]');
     await upload.setInputFiles(CHILD_FIXTURE);
     await expect(page.getByRole("button", { name: "browser-child.js", exact: true })).toBeVisible();
     await upload.setInputFiles(MODULE_FIXTURE);
-    await expect(page.getByRole("button", { name: "browser-preview-script.js", exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: "browser-preview-script.js",
+        exact: true,
+      }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "index.html", exact: true }).click();
     await waitForEditorText(page, "<!DOCTYPE html>");
@@ -316,7 +453,8 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await history.getByRole("button", { name: "Restore" }).first().click();
     await waitForPreview(page, "Version A");
     await waitForPreview(page, "nested module loaded");
-    await history.getByRole("button", { name: "Close", exact: true }).first().click();
+    await expect(history).toBeVisible();
+    await history.getByRole("button", { name: "Close", exact: true }).last().click();
 
     // Both user-visible download paths must return the authored bytes.
     await page.getByRole("button", { name: "Show code editor" }).click();
@@ -332,17 +470,44 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
 
     await openProjectMenu(page, projectName);
     const zipDownloadPromise = page.waitForEvent("download");
-    await page.getByRole("menuitem", { name: "Export as ZIP" }).click();
+    try {
+      await page.getByRole("menuitem", { name: "Export as ZIP" }).click();
+    } catch (error) {
+      const debugPath = resolve("/tmp", `site-studio-export-${randomUUID()}.png`);
+      await page.screenshot({ path: debugPath, fullPage: true });
+      console.log(`export debug screenshot: ${debugPath}`);
+      console.log(`export visible menu count: ${await page.locator('[role="menu"]:visible').count()}`);
+      console.log(
+        `export visible menu text: ${JSON.stringify(await page.locator('[role="menu"]:visible').allTextContents())}`,
+      );
+      throw error;
+    }
     const exported = await zipDownloadPromise;
     const exportedPath = await exported.path();
-    if (exportedPath === null || (await readFile(exportedPath)).subarray(0, 2).toString() !== "PK") {
+    if (exportedPath === null) {
       throw new Error("export did not return a ZIP archive");
     }
+    const archive = unzipSync(new Uint8Array(await readFile(exportedPath)));
+    const archiveFiles = Object.fromEntries(
+      Object.entries(archive).map(([path, bytes]) => [path, new TextDecoder().decode(bytes)]),
+    );
+    for (const path of ["index.html", "styles.css", "browser-preview-script.js", "browser-child.js"]) {
+      if (!(path in archiveFiles)) throw new Error(`ZIP archive is missing authored ${path}`);
+    }
+    if (!archiveFiles["index.html"]?.includes("Version A"))
+      throw new Error("ZIP index.html is not the restored authored file");
+    if (!archiveFiles["styles.css"]?.includes("rgb(12, 34, 56)"))
+      throw new Error("ZIP styles.css is not the authored file");
+    if (!archiveFiles["browser-preview-script.js"]?.includes("browser-child.js"))
+      throw new Error("ZIP nested module entry is not authored");
+    if (!archiveFiles["browser-child.js"]?.includes("nested module loaded"))
+      throw new Error("ZIP nested module content is not authored");
 
     // Reloading the actual app must recover persisted preview state.
-    await page.reload({ waitUntil: "networkidle" });
+    await page.reload({ waitUntil: "domcontentloaded" });
     await waitForPreview(page, "Version A");
     await waitForPreview(page, "nested module loaded");
+    await expect(completionText()).toBeVisible();
 
     // Leave no project or storage state behind.
     await openProjectMenu(page, projectName);
@@ -383,12 +548,14 @@ async function main(): Promise<void> {
   const identity = await runIdentity();
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const worker = startWorker(identity.jwks, identity.issuer, port);
+  const worker = startWorker(identity.jwks, identity.issuer, identity.token, identity.gatewayToken, port);
   let passed = false;
   try {
     await waitForWorker(baseUrl, worker.child);
     await runBrowserPath(baseUrl, identity.token);
-    console.log("local browser acceptance passed: dashboard/create/edit/upload/preview/CSS+nested-module/version-restore/download/export/reload/delete");
+    console.log(
+      "local browser acceptance passed: dashboard/create/chat-tool/stop-recovery/persisted-commit/edit/upload/preview/CSS+nested-module/version-restore/download/ZIP/reload/delete",
+    );
     passed = true;
   } finally {
     await stopWorker(worker);

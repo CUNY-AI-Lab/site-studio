@@ -156,14 +156,19 @@ dependencies through `bun run e2e:install:ci` before the browser gate.
 
 `bun run e2e:local` builds the frontend, starts a real local Bun process with
 the production Hono app, and uses the declared TypeScript Playwright runner to
-create, edit, upload, preview, version, restore, download, export, reload, and
-delete a project. The browser asserts authored HTML, CSS, and a nested
-JavaScript module actually execute.
+create a project, exercise a real WebSocket chat/tool turn through a local
+`SITE_BUILDER_AGENT` service-binding boundary, stop a held turn, recover with a
+new turn, edit, upload, preview, version, restore, download, export, reload,
+and delete. The browser asserts the authored HTML, CSS, and nested JavaScript
+module actually execute and opens the exported ZIP to inspect every authored
+entry.
 The process uses deterministic in-memory R2/KV bindings so the product's
 conditional CSRF/CAS paths remain active; Wrangler's local R2 emulator does not
-implement the required conditional first-write operation. It does not start a
-Durable Object or call a model/provider, so chat, model behavior, and native
-Cloudflare binding semantics remain separate checks. The test cleans up its
+implement the required conditional first-write operation. The local agent
+implements the maintained chat wire protocol and persists messages before
+emitting `site_studio_chat_committed`; it is not a native Durable Object and
+does not call a model/provider. Native Cloudflare binding semantics, model
+behavior, and provider quality remain separate checks. The test cleans up its
 project before exiting.
 The acceptance closes the code-editor overlay before opening Version history
 because that overlay currently covers the dialog; this proves the sequential
