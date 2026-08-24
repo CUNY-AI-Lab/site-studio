@@ -66,11 +66,23 @@ export function isApiError(error: CaughtError): error is ApiError {
 	return error instanceof ApiError;
 }
 
+/**
+ * An error whose message was written for end users and may be shown verbatim.
+ * Throw this (or ApiError) when the message is intentional copy; plain Errors
+ * are treated as internal and collapse to a generic message.
+ */
+export class UserFacingError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'UserFacingError';
+	}
+}
+
 export function getErrorMessage(error: CaughtError): string {
 	if (isApiError(error)) {
 		return error.getUserMessage();
 	}
-	if (error instanceof Error) {
+	if (error instanceof UserFacingError) {
 		return error.message;
 	}
 	return 'Something went wrong. Try again.';

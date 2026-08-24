@@ -155,14 +155,14 @@ export class OwnerMutationService {
     }
     const projectBytes = await this.prefixBytes(`projects/${ownerId}/${projectId}/`);
     if (projectBytes + additionalBytes > policy.maxProjectBytes) {
-      throw new Error("Project storage quota exceeded.");
+      throw new Error("This project is out of storage space. Delete some files or images, then try again.");
     }
     const ownerBytes =
       await this.prefixBytes(`projects/${ownerId}/`) +
       await this.prefixBytes(`snapshots/${ownerId}/`) +
       await this.prefixBytes(`uploads/${ownerId}/`);
     if (ownerBytes + additionalBytes > policy.maxOwnerBytes) {
-      throw new Error("Owner storage quota exceeded.");
+      throw new Error("Your account is out of storage space. Delete files from a project, then try again.");
     }
     return { recent, now, admissionId, alreadyRecorded };
   }

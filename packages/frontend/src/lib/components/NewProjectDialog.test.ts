@@ -154,11 +154,10 @@ describe('NewProjectDialog data disclosure', () => {
 		mockFetchTemplateCategories.mockResolvedValue(categories);
 	});
 
-	it('distinguishes project storage, model-provider retention, and publishing', () => {
+	it('describes the flow and privacy in plain language', () => {
 		openDialog();
 
-		expect(screen.getByText(/Site Studio saves prompts and attached files with your private project/)).toBeInTheDocument();
-		expect(screen.getByText(/Model-provider routes are configured not to retain prompts or outputs/)).toBeInTheDocument();
-		expect(screen.getByText(/Publishing separately makes the site files public/)).toBeInTheDocument();
+		expect(screen.getByText(/Choose a starting template and build on it with the assistant/)).toBeInTheDocument();
+		expect(screen.getByText(/Your project and chats stay private until you publish/)).toBeInTheDocument();
 	});
 });

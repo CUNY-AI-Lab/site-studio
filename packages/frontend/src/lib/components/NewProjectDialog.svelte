@@ -222,7 +222,7 @@
 		<Dialog.Header>
 			<Dialog.Title>Create New Project</Dialog.Title>
 			<Dialog.Description>
-				Choose a starting template and customize the static website with the AI assistant. Site Studio saves prompts and attached files with your private project. Model-provider routes are configured not to retain prompts or outputs; that setting does not cover Site Studio storage. Publishing separately makes the site files public. AI use is subject to your CAIL usage limit.
+				Choose a starting template and build on it with the assistant. Your project and chats stay private until you publish.
 			</Dialog.Description>
 		</Dialog.Header>
 

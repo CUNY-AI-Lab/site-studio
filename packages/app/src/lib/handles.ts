@@ -135,19 +135,19 @@ export function validateHandle(candidate: string): HandleValidation {
   const handle = candidate.trim();
 
   if (handle.length === 0) {
-    return { valid: false, reason: "Enter a handle." };
+    return { valid: false, reason: "Enter an address." };
   }
   if (handle !== handle.toLowerCase()) {
-    return { valid: false, reason: "Handles must be lowercase." };
+    return { valid: false, reason: "Addresses must be lowercase." };
   }
   if (handle.length < HANDLE_MIN_LENGTH) {
-    return { valid: false, reason: `Handles must be at least ${HANDLE_MIN_LENGTH} characters.` };
+    return { valid: false, reason: `Addresses must be at least ${HANDLE_MIN_LENGTH} characters.` };
   }
   if (handle.length > HANDLE_MAX_LENGTH) {
-    return { valid: false, reason: `Handles must be at most ${HANDLE_MAX_LENGTH} characters.` };
+    return { valid: false, reason: `Addresses must be at most ${HANDLE_MAX_LENGTH} characters.` };
   }
   if (handle.includes("--")) {
-    return { valid: false, reason: "Handles cannot contain consecutive hyphens." };
+    return { valid: false, reason: "Addresses cannot contain consecutive hyphens." };
   }
   if (!HANDLE_PATTERN.test(handle)) {
     return {
@@ -156,7 +156,7 @@ export function validateHandle(candidate: string): HandleValidation {
     };
   }
   if (RESERVED_HANDLES.has(handle)) {
-    return { valid: false, reason: "That handle is reserved." };
+    return { valid: false, reason: "That address is reserved." };
   }
 
   return { valid: true, handle };
@@ -321,7 +321,7 @@ export async function checkHandle(bucket: R2Bucket, candidate: string): Promise<
       handle: validation.handle,
       valid: true,
       available: false,
-      reason: "That handle is taken."
+      reason: "That address is taken."
     };
   }
 
@@ -422,7 +422,7 @@ export async function claimHandle(
         return {
           ok: false,
           status: 409,
-          reason: "You already have a handle. Handles can't be changed."
+          reason: "You already have an address. Addresses can't be changed."
         };
       }
       const claimedAtMs = Date.parse(existingRecord!.claimedAt);
@@ -436,7 +436,7 @@ export async function claimHandle(
         return {
           ok: false,
           status: 409,
-          reason: "Your handle claim is still in progress. Try again shortly."
+          reason: "Your address claim is still in progress. Try again shortly."
         };
       }
       // Cases A/B: the reverse slot is an orphan (forward missing or owned by
@@ -450,7 +450,7 @@ export async function claimHandle(
         return {
           ok: false,
           status: 409,
-          reason: "You already have a handle. Handles can't be changed."
+          reason: "You already have an address. Addresses can't be changed."
         };
       }
       let latest: UserHandleRecord | null = null;
@@ -471,7 +471,7 @@ export async function claimHandle(
         return {
           ok: false,
           status: 409,
-          reason: "You already have a handle. Handles can't be changed."
+          reason: "You already have an address. Addresses can't be changed."
         };
       }
 
@@ -489,7 +489,7 @@ export async function claimHandle(
         return {
           ok: false,
           status: 409,
-          reason: "You already have a handle. Handles can't be changed."
+          reason: "You already have an address. Addresses can't be changed."
         };
       }
 
@@ -507,7 +507,7 @@ export async function claimHandle(
         return { ok: true, handle, alreadyOwned: true };
       }
       await retireReverseClaim(bucket, reverseKey, replaced.etag, handle);
-      return { ok: false, status: 409, reason: "That handle is taken." };
+      return { ok: false, status: 409, reason: "That address is taken." };
     }
 
     const claimedAt = now();
@@ -530,7 +530,7 @@ export async function claimHandle(
       return {
         ok: false,
         status: 409,
-        reason: "You already have a handle. Handles can't be changed."
+        reason: "You already have an address. Addresses can't be changed."
       };
     }
 
@@ -556,13 +556,13 @@ export async function claimHandle(
     // Another user owns the handle. Retire only the exact reverse generation we
     // wrote in step 1, without risking a newer healthy replacement, then 409.
     await retireReverseClaim(bucket, reverseKey, reverseClaim.etag, handle);
-    return { ok: false, status: 409, reason: "That handle is taken." };
+    return { ok: false, status: 409, reason: "That address is taken." };
   }
 
   return {
     ok: false,
     status: 409,
-    reason: "You already have a handle. Handles can't be changed."
+    reason: "You already have an address. Addresses can't be changed."
   };
 }
 

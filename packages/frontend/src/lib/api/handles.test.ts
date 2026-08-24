@@ -59,9 +59,9 @@ describe('claimHandle response parsing (tri-state)', () => {
 	});
 
 	it('surfaces the server message on a 409', async () => {
-		csrfFetch.mockResolvedValue(jsonResponse({ message: 'That handle is taken.' }, 409));
+		csrfFetch.mockResolvedValue(jsonResponse({ message: 'That address is taken.' }, 409));
 		const result = await claimHandle('jane', csrfFetch);
-		expect(result).toEqual({ ok: false, message: 'That handle is taken.' });
+		expect(result).toEqual({ ok: false, message: 'That address is taken.' });
 	});
 
 	it('falls back to the error field then a default on failures', async () => {

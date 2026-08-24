@@ -6,7 +6,7 @@
 	import type { UIMessage as SDKUIMessage } from 'ai';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError, UserFacingError } from '$lib/api/errors';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
 import {
 		decodeToolInput,
@@ -933,7 +933,7 @@ import {
 					socket = null;
 					socketProjectId = null;
 				}
-				reject(new Error('Unable to connect to the agent'));
+				reject(new UserFacingError('Unable to connect to the assistant. Check your connection and try again.'));
 			};
 
 			nextSocket.addEventListener('open', onOpen, { once: true });
@@ -1052,7 +1052,7 @@ import {
 			{ method: 'POST' }
 		);
 		if (!response.ok) {
-			throw new Error('The connection to the assistant expired. Send your message again.');
+			throw new UserFacingError('The connection to the assistant expired. Send your message again.');
 		}
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			throw new Error('Project changed while refreshing the agent connection');
@@ -1105,7 +1105,12 @@ import {
 		}
 
 		if (isError) {
-			const errorText = getErrorMessage(chat.error);
+			// Stream errors arrive as plain Errors from the AI SDK, but their
+			// messages are server-authored user copy (the agent sanitizes them
+			// through describeModelStreamError and curated errorText frames), so
+			// pass the message through instead of collapsing it via
+			// getErrorMessage.
+			const errorText = chat.error?.message || getErrorMessage(chat.error);
 			const lastMessage = uiMessages[uiMessages.length - 1];
 			if (
 				lastMessage?.role !== 'assistant' ||

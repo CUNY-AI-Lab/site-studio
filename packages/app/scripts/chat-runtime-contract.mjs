@@ -221,7 +221,10 @@ await agent.onMessage(connectionB, JSON.stringify({
   type: "cf_agent_use_chat_request",
   id: "request-a",
 }));
-assert.equal(connectionB.sent.some((message) => String(message).includes("chat_request_conflict")), true);
+assert.equal(
+  connectionB.sent.some((message) => String(message).includes("This conversation is active in another window")),
+  true,
+);
 
 const controlFrame = JSON.stringify({ type: "cf_agent_stream_resuming", id: "request-a" });
 connectionB.send(controlFrame);
