@@ -145,20 +145,29 @@ Useful checks:
 
 ```bash
 bun run check
+bun run e2e:install
 bun run e2e:local
 bun run --cwd packages/app deploy --dry-run
 ```
 
+`bun run e2e:install` downloads the Chromium revision pinned by the exact
+`@playwright/test` dependency. CI runs the same install with Linux system
+dependencies through `bun run e2e:install:ci` before the browser gate.
+
 `bun run e2e:local` builds the frontend, starts a real local Bun process with
-the production Hono app, and uses Playwright to create, edit, upload, preview,
-version, restore, download, export, reload, and delete a project. The browser
-asserts authored HTML, CSS, and a nested JavaScript module actually execute.
+the production Hono app, and uses the declared TypeScript Playwright runner to
+create, edit, upload, preview, version, restore, download, export, reload, and
+delete a project. The browser asserts authored HTML, CSS, and a nested
+JavaScript module actually execute.
 The process uses deterministic in-memory R2/KV bindings so the product's
 conditional CSRF/CAS paths remain active; Wrangler's local R2 emulator does not
 implement the required conditional first-write operation. It does not start a
 Durable Object or call a model/provider, so chat, model behavior, and native
 Cloudflare binding semantics remain separate checks. The test cleans up its
 project before exiting.
+The acceptance closes the code-editor overlay before opening Version history
+because that overlay currently covers the dialog; this proves the sequential
+path and does not claim simultaneous access or change product layering.
 
 The remaining test suite contains unit, component, in-process route, and
 Worker-boundary tests. Those labels are intentional: acceptance of authoring
