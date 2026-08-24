@@ -16,6 +16,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
 	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
+	import { downloadBlob } from '$lib/browser/download';
 	import { csrfFetch, getCsrfToken, getCsrfTokenFromCookie } from '$lib/api/csrf';
 	import { apiFetch, apiResponseFetch } from '$lib/api/errors';
 	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
@@ -812,17 +813,7 @@
 			// Create a blob from the response
 			const blob = await response.blob();
 
-			// Create a temporary download link
-			const url = window.URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = `${currentProject.id}.zip`;
-			document.body.appendChild(a);
-			a.click();
-
-			// Cleanup
-			window.URL.revokeObjectURL(url);
-			document.body.removeChild(a);
+			downloadBlob(blob, `${currentProject.id}.zip`);
 		} catch (e) {
 			toast.error(e instanceof Error ? e.message : 'Failed to export project.');
 		}

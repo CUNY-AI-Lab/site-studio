@@ -52,7 +52,6 @@ function createBucket(initial) {
       uploaded: new Date("2026-08-24T00:00:00.000Z")
     });
   }
-
   return {
     async get(key) {
       const value = stored.get(key);
@@ -115,9 +114,12 @@ function createEnvironment() {
       slug: PROJECT_ID
     }),
     [`${prefix}/index.html`]: [
+      '<link rel="stylesheet" href="/styles/main.css">',
       '<source srcset="/images/small.png 1x, /images/large.png 2x">',
       '<script type="module" src="/scripts/main.js"></script>'
     ].join(""),
+    [`${prefix}/styles/main.css`]: "@font-face { font-family: Boundary; src: url('../fonts/body.woff2'); }",
+    [`${prefix}/fonts/body.woff2`]: "font",
     [`${prefix}/scripts/main.js`]: [
       "import { nestedMarker } from './nested.js';",
       "globalThis.entryMarker = 'entry-module-ok';",
@@ -239,10 +241,13 @@ async function runContract() {
   try {
     const port = await readServerPort(child);
     const origin = `http://127.0.0.1:${port}`;
-    const page = await expectResponse(await fetch(`${origin}/preview/${PROJECT_ID}/index.html?v=42`, {
+    const page = await expectResponse(await fetch(`${origin}/preview/${PROJECT_ID}/index.html?v=42&ready=42`, {
       headers: { "X-Boundary-Owner": OWNER_ID }
     }), 200, "preview page");
     const pageToken = requireMatch(page, /scripts\/main\.js\?v=42&pt=([0-9a-f]{64})/, "page token");
+    if (!page.includes('parent.postMessage({"type":"site-studio-preview-ready","token":"42"},"*")')) {
+      throw new Error("Resolved preview page omitted the child readiness signal");
+    }
     if (!page.includes(`images/large.png?v=42&pt=${pageToken} 2x`)) {
       throw new Error("Preview page did not rewrite every srcset candidate");
     }
@@ -295,6 +300,31 @@ async function runContract() {
       200,
       "responsive image"
     );
+    const style = await expectResponse(
+      await fetch(`${origin}/preview/${PROJECT_ID}/styles/main.css?v=42&pt=${pageToken}`),
+      200,
+      "preview stylesheet"
+    );
+    const fontToken = requireMatch(style, /fonts\/body\.woff2\?v=42&pt=([0-9a-f]{64})/, "font token");
+    const font = await fetch(`${origin}/preview/${PROJECT_ID}/fonts/body.woff2?pt=${fontToken}`);
+    await expectResponse(font.clone(), 200, "preview font");
+    if (font.headers.get("Access-Control-Allow-Origin") !== "*") {
+      throw new Error("Resolved authored font omitted opaque-origin CORS");
+    }
+    const missingPage = await fetch(`${origin}/preview/${PROJECT_ID}/missing.html?ready=42`, {
+      headers: { "X-Boundary-Owner": OWNER_ID, Accept: "text/html" }
+    });
+    const missingPageBody = await expectResponse(missingPage, 404, "missing preview page");
+    if (missingPageBody.includes("site-studio-preview-ready")) {
+      throw new Error("Missing preview page emitted a false readiness signal");
+    }
+    const missingFont = await fetch(`${origin}/u/${HANDLE}/${PROJECT_ID}/fonts/missing.woff2`, {
+      headers: { Host: "site-studio.test" }
+    });
+    await expectResponse(missingFont.clone(), 404, "missing published font");
+    if (missingFont.headers.has("Access-Control-Allow-Origin")) {
+      throw new Error("Missing authored font received a success-only CORS header");
+    }
     await expectResponse(
       await fetch(`${origin}/preview/${PROJECT_ID}/unlinked.txt?pt=${pageToken}`),
       401,
@@ -343,7 +373,7 @@ async function runContract() {
       "published dynamic module"
     );
 
-    console.log("preview route contract: opaque-origin modules, nested capabilities, and public mounts crossed child HTTP/process boundaries");
+    console.log("preview route contract: readiness, opaque-origin modules/fonts, nested capabilities, and public mounts crossed child HTTP/process boundaries");
   } finally {
     child.kill();
     await child.exited;

@@ -101,22 +101,21 @@
 			isLoading = false;
 			snapshotLabel = '';
 			errorMessage = '';
-			restoringSnapshotId = null;
 		}
 	});
 
 	async function handleCreateSnapshot() {
-		if (!projectId || isCreating) {
+		if (!projectId || isCreating || restoringSnapshotId !== null) {
 			return;
 		}
 
+		isCreating = true;
 		try {
 			const canCreate = onBeforeCreateSnapshot ? await onBeforeCreateSnapshot() : true;
 			if (!canCreate) {
 				return;
 			}
 
-			isCreating = true;
 			errorMessage = '';
 			const snapshot = await createProjectSnapshot(projectId, snapshotLabel.trim() || undefined);
 			snapshots = [snapshot, ...snapshots];
@@ -129,17 +128,17 @@
 	}
 
 	async function handleRestore(snapshotId: string) {
-		if (!projectId || restoringSnapshotId) {
+		if (!projectId || isCreating || restoringSnapshotId !== null) {
 			return;
 		}
 
+		restoringSnapshotId = snapshotId;
 		try {
 			const canRestore = onBeforeRestore ? await onBeforeRestore() : true;
 			if (!canRestore) {
 				return;
 			}
 
-			restoringSnapshotId = snapshotId;
 			errorMessage = '';
 			await restoreProjectSnapshot(projectId, snapshotId);
 			await loadSnapshots();
@@ -170,10 +169,10 @@
 					id="snapshot-label"
 					bind:value={snapshotLabel}
 					placeholder="Optional note for this checkpoint"
-					disabled={isCreating}
+					disabled={isCreating || restoringSnapshotId !== null}
 				/>
 			</div>
-			<Button onclick={handleCreateSnapshot} disabled={isCreating}>
+			<Button onclick={handleCreateSnapshot} disabled={isCreating || restoringSnapshotId !== null}>
 				{#if isCreating}
 					<Loader2 size={14} class="animate-spin" />
 					Creating...
@@ -216,7 +215,7 @@
 							variant="outline"
 							size="sm"
 							onclick={() => handleRestore(snapshot.id)}
-							disabled={restoringSnapshotId !== null}
+							disabled={isCreating || restoringSnapshotId !== null}
 						>
 							{#if restoringSnapshotId === snapshot.id}
 								<Loader2 size={14} class="animate-spin" />

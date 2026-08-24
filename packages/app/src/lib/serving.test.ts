@@ -81,6 +81,18 @@ describe("app serving security headers", () => {
     expect(headers).not.toHaveProperty("Access-Control-Allow-Credentials");
   });
 
+  it.each([
+    "font/woff",
+    "font/woff2",
+    "font/ttf",
+    "font/otf",
+    "application/vnd.ms-fontobject"
+  ])("allows a successfully resolved authored %s font to load from the opaque origin", (contentType) => {
+    const headers = servedContentHeaders(contentType);
+    expect(headers).toMatchObject({ "Access-Control-Allow-Origin": "*" });
+    expect(headers).not.toHaveProperty("Access-Control-Allow-Credentials");
+  });
+
   it("keeps generated public 404s revalidated and non-embeddable", () => {
     const headers = servedNotFoundHeaders("public, max-age=0, must-revalidate");
     expect(headers["Cache-Control"]).toBe("public, max-age=0, must-revalidate");

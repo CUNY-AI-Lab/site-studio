@@ -2,6 +2,7 @@ import { resolvePath } from '$lib/utils/paths';
 import { apiFetch, handleApiError } from './errors';
 import { csrfFetch } from './csrf';
 import { z } from 'zod';
+import { downloadBlob } from '$lib/browser/download';
 
 const API_BASE = resolvePath('/api');
 
@@ -160,14 +161,7 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 	}
 
 	const blob = await response.blob();
-	const url = window.URL.createObjectURL(blob);
-	const a = document.createElement('a');
-	a.href = url;
-	a.download = filePath.split('/').pop() || 'download';
-	document.body.appendChild(a);
-	a.click();
-	document.body.removeChild(a);
-	window.URL.revokeObjectURL(url);
+	downloadBlob(blob, filePath.split('/').pop() || 'download');
 }
 
 /**
