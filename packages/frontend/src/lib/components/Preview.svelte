@@ -1,31 +1,56 @@
 <script lang="ts">
-    import { resolvePath } from '$lib/utils/paths';
-    import { Skeleton } from '$lib/components/ui/skeleton';
+	import { resolvePath } from '$lib/utils/paths';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { RefreshCw } from 'lucide-svelte';
 
-    let { projectId, onRefresh }: { projectId: string; onRefresh?: () => void } = $props();
+	let { projectId }: { projectId: string } = $props();
 
-    let previewUrl = $derived(resolvePath(`/preview/${projectId}/index.html`));
-    let previewVersion = $state(0);
-    let previewSource = $derived(`${previewUrl}?v=${previewVersion}`);
+	const PREVIEW_NAVIGATION_TIMEOUT_MS = 15_000;
 
-    let isLoading = $state(true);
+	let previewUrl = $derived(resolvePath(`/preview/${projectId}/index.html`));
+	let previewVersion = $state(0);
+	let previewSource = $derived(`${previewUrl}?v=${previewVersion}`);
+	let navigationState = $state<'loading' | 'ready' | 'failed'>('loading');
 
-    export function refresh() {
-        isLoading = true;
-        previewVersion += 1;
-        onRefresh?.();
-    }
+	$effect(() => {
+		const activeSource = previewSource;
+		navigationState = 'loading';
+		const timeout = setTimeout(() => {
+			if (previewSource === activeSource && navigationState === 'loading') {
+				navigationState = 'failed';
+			}
+		}, PREVIEW_NAVIGATION_TIMEOUT_MS);
 
-    function handleIframeLoad(): void {
-        isLoading = false;
-    }
+		return () => clearTimeout(timeout);
+	});
+
+	export function refresh() {
+		previewVersion += 1;
+	}
+
+	function handleIframeLoad(): void {
+		navigationState = 'ready';
+	}
+
+	function handleIframeError(): void {
+		navigationState = 'failed';
+	}
 </script>
 
 <div class="preview">
 	<!-- Loading skeleton overlay -->
-	{#if isLoading}
+	{#if navigationState === 'loading'}
 		<div class="loading-overlay">
 			<Skeleton class="loading-skeleton" />
+		</div>
+	{:else if navigationState === 'failed'}
+		<div class="preview-error" role="alert">
+			<p class="preview-error-title">The preview could not be loaded.</p>
+			<p class="preview-error-detail">Your site is still saved. Try loading the preview again.</p>
+			<button class="preview-retry" type="button" onclick={refresh}>
+				<RefreshCw size={15} />
+				Retry preview
+			</button>
 		</div>
 	{/if}
 
@@ -43,6 +68,7 @@
 		sandbox="allow-scripts"
 		style="width: 100%; height: 100%; border: none;"
 		onload={handleIframeLoad}
+		onerror={handleIframeError}
 	></iframe>
 </div>
 
@@ -70,5 +96,52 @@
 		width: 100%;
 		height: 100%;
 		border-radius: 0;
+	}
+
+	.preview-error {
+		position: absolute;
+		inset: 0;
+		z-index: var(--z-overlay);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75rem;
+		padding: 2rem;
+		text-align: center;
+		background: var(--color-bg-primary);
+	}
+
+	.preview-error-title,
+	.preview-error-detail {
+		margin: 0;
+	}
+
+	.preview-error-title {
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+
+	.preview-error-detail {
+		max-width: 28rem;
+		color: var(--color-text-secondary);
+		line-height: 1.5;
+	}
+
+	.preview-retry {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.625rem 0.95rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg-secondary);
+		color: var(--color-text-primary);
+		cursor: pointer;
+	}
+
+	.preview-retry:hover {
+		background: var(--color-bg-tertiary);
+		border-color: var(--color-border-hover);
 	}
 </style>

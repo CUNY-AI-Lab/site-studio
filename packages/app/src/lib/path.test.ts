@@ -6,9 +6,12 @@ import {
   isTextContentType,
   addCacheBusterToCss,
   addCacheBusterToHtml,
+  addCacheBusterToJavaScript,
   collectPreviewCssResourcePaths,
+  collectPreviewJavaScriptResourcePaths,
   rewriteRootRelativeCssUrls,
   rewriteRootRelativeHtmlUrls,
+  rewriteRootRelativeJavaScriptUrls,
   buildFileTree,
   collectPreviewResourcePaths
 } from "./path";
@@ -188,6 +191,31 @@ describe("addCacheBusterToHtml", () => {
     expect(result).toContain('src="photo.png?v=123&pt=preview-token"');
   });
 
+  it("rewrites and grants every local srcset and imagesrcset candidate", async () => {
+    const html = [
+      '<img srcset="images/small.jpg 1x, /images/large.jpg 2x, https://cdn.example/remote.jpg 3x">',
+      '<link rel="preload" imagesrcset="images/card.jpg 400w, data:image/png;base64,AAAA 800w">'
+    ].join("");
+    const rewritten = await addCacheBusterToHtml(
+      html,
+      "123",
+      { pt: "token" },
+      "/preview/proj/",
+      "pages/index.html"
+    );
+
+    expect(rewritten).toContain("images/small.jpg?v=123&pt=token 1x");
+    expect(rewritten).toContain("/preview/proj/images/large.jpg?v=123&pt=token 2x");
+    expect(rewritten).toContain("https://cdn.example/remote.jpg 3x");
+    expect(rewritten).toContain("images/card.jpg?v=123&pt=token 400w");
+    expect(rewritten).toContain("data:image/png;base64,AAAA 800w");
+    expect(await collectPreviewResourcePaths(html, "pages/index.html", "/preview/proj/")).toEqual([
+      "images/large.jpg",
+      "pages/images/card.jpg",
+      "pages/images/small.jpg"
+    ]);
+  });
+
   it("maps root navigation and rejects parent escapes", async () => {
     const html = '<a href="/">Home</a><script src="../outside.js"></script><img src="/../secret.png">';
     const result = await addCacheBusterToHtml(html, "123", { pt: "token" }, "/preview/proj/", "index.html");
@@ -344,6 +372,45 @@ describe("addCacheBusterToHtml", () => {
       "docs/styles.css",
       "/site-studio/preview/proj/"
     )).toEqual(["images/hero.png"]);
+  });
+
+  it("rewrites literal static and dynamic module imports without touching computed or bare imports", () => {
+    const source = [
+      'import value from "./nested.js";',
+      "export { shared } from '../shared.js';",
+      "const lazy = import('/lazy.js');",
+      "const computed = import('./chunks/' + name);",
+      "import 'package-name';",
+      "import 'https://cdn.example/module.js';"
+    ].join("\n");
+    const rewritten = addCacheBusterToJavaScript(
+      source,
+      "123",
+      { pt: "token" },
+      "/preview/proj/",
+      "scripts/main.js"
+    );
+
+    expect(rewritten).toContain('from "./nested.js?v=123&pt=token"');
+    expect(rewritten).toContain("from '../shared.js?v=123&pt=token'");
+    expect(rewritten).toContain('import("/preview/proj/lazy.js?v=123&pt=token")');
+    expect(rewritten).toContain("import('./chunks/' + name)");
+    expect(rewritten).toContain("import 'package-name'");
+    expect(rewritten).toContain("import 'https://cdn.example/module.js'");
+    expect(collectPreviewJavaScriptResourcePaths(source, "scripts/main.js", "/preview/proj/")).toEqual([
+      "lazy.js",
+      "scripts/nested.js",
+      "shared.js"
+    ]);
+
+    const published = rewriteRootRelativeJavaScriptUrls(
+      source,
+      "/site-studio/u/janedoe/site/",
+      "scripts/main.js"
+    );
+    expect(published).toContain('from "./nested.js"');
+    expect(published).toContain("from '../shared.js'");
+    expect(published).toContain('import("/site-studio/u/janedoe/site/lazy.js")');
   });
 
 });

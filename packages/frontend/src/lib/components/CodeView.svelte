@@ -4,6 +4,7 @@
 	import Editor from './Editor.svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import { RefreshCw } from 'lucide-svelte';
+	import { toast } from '$lib/toast.svelte';
 
 	let {
 		projectId,
@@ -32,10 +33,19 @@
 		currentFileLoadFailed?: boolean;
 		onFileSelect: (path: string) => void;
 		onEditorChange: (content: string) => void;
-		onDownloadFile: (path: string) => void;
+		onDownloadFile: (path: string) => void | Promise<void>;
 		onRefreshFiles: () => void;
 		isSaving: boolean;
 	} = $props();
+
+	async function handleCurrentFileDownload() {
+		try {
+			await onDownloadFile(currentFile);
+		} catch (error) {
+			console.error('Error downloading file:', error);
+			toast.error('Failed to download file. Please try again.');
+		}
+	}
 </script>
 
 <div class="code-view">
@@ -109,7 +119,7 @@
 							<p class="binary-description">
 								{currentFileContentType || 'Binary content'} files open as assets or downloads. Use the agent's document tool for PDFs, or download the file directly.
 							</p>
-							<button class="download-current-file" type="button" onclick={() => onDownloadFile(currentFile)}>
+							<button class="download-current-file" type="button" onclick={handleCurrentFileDownload}>
 								Download file
 							</button>
 						</div>

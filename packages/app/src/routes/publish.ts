@@ -23,7 +23,8 @@ import { isLoopbackOrigin } from "../lib/csrf";
 import {
   decodeServedPath,
   rewriteRootRelativeCssUrls,
-  rewriteRootRelativeHtmlUrls
+  rewriteRootRelativeHtmlUrls,
+  rewriteRootRelativeJavaScriptUrls
 } from "../lib/path";
 import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
 import {
@@ -552,12 +553,16 @@ async function servePublishedFile(
   let transformed = false;
   const isMarkup = contentType.startsWith("text/html")
     || contentType.startsWith("image/svg+xml");
-  if (isMarkup || contentType.startsWith("text/css")) {
+  const isCss = contentType.startsWith("text/css");
+  const isJavaScript = contentType.includes("javascript");
+  if (isMarkup || isCss || isJavaScript) {
     try {
       const originalText = new TextDecoder("utf-8", { fatal: true }).decode(originalBytes);
       const rewritten = isMarkup
         ? await rewriteRootRelativeHtmlUrls(originalText, siteRootPath, resolved.filePath)
-        : rewriteRootRelativeCssUrls(originalText, siteRootPath);
+        : isCss
+          ? rewriteRootRelativeCssUrls(originalText, siteRootPath)
+          : rewriteRootRelativeJavaScriptUrls(originalText, siteRootPath, resolved.filePath);
       if (rewritten !== originalText) {
         content = new TextEncoder().encode(rewritten);
         transformed = true;
