@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	ApiError,
 	apiResponseFetch,
-	handleApiError
+	getErrorMessage,
+	handleApiError,
+	UserFacingError
 } from './errors';
 
 const AUTHENTICATION_REQUIRED = {
@@ -48,6 +50,26 @@ async function thrownApiError(response: Response): Promise<ApiError> {
 	}
 	throw new Error('Expected handleApiError to throw');
 }
+
+describe('getErrorMessage', () => {
+	it('passes through ApiError user messages', () => {
+		expect(getErrorMessage(new ApiError(403, 'Request access to continue.'))).toBe(
+			'Request access to continue.'
+		);
+	});
+
+	it('passes through UserFacingError messages', () => {
+		expect(
+			getErrorMessage(new UserFacingError('The connection to the assistant expired. Send your message again.'))
+		).toBe('The connection to the assistant expired. Send your message again.');
+	});
+
+	it('collapses plain Errors to the generic message', () => {
+		expect(getErrorMessage(new Error('ReferenceError: x is not defined'))).toBe(
+			'Something went wrong. Try again.'
+		);
+	});
+});
 
 describe('canonical Doorway API errors', () => {
 	beforeEach(() => {

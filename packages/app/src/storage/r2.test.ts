@@ -1501,7 +1501,7 @@ describe("OwnerMutationService recovery journal", () => {
       content: new Uint8Array(10),
       ...policy,
       now: 100_001
-    })).rejects.toThrow("Project storage quota exceeded");
+    })).rejects.toThrow("This project is out of storage space");
     expect(await storage.fileExists("user-a", "site", "images/two.png")).toBe(false);
   });
 

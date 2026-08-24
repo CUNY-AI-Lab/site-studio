@@ -117,12 +117,12 @@ describe('HandleClaimDialog', () => {
 				handle: 'taken',
 				valid: true,
 				available: false,
-				reason: 'That handle is taken.'
+				reason: 'That address is taken.'
 			});
 			open();
 			await user.type(screen.getByLabelText('Address'), 'taken');
 			await vi.advanceTimersByTimeAsync(400);
-			expect(screen.getByText('That handle is taken.')).toBeInTheDocument();
+			expect(screen.getByText('That address is taken.')).toBeInTheDocument();
 		} finally {
 			vi.useRealTimers();
 		}

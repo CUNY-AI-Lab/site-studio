@@ -1986,7 +1986,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       connection.send(JSON.stringify({
         type: CF_AGENT_USE_CHAT_RESPONSE_TYPE,
         id: requestId,
-        body: JSON.stringify({ type: "error", errorText: "chat_request_conflict" }),
+        body: JSON.stringify({
+          type: "error",
+          errorText: "This conversation is active in another window. Continue there, or send your message again here.",
+        }),
         done: true,
         error: true,
       }));
