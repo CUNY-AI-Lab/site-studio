@@ -495,6 +495,78 @@ describe("preview file resolution", () => {
     ]);
   });
 
+  it("propagates preview access through srcset candidates and nested module imports", async () => {
+    await storage.writeFile(userId, "proj", "index.html", [
+      '<source srcset="images/small.png 1x, images/large.png 2x">',
+      '<script type="module" src="scripts/main.js"></script>'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      "proj",
+      "scripts/main.js",
+      "import './nested.js'; void import('/lazy.js');"
+    );
+    await storage.writeFile(userId, "proj", "scripts/nested.js", "import './deep.js';");
+    await storage.writeFile(userId, "proj", "scripts/deep.js", "export const ready = true;");
+    await storage.writeFile(userId, "proj", "lazy.js", "export const lazy = true;");
+    await storage.writeFile(userId, "proj", "images/small.png", "small");
+    await storage.writeFile(userId, "proj", "images/large.png", "large");
+
+    const page = await get("index.html?v=42", "text/html");
+    const html = await page.text();
+    const pageToken = /scripts\/main\.js\?v=42&pt=([0-9a-f]{64})/.exec(html)?.[1];
+    expect(page.status).toBe(200);
+    expect(pageToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(html).toContain(`images/small.png?v=42&pt=${pageToken} 1x`);
+    expect(html).toContain(`images/large.png?v=42&pt=${pageToken} 2x`);
+    expect(JSON.parse(kv.store.get(`preview-token:${pageToken}`) || "{}").allowedPaths).toEqual([
+      "images/large.png",
+      "images/small.png",
+      "scripts/main.js"
+    ]);
+
+    const tokenApp = createAuthenticatedPreviewApp();
+    const main = await tokenApp.request(
+      `http://site-studio.test/preview/proj/scripts/main.js?v=42&pt=${pageToken}`,
+      { headers: { Accept: "application/javascript" } },
+      createEnv(bucket, kv)
+    );
+    const mainSource = await main.text();
+    const moduleToken = /nested\.js\?v=42&pt=([0-9a-f]{64})/.exec(mainSource)?.[1];
+    expect(main.status).toBe(200);
+    expect(moduleToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(mainSource).toContain(`/preview/proj/lazy.js?v=42&pt=${moduleToken}`);
+    expect(JSON.parse(kv.store.get(`preview-token:${moduleToken}`) || "{}").allowedPaths).toEqual([
+      "lazy.js",
+      "scripts/nested.js"
+    ]);
+
+    const nested = await tokenApp.request(
+      `http://site-studio.test/preview/proj/scripts/nested.js?v=42&pt=${moduleToken}`,
+      { headers: { Accept: "application/javascript" } },
+      createEnv(bucket, kv)
+    );
+    const nestedSource = await nested.text();
+    const nestedToken = /deep\.js\?v=42&pt=([0-9a-f]{64})/.exec(nestedSource)?.[1];
+    expect(nested.status).toBe(200);
+    expect(nestedToken).toMatch(/^[0-9a-f]{64}$/);
+
+    const deep = await tokenApp.request(
+      `http://site-studio.test/preview/proj/scripts/deep.js?pt=${nestedToken}`,
+      { headers: { Accept: "application/javascript" } },
+      createEnv(bucket, kv)
+    );
+    const responsiveImage = await tokenApp.request(
+      `http://site-studio.test/preview/proj/images/large.png?pt=${pageToken}`,
+      { headers: { Accept: "image/png" } },
+      createEnv(bucket, kv)
+    );
+    expect(deep.status).toBe(200);
+    expect(await deep.text()).toContain("ready = true");
+    expect(responsiveImage.status).toBe(200);
+    expect(await responsiveImage.text()).toBe("large");
+  });
+
   it("does not disclose a preview bearer to protocol-relative authored URLs", async () => {
     await storage.writeFile(
       userId,
@@ -868,6 +940,54 @@ describe("preview ↔ publish extensionless parity", () => {
     );
     expect(publishedDirectory.status).toBe(200);
     expect(await publishedDirectory.text()).toContain("Docs");
+  });
+
+  it("keeps responsive images and module graphs under the configured public mount", async () => {
+    await storage.writeFile(userId, slug, "index.html", [
+      '<source srcset="/images/small.png 1x, /images/large.png 2x">',
+      '<script type="module" src="/scripts/main.js"></script>'
+    ].join(""));
+    await storage.writeFile(
+      userId,
+      slug,
+      "scripts/main.js",
+      "import '/scripts/nested.js'; void import('./relative.js');"
+    );
+    await storage.writeFile(userId, slug, "scripts/nested.js", "export const nested = true;");
+    await storage.writeFile(userId, slug, "scripts/relative.js", "export const relative = true;");
+    const env = createEnv(bucket, createMockKV(), {
+      PUBLISHED_BASE_URL: "https://tools.ailab.gc.cuny.edu/site-studio"
+    });
+
+    const page = await app.request(
+      "https://site-studio.test/u/janedoe/site/index.html",
+      {},
+      env
+    );
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain("/site-studio/u/janedoe/site/images/small.png 1x");
+    expect(html).toContain("/site-studio/u/janedoe/site/images/large.png 2x");
+    expect(html).toContain('src="/site-studio/u/janedoe/site/scripts/main.js"');
+
+    const module = await app.request(
+      "https://site-studio.test/u/janedoe/site/scripts/main.js",
+      {},
+      env
+    );
+    const source = await module.text();
+    expect(module.status).toBe(200);
+    expect(source).toContain("import '/site-studio/u/janedoe/site/scripts/nested.js'");
+    expect(source).toContain("import('./relative.js')");
+    expect(module.headers.get("ETag")).toBeNull();
+
+    const nested = await app.request(
+      "https://site-studio.test/u/janedoe/site/scripts/nested.js",
+      {},
+      env
+    );
+    expect(nested.status).toBe(200);
+    expect(await nested.text()).toContain("nested = true");
   });
 
   it("preserves an external base and its governed URLs on published HTML", async () => {

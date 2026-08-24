@@ -1,5 +1,6 @@
 import { CONTENT_TYPES } from "./constants";
 import type { ProjectTreeNode, StorageFile } from "../types";
+import { parse as parseModuleSyntax } from "es-module-lexer/js";
 
 const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const PREVIEW_ORIGIN = "https://preview.invalid";
@@ -162,6 +163,9 @@ function rewriteMarkupAttribute(
   const lowerName = name.toLowerCase();
   if (lowerName === "style") {
     return rewriteCssUrls(value, (url) => rewriteMarkupUrl(url, state, options, rewrite));
+  }
+  if (lowerName === "srcset" || lowerName === "imagesrcset") {
+    return rewriteSrcset(value, (url) => rewriteMarkupUrl(url, state, options, rewrite));
   }
   if (lowerName !== "href" && lowerName !== "src" && lowerName !== "xlink:href") return value;
   return rewriteMarkupUrl(value, state, options, rewrite);
@@ -333,6 +337,113 @@ function splitTrimmed(value: string) {
   };
 }
 
+function isAsciiWhitespace(value: string): boolean {
+  return value === "\t" || value === "\n" || value === "\f" || value === "\r" || value === " ";
+}
+
+/** Rewrite only the URL token in each candidate while preserving authored descriptors and spacing. */
+function rewriteSrcset(srcset: string, rewrite: (url: string) => string): string {
+  const ranges: Array<{ start: number; end: number; replacement: string }> = [];
+  let position = 0;
+
+  while (position < srcset.length) {
+    while (position < srcset.length && (isAsciiWhitespace(srcset[position]) || srcset[position] === ",")) {
+      position += 1;
+    }
+    if (position >= srcset.length) break;
+
+    const start = position;
+    while (position < srcset.length && !isAsciiWhitespace(srcset[position])) position += 1;
+    let end = position;
+    while (end > start && srcset[end - 1] === ",") end -= 1;
+
+    if (end > start) {
+      const url = srcset.slice(start, end);
+      const replacement = rewrite(url);
+      if (replacement !== url) ranges.push({ start, end, replacement });
+    }
+
+    // A trailing comma on the URL token ends a descriptorless candidate.
+    if (end < position) continue;
+
+    let inParentheses = false;
+    while (position < srcset.length) {
+      const character = srcset[position];
+      position += 1;
+      if (character === "(") {
+        inParentheses = true;
+      } else if (character === ")") {
+        inParentheses = false;
+      } else if (character === "," && !inParentheses) {
+        break;
+      }
+    }
+  }
+
+  let rewritten = srcset;
+  for (const range of ranges.reverse()) {
+    rewritten = `${rewritten.slice(0, range.start)}${range.replacement}${rewritten.slice(range.end)}`;
+  }
+  return rewritten;
+}
+
+function isLocalModuleSpecifier(specifier: string): boolean {
+  return specifier.startsWith("./")
+    || specifier.startsWith("../")
+    || (specifier.startsWith("/") && !specifier.startsWith("//"));
+}
+
+function escapeStaticModuleSpecifier(specifier: string, quote: string): string {
+  const jsonContent = JSON.stringify(specifier).slice(1, -1);
+  return quote === "'" ? jsonContent.replaceAll("'", "\\'") : jsonContent;
+}
+
+function rewriteJavaScriptModuleSpecifiers(
+  source: string,
+  documentPath: string,
+  rootPath: string | undefined,
+  rewrite: UrlRewrite,
+  paths?: Set<string>
+): string {
+  let imports: ReturnType<typeof parseModuleSyntax>[0];
+  try {
+    [imports] = parseModuleSyntax(source);
+  } catch {
+    return source;
+  }
+
+  const ranges: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const imported of imports) {
+    const specifier = imported.n;
+    if (!specifier || !isLocalModuleSpecifier(specifier)) continue;
+    const resolved = resolveLocalUrl(specifier, documentPath, true);
+    if (!resolved) continue;
+
+    const mountedPath = isRootRelative(specifier)
+      ? unmountRootPath(resolved.url.pathname, rootPath)
+      : null;
+    paths?.add(mountedPath ?? resolved.path);
+
+    const rewritten = rewrite(specifier, resolved);
+    if (rewritten === specifier) continue;
+    if (imported.d >= 0) {
+      ranges.push({ start: imported.s, end: imported.e, replacement: JSON.stringify(rewritten) });
+    } else {
+      ranges.push({
+        start: imported.s,
+        end: imported.e,
+        replacement: escapeStaticModuleSpecifier(rewritten, source[imported.s - 1] ?? "\"")
+      });
+    }
+  }
+
+  let rewritten = source;
+  for (const range of ranges.reverse()) {
+    rewritten = `${rewritten.slice(0, range.start)}${range.replacement}${rewritten.slice(range.end)}`;
+  }
+  return rewritten;
+}
+
 // This deliberately handles only CSS url(...) and quoted @import references;
 // comments, quoted text, external/data URLs, and the rest of CSS stay opaque.
 function rewriteCssUrls(css: string, rewrite: (url: string) => string): string {
@@ -447,6 +558,22 @@ export function addCacheBusterToCss(
   });
 }
 
+export function addCacheBusterToJavaScript(
+  source: string,
+  version?: string,
+  extraParams: Record<string, string> = {},
+  rootPath?: string,
+  documentPath = "index.js"
+): string {
+  const params = { v: version || Date.now().toString(), ...extraParams };
+  return rewriteJavaScriptModuleSpecifiers(
+    source,
+    documentPath,
+    rootPath,
+    (url) => addQueryParams(rewriteRootRelativeUrl(url, rootPath), params)
+  );
+}
+
 export async function rewriteRootRelativeHtmlUrls(
   html: string,
   rootPath: string,
@@ -461,6 +588,19 @@ export async function rewriteRootRelativeHtmlUrls(
 
 export function rewriteRootRelativeCssUrls(css: string, rootPath: string): string {
   return rewriteCssUrls(css, (url) => rewriteRootRelativeUrl(url, rootPath));
+}
+
+export function rewriteRootRelativeJavaScriptUrls(
+  source: string,
+  rootPath: string,
+  documentPath = "index.js"
+): string {
+  return rewriteJavaScriptModuleSpecifiers(
+    source,
+    documentPath,
+    rootPath,
+    (url) => rewriteRootRelativeUrl(url, rootPath)
+  );
 }
 
 function addQueryParams(value: string, params: Record<string, string>): string {
@@ -500,6 +640,16 @@ export function collectPreviewCssResourcePaths(
     }
     return url;
   });
+  return [...paths].sort();
+}
+
+export function collectPreviewJavaScriptResourcePaths(
+  source: string,
+  documentPath: string,
+  rootPath?: string
+): string[] {
+  const paths = new Set<string>();
+  rewriteJavaScriptModuleSpecifiers(source, documentPath, rootPath, (url) => url, paths);
   return [...paths].sort();
 }
 

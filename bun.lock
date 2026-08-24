@@ -26,6 +26,7 @@
         "@modelcontextprotocol/sdk": "1.30.0",
         "agents": "0.20.1",
         "ai": "6.0.225",
+        "es-module-lexer": "2.3.1",
         "fflate": "0.8.3",
         "hono": "4.13.1",
         "unpdf": "1.6.2",

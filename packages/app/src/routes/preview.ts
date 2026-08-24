@@ -3,7 +3,9 @@ import type { Env } from "../types";
 import {
   addCacheBusterToCss,
   addCacheBusterToHtml,
+  addCacheBusterToJavaScript,
   collectPreviewCssResourcePaths,
+  collectPreviewJavaScriptResourcePaths,
   collectPreviewResourcePaths,
   decodeServedPath
 } from "../lib/path";
@@ -182,6 +184,27 @@ async function servePreviewFile(
       requestedPath
     );
     if (rewritten !== css) content = new TextEncoder().encode(rewritten);
+  } else if (contentType.includes("javascript")) {
+    const version = c.req.query("v") || undefined;
+    const source = new TextDecoder().decode(content);
+    const allowedPaths = collectPreviewJavaScriptResourcePaths(source, resolvedPath, siteRootPath);
+    const previewToken = allowedPaths.length > 0
+      ? await mintPreviewToken(
+          c.env.SESSION_KV,
+          user.id,
+          projectId,
+          allowedPaths,
+          c.get("previewTokenExpiresAt") ?? undefined
+        )
+      : null;
+    const rewritten = addCacheBusterToJavaScript(
+      source,
+      version,
+      previewToken ? { pt: previewToken } : {},
+      siteRootPath,
+      resolvedPath
+    );
+    if (rewritten !== source) content = new TextEncoder().encode(rewritten);
   }
 
   // §3¾: the preview renders agent/student-authored HTML on our origin. The

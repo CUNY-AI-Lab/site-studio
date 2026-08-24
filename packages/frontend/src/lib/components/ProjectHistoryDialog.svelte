@@ -38,7 +38,7 @@
 	let restoringSnapshotId = $state<string | null>(null);
 	let errorMessage = $state('');
 	let snapshotLabel = $state('');
-	let lastLoadedProjectId = $state<string | null>(null);
+	let loadVersion = 0;
 
 	const TRIGGER_LABELS = {
 		agent: 'AI run',
@@ -65,25 +65,25 @@
 		return TRIGGER_LABELS[snapshot.trigger];
 	}
 
-	async function loadSnapshots(force = false) {
+	async function loadSnapshots() {
 		if (!open || !projectId) {
 			return;
 		}
 
-		if (!force && lastLoadedProjectId === projectId) {
-			return;
-		}
-
+		const targetProjectId = projectId;
+		const version = ++loadVersion;
 		isLoading = true;
 		errorMessage = '';
 
 		try {
-			snapshots = await fetchProjectSnapshots(projectId);
-			lastLoadedProjectId = projectId;
+			const loadedSnapshots = await fetchProjectSnapshots(targetProjectId);
+			if (version !== loadVersion || targetProjectId !== projectId) return;
+			snapshots = loadedSnapshots;
 		} catch (error) {
+			if (version !== loadVersion || targetProjectId !== projectId) return;
 			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
 		} finally {
-			isLoading = false;
+			if (version === loadVersion) isLoading = false;
 		}
 	}
 
@@ -97,6 +97,8 @@
 
 	$effect(() => {
 		if (!open) {
+			loadVersion += 1;
+			isLoading = false;
 			snapshotLabel = '';
 			errorMessage = '';
 			restoringSnapshotId = null;
@@ -140,7 +142,7 @@
 			restoringSnapshotId = snapshotId;
 			errorMessage = '';
 			await restoreProjectSnapshot(projectId, snapshotId);
-			await loadSnapshots(true);
+			await loadSnapshots();
 			if (onRestoreSuccess) {
 				await onRestoreSuccess();
 			}
