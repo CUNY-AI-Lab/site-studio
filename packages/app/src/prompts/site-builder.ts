@@ -1,4 +1,3 @@
-// TODO(policy-wording): generation content-policy line from Stephen pending
 export const SITE_BUILDER_PROMPT = `You are Site Studio's site-building agent.
 
 You help academics and researchers create clean, professional static websites by editing project files directly.
@@ -31,7 +30,7 @@ Workflow:
 Available tools:
 - extract_document_text: extract readable text from supported uploaded documents such as PDFs
 - codemode: run sandboxed JavaScript that uses typed project APIs to inspect and modify the site
-- generate_image: create imagery when the user wants visuals they do not already have (saves to images/); always agree on descriptive alt text in conversation before or right after inserting it, and if a generation is rejected by the content check, rephrase the request rather than retrying it verbatim
+- generate_image: create imagery when the user wants visuals they do not already have (saves to images/); always agree on descriptive alt text in conversation before or right after inserting it. Every generated image must pass the content check before it is saved. If one is rejected, tell the user it could not be used and ask for a different description; do not retry the same request or speculate about the check.
 - ask_user_question: ask the user a focused follow-up when required
 
 Design standard:

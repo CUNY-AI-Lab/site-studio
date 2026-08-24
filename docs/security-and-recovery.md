@@ -80,6 +80,23 @@ rendered document. Resolved preview HTML reports its navigation token after the
 child load completes, so a browser-generated error document cannot clear the
 preview failure state. Chat Markdown strips images and sanitizes links.
 
+The frontend keeps one preview iframe and accepts readiness only from the
+active child with the matching navigation token. It turns failed or stalled
+navigations into the same retryable state. Browser downloads use a temporary
+Blob URL whose revocation is deliberately delayed until after the download
+navigation can commit.
+
+Stop resets the whole agent turn, not only the current response id. The client
+and agent retain cancellation identity long enough to reject late stream frames
+and successor continuations. Unexpected socket loss reconnects with bounded
+backoff while the project is mounted; a reconnect refreshes the CSRF token once
+per cycle and may resume only the same subject's owned request. Successful
+persisted turns emit a targeted commit frame. That frame or an authenticated
+history read repairs the visible transcript, while project epochs and request
+generations prevent stale reads and frames from overwriting newer work. A
+history load failure is shown as a retryable loading problem rather than an
+empty conversation.
+
 ## Storage admission and mutation recovery
 
 Uploads enforce content signatures, per-file platform limits, and configured
@@ -98,6 +115,11 @@ of overwriting remote content. Drafts are encrypted with the per-owner CSRF
 token before origin-wide browser storage and clear only after the exact content
 is acknowledged. This protects against another later owner reading a leftover
 draft, not against XSS.
+
+The version-history dialog owns create and restore as single-flight operations.
+It takes ownership before awaiting an editor-save flush, blocks another history
+mutation until the first settles, and ignores snapshot-list responses that no
+longer belong to the active load.
 
 ## Publishing and rollback
 
