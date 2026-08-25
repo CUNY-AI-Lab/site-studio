@@ -125,8 +125,9 @@ longer belong to the active load.
 
 Publishing reserves an owner-local slug and makes current project objects
 public at `/u/:handle/:slug/*`. The durable public identity is the verified
-handle plus project slug; project metadata does not treat a full host URL as
-authoritative. API links are derived from the current `PUBLISHED_BASE_URL`, so
+handle mapping plus project slug; project metadata does not treat a full host
+URL as authoritative. API links are derived from the current
+`PUBLISHED_BASE_URL`, so
 moving the public mount does not require rewriting or republishing records.
 DNS and redirects from an old mount are deployment responsibilities. There is
 no release generation, copied publish directory, manifest, publisher Worker,

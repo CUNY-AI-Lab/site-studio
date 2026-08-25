@@ -34,10 +34,7 @@ import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { z } from "zod";
 import { migrateHandle } from "./handles";
 import { readR2Json } from "./r2-json";
-import {
-  emitDiagnostic,
-  type SiteStudioLoggingContext,
-} from "./logging";
+import { emitDiagnostic, type SiteStudioLoggingContext } from "./logging";
 
 const projectMetadataSchema = z.object({
   id: z.string(),
@@ -53,6 +50,12 @@ const projectMetadataSchema = z.object({
   importedOriginalId: z.string().optional(),
   creatingOperationId: z.string().optional(),
 });
+
+const projectMetadataWithLegacyUrlSchema = projectMetadataSchema
+  .extend({
+    publishedUrl: z.string().optional(),
+  })
+  .strict();
 
 const projectSnapshotSchema = z.object({
   id: z.string(),
@@ -83,15 +86,12 @@ export interface ChatHistoryPorter {
     fromOwner: string,
     fromProjectId: string,
     toOwner: string,
-    toProjectId: string
+    toProjectId: string,
   ): Promise<void>;
 }
 
 export type MigrationStatus =
-  | "migrated"
-  | "already-complete"
-  | "refused"
-  | "nothing-to-migrate";
+  "migrated" | "already-complete" | "refused" | "nothing-to-migrate";
 
 export interface MigrationResult {
   status: MigrationStatus;
@@ -157,19 +157,28 @@ function bytesEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
  * Different bytes stop the migration before its delete phase, preserving both
  * namespaces for reconciliation.
  */
-async function copyIfAbsent(bucket: R2Bucket, fromKey: string, toKey: string): Promise<void> {
+async function copyIfAbsent(
+  bucket: R2Bucket,
+  fromKey: string,
+  toKey: string,
+): Promise<void> {
   const object = await bucket.get(fromKey);
   if (!object) return; // source vanished (concurrent run finished it) — fine
   const sourceBytes = await object.arrayBuffer();
   const wrote = await bucket.put(toKey, sourceBytes, {
     httpMetadata: object.httpMetadata,
-    onlyIf: { etagDoesNotMatch: "*" }
+    onlyIf: { etagDoesNotMatch: "*" },
   });
   if (wrote) return;
 
   const destination = await bucket.get(toKey);
-  if (!destination || !bytesEqual(sourceBytes, await destination.arrayBuffer())) {
-    throw new Error("Anonymous-data migration stopped because the destination changed concurrently.");
+  if (
+    !destination ||
+    !bytesEqual(sourceBytes, await destination.arrayBuffer())
+  ) {
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
   }
 }
 
@@ -181,18 +190,94 @@ async function putJsonIfAbsentOrEqual(
   const serialized = JSON.stringify(value);
   const wrote = await bucket.put(key, serialized, {
     httpMetadata: { contentType: "application/json" },
-    onlyIf: { etagDoesNotMatch: "*" }
+    onlyIf: { etagDoesNotMatch: "*" },
   });
   if (wrote) return;
 
   const existing = await bucket.get(key);
   if (!existing || (await existing.text()) !== serialized) {
-    throw new Error("Anonymous-data migration stopped because the destination changed concurrently.");
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
+  }
+}
+
+/**
+ * Resume a metadata copy that an older deployment already stamped as this
+ * exact import. That deployment could have persisted the now-obsolete
+ * publishedUrl field; remove only that field, and only when every remaining
+ * field matches the current import's candidate. Any other destination change
+ * remains a conflict and preserves both namespaces.
+ */
+async function putProjectMetadataIfAbsentOrEqual(
+  bucket: R2Bucket,
+  key: string,
+  value: ProjectMetadata,
+  sourceOwner: string,
+  originalProjectId: string,
+): Promise<void> {
+  const serialized = JSON.stringify(value);
+  const wrote = await bucket.put(key, serialized, {
+    httpMetadata: { contentType: "application/json" },
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  if (wrote) return;
+
+  const existing = await bucket.get(key);
+  if (!existing) {
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
+  }
+  const existingText = await existing.text();
+  if (existingText === serialized) return;
+
+  let parsed;
+  try {
+    parsed = projectMetadataWithLegacyUrlSchema.safeParse(
+      JSON.parse(existingText),
+    );
+  } catch {
+    parsed = { success: false } as const;
+  }
+  if (
+    !parsed.success ||
+    parsed.data.importedFrom !== sourceOwner ||
+    parsed.data.importedOriginalId !== originalProjectId ||
+    parsed.data.publishedUrl === undefined
+  ) {
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
+  }
+
+  const normalized = { ...parsed.data };
+  delete normalized.publishedUrl;
+  if (
+    JSON.stringify(normalized, Object.keys(normalized).sort()) !==
+    JSON.stringify(value, Object.keys(value).sort())
+  ) {
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
+  }
+
+  const repaired = await bucket.put(key, serialized, {
+    onlyIf: { etagMatches: existing.etag },
+    httpMetadata: { contentType: "application/json" },
+  });
+  if (!repaired) {
+    throw new Error(
+      "Anonymous-data migration stopped because the destination changed concurrently.",
+    );
   }
 }
 
 /** Distinct project ids under a user namespace. */
-async function listProjectIds(bucket: R2Bucket, userId: string): Promise<string[]> {
+async function listProjectIds(
+  bucket: R2Bucket,
+  userId: string,
+): Promise<string[]> {
   const prefix = projectPrefix(userId);
   const ids = new Set<string>();
   for (const key of await listKeys(bucket, prefix)) {
@@ -207,7 +292,7 @@ async function listProjectIds(bucket: R2Bucket, userId: string): Promise<string[
 async function getMetadata(
   bucket: R2Bucket,
   userId: string,
-  projectId: string
+  projectId: string,
 ): Promise<ProjectMetadata | null> {
   return readR2Json(
     bucket,
@@ -219,11 +304,11 @@ async function getMetadata(
 async function subjectProjectOccupied(
   bucket: R2Bucket,
   subject: string,
-  projectId: string
+  projectId: string,
 ): Promise<boolean> {
   const listed = await bucket.list({
     prefix: `${projectPrefix(subject)}${projectId}/`,
-    limit: 1
+    limit: 1,
   });
   return listed.objects.length > 0;
 }
@@ -239,7 +324,7 @@ async function resolveTargetProjectId(
   subject: string,
   anonUserId: string,
   originalId: string,
-  taken: Set<string>
+  taken: Set<string>,
 ): Promise<string> {
   const candidates = [originalId, `${originalId}-imported`];
   for (let n = 2; candidates.length < 50; n++) {
@@ -252,7 +337,10 @@ async function resolveTargetProjectId(
       return candidate;
     }
     const meta = await getMetadata(bucket, subject, candidate);
-    if (meta?.importedFrom === anonUserId && meta.importedOriginalId === originalId) {
+    if (
+      meta?.importedFrom === anonUserId &&
+      meta.importedOriginalId === originalId
+    ) {
       return candidate; // our own copy from a previous/concurrent run
     }
     // Occupied by something that isn't our copy — collision, try next suffix.
@@ -268,13 +356,17 @@ async function usedSubjectSlugs(
   bucket: R2Bucket,
   subject: string,
   anonUserId: string,
-  originalId: string
+  originalId: string,
 ): Promise<Set<string>> {
   const slugs = new Set<string>();
   for (const projectId of await listProjectIds(bucket, subject)) {
     const meta = await getMetadata(bucket, subject, projectId);
     if (!meta?.published) continue;
-    if (meta.importedFrom === anonUserId && meta.importedOriginalId === originalId) continue;
+    if (
+      meta.importedFrom === anonUserId &&
+      meta.importedOriginalId === originalId
+    )
+      continue;
     slugs.add(meta.slug || projectId);
   }
   return slugs;
@@ -330,7 +422,13 @@ async function copyAnonymousNamespace(options: {
     let newId = projectMap[oldId];
     const portHistory = !newId; // already ported by the sweep that first saw it
     if (!newId) {
-      newId = await resolveTargetProjectId(bucket, subject, anonUserId, oldId, taken);
+      newId = await resolveTargetProjectId(
+        bucket,
+        subject,
+        anonUserId,
+        oldId,
+        taken,
+      );
       taken.add(newId);
       projectMap[oldId] = newId;
     }
@@ -363,7 +461,13 @@ async function copyAnonymousNamespace(options: {
         importedOriginalId: plan.oldId,
       };
       if (plan.newSlug) rewritten.slug = plan.newSlug;
-      await putJsonIfAbsentOrEqual(bucket, `${toPrefix}.metadata.json`, rewritten);
+      await putProjectMetadataIfAbsentOrEqual(
+        bucket,
+        `${toPrefix}.metadata.json`,
+        rewritten,
+        anonUserId,
+        plan.oldId,
+      );
     }
 
     for (const key of await listKeys(bucket, fromPrefix)) {
@@ -381,9 +485,14 @@ async function copyAnonymousNamespace(options: {
       if (key.endsWith(".json")) {
         const record = await readR2Json(bucket, key, projectSnapshotSchema);
         if (!record) {
-          throw new Error("Anonymous-data migration stopped because snapshot metadata is invalid; source retained.");
+          throw new Error(
+            "Anonymous-data migration stopped because snapshot metadata is invalid; source retained.",
+          );
         }
-        await putJsonIfAbsentOrEqual(bucket, toKey, { ...record, projectId: plan.newId });
+        await putJsonIfAbsentOrEqual(bucket, toKey, {
+          ...record,
+          projectId: plan.newId,
+        });
       } else {
         await copyIfAbsent(bucket, key, toKey);
       }
@@ -399,11 +508,18 @@ async function copyAnonymousNamespace(options: {
       try {
         await porter.port(anonUserId, plan.oldId, subject, plan.newId);
       } catch (error) {
-        emitDiagnostic("warning", "migration_chat_history_port_failed", {
-        }, logging);
-        throw new Error("Chat history migration failed; anonymous data retained for retry.", {
-          cause: error,
-        });
+        emitDiagnostic(
+          "warning",
+          "migration_chat_history_port_failed",
+          {},
+          logging,
+        );
+        throw new Error(
+          "Chat history migration failed; anonymous data retained for retry.",
+          {
+            cause: error,
+          },
+        );
       }
     }
   }
@@ -433,7 +549,8 @@ export async function migrateAnonymousData(options: {
   logging?: SiteStudioLoggingContext;
   now?: () => string;
 }): Promise<MigrationResult> {
-  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } = options;
+  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } =
+    options;
   const now = options.now ?? (() => new Date().toISOString());
 
   if (!isAnonymousUserId(anonUserId) || anonUserId === subject) {
@@ -464,12 +581,15 @@ export async function migrateAnonymousData(options: {
   const claim: MigrationClaim = existingClaim ?? {
     subject,
     status: "pending",
-    startedAt: now()
+    startedAt: now(),
   };
   await kv.put(claimKey, JSON.stringify(claim));
   await kv.put(migrationPendingKey(subject), anonUserId);
 
-  const finish = async (status: MigrationStatus, projects: Record<string, string>) => {
+  const finish = async (
+    status: MigrationStatus,
+    projects: Record<string, string>,
+  ) => {
     if (anonSessionId) {
       // Safe to swallow: deleting the spent anon session is best-effort; if it
       // fails it simply expires on its own TTL. Not on the security path.
@@ -477,7 +597,11 @@ export async function migrateAnonymousData(options: {
     }
     await kv.put(
       claimKey,
-      JSON.stringify({ ...claim, status: "complete", completedAt: now() } satisfies MigrationClaim)
+      JSON.stringify({
+        ...claim,
+        status: "complete",
+        completedAt: now(),
+      } satisfies MigrationClaim),
     );
     // Safe to swallow: best-effort resume-marker cleanup (see above).
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);

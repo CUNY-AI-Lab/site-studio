@@ -93,8 +93,9 @@ site-studio/
 ## Compatibility Position
 
 This is a greenfield product with one narrow data-preservation exception.
-Canonical published URLs are `/u/:handle/:slug/*`; the handle and slug are the
-durable public identity while `PUBLISHED_BASE_URL` is the deployment mount.
+Canonical published URLs are `/u/:handle/:slug/*`; the user's separate handle
+mapping and project slug are the durable public identity while
+`PUBLISHED_BASE_URL` is the deployment mount.
 API links derive that current base at read time, so moving the mount does not
 rewrite or republish projects. There is no `/sites` route, forwarding pointer,
 migration window, dual-read, or compatibility API. Any DNS or redirect work

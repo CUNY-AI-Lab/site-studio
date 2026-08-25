@@ -7,10 +7,13 @@ import {
   migrationClaimKey,
   migrationPendingKey,
   type ChatHistoryPorter,
-  type MigrationClaim
+  type MigrationClaim,
 } from "./migration";
 import { getUserHandle } from "./handles";
-import { createMockKV as createSharedMockKV, createTestR2Object } from "./test-utils";
+import {
+  createMockKV as createSharedMockKV,
+  createTestR2Object,
+} from "./test-utils";
 
 function testConditional(options?: R2PutOptions): R2Conditional | undefined {
   const conditional = options?.onlyIf;
@@ -25,7 +28,10 @@ function testMetadata(options?: R2PutOptions): R2HTTPMetadata | undefined {
 // Mock R2 bucket (same shape as storage/r2.test.ts).
 function createMockBucket() {
   let revision = 0;
-  const store = new Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }>();
+  const store = new Map<
+    string,
+    { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }
+  >();
 
   function textData(data: string | ArrayBuffer | Uint8Array): string {
     if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
@@ -50,25 +56,38 @@ function createMockBucket() {
         size: entry.data.length,
         httpMetadata: entry.httpMetadata || {},
         text: async () => entry.data,
-        arrayBuffer: async () => new TextEncoder().encode(entry.data).buffer
+        arrayBuffer: async () => new TextEncoder().encode(entry.data).buffer,
       };
     }),
-    put: vi.fn(async (key: string, data: string | ArrayBuffer | Uint8Array, options?: R2PutOptions) => {
-      // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when
-      // the key is empty; a failed condition returns null (no write, no throw).
-      // migrateHandle's promotion (SS-52) relies on this contract.
-      const conditional = testConditional(options);
-      if (conditional?.etagDoesNotMatch === "*" && store.has(key)) {
-        return null;
-      }
-      if (conditional?.etagMatches && store.get(key)?.etag !== conditional.etagMatches) {
-        return null;
-      }
-      const text = textData(data);
-      const etag = `etag-${++revision}`;
-      store.set(key, { data: text, httpMetadata: testMetadata(options), etag });
-      return createTestR2Object(key, etag, text.length);
-    }),
+    put: vi.fn(
+      async (
+        key: string,
+        data: string | ArrayBuffer | Uint8Array,
+        options?: R2PutOptions,
+      ) => {
+        // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when
+        // the key is empty; a failed condition returns null (no write, no throw).
+        // migrateHandle's promotion (SS-52) relies on this contract.
+        const conditional = testConditional(options);
+        if (conditional?.etagDoesNotMatch === "*" && store.has(key)) {
+          return null;
+        }
+        if (
+          conditional?.etagMatches &&
+          store.get(key)?.etag !== conditional.etagMatches
+        ) {
+          return null;
+        }
+        const text = textData(data);
+        const etag = `etag-${++revision}`;
+        store.set(key, {
+          data: text,
+          httpMetadata: testMetadata(options),
+          etag,
+        });
+        return createTestR2Object(key, etag, text.length);
+      },
+    ),
     delete: vi.fn(async (key: string) => {
       store.delete(key);
     }),
@@ -83,7 +102,8 @@ function createMockBucket() {
           const rest = key.slice(prefix?.length || 0);
           const delimIndex = rest.indexOf(delimiter);
           if (delimIndex >= 0) {
-            const delimitedPrefix = (prefix || "") + rest.slice(0, delimIndex + 1);
+            const delimitedPrefix =
+              (prefix || "") + rest.slice(0, delimIndex + 1);
             if (!delimitedPrefixes.includes(delimitedPrefix)) {
               delimitedPrefixes.push(delimitedPrefix);
             }
@@ -97,12 +117,21 @@ function createMockBucket() {
       return {
         objects: limit ? objects.slice(0, limit) : objects,
         truncated: false,
-        delimitedPrefixes
+        delimitedPrefixes,
       };
     }),
-    createMultipartUpload: vi.fn(async () => { throw new Error("multipart upload is not part of this fixture"); }),
-    resumeMultipartUpload: vi.fn(() => { throw new Error("multipart upload is not part of this fixture"); })
-  } as R2Bucket & { store: Map<string, { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }> };
+    createMultipartUpload: vi.fn(async () => {
+      throw new Error("multipart upload is not part of this fixture");
+    }),
+    resumeMultipartUpload: vi.fn(() => {
+      throw new Error("multipart upload is not part of this fixture");
+    }),
+  } as R2Bucket & {
+    store: Map<
+      string,
+      { data: string; httpMetadata?: R2HTTPMetadata; etag?: string }
+    >;
+  };
 }
 
 function createMockKV() {
@@ -125,7 +154,7 @@ function metadataFor(id: string, extra: Partial<ProjectMetadata> = {}): string {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     published: false,
-    ...extra
+    ...extra,
   } satisfies ProjectMetadata);
 }
 
@@ -133,10 +162,14 @@ function seedAnonProject(
   bucket: ReturnType<typeof createMockBucket>,
   projectId: string,
   extra: Partial<ProjectMetadata> = {},
-  content = `<h1>${projectId} (anon)</h1>`
+  content = `<h1>${projectId} (anon)</h1>`,
 ) {
-  bucket.store.set(`projects/${ANON}/${projectId}/.metadata.json`, { data: metadataFor(projectId, extra) });
-  bucket.store.set(`projects/${ANON}/${projectId}/index.html`, { data: content });
+  bucket.store.set(`projects/${ANON}/${projectId}/.metadata.json`, {
+    data: metadataFor(projectId, extra),
+  });
+  bucket.store.set(`projects/${ANON}/${projectId}/index.html`, {
+    data: content,
+  });
 }
 
 function seedAnonHandle(
@@ -145,10 +178,10 @@ function seedAnonHandle(
 ) {
   const claimedAt = "2026-01-01T00:00:00.000Z";
   bucket.store.set(`handles/${handle}.json`, {
-    data: JSON.stringify({ ownerId: ANON, claimedAt })
+    data: JSON.stringify({ ownerId: ANON, claimedAt }),
   });
   bucket.store.set(`userhandles/${ANON}.json`, {
-    data: JSON.stringify({ handle, claimedAt })
+    data: JSON.stringify({ handle, claimedAt }),
   });
 }
 
@@ -161,31 +194,46 @@ describe("migrateAnonymousData", () => {
     kv = createMockKV();
   });
 
-  const run = (overrides: Partial<Parameters<typeof migrateAnonymousData>[0]> = {}) =>
+  const run = (
+    overrides: Partial<Parameters<typeof migrateAnonymousData>[0]> = {},
+  ) =>
     migrateAnonymousData({
       bucket,
       kv,
       anonUserId: ANON,
       subject: SUBJECT,
       anonSessionId: "anon-session-id",
-      ...overrides
+      ...overrides,
     });
 
   it("migrates projects, snapshots, and uploads into the subject namespace (happy path)", async () => {
     seedAnonProject(bucket, "portfolio");
-    bucket.store.set(`projects/${ANON}/portfolio/styles.css`, { data: "body{}" });
-    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.zip`, { data: "zipbytes" });
+    bucket.store.set(`projects/${ANON}/portfolio/styles.css`, {
+      data: "body{}",
+    });
+    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.zip`, {
+      data: "zipbytes",
+    });
     bucket.store.set(`snapshots/${ANON}/portfolio/snap1.json`, {
-      data: JSON.stringify({ id: "snap1", createdAt: "2026-01-02T00:00:00.000Z", projectId: "portfolio", trigger: "manual", fileCount: 2 })
+      data: JSON.stringify({
+        id: "snap1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        projectId: "portfolio",
+        trigger: "manual",
+        fileCount: 2,
+      }),
     });
     bucket.store.set(`uploads/${ANON}/paper.pdf`, { data: "pdfbytes" });
-    kv.store.set("session:anon-session-id", JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" }));
+    kv.store.set(
+      "session:anon-session-id",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" }),
+    );
 
     const ported: string[] = [];
     const porter: ChatHistoryPorter = {
       port: async (fromOwner, fromId, toOwner, toId) => {
         ported.push(`${fromOwner}:${fromId}->${toOwner}:${toId}`);
-      }
+      },
     };
 
     const result = await run({ porter });
@@ -193,14 +241,24 @@ describe("migrateAnonymousData", () => {
     expect(result.projects).toEqual({ portfolio: "portfolio" });
 
     // Subject now owns the data.
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data);
+    const meta = JSON.parse(
+      bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data,
+    );
     expect(meta.id).toBe("portfolio");
     expect(meta.importedFrom).toBe(ANON);
     expect(meta.importedOriginalId).toBe("portfolio");
-    expect(textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`))).toContain("(anon)");
-    expect(bucket.store.get(`projects/${SUBJECT}/portfolio/styles.css`)).toBeTruthy();
-    expect(bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.zip`)).toBeTruthy();
-    const snapRecord = JSON.parse(bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.json`)!.data);
+    expect(
+      textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)),
+    ).toContain("(anon)");
+    expect(
+      bucket.store.get(`projects/${SUBJECT}/portfolio/styles.css`),
+    ).toBeTruthy();
+    expect(
+      bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.zip`),
+    ).toBeTruthy();
+    const snapRecord = JSON.parse(
+      bucket.store.get(`snapshots/${SUBJECT}/portfolio/snap1.json`)!.data,
+    );
     expect(snapRecord.projectId).toBe("portfolio");
     expect(bucket.store.get(`uploads/${SUBJECT}/paper.pdf`)).toBeTruthy();
 
@@ -208,14 +266,24 @@ describe("migrateAnonymousData", () => {
     expect(ported).toEqual([`${ANON}:portfolio->${SUBJECT}:portfolio`]);
 
     // Originals are retired after the complete copy.
-    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
-    expect(bucket.store.get(`snapshots/${ANON}/portfolio/snap1.zip`)).toBeUndefined();
+    expect(
+      bucket.store.get(`projects/${ANON}/portfolio/index.html`),
+    ).toBeUndefined();
+    expect(
+      bucket.store.get(`snapshots/${ANON}/portfolio/snap1.zip`),
+    ).toBeUndefined();
     expect(bucket.store.get(`uploads/${ANON}/paper.pdf`)).toBeUndefined();
-    expect([...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`))).toBe(false);
+    expect(
+      [...bucket.store.keys()].some((key) =>
+        key.startsWith(`projects/${ANON}/`),
+      ),
+    ).toBe(false);
 
     // Claim recorded complete; anon session and pending marker cleared.
     // SAFETY: The migration service writes this KV value from the MigrationClaim schema.
-    const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
+    const claim = JSON.parse(
+      kv.store.get(migrationClaimKey(ANON))!,
+    ) as MigrationClaim;
     expect(claim).toMatchObject({ subject: SUBJECT, status: "complete" });
     expect(kv.store.has("session:anon-session-id")).toBe(false);
     expect(kv.store.has(migrationPendingKey(SUBJECT))).toBe(false);
@@ -226,7 +294,7 @@ describe("migrateAnonymousData", () => {
     await run();
 
     const snapshotBefore = new Map(
-      [...bucket.store.entries()].map(([k, v]) => [k, v.data])
+      [...bucket.store.entries()].map(([k, v]) => [k, v.data]),
     );
     const second = await run();
 
@@ -239,8 +307,12 @@ describe("migrateAnonymousData", () => {
 
   it("merges without overwriting: colliding project ids are suffixed, subject data untouched", async () => {
     // Subject already owns "site" with its own content.
-    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, { data: metadataFor("site") });
-    bucket.store.set(`projects/${SUBJECT}/site/index.html`, { data: "<h1>subject original</h1>" });
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
+      data: metadataFor("site", { published: true, slug: "site" }),
+    });
+    bucket.store.set(`projects/${SUBJECT}/site/index.html`, {
+      data: "<h1>subject original</h1>",
+    });
 
     // Anonymous namespace has a colliding "site" and a non-colliding "blog".
     seedAnonProject(bucket, "site");
@@ -251,14 +323,23 @@ describe("migrateAnonymousData", () => {
     expect(result.projects).toEqual({ site: "site-imported", blog: "blog" });
 
     // Subject's original is byte-identical.
-    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe("<h1>subject original</h1>");
+    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe(
+      "<h1>subject original</h1>",
+    );
     // Incoming copy lives under the suffixed id with its own content.
-    const imported = JSON.parse(bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`)!.data);
+    const imported = JSON.parse(
+      bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`)!
+        .data,
+    );
     expect(imported.id).toBe("site-imported");
     expect(imported.importedOriginalId).toBe("site");
-    expect(textOf(bucket.store.get(`projects/${SUBJECT}/site-imported/index.html`))).toContain("(anon)");
+    expect(
+      textOf(bucket.store.get(`projects/${SUBJECT}/site-imported/index.html`)),
+    ).toContain("(anon)");
     // Non-colliding project keeps its id.
-    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBeTruthy();
+    expect(
+      bucket.store.get(`projects/${SUBJECT}/blog/index.html`),
+    ).toBeTruthy();
   });
 
   it("preserves both namespaces when a subject write wins the copy-if-absent race", async () => {
@@ -268,21 +349,27 @@ describe("migrateAnonymousData", () => {
     let injected = false;
     // SAFETY: This replacement preserves the R2 put signature while injecting
     // a subject-side writer for the copy-if-absent race.
-    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
-      if (key === destination && !injected) {
-        injected = true;
-        await originalPut(destination, "<h1>subject concurrent edit</h1>");
-      }
-      return originalPut(key, data, options);
-    });
+    bucket.put = vi.fn(
+      async (key: string, data: string, options?: R2PutOptions) => {
+        if (key === destination && !injected) {
+          injected = true;
+          await originalPut(destination, "<h1>subject concurrent edit</h1>");
+        }
+        return originalPut(key, data, options);
+      },
+    );
 
     await expect(run()).rejects.toThrow("destination changed");
-    expect(textOf(bucket.store.get(destination))).toBe("<h1>subject concurrent edit</h1>");
-    expect(textOf(bucket.store.get(`projects/${ANON}/portfolio/index.html`))).toBe(
-      "<h1>anonymous source</h1>"
+    expect(textOf(bucket.store.get(destination))).toBe(
+      "<h1>subject concurrent edit</h1>",
     );
+    expect(
+      textOf(bucket.store.get(`projects/${ANON}/portfolio/index.html`)),
+    ).toBe("<h1>anonymous source</h1>");
     // SAFETY: The failed migration leaves the claim in its documented pending shape.
-    const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
+    const claim = JSON.parse(
+      kv.store.get(migrationClaimKey(ANON))!,
+    ) as MigrationClaim;
     expect(claim.status).toBe("pending");
   });
 
@@ -291,13 +378,20 @@ describe("migrateAnonymousData", () => {
     await run(); // SUBJECT claims and completes
 
     const otherSubject = canonicalTestSubject("other-owner");
-    const result = await run({ subject: otherSubject, anonSessionId: undefined });
+    const result = await run({
+      subject: otherSubject,
+      anonSessionId: undefined,
+    });
 
     expect(result.status).toBe("refused");
     // SAFETY: The completed first claim is stored using the MigrationClaim schema.
-    const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
+    const claim = JSON.parse(
+      kv.store.get(migrationClaimKey(ANON))!,
+    ) as MigrationClaim;
     expect(claim.subject).toBe(SUBJECT); // original claim untouched
-    const otherKeys = [...bucket.store.keys()].filter((k) => k.includes(otherSubject));
+    const otherKeys = [...bucket.store.keys()].filter((k) =>
+      k.includes(otherSubject),
+    );
     expect(otherKeys).toEqual([]);
   });
 
@@ -318,23 +412,32 @@ describe("migrateAnonymousData", () => {
     await expect(run()).rejects.toThrow("KV read failed");
 
     // The guard was NOT bypassed: nothing was copied into the subject namespace.
-    const subjectKeys = [...bucket.store.keys()].filter((k) => k.includes(SUBJECT));
+    const subjectKeys = [...bucket.store.keys()].filter((k) =>
+      k.includes(SUBJECT),
+    );
     expect(subjectKeys).toEqual([]);
   });
 
   it("refuses non-anonymous ids (never migrates a subject namespace)", async () => {
-    const result = await run({ anonUserId: canonicalTestSubject("non-anonymous-id") });
+    const result = await run({
+      anonUserId: canonicalTestSubject("non-anonymous-id"),
+    });
     expect(result.status).toBe("refused");
     expect(kv.store.size).toBe(0);
   });
 
   it("completes with nothing-to-migrate when the anonymous namespace is empty", async () => {
-    kv.store.set("session:anon-session-id", JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" }));
+    kv.store.set(
+      "session:anon-session-id",
+      JSON.stringify({ id: ANON, createdAt: "2026-01-01T00:00:00.000Z" }),
+    );
     const result = await run();
 
     expect(result.status).toBe("nothing-to-migrate");
     // SAFETY: The empty migration records completion using the MigrationClaim schema.
-    const claim = JSON.parse(kv.store.get(migrationClaimKey(ANON))!) as MigrationClaim;
+    const claim = JSON.parse(
+      kv.store.get(migrationClaimKey(ANON))!,
+    ) as MigrationClaim;
     expect(claim.status).toBe("complete");
     expect(kv.store.has("session:anon-session-id")).toBe(false);
   });
@@ -345,7 +448,11 @@ describe("migrateAnonymousData", () => {
    * result is computed, so the listing that triggered the injection does not
    * see them — simulating a direct file-API write racing the migration.
    */
-  function injectAfterList(triggerPrefix: string, nth: number, inject: () => void) {
+  function injectAfterList(
+    triggerPrefix: string,
+    nth: number,
+    inject: () => void,
+  ) {
     const original = bucket.list.bind(bucket);
     let count = 0;
     bucket.list = vi.fn(async (options: R2ListOptions = {}) => {
@@ -366,7 +473,7 @@ describe("migrateAnonymousData", () => {
     // caught by the delete pass — silently lost.
     injectAfterList(`projects/${ANON}/portfolio/`, 1, () => {
       bucket.store.set(`projects/${ANON}/portfolio/late-edit.html`, {
-        data: "<h1>written mid-migration</h1>"
+        data: "<h1>written mid-migration</h1>",
       });
     });
 
@@ -374,11 +481,13 @@ describe("migrateAnonymousData", () => {
     expect(result.status).toBe("migrated");
 
     // The mid-run write survived into the subject namespace...
-    expect(textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/late-edit.html`))).toContain(
-      "written mid-migration"
-    );
+    expect(
+      textOf(bucket.store.get(`projects/${SUBJECT}/portfolio/late-edit.html`)),
+    ).toContain("written mid-migration");
     // ...and the anon original is gone.
-    const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
+    const anonKeys = [...bucket.store.keys()].filter((k) =>
+      k.startsWith(`projects/${ANON}/`),
+    );
     expect(anonKeys).toEqual([]);
   });
 
@@ -389,20 +498,33 @@ describe("migrateAnonymousData", () => {
     // the first sweep's plan listing. A project created right after #2 was,
     // before this fix, never planned or copied yet still deleted.
     injectAfterList(`projects/${ANON}/`, 2, () => {
-      bucket.store.set(`projects/${ANON}/newproj/.metadata.json`, { data: metadataFor("newproj") });
-      bucket.store.set(`projects/${ANON}/newproj/index.html`, { data: "<h1>newproj (anon)</h1>" });
+      bucket.store.set(`projects/${ANON}/newproj/.metadata.json`, {
+        data: metadataFor("newproj"),
+      });
+      bucket.store.set(`projects/${ANON}/newproj/index.html`, {
+        data: "<h1>newproj (anon)</h1>",
+      });
     });
 
     const result = await run();
     expect(result.status).toBe("migrated");
-    expect(result.projects).toEqual({ portfolio: "portfolio", newproj: "newproj" });
+    expect(result.projects).toEqual({
+      portfolio: "portfolio",
+      newproj: "newproj",
+    });
 
     // The mid-run project survived into the subject namespace...
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`)!.data);
+    const meta = JSON.parse(
+      bucket.store.get(`projects/${SUBJECT}/newproj/.metadata.json`)!.data,
+    );
     expect(meta.importedFrom).toBe(ANON);
-    expect(textOf(bucket.store.get(`projects/${SUBJECT}/newproj/index.html`))).toContain("newproj (anon)");
+    expect(
+      textOf(bucket.store.get(`projects/${SUBJECT}/newproj/index.html`)),
+    ).toContain("newproj (anon)");
     // ...and the anon originals are gone.
-    const anonKeys = [...bucket.store.keys()].filter((k) => k.startsWith(`projects/${ANON}/`));
+    const anonKeys = [...bucket.store.keys()].filter((k) =>
+      k.startsWith(`projects/${ANON}/`),
+    );
     expect(anonKeys).toEqual([]);
   });
 
@@ -411,8 +533,12 @@ describe("migrateAnonymousData", () => {
     // second sweep must resolve the SAME anon project to the SAME subject id
     // (via the importedFrom stamp) instead of re-suffixing, and must not
     // overwrite the metadata or files the first sweep wrote.
-    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, { data: metadataFor("site") });
-    bucket.store.set(`projects/${SUBJECT}/site/index.html`, { data: "<h1>subject original</h1>" });
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
+      data: metadataFor("site"),
+    });
+    bucket.store.set(`projects/${SUBJECT}/site/index.html`, {
+      data: "<h1>subject original</h1>",
+    });
     seedAnonProject(bucket, "site");
 
     const result = await run();
@@ -423,18 +549,164 @@ describe("migrateAnonymousData", () => {
     const importedIds = new Set(
       [...bucket.store.keys()]
         .filter((k) => k.startsWith(`projects/${SUBJECT}/`))
-        .map((k) => k.slice(`projects/${SUBJECT}/`.length).split("/")[0])
+        .map((k) => k.slice(`projects/${SUBJECT}/`.length).split("/")[0]),
     );
     expect([...importedIds].sort()).toEqual(["site", "site-imported"]);
-    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe("<h1>subject original</h1>");
+    expect(bucket.store.get(`projects/${SUBJECT}/site/index.html`)!.data).toBe(
+      "<h1>subject original</h1>",
+    );
+  });
+
+  it("repairs an older stamped metadata partial on retry without duplicating the project", async () => {
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
+      data: metadataFor("site", { published: true, slug: "site" }),
+    });
+    bucket.store.set(`projects/${SUBJECT}/site/index.html`, {
+      data: "<h1>subject original</h1>",
+    });
+    seedAnonProject(bucket, "site", { published: true, slug: "site" });
+    seedAnonHandle(bucket, "jane-rivera");
+
+    const legacyDestination = z
+      .object({
+        id: z.string(),
+        name: z.string(),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+        published: z.boolean(),
+        publishedAt: z.string().optional(),
+        slug: z.string().optional(),
+        importedFrom: z.string().optional(),
+        importedOriginalId: z.string().optional(),
+        publishedUrl: z.string().optional(),
+      })
+      .parse(
+        JSON.parse(metadataFor("site", { published: true, slug: "site-2" })),
+      );
+    legacyDestination.id = "site-imported";
+    legacyDestination.importedFrom = ANON;
+    legacyDestination.importedOriginalId = "site";
+    legacyDestination.publishedUrl =
+      "https://old.example/u/jane-rivera/site-2/";
+    bucket.store.set(`projects/${SUBJECT}/site-imported/.metadata.json`, {
+      data: JSON.stringify(legacyDestination),
+    });
+    bucket.store.set(`projects/${SUBJECT}/site-imported/index.html`, {
+      data: "<h1>site (anon)</h1>",
+    });
+    kv.store.set(
+      migrationClaimKey(ANON),
+      JSON.stringify({
+        subject: SUBJECT,
+        status: "pending",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      } satisfies MigrationClaim),
+    );
+    kv.store.set(migrationPendingKey(SUBJECT), ANON);
+
+    const result = await run();
+
+    expect(result).toMatchObject({
+      status: "migrated",
+      projects: { site: "site-imported" },
+    });
+    const repaired = JSON.parse(
+      bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`)!
+        .data,
+    );
+    expect(repaired).toMatchObject({
+      id: "site-imported",
+      published: true,
+      slug: "site-2",
+      importedFrom: ANON,
+      importedOriginalId: "site",
+    });
+    expect(repaired.publishedUrl).toBeUndefined();
+    expect(
+      textOf(bucket.store.get(`projects/${SUBJECT}/site-imported/index.html`)),
+    ).toBe("<h1>site (anon)</h1>");
+    expect(
+      [
+        ...new Set(
+          [...bucket.store.keys()]
+            .filter((key) => key.startsWith(`projects/${SUBJECT}/`))
+            .map((key) =>
+              key.slice(`projects/${SUBJECT}/`.length).split("/")[0],
+            ),
+        ),
+      ],
+    ).toEqual(["site", "site-imported"]);
+    expect(
+      [...bucket.store.keys()].some((key) =>
+        key.startsWith(`projects/${ANON}/`),
+      ),
+    ).toBe(false);
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!).status).toBe(
+      "complete",
+    );
+  });
+
+  it("keeps the source when a stamped legacy destination has another change", async () => {
+    bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
+      data: metadataFor("site", { published: true, slug: "site" }),
+    });
+    seedAnonProject(bucket, "site", { published: true, slug: "site" });
+
+    const legacyDestination = z
+      .object({
+        id: z.string(),
+        name: z.string(),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+        published: z.boolean(),
+        slug: z.string().optional(),
+        importedFrom: z.string().optional(),
+        importedOriginalId: z.string().optional(),
+        publishedUrl: z.string().optional(),
+      })
+      .parse(
+        JSON.parse(metadataFor("site", { published: true, slug: "site-2" })),
+      );
+    legacyDestination.id = "site-imported";
+    legacyDestination.name = "changed after partial copy";
+    legacyDestination.importedFrom = ANON;
+    legacyDestination.importedOriginalId = "site";
+    legacyDestination.publishedUrl =
+      "https://old.example/u/jane-rivera/site-2/";
+    bucket.store.set(`projects/${SUBJECT}/site-imported/.metadata.json`, {
+      data: JSON.stringify(legacyDestination),
+    });
+    kv.store.set(
+      migrationClaimKey(ANON),
+      JSON.stringify({
+        subject: SUBJECT,
+        status: "pending",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      } satisfies MigrationClaim),
+    );
+    kv.store.set(migrationPendingKey(SUBJECT), ANON);
+
+    await expect(run()).rejects.toThrow("destination changed");
+    expect(
+      bucket.store.has(`projects/${ANON}/site/.metadata.json`),
+    ).toBe(true);
+    expect(
+      JSON.parse(
+        bucket.store.get(`projects/${SUBJECT}/site-imported/.metadata.json`)!
+          .data,
+      ).publishedUrl,
+    ).toBe("https://old.example/u/jane-rivera/site-2/");
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!).status).toBe(
+      "pending",
+    );
   });
 
   it("resumes after partial source deletion without duplicating imported projects", async () => {
     bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {
-      data: metadataFor("site", { published: true, slug: "site" })
+      data: metadataFor("site", { published: true, slug: "site" }),
     });
     bucket.store.set(`projects/${SUBJECT}/site/index.html`, {
-      data: "<h1>subject site</h1>"
+      data: "<h1>subject site</h1>",
     });
     seedAnonProject(bucket, "site", { published: true, slug: "site" });
     seedAnonProject(bucket, "notes", { published: true, slug: "notes" });
@@ -452,19 +724,35 @@ describe("migrateAnonymousData", () => {
     });
 
     await expect(run()).rejects.toThrow("injected delete interruption");
-    expect(bucket.store.has(`projects/${SUBJECT}/site-imported/.metadata.json`)).toBe(true);
-    expect(bucket.store.has(`projects/${SUBJECT}/notes/.metadata.json`)).toBe(true);
-    expect(bucket.store.has(`projects/${ANON}/site/.metadata.json`)).toBe(false);
-    expect(bucket.store.has(`projects/${ANON}/notes/.metadata.json`)).toBe(true);
+    expect(
+      bucket.store.has(`projects/${SUBJECT}/site-imported/.metadata.json`),
+    ).toBe(true);
+    expect(bucket.store.has(`projects/${SUBJECT}/notes/.metadata.json`)).toBe(
+      true,
+    );
+    expect(bucket.store.has(`projects/${ANON}/site/.metadata.json`)).toBe(
+      false,
+    );
+    expect(bucket.store.has(`projects/${ANON}/notes/.metadata.json`)).toBe(
+      true,
+    );
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
     const subjectProjectIds = new Set(
       [...bucket.store.keys()]
         .filter((key) => key.startsWith(`projects/${SUBJECT}/`))
-        .map((key) => key.slice(`projects/${SUBJECT}/`.length).split("/")[0])
+        .map((key) => key.slice(`projects/${SUBJECT}/`.length).split("/")[0]),
     );
-    expect([...subjectProjectIds].sort()).toEqual(["notes", "site", "site-imported"]);
-    expect([...bucket.store.keys()].filter((key) => key.startsWith(`projects/${ANON}/`))).toEqual([]);
+    expect([...subjectProjectIds].sort()).toEqual([
+      "notes",
+      "site",
+      "site-imported",
+    ]);
+    expect(
+      [...bucket.store.keys()].filter((key) =>
+        key.startsWith(`projects/${ANON}/`),
+      ),
+    ).toEqual([]);
   });
 
   it("fails closed when chat history export is unavailable", async () => {
@@ -477,15 +765,21 @@ describe("migrateAnonymousData", () => {
     const porter: ChatHistoryPorter = {
       port: async () => {
         throw new Error("anonymous chat export unavailable");
-      }
+      },
     };
 
-    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
+    await expect(run({ porter })).rejects.toThrow(
+      "Chat history migration failed",
+    );
 
     // File copies may precede the chat call, but the source remains available
     // because no completion claim was written.
-    expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
-    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    expect(
+      bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`),
+    ).toBeTruthy();
+    expect(
+      bucket.store.get(`projects/${ANON}/portfolio/index.html`),
+    ).toBeTruthy();
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "pending",
@@ -494,14 +788,18 @@ describe("migrateAnonymousData", () => {
     expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
     // Handle ownership and the old published namespace remain authoritative
     // until chat history can be imported on a retry.
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(ANON);
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(ANON);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
   });
 
   it("retains the anonymous source when snapshot metadata is invalid", async () => {
     seedAnonProject(bucket, "portfolio");
-    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.zip`, { data: "zipbytes" });
+    bucket.store.set(`snapshots/${ANON}/portfolio/snap1.zip`, {
+      data: "zipbytes",
+    });
     bucket.store.set(`snapshots/${ANON}/portfolio/snap1.json`, {
       data: JSON.stringify({
         id: "snap1",
@@ -516,8 +814,12 @@ describe("migrateAnonymousData", () => {
 
     // The strict snapshot schema must fail before migration reaches source
     // deletion. Both the archive and its invalid record remain recoverable.
-    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.zip`)).toBe(true);
-    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.json`)).toBe(true);
+    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.zip`)).toBe(
+      true,
+    );
+    expect(bucket.store.has(`snapshots/${ANON}/portfolio/snap1.json`)).toBe(
+      true,
+    );
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "pending",
@@ -537,36 +839,56 @@ describe("migrateAnonymousData", () => {
         if (attempts === 1) {
           throw new Error("subject chat import unavailable");
         }
-      }
+      },
     };
 
-    await expect(run({ porter })).rejects.toThrow("Chat history migration failed");
-    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeTruthy();
+    await expect(run({ porter })).rejects.toThrow(
+      "Chat history migration failed",
+    );
+    expect(
+      bucket.store.get(`projects/${ANON}/portfolio/index.html`),
+    ).toBeTruthy();
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "pending",
     });
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(ANON);
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(ANON);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
     const retry = await run({ porter });
     expect(retry.status).toBe("migrated");
     expect(attempts).toBe(2);
-    expect(bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`)).toBeTruthy();
-    expect(bucket.store.get(`projects/${ANON}/portfolio/index.html`)).toBeUndefined();
-    expect([...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`))).toBe(false);
+    expect(
+      bucket.store.get(`projects/${SUBJECT}/portfolio/index.html`),
+    ).toBeTruthy();
+    expect(
+      bucket.store.get(`projects/${ANON}/portfolio/index.html`),
+    ).toBeUndefined();
+    expect(
+      [...bucket.store.keys()].some((key) =>
+        key.startsWith(`projects/${ANON}/`),
+      ),
+    ).toBe(false);
     expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
       subject: SUBJECT,
       status: "complete",
     });
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(SUBJECT);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data),
+    ).toMatchObject({
       handle: "jane-rivera",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle,
+    ).toBe("jane-rivera");
   });
 
   it("retries after forward handle ownership commits before the subject reverse record", async () => {
@@ -580,22 +902,30 @@ describe("migrateAnonymousData", () => {
     let failSubjectReverse = true;
     // SAFETY: This replacement preserves the R2 put signature while injecting
     // the first subject reverse-write failure.
-    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
-      if (key === `userhandles/${SUBJECT}.json` && failSubjectReverse) {
-        failSubjectReverse = false;
-        throw new Error("injected subject reverse failure");
-      }
-      return originalPut(key, data, options);
-    });
+    bucket.put = vi.fn(
+      async (key: string, data: string, options?: R2PutOptions) => {
+        if (key === `userhandles/${SUBJECT}.json` && failSubjectReverse) {
+          failSubjectReverse = false;
+          throw new Error("injected subject reverse failure");
+        }
+        return originalPut(key, data, options);
+      },
+    );
 
     await expect(run()).rejects.toThrow("injected subject reverse failure");
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(SUBJECT);
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
     expect(bucket.store.has(`userhandles/${SUBJECT}.json`)).toBe(false);
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
-    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(
+      false,
+    );
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle,
+    ).toBe("jane-rivera");
   });
 
   it("retries after subject reverse commit before anonymous reverse cleanup", async () => {
@@ -606,28 +936,38 @@ describe("migrateAnonymousData", () => {
     let failAnonReverseRetirement = true;
     // SAFETY: This replacement preserves the R2 put signature while injecting
     // the anonymous reverse-retirement failure.
-    bucket.put = vi.fn(async (key: string, data: string, options?: R2PutOptions) => {
-      if (
-        key === `userhandles/${ANON}.json`
-        && testConditional(options)?.etagMatches
-        && failAnonReverseRetirement
-      ) {
-        failAnonReverseRetirement = false;
-        throw new Error("injected anonymous reverse cleanup failure");
-      }
-      return originalPut(key, data, options);
-    });
+    bucket.put = vi.fn(
+      async (key: string, data: string, options?: R2PutOptions) => {
+        if (
+          key === `userhandles/${ANON}.json` &&
+          testConditional(options)?.etagMatches &&
+          failAnonReverseRetirement
+        ) {
+          failAnonReverseRetirement = false;
+          throw new Error("injected anonymous reverse cleanup failure");
+        }
+        return originalPut(key, data, options);
+      },
+    );
 
     // Cleanup is part of the migration boundary. If retiring the anonymous
     // reverse record fails, the run must stay pending so the source remains
     // available for a complete retry.
-    await expect(run()).rejects.toThrow("injected anonymous reverse cleanup failure");
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
+    await expect(run()).rejects.toThrow(
+      "injected anonymous reverse cleanup failure",
+    );
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(SUBJECT);
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle,
+    ).toBe("jane-rivera");
     expect(bucket.store.has(`userhandles/${ANON}.json`)).toBe(true);
 
     await expect(run()).resolves.toMatchObject({ status: "migrated" });
-    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(false);
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(
+      false,
+    );
     // The cleanup failure is intentionally best-effort; the stale reverse
     // record is not authoritative because its forward record points at the
     // subject, and normal handle repair can reap it later.
@@ -647,8 +987,12 @@ describe("handle re-homing through migration", () => {
 
   function seedHandle(ownerId: string, handle: string) {
     const claimedAt = "2026-01-01T00:00:00.000Z";
-    bucket.store.set(`handles/${handle}.json`, { data: JSON.stringify({ ownerId, claimedAt }) });
-    bucket.store.set(`userhandles/${ownerId}.json`, { data: JSON.stringify({ handle, claimedAt }) });
+    bucket.store.set(`handles/${handle}.json`, {
+      data: JSON.stringify({ ownerId, claimedAt }),
+    });
+    bucket.store.set(`userhandles/${ownerId}.json`, {
+      data: JSON.stringify({ handle, claimedAt }),
+    });
   }
 
   it("moves the anon handle to a subject with none without storing a publication URL", async () => {
@@ -659,23 +1003,28 @@ describe("handle re-homing through migration", () => {
       {
         published: true,
         slug: "portfolio",
-        publishedAt: "2026-01-02T00:00:00.000Z"
+        publishedAt: "2026-01-02T00:00:00.000Z",
       },
-      "<h1>site</h1>"
+      "<h1>site</h1>",
     );
     const legacyMetadataKey = `projects/${ANON}/portfolio/.metadata.json`;
-    const legacyMetadata = z.object({
-      id: z.string(),
-      name: z.string(),
-      createdAt: z.string(),
-      updatedAt: z.string(),
-      published: z.boolean(),
-      publishedAt: z.string().optional(),
-      slug: z.string().optional(),
-      publishedUrl: z.string().optional(),
-    }).parse(JSON.parse(bucket.store.get(legacyMetadataKey)!.data));
-    legacyMetadata.publishedUrl = "https://old.example/u/jane-rivera/portfolio/";
-    bucket.store.set(legacyMetadataKey, { data: JSON.stringify(legacyMetadata) });
+    const legacyMetadata = z
+      .object({
+        id: z.string(),
+        name: z.string(),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+        published: z.boolean(),
+        publishedAt: z.string().optional(),
+        slug: z.string().optional(),
+        publishedUrl: z.string().optional(),
+      })
+      .parse(JSON.parse(bucket.store.get(legacyMetadataKey)!.data));
+    legacyMetadata.publishedUrl =
+      "https://old.example/u/jane-rivera/portfolio/";
+    bucket.store.set(legacyMetadataKey, {
+      data: JSON.stringify(legacyMetadata),
+    });
 
     await migrateAnonymousData({
       bucket,
@@ -685,16 +1034,24 @@ describe("handle re-homing through migration", () => {
     });
 
     // Handle re-homed: record points at subject, reverse record moved.
-    expect(JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("jane-rivera");
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
+    expect(
+      JSON.parse(bucket.store.get(`handles/jane-rivera.json`)!.data).ownerId,
+    ).toBe(SUBJECT);
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle,
+    ).toBe("jane-rivera");
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data),
+    ).toMatchObject({
       handle: "jane-rivera",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });
 
     // Publication addresses are derived from the current base and are not
     // copied into project metadata during migration.
-    const meta = JSON.parse(bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data);
+    const meta = JSON.parse(
+      bucket.store.get(`projects/${SUBJECT}/portfolio/.metadata.json`)!.data,
+    );
     expect(meta.publishedUrl).toBeUndefined();
     expect(JSON.stringify(meta)).not.toContain("old.example");
   });
@@ -702,7 +1059,10 @@ describe("handle re-homing through migration", () => {
   it("keeps the subject's primary handle but re-points the anon handle as an alias", async () => {
     seedHandle(SUBJECT, "primary");
     seedHandle(ANON, "anon-alias");
-    seedAnonProject(bucket, "portfolio", { published: true, slug: "portfolio" });
+    seedAnonProject(bucket, "portfolio", {
+      published: true,
+      slug: "portfolio",
+    });
 
     await migrateAnonymousData({
       bucket,
@@ -712,10 +1072,16 @@ describe("handle re-homing through migration", () => {
     });
 
     // Subject keeps its own primary.
-    expect(JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle).toBe("primary");
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${SUBJECT}.json`)!.data).handle,
+    ).toBe("primary");
     // Anon handle survives as an alias pointing at the subject.
-    expect(JSON.parse(bucket.store.get(`handles/anon-alias.json`)!.data).ownerId).toBe(SUBJECT);
-    expect(JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data)).toMatchObject({
+    expect(
+      JSON.parse(bucket.store.get(`handles/anon-alias.json`)!.data).ownerId,
+    ).toBe(SUBJECT);
+    expect(
+      JSON.parse(bucket.store.get(`userhandles/${ANON}.json`)!.data),
+    ).toMatchObject({
       handle: "anon-alias",
       claimedAt: "1970-01-01T00:00:00.000Z",
     });
