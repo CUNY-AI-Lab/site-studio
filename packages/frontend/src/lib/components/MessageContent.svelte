@@ -10,6 +10,7 @@
 	import css from 'highlight.js/lib/languages/css';
 	import json from 'highlight.js/lib/languages/json';
 	import bash from 'highlight.js/lib/languages/bash';
+	import plaintext from 'highlight.js/lib/languages/plaintext';
 	import { browserWindow } from '$lib/contracts';
 
 	// One-time configuration of the module-global `marked` singleton. This lives in
@@ -25,6 +26,7 @@
 	hljs.registerLanguage('css', css);
 	hljs.registerLanguage('json', json);
 	hljs.registerLanguage('bash', bash);
+	hljs.registerLanguage('plaintext', plaintext);
 
 	marked.use(
 		markedHighlight({
