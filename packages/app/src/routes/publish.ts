@@ -42,6 +42,11 @@ import {
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
 import { readBoundedFormData } from "../lib/multipart";
+import {
+  getPublishedBaseUrl,
+  normalizePublishedBaseUrl,
+  publishedProjectUrl,
+} from "../lib/published-url";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -153,10 +158,6 @@ function slugify(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
 function getAppPublicRoot(c: AppContext): string {
   const requestOrigin = new URL(c.req.url).origin;
   if (isLoopbackOrigin(requestOrigin)) {
@@ -164,24 +165,7 @@ function getAppPublicRoot(c: AppContext): string {
   }
 
   const configuredOrigin = c.env.APP_PUBLIC_DOMAIN?.trim();
-  return `${normalizeBaseUrl(configuredOrigin || requestOrigin)}/`;
-}
-
-function getPublishedBaseUrl(c: AppContext): string {
-  const requestOrigin = new URL(c.req.url).origin;
-  // Published sites are served by this worker at /u/{handle}/{slug}/. In dev
-  // that means the local worker origin; production keeps its configured public
-  // domain authoritative because its request origin is never loopback.
-  if (isLoopbackOrigin(requestOrigin)) {
-    return normalizeBaseUrl(requestOrigin);
-  }
-
-  const configuredBaseUrl = c.env.PUBLISHED_BASE_URL?.trim();
-  if (configuredBaseUrl) {
-    return normalizeBaseUrl(configuredBaseUrl);
-  }
-
-  return normalizeBaseUrl(requestOrigin);
+  return `${normalizePublishedBaseUrl(configuredOrigin || requestOrigin)}/`;
 }
 
 /**
@@ -190,7 +174,7 @@ function getPublishedBaseUrl(c: AppContext): string {
  * loopback development remains mounted at the origin root.
  */
 function getPublishedPathPrefix(c: AppContext): string {
-  const pathname = new URL(getPublishedBaseUrl(c)).pathname.replace(/\/+$/, "");
+  const pathname = new URL(getPublishedBaseUrl(c.req.url, c.env.PUBLISHED_BASE_URL)).pathname.replace(/\/+$/, "");
   return pathname === "/" ? "" : pathname;
 }
 
@@ -259,8 +243,6 @@ export function createPublishRouter() {
           type: "publish-project",
           projectId,
           desiredSlug,
-          publishedBaseUrl: getPublishedBaseUrl(c),
-          handle
         }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       } catch (error) {
         if (error instanceof Error && error.message.includes("Project not found")) {
@@ -269,7 +251,11 @@ export function createPublishRouter() {
         throw error;
       }
       if (!("published" in result)) throw new Error("Unexpected mutation result");
-      ({ url } = result.published);
+      url = publishedProjectUrl(
+        getPublishedBaseUrl(c.req.url, c.env.PUBLISHED_BASE_URL),
+        handle,
+        result.published.slug,
+      );
       publishAction.acknowledgeMutation();
 
       const terminalAt = Date.now();

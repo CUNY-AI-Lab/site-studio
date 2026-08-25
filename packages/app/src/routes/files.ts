@@ -217,7 +217,7 @@ export function createFileRouter() {
 
     // SS-18: protected system files (.metadata.json, .thumbnail.png) were guarded
     // on delete/rename but NOT on write, so a caller could overwrite their own
-    // project's .metadata.json and flip published/slug/publishedUrl. Reject writes
+    // project's .metadata.json and flip published/slug. Reject writes
     // to any protected basename here, matching the delete/rename guards.
     if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
       jsonError("Cannot overwrite protected files", 403);

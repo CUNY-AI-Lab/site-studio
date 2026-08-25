@@ -211,6 +211,11 @@
 		}
 	}
 
+	function beginNameEdit() {
+		hasUserEditedName = true;
+		suggestionGeneration += 1;
+	}
+
 	// Get the Lucide icon component for an icon name
 	function getIcon(iconName: string) {
 		return iconMap[iconName] || FileText;
@@ -303,7 +308,8 @@
 					<Input
 						id="projectName"
 						bind:value={projectName}
-						oninput={() => hasUserEditedName = true}
+						onfocus={beginNameEdit}
+						oninput={beginNameEdit}
 						placeholder="my-awesome-project"
 						disabled={isCreating}
 					/>

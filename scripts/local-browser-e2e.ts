@@ -320,7 +320,7 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await dialog.getByLabel("Project Name (optional)").fill(projectName);
     await dialog.getByRole("button", { name: "Create Project" }).click();
     await page.waitForURL("**/editor/**");
-    await expect(page.getByText(projectName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: projectName, exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Show code editor" })).toBeVisible();
 
     // The browser now crosses the real app route into a local

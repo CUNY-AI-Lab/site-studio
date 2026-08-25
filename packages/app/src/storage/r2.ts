@@ -106,7 +106,6 @@ const projectMetadataSchema: z.ZodType<ProjectMetadata> = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   published: z.boolean(),
-  publishedUrl: z.string().optional(),
   publishedAt: z.string().optional(),
   unpublishedAt: z.string().optional(),
   thumbnailUrl: z.string().optional(),

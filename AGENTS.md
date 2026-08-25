@@ -93,8 +93,13 @@ site-studio/
 ## Compatibility Position
 
 This is a greenfield product with one narrow data-preservation exception.
-Canonical published URLs are `/u/:handle/:slug/*`; there is no `/sites` route,
-forwarding pointer, migration window, dual-read, or compatibility API.
+Canonical published URLs are `/u/:handle/:slug/*`; the user's separate handle
+mapping and project slug are the durable public identity while
+`PUBLISHED_BASE_URL` is the deployment mount.
+API links derive that current base at read time, so moving the mount does not
+rewrite or republish projects. There is no `/sites` route, forwarding pointer,
+migration window, dual-read, or compatibility API. Any DNS or redirect work
+for an old mount belongs to deployment configuration, not project storage.
 
 On a user's first verified CAIL login only, an old `site-studio-session` cookie
 may resolve an unexpired R2 legacy session. Its server-stored anonymous owner is

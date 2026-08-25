@@ -906,7 +906,7 @@ export function createProjectTools(
 
         // SS-18: protected system files (.metadata.json, .thumbnail.png) are
         // guarded on delete/rename; guard writes too so the agent can't overwrite
-        // .metadata.json and flip published/slug/publishedUrl.
+        // .metadata.json and flip published/slug.
         if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
           return {
             ok: false,

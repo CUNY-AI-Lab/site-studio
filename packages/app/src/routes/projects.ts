@@ -14,6 +14,8 @@ import {
   type LoggingVariables,
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
+import { getUserHandle } from "../lib/handles";
+import { getPublishedBaseUrl, publishedProjectUrl } from "../lib/published-url";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -28,12 +30,20 @@ const createSnapshotSchema = z.object({
   label: z.string().min(1).max(160).optional()
 });
 
-function toProjectSummary(id: string, metadata: ProjectMetadata | null) {
+function toProjectSummary(
+  id: string,
+  metadata: ProjectMetadata | null,
+  publishedBaseUrl: string,
+  handle: string | null,
+) {
+  const publishedUrl = metadata?.published && metadata.slug && handle
+    ? publishedProjectUrl(publishedBaseUrl, handle, metadata.slug)
+    : undefined;
   return {
     id,
     name: metadata?.name || id,
     published: metadata?.published || false,
-    publishedUrl: metadata?.publishedUrl,
+    publishedUrl,
     thumbnailUrl: metadata?.thumbnailUrl
   };
 }
@@ -46,8 +56,15 @@ export function createProjectRouter() {
     const logging = getLoggingContext(c, user.operationalSubject);
     const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, logging);
     const projectIds = await storage.listProjects(user.id);
+    const publishedBaseUrl = getPublishedBaseUrl(c.req.url, c.env.PUBLISHED_BASE_URL);
+    const handle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, user.id);
     const projects = await Promise.all(
-      projectIds.map(async (projectId) => toProjectSummary(projectId, await storage.getProjectMetadata(user.id, projectId)))
+      projectIds.map(async (projectId) => toProjectSummary(
+        projectId,
+        await storage.getProjectMetadata(user.id, projectId),
+        publishedBaseUrl,
+        handle,
+      ))
     );
 
     return c.json({ projects });
@@ -147,7 +164,12 @@ export function createProjectRouter() {
       }
       throw error;
     }
-    return c.json(toProjectSummary(nextId, updated));
+    return c.json(toProjectSummary(
+      nextId,
+      updated,
+      getPublishedBaseUrl(c.req.url, c.env.PUBLISHED_BASE_URL),
+      await getUserHandle(c.env.SITE_STUDIO_BUCKET, user.id),
+    ));
   });
 
   app.delete("/api/projects/:id", async (c) => {

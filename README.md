@@ -21,10 +21,16 @@ sandboxed Dynamic Worker. Preview and published content are served by the app
 itself. There is no publisher service, release manifest, copied publish tree,
 deployment matrix, or compatibility routing layer.
 
-Publishing sets live project metadata to `published: true`. The single public
-shape is `/u/:handle/:slug/*`, where the handle is chosen by the user. Internal
-CAIL subjects never appear in public URLs. Editing a published project changes
-its public bytes; snapshots, not publish artifacts, provide content recovery.
+Publishing sets live project metadata to `published: true` and reserves the
+project's durable `slug`. The single public shape is `/u/:handle/:slug/*`, where
+the handle is chosen by the user. Internal CAIL subjects never appear in public
+URLs. A separate owner mapping stores the handle while project metadata stores
+the slug and publication state, not a full host URL; the API derives the
+current link from `PUBLISHED_BASE_URL` at read time. Moving
+the public mount therefore changes links without rewriting or republishing
+projects. DNS and any redirects from the former mount remain deployment
+responsibilities. Editing a published project changes its public bytes;
+snapshots, not publish artifacts, provide content recovery.
 
 ## Identity and model access
 
