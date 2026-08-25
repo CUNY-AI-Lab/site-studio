@@ -26,7 +26,7 @@
 		files: FileNode[],
 		projectId: string,
 		onSelect: (path: string) => void,
-		onRefresh: () => void
+		onRefresh: () => void | Promise<void>
 	} = $props();
 
 	let fileInput: HTMLInputElement;
@@ -52,7 +52,7 @@
 			if (!response.ok) await handleApiError(response);
 
 			// Refresh file list
-			onRefresh();
+			await onRefresh();
 
 			// Clear input
 			input.value = '';
@@ -94,7 +94,7 @@
 			}
 
 			// Refresh file list
-			onRefresh();
+			await onRefresh();
 		} catch (error) {
 			console.error('Error deleting file:', error);
 			toast.error(`Couldn't delete that file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
@@ -124,7 +124,7 @@
 			}
 
 			// Refresh file list
-			onRefresh();
+			await onRefresh();
 		} catch (error) {
 			console.error('Error renaming file:', error);
 			toast.error(`Couldn't rename that file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);

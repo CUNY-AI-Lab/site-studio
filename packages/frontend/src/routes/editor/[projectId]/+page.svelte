@@ -25,6 +25,11 @@
 	import ImageManagerDialog from '$lib/components/ImageManagerDialog.svelte';
 	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
 	import { toast } from '$lib/toast.svelte';
+	import {
+		createFileTreeRefreshCoordinator,
+		type FileTreeRefreshRequest,
+		type FileTreeRefreshSource
+	} from '$lib/file-tree-refresh';
 	import { Pane } from 'paneforge';
 	import { z } from 'zod';
 	import type { Driver } from 'driver.js';
@@ -252,6 +257,66 @@
 		return data.files;
 	}
 
+	function isCurrentFileContext(targetProjectId: string, targetContextVersion: number): boolean {
+		return targetProjectId === projectId && targetContextVersion === projectLoadVersion;
+	}
+
+	function isCurrentFileRefresh(request: FileTreeRefreshRequest): boolean {
+		return isCurrentFileContext(request.projectId, request.contextVersion);
+	}
+
+	const fileTreeRefreshCoordinator = createFileTreeRefreshCoordinator<ProjectFile[]>({
+		load: loadFiles,
+		isCurrent: isCurrentFileRefresh,
+		onLoaded: async (request, loadedFiles) => {
+			if (!isCurrentFileRefresh(request)) return;
+
+			filesLoadError = null;
+			files = loadedFiles;
+
+			if (request.reloadCurrentFile && currentFile) {
+				const filePath = currentFile;
+				await onFileSelect(filePath, request.projectId, request.contextVersion);
+			}
+
+			if (request.refreshPreview && isCurrentFileRefresh(request)) {
+				previewComponent?.refresh();
+			}
+		},
+		onError: (request, error) => {
+			if (!isCurrentFileRefresh(request)) return;
+
+			console.error('Error refreshing files:', error);
+			filesLoadError = error instanceof Error ? error.message : 'Failed to load project files';
+			toast.error(
+				request.source === 'project-load'
+					? 'Could not load the project. Check your connection and retry.'
+					: 'Could not refresh the file list. Check your connection and retry.'
+			);
+		}
+	});
+
+	$effect(() => {
+		return () => fileTreeRefreshCoordinator.dispose();
+	});
+
+	function requestFileRefresh(
+		source: FileTreeRefreshSource,
+		options: Partial<Pick<FileTreeRefreshRequest, 'reloadCurrentFile' | 'refreshPreview'>> = {},
+		targetProjectId = projectId,
+		targetContextVersion = projectLoadVersion
+	): Promise<void> {
+		if (!targetProjectId) return Promise.resolve();
+
+		return fileTreeRefreshCoordinator.request({
+			projectId: targetProjectId,
+			contextVersion: targetContextVersion,
+			source,
+			reloadCurrentFile: options.reloadCurrentFile ?? false,
+			refreshPreview: options.refreshPreview ?? false
+		});
+	}
+
 	function findFileByPath(nodes: ProjectFile[], filePath: string): ProjectFile | null {
 		for (const node of nodes) {
 			if (node.type === 'file' && node.path === filePath) {
@@ -274,10 +339,17 @@
 
 	let fileSelectCounter = 0;
 
-	async function onFileSelect(filePath: string) {
-		if (!projectId) return;
+	async function onFileSelect(
+		filePath: string,
+		expectedProjectId = projectId,
+		expectedContextVersion = projectLoadVersion
+	) {
+		if (!isCurrentFileContext(expectedProjectId, expectedContextVersion)) return;
+
+		const targetProjectId = expectedProjectId;
 		const didFlushPendingSave = await flushPendingSave();
 		if (!didFlushPendingSave) return;
+		if (!isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
 
 		const requestId = ++fileSelectCounter;
 		const selectedFile = findFileByPath(files, filePath);
@@ -299,13 +371,13 @@
 
 		try {
 			const response = await apiResponseFetch(
-				resolvePath(`/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`),
+				resolvePath(`/api/projects/${targetProjectId}/file?path=${encodeURIComponent(filePath)}`),
 				{
 					credentials: 'include'
 				}
 			);
 			if (response.status === 415) {
-				if (requestId !== fileSelectCounter) return;
+				if (requestId !== fileSelectCounter || !isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
 				currentFileIsText = false;
 				fileContent = '';
 				currentFileEtag = null;
@@ -315,7 +387,7 @@
 			if (!response.ok) throw new Error('Failed to load file');
 
 			// Ignore stale response if user selected a different file
-			if (requestId !== fileSelectCounter) return;
+			if (requestId !== fileSelectCounter || !isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
 
 			const data = parseLoadedFileResponse(await response.text());
 			currentFileContentType = data.contentType || selectedFile?.contentType || '';
@@ -327,7 +399,7 @@
 			} catch (error) {
 				console.error('Could not read encrypted local draft:', error);
 			}
-			if (requestId !== fileSelectCounter) return;
+			if (requestId !== fileSelectCounter || !isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
 			if (draft && draft.content !== data.content) {
 				fileContent = draft.content;
 				currentFileEtag = draft.baseEtag;
@@ -339,7 +411,7 @@
 			currentFileOpenStatus = 'loaded';
 		} catch (error) {
 			console.error('Error loading file:', error);
-			if (requestId === fileSelectCounter) {
+			if (requestId === fileSelectCounter && isCurrentFileContext(targetProjectId, expectedContextVersion)) {
 				// SS-47: the load FAILED — do not present the previous file's text as
 				// this file, and do not drop into an unguarded-write state (the etag
 				// is gone, so autosave would silently overwrite the file with stale
@@ -467,15 +539,15 @@
 		};
 	});
 
-	async function refreshProjectState(targetProjectId: string) {
-		const loadVersion = ++projectLoadVersion;
+	async function refreshProjectState(targetProjectId: string, loadVersion = ++projectLoadVersion) {
 		projectMissing = false;
-		let loadedFiles: ProjectFile[];
-		let loadedProjects: Project[];
+		let loadedProjects: Project[] | undefined;
 		try {
-			[loadedFiles, loadedProjects] = await Promise.all([
-				loadFiles(targetProjectId),
-				loadAllProjects()
+			await Promise.all([
+				requestFileRefresh('project-load', {}, targetProjectId, loadVersion),
+				loadAllProjects().then((projects) => {
+					loadedProjects = projects;
+				})
 			]);
 		} catch (error) {
 			console.error('Error loading project state:', error);
@@ -490,12 +562,11 @@
 			return;
 		}
 
-		if (loadVersion !== projectLoadVersion || targetProjectId !== projectId) {
+		if (!isCurrentFileContext(targetProjectId, loadVersion) || filesLoadError || !loadedProjects) {
 			return;
 		}
 
 		filesLoadError = null;
-		files = loadedFiles;
 		allProjects = loadedProjects;
 		currentProject = loadedProjects.find((project) => project.id === targetProjectId) || null;
 		projectMissing = currentProject === null;
@@ -503,16 +574,8 @@
 	}
 
 	/** Retry/refresh the file tree from CodeView; failures surface, never blank. */
-	async function handleRefreshFiles() {
-		try {
-			const loadedFiles = await loadFiles();
-			filesLoadError = null;
-			files = loadedFiles;
-		} catch (error) {
-			console.error('Error refreshing files:', error);
-			filesLoadError = error instanceof Error ? error.message : 'Failed to load project files';
-			toast.error('Could not refresh the file list. Check your connection and retry.');
-		}
+	async function handleRefreshFiles(): Promise<void> {
+		await requestFileRefresh('manual');
 	}
 
 	async function navigateToProject(targetProjectId: string) {
@@ -525,6 +588,7 @@
 	}
 
 	async function handleProjectChange(targetProjectId: string, fallbackProjectId: string | null) {
+		const loadVersion = ++projectLoadVersion;
 		const didFlushPendingSave = await flushPendingSave();
 		if (!didFlushPendingSave) {
 			if (fallbackProjectId && fallbackProjectId !== targetProjectId) {
@@ -544,7 +608,7 @@
 		projectMissing = false;
 		currentProject = null;
 
-		await refreshProjectState(targetProjectId);
+		await refreshProjectState(targetProjectId, loadVersion);
 	}
 
 	$effect(() => {
@@ -556,26 +620,7 @@
 	});
 
 	async function onAgentUpdate() {
-		// Reload files when agent makes changes. SS-48: on failure keep the tree
-		// we already have (it is stale, not gone) and say so, rather than
-		// rendering the project as empty.
-		try {
-			files = await loadFiles(projectId);
-			filesLoadError = null;
-		} catch (error) {
-			console.error('Error reloading files after agent update:', error);
-			toast.error('Could not refresh the file list after the last change.');
-		}
-
-		// Reload current file if it's open
-		if (currentFile) {
-			await onFileSelect(currentFile);
-		}
-
-		// Refresh preview to show agent's changes
-		if (previewComponent) {
-			previewComponent.refresh();
-		}
+		await requestFileRefresh('agent', { reloadCurrentFile: true, refreshPreview: true });
 	}
 
 	async function handleCurrentFileDownload(filePath: string) {

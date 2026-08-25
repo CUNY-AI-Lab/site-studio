@@ -125,7 +125,6 @@ import {
 	// transport owns active response streams; these markers cover server resume
 	// announcements that can arrive after the local stream has been stopped.
 	let cancelledRequestIds = $state<Set<string>>(new Set());
-	let settledRequestIds = $state<Set<string>>(new Set());
 	let cancelTurnDeliveryPending = false;
 	let ignoreNextSocketClose = $state(false);
 	let requestStartedAt = $state<number | null>(null);
@@ -135,7 +134,6 @@ import {
 	// hook runs. Keep its correlation and message anchors long enough for the one
 	// authenticated history read or the late custom commit to repair the transcript.
 	let pendingHistoryReconciliations = $state<PendingHistoryReconciliation[]>([]);
-	let pendingCommit: { requestId: string; messages: UIChatMessage[] } | null = $state(null);
 	const completedMutatingToolCalls = new Set<string>();
 	let historyRefreshPending = $state(false);
 	// SS-11: guard so we refresh the CSRF cookie at most once per reconnect cycle
@@ -404,7 +402,7 @@ import {
 		};
 	}
 
-	function resetRequestState() {
+	function resetRequestState(scheduleRefresh = true) {
 		isLoading = false;
 		currentStatus = '';
 		currentRequestId = null;
@@ -413,12 +411,11 @@ import {
 		requestStartedAt = null;
 		toolStartTimes = {};
 		isReconnecting = false;
-		schedulePendingHistoryRefresh();
+		if (scheduleRefresh) schedulePendingHistoryRefresh();
 	}
 
 	function cancelResumedRequest(requestId: string) {
 		cancelledRequestIds.add(requestId);
-		settledRequestIds = new Set([...settledRequestIds, requestId].slice(-8));
 		try {
 			sendSocketMessage({ type: AgentMessageType.CF_AGENT_CHAT_REQUEST_CANCEL, id: requestId });
 		} catch (error) {
@@ -1137,17 +1134,7 @@ import {
 			generation: requestGeneration
 		};
 		rememberHistoryReconciliation(reconciliation);
-		const committed = pendingCommit;
-		pendingCommit = null;
 		resetRequestState();
-		if (committed) {
-			setChatMessages(committed.messages);
-			takeHistoryReconciliation(reconciliation.requestId);
-			historyLoadFailed = false;
-			onUpdate();
-			scrollToBottom();
-			return;
-		}
 		const targetProjectId = projectId;
 		const targetEpoch = projectContextEpoch;
 		if (targetProjectId) {
@@ -1194,7 +1181,6 @@ import {
 		expectingContinuation = false;
 		cancelledContinuationPending = false;
 		cancelledRequestIds = new Set();
-		settledRequestIds = new Set();
 		void chat.sendMessage().catch((error) => {
 			if (isCurrentProjectContext(targetProjectId, targetEpoch)) {
 				console.error('Error sending chat request:', error);
@@ -1278,19 +1264,20 @@ import {
 				clearReconciledHistoryEntries(incomingHistory);
 				historyLoadFailed = false;
 				scrollToBottom();
+				schedulePendingHistoryRefresh();
 				break;
 			}
 			case AgentMessageType.CF_AGENT_MESSAGE_UPDATED:
 				if (data.message) {
 					setChatMessages(mergeUpdatedMessage(uiMessages, data.message));
 					clearReconciledHistoryEntries(uiMessages);
+					schedulePendingHistoryRefresh();
 				}
 				scrollToBottom();
 				break;
 			case AgentMessageType.SITE_STUDIO_CHAT_CANCELLED:
 				if (currentRequestId) {
 					cancelledRequestIds.add(currentRequestId);
-					settledRequestIds = new Set([...settledRequestIds, currentRequestId].slice(-8));
 				}
 				cancelledContinuationPending = cancelledContinuationPending || expectingContinuation;
 				resetRequestState();
@@ -1301,14 +1288,8 @@ import {
 				const isCurrentRequest = committed.requestId === currentRequestId;
 				const isActiveTransportRequest = activeRequestIds.has(committed.requestId);
 				const matchingReconciliation = pendingHistoryReconciliations.find(
-					(entry) =>
-						entry.requestId === committed.requestId ||
-						committed.messages.some((message) => message.id === entry.assistantMessageId)
+					(entry) => entry.requestId === committed.requestId
 				);
-				const currentAssistantId = findLastAssistantMessage(uiMessages)?.id;
-				const commitContainsCurrentAssistant = currentAssistantId
-					? committed.messages.some((message) => message.id === currentAssistantId)
-					: false;
 				// The persisted commit is the authoritative terminal for this connection.
 				// The maintained transport removes its request id synchronously when it
 				// sees done:true, while the SDK may still be consuming the final tool
@@ -1319,23 +1300,21 @@ import {
 				if (isLoading && (isCurrentRequest || isActiveTransportRequest)) {
 					if (isActiveTransportRequest) void chat.stop();
 					chatTransport.handleServerTurnCompleted(committed.requestId);
-					resetRequestState();
+					resetRequestState(false);
 					setChatMessages(committed.messages);
 					historyLoadFailed = false;
 					onUpdate();
 					scrollToBottom();
+					schedulePendingHistoryRefresh();
 					break;
 				}
 				if (isLoading) {
-					pendingCommit = { requestId: committed.requestId, messages: committed.messages };
 					historyRefreshPending = true;
 					break;
 				}
-				if (!matchingReconciliation && committed.messages.length < uiMessages.length) {
+				if (!matchingReconciliation) {
 					historyRefreshPending = true;
-					break;
-				}
-				if (!matchingReconciliation && uiMessages.length > 0 && !commitContainsCurrentAssistant && committed.messages.length <= uiMessages.length) {
+					schedulePendingHistoryRefresh();
 					break;
 				}
 				if (matchingReconciliation) takeHistoryReconciliation(matchingReconciliation.requestId);
@@ -1343,6 +1322,7 @@ import {
 				historyLoadFailed = false;
 				onUpdate();
 				scrollToBottom();
+				schedulePendingHistoryRefresh();
 				break;
 			}
 		}
@@ -1414,6 +1394,8 @@ import {
 		attachedFile = null;
 		cancelledContinuationPending = false;
 		cancelTurnDeliveryPending = false;
+		pendingHistoryReconciliations = [];
+		historyRefreshPending = false;
 		resetRequestState();
 		setChatMessages([]);
 		closeSocket();
@@ -1446,7 +1428,6 @@ import {
 		const wasAwaitingContinuation = expectingContinuation;
 		if (stoppedRequestId) {
 			cancelledRequestIds.add(stoppedRequestId);
-			settledRequestIds = new Set([...settledRequestIds, stoppedRequestId].slice(-8));
 		}
 		cancelledContinuationPending = wasAwaitingContinuation;
 		cancelTurnDeliveryPending = true;

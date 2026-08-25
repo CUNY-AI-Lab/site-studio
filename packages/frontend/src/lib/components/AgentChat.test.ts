@@ -616,6 +616,75 @@ describe('AgentChat', () => {
 		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
+	it('repairs an unrelated commit through authenticated history without replacing the active turn', async () => {
+		let historyGets = 0;
+		let authoritativeHistory: UIChatMessage[] = [];
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/get-messages')) {
+				historyGets += 1;
+				return new Response(JSON.stringify(authoritativeHistory), { status: 200 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const { component } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+
+		await component.sendPrompt('keep this turn visible');
+		await settle();
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const userMessageId = JSON.parse(request.init.body).messages.at(-1).id;
+		authoritativeHistory = [
+			{ id: userMessageId, role: 'user', parts: [{ type: 'text', text: 'keep this turn visible' }] },
+			{ id: 'current-persisted-assistant', role: 'assistant', parts: [{ type: 'text', text: 'current persisted answer' }] }
+		];
+
+		ws.serverMessage({
+			type: AgentMessageType.SITE_STUDIO_CHAT_COMMITTED,
+			requestId: 'other-tab-request',
+			messages: [
+				{ id: 'other-tab-user', role: 'user', parts: [{ type: 'text', text: 'other tab turn' }] },
+				{ id: 'other-tab-assistant', role: 'assistant', parts: [{ type: 'text', text: 'other tab answer' }] }
+			]
+		});
+		await settle();
+		expect(screen.queryByText('other tab answer')).not.toBeInTheDocument();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-start', id: 'current-text' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'current-text', delta: 'current answer' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'text-end', id: 'current-text' }),
+			done: true
+		});
+
+		await waitFor(() => expect(screen.getByText('current persisted answer')).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
+		await waitFor(() => expect(historyGets).toBeGreaterThanOrEqual(3));
+		expect(screen.queryByText('other tab answer')).not.toBeInTheDocument();
+	});
+
 	it('does not let a delayed completed-turn history read erase a newer request', async () => {
 		let historyGets = 0;
 		let oldHistoryRequested = false;
