@@ -96,6 +96,22 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		expect(input.value).toBe('custom-name');
 	});
 
+	it('does not let a pending suggestion change the focused name field', async () => {
+		const projects = deferred<Project[]>();
+		mockFetchProjects.mockReturnValueOnce(projects.promise);
+		openDialog();
+
+		const { user, input } = await chooseTemplate(/Alpha template/);
+		await user.click(input);
+		projects.resolve([{ id: 'alpha-1', name: 'alpha-1' }]);
+		await projects.promise;
+		await flushPendingUpdates();
+
+		expect(input.value).toBe('');
+		await user.type(input, 'custom-name');
+		expect(input.value).toBe('custom-name');
+	});
+
 	it('ignores a stale template request after switching templates', async () => {
 		const alphaProjects = deferred<Project[]>();
 		const betaProjects = deferred<Project[]>();
