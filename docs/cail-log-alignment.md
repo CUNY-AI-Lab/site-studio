@@ -127,9 +127,12 @@ Studio does not reproduce either ledger.
 
 ## Decisive sources
 
-- The local CAIL gateway `docs/INTEGRATION.md` defines the stable
-  `X-CAIL-App` attribution slug, user-bound identity forwarding, single-attempt
-  streaming calls, and gateway-owned quota/spend contract. Site Studio keeps
+- The [CAIL Gateway runtime contract](https://github.com/CUNY-AI-Lab/cail-gateway/blob/main/docs/gateway-contract.md),
+  [model-admission contract](https://github.com/CUNY-AI-Lab/cail-gateway/blob/main/docs/model-admission-contract.md),
+  and [quota design](https://github.com/CUNY-AI-Lab/cail-gateway/blob/main/docs/quota-design.md)
+  define the stable `X-CAIL-App` attribution slug, verified user-bound identity
+  forwarding, one-attempt streaming calls, provider-native retention admission,
+  and Gateway-owned `GET /v1/quota` spend display. Site Studio keeps
   `site-studio` low-cardinality and leaves model accounting at that boundary.
 - [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
   (updated June 9, 2026) recommends structured JSON but documents that default
@@ -222,8 +225,10 @@ hostnames/ingress, notification recipients, institution-approved retention,
 the approved monthly product budget, secrets, and deployment authorization also
 remain external.
 
-Site Studio surfaces terminal `quota_exceeded` failures and proxies the typed
-Cloudflare-managed `GET /quota` usage estimate to the authenticated UI. The
-gateway ignores caller-supplied `X-CAIL-Metadata`, so local
+Site Studio surfaces terminal `quota_exceeded` failures. Its authenticated
+`GET /api/quota` route uses `@cuny-ai-lab/cail-client` with the canonical
+`CAIL_API_BASE`, which requests the Gateway's `GET /v1/quota` estimate and
+passes the typed Cloudflare-managed result to the UI. The gateway ignores
+caller-supplied `X-CAIL-Metadata`, so local
 purpose/project/course labels must not be described as authoritative cost
 attribution.
