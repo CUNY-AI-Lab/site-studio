@@ -385,6 +385,20 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await page.getByRole("button", { name: "Send message" }).click();
     await expect.poll(() => completionMessages().count()).toBe(completedMessagesBeforeStop + 1);
 
+    const completedMessagesBeforeMultiple = await completionMessages().count();
+    await chatInput.fill("Run multiple mutating tools.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect.poll(() => completionMessages().count()).toBe(completedMessagesBeforeMultiple + 1);
+    await expect
+      .poll(() => receivedSocketFrames.some((frame) =>
+        frame.type === "site_studio_chat_committed"
+        && frame.messages?.some((message) =>
+          message.role === "assistant"
+          && message.parts.filter((part) => part.type === "tool-codemode").length >= 2,
+        ) === true,
+      ))
+      .toBe(true);
+
     // A blank project is visibly useful only once authored assets execute.
     await page.getByRole("button", { name: "Show code editor" }).click();
     await expect(page.getByRole("button", { name: "Upload file" })).toBeVisible();
@@ -398,6 +412,22 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
         exact: true,
       }),
     ).toBeVisible();
+
+    // Exercise the parent-owned refresh queue across real file mutations. The
+    // mutation requests overlap with their follow-up tree reads; the visible
+    // tree must settle on the final state without losing the current project.
+    page.once("dialog", async (dialog) => {
+      await dialog.accept("browser-child-renamed.js");
+    });
+    await page.getByRole("button", { name: "Rename browser-child.js" }).click();
+    await expect(page.getByRole("button", { name: "browser-child-renamed.js", exact: true })).toBeVisible();
+    page.once("dialog", async (dialog) => {
+      await dialog.accept();
+    });
+    await page.getByRole("button", { name: "Delete browser-child-renamed.js" }).click();
+    await expect(page.getByRole("button", { name: "browser-child-renamed.js", exact: true })).not.toBeVisible();
+    await upload.setInputFiles(CHILD_FIXTURE);
+    await expect(page.getByRole("button", { name: "browser-child.js", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "index.html", exact: true }).click();
     await waitForEditorText(page, "<!DOCTYPE html>");
@@ -554,7 +584,7 @@ async function main(): Promise<void> {
     await waitForWorker(baseUrl, worker.child);
     await runBrowserPath(baseUrl, identity.token);
     console.log(
-      "local browser acceptance passed: dashboard/create/chat-tool/stop-recovery/persisted-commit/edit/upload/preview/CSS+nested-module/version-restore/download/ZIP/reload/delete",
+      "local browser acceptance passed: dashboard/create/chat-tool/stop-recovery/multiple-tools/persisted-commit/edit/upload/rename/delete/preview/CSS+nested-module/version-restore/download/ZIP/reload",
     );
     passed = true;
   } finally {

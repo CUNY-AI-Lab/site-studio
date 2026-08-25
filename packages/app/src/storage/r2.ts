@@ -223,20 +223,6 @@ export class R2ProjectStorage {
     return visible.filter((projectId): projectId is string => projectId !== null).sort();
   }
 
-  async createProject(userId: string, projectId: string, name: string): Promise<ProjectMetadata> {
-    const now = new Date().toISOString();
-    const metadata: ProjectMetadata = {
-      id: projectId,
-      name,
-      createdAt: now,
-      updatedAt: now,
-      published: false
-    };
-
-    await this.putJson(metadataKey(userId, projectId), metadata);
-    return metadata;
-  }
-
   async createProjectIfAbsent(
     userId: string,
     projectId: string,
@@ -422,8 +408,8 @@ export class R2ProjectStorage {
       // fabricate the record. The old absent-object branch wrote a default
       // record via `etagDoesNotMatch: "*"`, so a publish racing a delete could
       // resurrect the just-deleted project as a `{published: true, slug}`
-      // ghost. Creation stays with the explicit create paths (createProject,
-      // createProjectIfAbsent, renameProject's target claim); an update of an
+      // ghost. Creation stays with the explicit create paths
+      // (createProjectIfAbsent, renameProject's target claim); an update of an
       // absent record is always a caller bug or a concurrent delete, and both
       // must surface.
       if (!object) {

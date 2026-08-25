@@ -74,6 +74,9 @@ does the app write the empty subject-keyed completion object
 resolvable legacy source, the same empty record closes the import without
 guessing a mapping.
 
+Resumable legacy metadata migration drops any obsolete stored `publishedUrl`;
+public links are derived from the configured `PUBLISHED_BASE_URL`.
+
 An error returns a private retryable 503 and does not write completion or
 clear the legacy cookie. A later login retries. Verified identity remains the
 sole authentication source; there is no subject session cookie or subject

@@ -34,7 +34,7 @@
 		onFileSelect: (path: string) => void;
 		onEditorChange: (content: string) => void;
 		onDownloadFile: (path: string) => void | Promise<void>;
-		onRefreshFiles: () => void;
+		onRefreshFiles: () => void | Promise<void>;
 		isSaving: boolean;
 	} = $props();
 

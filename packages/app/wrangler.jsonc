@@ -56,14 +56,15 @@
     "CAIL_LOG_ENV": "production",
     "APP_PUBLIC_DOMAIN": "https://tools.ailab.gc.cuny.edu",
     "PUBLISHED_BASE_URL": "https://tools.ailab.gc.cuny.edu/site-studio",
-    // ---- CAIL backbone (see cail-gateway docs/INTEGRATION.md) ----
+    // ---- CAIL model gateway (see cail-gateway docs/gateway-contract.md) ----
     // CAIL_API_BASE: the canonical CAIL Gateway origin. The shared client owns
     // its /v1 model and quota paths. Chat calls hit
     // {CAIL_API_BASE}/v1/chat/completions; image generation hits the native
     // {CAIL_API_BASE}/v1/run.
     "CAIL_API_BASE": "https://tools.ailab.gc.cuny.edu",
-    // CAIL_MODEL: Workers AI catalog id. CAIL policy (2026-07-04): Cloudflare
-    // models only — any override must also be a `@cf/...` id. Default is the
+    // CAIL_MODEL: Workers AI catalog id. CAIL model admission policy
+    // (cail-gateway docs/model-admission-contract.md): Cloudflare models only —
+    // any override must also be a `@cf/...` id. Default is the
     // agentic-coding flagship; `@cf/openai/gpt-oss-120b` is the cheaper fallback.
     "CAIL_MODEL": "@cf/zai-org/glm-5.2",
     // CAIL_IMAGE_MODEL: text-to-image Workers AI catalog id (native /v1/run

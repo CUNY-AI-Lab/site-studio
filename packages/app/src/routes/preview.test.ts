@@ -122,7 +122,7 @@ describe("preview file resolution", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     kv = createMockKV();
-    await storage.createProject(userId, "proj", "Proj");
+    await storage.createProjectIfAbsent(userId, "proj", "Proj");
     await storage.writeFile(userId, "proj", "index.html", "<h1>Home</h1>");
   });
 
@@ -645,9 +645,9 @@ describe("preview token authentication", () => {
     storage = new R2ProjectStorage(bucket);
     kv = createMockKV();
     app = createAuthenticatedPreviewApp();
-    await storage.createProject(userId, "proj", "Proj");
+    await storage.createProjectIfAbsent(userId, "proj", "Proj");
     await storage.writeFile(userId, "proj", "styles.css", "body { color: red; }");
-    await storage.createProject(userId, "other", "Other");
+    await storage.createProjectIfAbsent(userId, "other", "Other");
     await storage.writeFile(userId, "other", "styles.css", "body { color: blue; }");
   });
 
@@ -883,7 +883,7 @@ describe("preview ↔ publish extensionless parity", () => {
     storage = new R2ProjectStorage(bucket);
     app = createTestApp();
     seedHandle(bucket, userId, handle);
-    await storage.createProject(userId, slug, "Site");
+    await storage.createProjectIfAbsent(userId, slug, "Site");
     await storage.writeFile(userId, slug, "index.html", "<h1>Home</h1>");
     // Flat sibling only.
     await storage.writeFile(userId, slug, "about.html", "<h1>Flat About</h1>");

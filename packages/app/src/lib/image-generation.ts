@@ -19,7 +19,8 @@ import { sniffImageType, type ImageType } from "./image-validation";
 import { IMAGE_MAX_UPLOAD_BYTES } from "./constants";
 
 /**
- * Default image-generation model. CAIL policy (docs/INTEGRATION.md §1):
+ * Default image-generation model. CAIL model admission policy
+ * (cail-gateway docs/model-admission-contract.md):
  * Cloudflare models only — must be a Workers AI catalog id (`@cf/...`).
  * Overridable via `CAIL_IMAGE_MODEL`, but the value must also be `@cf/`.
  *

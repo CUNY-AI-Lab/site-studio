@@ -6,7 +6,8 @@ import type { SessionVariables } from "./session";
 import { CSRF_COOKIE_NAME, SESSION_TTL_SECONDS } from "./constants";
 
 /**
- * CSRF protection per docs/INTEGRATION.md §3¾ ("CSRF for gated tools").
+ * CSRF protection per docs/security-and-recovery.md (browser and serving
+ * defenses).
  *
  * Threat model recap: the SSO gate authenticates browsers with an ambient
  * SameSite=Lax cookie, so a forged cross-site request can arrive already
@@ -113,8 +114,8 @@ export async function getOrMintCsrfToken(bucket: R2Bucket, userId: string): Prom
 }
 
 /**
- * Deliver the R2 token to page JS via a cookie (INTEGRATION.md §3¾ rule 3
- * "Delivery"). The token must NEVER appear in a response body — a same-origin
+ * Deliver the R2 token to page JS via a cookie (docs/security-and-recovery.md,
+ * browser and serving defenses). The token must NEVER appear in a response body — a same-origin
  * sibling or user-authored published script could fetch GET /api/csrf with
  * ambient browser credentials and read a JSON token straight out of the body,
  * defeating rule 3. A path-scoped cookie is the one same-origin-proof channel:

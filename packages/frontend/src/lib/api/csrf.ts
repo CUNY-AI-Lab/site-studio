@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { handleApiErrorResponse } from './error-handler';
 
 /**
- * Anti-CSRF token client (CAIL INTEGRATION.md §3¾).
+ * Anti-CSRF token client (docs/security-and-recovery.md, browser and serving
+ * defenses).
  *
  * Every state-changing request to /api/* must carry an `X-CSRF-Token` header, and
  * agent WebSocket connects must append `?csrf=<token>`. The token is DELIVERED by

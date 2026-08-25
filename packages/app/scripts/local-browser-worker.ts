@@ -297,6 +297,7 @@ type LocalAgentTurn = {
   socket: LocalAgentSocket;
   cancelled: boolean;
   held: boolean;
+  toolCallIds: string[];
 };
 
 type LocalWebSocketServer = {
@@ -448,43 +449,49 @@ class LocalSiteBuilderAgent {
       socket,
       cancelled: false,
       held: prompt.includes("hold") || prompt.includes("stop"),
+      toolCallIds: prompt.includes("multiple mutating tools")
+        ? [`local-tool-${requestId}-one`, `local-tool-${requestId}-two`]
+        : [`local-tool-${requestId}`],
     };
     this.activeTurn = turn;
     this.messages.push(structuredClone(latest));
-    const toolCallId = `local-tool-${requestId}`;
     localChatChunk(turn, { type: "text-start", id: `local-text-${requestId}` });
     localChatChunk(turn, {
       type: "text-delta",
       id: `local-text-${requestId}`,
       delta: "Local agent is working. ",
     });
-    localChatChunk(turn, {
-      type: "tool-input-start",
-      toolCallId,
-      toolName: "codemode",
-    });
-    localChatChunk(turn, {
-      type: "tool-input-available",
-      toolCallId,
-      toolName: "codemode",
-      input: { operation: "inspect project", source: "local SiteBuilderAgent" },
-    });
+    for (const toolCallId of turn.toolCallIds) {
+      localChatChunk(turn, {
+        type: "tool-input-start",
+        toolCallId,
+        toolName: "codemode",
+      });
+      localChatChunk(turn, {
+        type: "tool-input-available",
+        toolCallId,
+        toolName: "codemode",
+        input: { operation: "inspect project", source: "local SiteBuilderAgent" },
+      });
+    }
 
     if (turn.held) return;
-    this.finishTurn(turn, toolCallId);
+    this.finishTurn(turn);
   }
 
-  private finishTurn(turn: LocalAgentTurn, toolCallId: string): void {
+  private finishTurn(turn: LocalAgentTurn): void {
     if (turn.cancelled) return;
-    localChatChunk(turn, {
-      type: "tool-output-available",
-      toolCallId,
-      output: {
-        ok: true,
-        boundary: "SITE_BUILDER_AGENT",
-        files: ["index.html", "styles.css"],
-      },
-    });
+    for (const toolCallId of turn.toolCallIds) {
+      localChatChunk(turn, {
+        type: "tool-output-available",
+        toolCallId,
+        output: {
+          ok: true,
+          boundary: "SITE_BUILDER_AGENT",
+          files: ["index.html", "styles.css"],
+        },
+      });
+    }
     localChatChunk(turn, {
       type: "text-delta",
       id: `local-text-${turn.requestId}`,
@@ -505,7 +512,7 @@ class LocalSiteBuilderAgent {
           text: "Local agent is working. The local tool completed successfully.",
           state: "done",
         },
-        {
+        ...turn.toolCallIds.map((toolCallId) => ({
           type: "tool-codemode",
           toolCallId,
           toolName: "codemode",
@@ -519,7 +526,7 @@ class LocalSiteBuilderAgent {
             boundary: "SITE_BUILDER_AGENT",
             files: ["index.html", "styles.css"],
           },
-        },
+        })),
       ],
     };
     this.messages.push(assistant);

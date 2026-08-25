@@ -1,6 +1,7 @@
 export const SESSION_COOKIE_NAME = "site-studio-session";
 /**
- * Delivery cookie for the anti-CSRF token (INTEGRATION.md §3¾ rule 3). The
+ * Delivery cookie for the anti-CSRF token (docs/security-and-recovery.md,
+ * browser and serving defenses). The
  * KV-stored per-subject token is handed to page JS via this cookie instead of
  * a response body, so a same-origin sibling/attacker script cannot read it out
  * of a fetch response. NOT HttpOnly (page JS must read it), Secure, SameSite=Lax,
