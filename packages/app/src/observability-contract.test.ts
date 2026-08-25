@@ -67,7 +67,7 @@ describe("observability source contract", () => {
   });
 
   it("defines queryable build and publish action seams", () => {
-    expect(OBSERVABILITY_CONTRACT_VERSION).toBe(3);
+    expect(OBSERVABILITY_CONTRACT_VERSION).toBe(4);
     expect(OBSERVABILITY_CONTRACT.actions).toEqual({
       build: {
         route: "/api/agents/site-builder/{project_id}",
@@ -161,15 +161,6 @@ describe("observability source contract", () => {
           route: "/api/projects/{id}/observability",
           schemaVersion: "site-studio.action-attempt-admin.v1",
         },
-        modelCostAndLimit: {
-          source: "cail-gateway-key-service-accounting",
-          nativeLimitUsd: 10,
-          applicationLogsAreLedger: false,
-        },
-        sandboxSettlementAndCost: {
-          source: "cail-sandbox-accounting",
-          applicationLogsAreLedger: false,
-        },
       },
     });
     expect(OBSERVABILITY_CONTRACT.access).toEqual({
@@ -179,7 +170,6 @@ describe("observability source contract", () => {
         "dashboards",
         "saved_queries",
         "monitor_configuration",
-        "spend_views",
       ],
     });
     expect(OBSERVABILITY_CONTRACT.syntheticMonitor).toMatchObject({
@@ -221,7 +211,7 @@ describe("observability source contract", () => {
     }
   });
 
-  it("versions the 24-hour SLO, action denominator, coverage, latency, and MTD spend rules", () => {
+  it("versions the 24-hour SLO, action denominator, coverage, and latency rules", () => {
     const levels = OBSERVABILITY_CONTRACT.serviceLevels;
     expect(levels.evaluation).toEqual({
       reliabilityWindowHours: 24,
@@ -317,16 +307,7 @@ describe("observability source contract", () => {
       criticalMultiplier: 2,
       minimumEligibleActions: 10,
     });
-    expect(levels.spend).toEqual({
-      source: "cail-gateway-usage-ledger",
-      productId: "site-studio",
-      window: "calendar_month_to_date_utc",
-      measure: "sum_cost_micro_usd",
-      budgetInput: "monthly_budget_micro_usd",
-      warningPercent: 80,
-      criticalPercent: 95,
-      exhaustedPercent: 100,
-    });
+    expect(levels).not.toHaveProperty("spend");
   });
 
   it("returns a stable, no-store app liveness response with null local metadata", async () => {
