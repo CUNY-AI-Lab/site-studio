@@ -1135,6 +1135,82 @@ describe('AgentChat', () => {
 		expect(screen.queryByText('Needs attention')).not.toBeInTheDocument();
 	});
 
+	it('shows the tool card without a duplicate large status card while a tool runs', async () => {
+		const { component, container } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('inspect the project');
+		await settle();
+
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({ type: 'tool-input-start', toolCallId: 'read-1', toolName: 'read_file' })
+		});
+		ws.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: request.id,
+			body: JSON.stringify({
+				type: 'tool-input-available',
+				toolCallId: 'read-1',
+				toolName: 'read_file',
+				input: { path: 'index.html' }
+			})
+		});
+
+		await waitFor(() => expect(container.querySelectorAll('.tool-card')).toHaveLength(1));
+		expect(container.querySelectorAll('.active-status-card')).toHaveLength(0);
+		expect(screen.getByText('Working')).toBeInTheDocument();
+	});
+
+	it('uses one neutral status while the model continues after a tool result', async () => {
+		const { component, container } = renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		await component.sendPrompt('inspect the project');
+		await settle();
+
+		const request = ws.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(request).toBeTruthy();
+		const sendChunk = (body: JsonValue) => {
+			ws.serverMessage({
+				type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+				id: request.id,
+				body: JSON.stringify(body)
+			});
+		};
+		sendChunk({ type: 'tool-input-start', toolCallId: 'read-2', toolName: 'read_file' });
+		sendChunk({
+			type: 'tool-input-available',
+			toolCallId: 'read-2',
+			toolName: 'read_file',
+			input: { path: 'index.html' }
+		});
+		await waitFor(() => expect(container.querySelector('.tool-card.status-running')).not.toBeNull());
+		sendChunk({
+			type: 'tool-output-available',
+			toolCallId: 'read-2',
+			toolName: 'read_file',
+			output: { ok: true, path: 'index.html', content: '<h1>Site</h1>', truncated: false }
+		});
+
+		await waitFor(() => expect(container.querySelector('.tool-card.status-success')).not.toBeNull());
+		await waitFor(() => expect(container.querySelectorAll('.active-status-card')).toHaveLength(1));
+		expect(screen.getByText('Working...')).toBeInTheDocument();
+		expect(screen.queryByText('Writing the response back into the chat.')).not.toBeInTheDocument();
+		expect(screen.queryByText(/Still working|Inspecting the current project/)).not.toBeInTheDocument();
+	});
+
 	it('handles a plain-text error frame body (CAIL quota) without noise or duplication', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { component } = mount();

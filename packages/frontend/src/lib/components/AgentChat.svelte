@@ -448,91 +448,11 @@ import {
 		return getRunningToolFromParts(lastAssistant.parts);
 	}
 
-	function getActivityTarget(tool: RunningToolState | null): string {
-		if (!tool) return '';
-
-		const { input } = tool;
-		const pathValue =
-			input.file_path ?? input.path ?? input.directory_path ?? input.oldPath ?? input.page_name ?? '';
-
-		if (!pathValue) return '';
-
-		const parts = pathValue.split('/');
-		return parts[parts.length - 1] || pathValue;
-	}
-
-	function getActivitySummary(
-		tool: RunningToolState | null,
-		status: string,
-		elapsedMs: number
-	): ActivitySummary {
-		const headline = status || 'Thinking...';
-
-		if (!tool) {
-			if (headline === 'Responding...') {
-				return {
-					headline,
-					detail: 'Writing the response back into the chat.'
-				};
-			}
-
-			return {
-				headline,
-				detail:
-					elapsedMs > 20000
-						? 'Still working through the next step. Larger requests can take a bit.'
-						: 'Still working on the next step.'
-			};
-		}
-
-		switch (normalizeToolName(tool.name)) {
-			case 'codemode':
-				return {
-					headline,
-					detail:
-						elapsedMs < 8000
-							? 'Reviewing the current project and planning the next edits.'
-							: elapsedMs < 20000
-								? 'Editing project files and checking the result.'
-								: 'Still working through project changes. Larger site updates can take a bit.'
-				};
-			case 'extract_document_text':
-				return {
-					headline,
-					detail: 'Reading the uploaded document so the agent can use that content in the site.'
-				};
-			case 'list_files':
-			case 'search_files':
-			case 'read_file':
-				return {
-					headline,
-					detail: 'Inspecting the current project files before making changes.'
-				};
-			case 'write_file':
-			case 'edit_file':
-			case 'rename_file':
-			case 'delete_file':
-			case 'add_page':
-				return {
-					headline,
-					detail: 'Updating project files for this request.'
-				};
-			case 'scaffold_template':
-				return {
-					headline,
-					detail: 'Setting up the requested starting structure.'
-				};
-			case 'ask_user_question':
-				return {
-					headline,
-					detail: 'The agent is waiting for your answer before it can continue.'
-				};
-			default:
-				return {
-					headline,
-					detail: 'Running the next step for your request.'
-				};
-		}
+	function getActivitySummary(status: string): ActivitySummary {
+		return {
+			headline: status.startsWith('Unable to') ? status : 'Working...',
+			detail: ''
+		};
 	}
 
 	function toDisplayMessages(
@@ -1333,8 +1253,7 @@ import {
 	let requestElapsedMs = $derived(requestStartedAt ? Math.max(0, clockNow - requestStartedAt) : 0);
 	let requestElapsedLabel = $derived(formatElapsedTime(requestElapsedMs));
 	let currentRunningTool = $derived(getCurrentRunningTool(uiMessages));
-	let activitySummary = $derived(getActivitySummary(currentRunningTool, currentStatus, requestElapsedMs));
-	let activeToolTarget = $derived(getActivityTarget(currentRunningTool));
+	let activitySummary = $derived(getActivitySummary(currentStatus));
 
 	$effect(() => {
 		return () => {
@@ -1813,7 +1732,7 @@ import {
 			{/if}
 		{/key}
 
-		{#if isLoading}
+		{#if isLoading && !currentRunningTool}
 			<div class="active-status-card" aria-live="polite">
 				<div class="active-status-header">
 					<div class="active-status-heading">
@@ -1821,15 +1740,12 @@ import {
 							<Loader2 size={16} class="animate-spin" />
 							<span class="active-status-title">{activitySummary.headline}</span>
 						</div>
-						<p class="active-status-detail">{activitySummary.detail}</p>
+						{#if activitySummary.detail}
+							<p class="active-status-detail">{activitySummary.detail}</p>
+						{/if}
 					</div>
 					<span class="active-status-time">{requestElapsedLabel}</span>
 				</div>
-				{#if activeToolTarget}
-					<div class="active-status-meta">
-						<span class="status-pill muted">{activeToolTarget}</span>
-					</div>
-				{/if}
 				<div class="active-status-bar" aria-hidden="true">
 					<span class="active-status-bar-fill"></span>
 				</div>
@@ -2094,28 +2010,6 @@ import {
 		background: var(--color-bg-secondary);
 		border: 1px solid var(--color-border);
 		flex-shrink: 0;
-	}
-
-	.active-status-meta {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.5rem;
-	}
-
-	.status-pill {
-		display: inline-flex;
-		align-items: center;
-		padding: 0.25rem 0.625rem;
-		background: var(--color-primary-light);
-		color: var(--color-primary);
-		font-size: 0.75rem;
-		font-weight: 500;
-	}
-
-	.status-pill.muted {
-		background: var(--color-bg-secondary);
-		color: var(--color-text-secondary);
-		border: 1px solid var(--color-border);
 	}
 
 	.active-status-bar {
