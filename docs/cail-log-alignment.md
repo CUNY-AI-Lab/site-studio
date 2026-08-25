@@ -14,9 +14,9 @@ shared observability workspace package.
   `cail-v1-<32 lowercase hex>`. This is a log representation only; storage,
   Durable Object and handle keys remain the exact identity `sub`.
   Legacy and anonymous owner identifiers remain anonymous.
-- The CAIL model gateway remains the owner of model-call success, token, quota,
-  latency, and spend records. Site Studio does not duplicate those events or use
-  application logs as a spend ledger.
+- The CAIL Gateway/Cloudflare AI Gateway boundary remains authoritative for
+  model-call success, token, quota, latency, and spend records. Site Studio does
+  not duplicate those events or use application logs as a spend ledger.
 
 ## Event and acknowledgement map
 
@@ -88,8 +88,8 @@ export window. It evaluates the diagnostic projection, never product state.
 Contract version 2 defines the initial operating posture: full-sampled
 bounded custom events, invocation logs off, no v1 external exporter, default-
 deny `kale-admin` access, a one-minute `ENAM` synthetic profile, rolling 24-hour
-SLOs, latency and reliability thresholds, and month-to-date gateway-ledger spend
-bands. Its action SLI sub-contract versions admission-window assignment, a
+SLOs and latency/reliability thresholds. Its action SLI sub-contract versions
+admission-window assignment, a
 15-minute terminal grace period, exact terminal matching, durable-success
 semantics, and separate build/publish denominators.
 
@@ -106,11 +106,13 @@ minutes. Build/publish admissions get a 15-minute terminal grace period.
 | Build/publish terminal coverage | below 99.5% | below 98.0% | 10 actions |
 
 Request p95 latency warns above five seconds for the app. Action p95 warns above ten minutes for build and 30 seconds for
-publish; critical latency is twice the warning threshold. Spend is
-calendar-month-to-date UTC from the gateway ledger, with bands at 80%, 95%, and
-100% of the externally approved product budget.
+publish; critical latency is twice the warning threshold. Site Studio has no
+spend SLO or threshold ledger. Its authenticated quota endpoint relays the
+verified user's current Cloudflare Gateway estimate and returned accounting
+window as a display-only value; Site Studio does not create a local spend ledger
+or infer a budget from model prices.
 
-Contract version 3 adds the fleet projection without changing that privacy
+Contract version 4 retains the fleet projection without changing that privacy
 posture. At each trusted Worker boundary, the logger uses
 `fanoutSinks(workersStructuredSink, createAnalyticsEngineSink(...))`. The
 library owns the ordered Analytics Engine columns and the
@@ -121,9 +123,11 @@ facts, and Kale project identity.
 
 Analytics Engine counts, rates, and percentiles are weighted cohort diagnostics
 using `_sample_interval`; they are never exact lifecycle or accounting facts.
-Model spend and the native $10 model limit come from CAIL gateway/key-service
-accounting. Sandbox settlement and cost come from Sandbox accounting. Site
-Studio does not reproduce either ledger.
+Model spend, enforcement, and the authenticated quota estimate remain at the
+Cloudflare AI Gateway boundary for the verified user. The estimate is
+display-only and may lag analytics; Site Studio does not reproduce that
+accounting or invent model limits. Sandbox settlement and cost are outside this
+Site Studio observability contract.
 
 ## Decisive sources
 

@@ -15,7 +15,7 @@ import {
 import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./fleet-projection";
 import { z } from "zod";
 
-export const OBSERVABILITY_CONTRACT_VERSION = 3;
+export const OBSERVABILITY_CONTRACT_VERSION = 4;
 export const PRODUCT_ID = "site-studio";
 export const SERVICE_VERSION = "0.1.0";
 
@@ -106,15 +106,6 @@ export const OBSERVABILITY_CONTRACT = {
         route: "/api/projects/{id}/observability",
         schemaVersion: ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION,
       },
-      modelCostAndLimit: {
-        source: "cail-gateway-key-service-accounting",
-        nativeLimitUsd: 10,
-        applicationLogsAreLedger: false,
-      },
-      sandboxSettlementAndCost: {
-        source: "cail-sandbox-accounting",
-        applicationLogsAreLedger: false,
-      },
     },
   },
   access: {
@@ -124,7 +115,6 @@ export const OBSERVABILITY_CONTRACT = {
       "dashboards",
       "saved_queries",
       "monitor_configuration",
-      "spend_views",
     ],
   },
   syntheticMonitor: {
@@ -237,16 +227,6 @@ export const OBSERVABILITY_CONTRACT = {
         criticalMultiplier: 2,
         minimumEligibleActions: 10,
       },
-    },
-    spend: {
-      source: "cail-gateway-usage-ledger",
-      productId: PRODUCT_ID,
-      window: "calendar_month_to_date_utc",
-      measure: "sum_cost_micro_usd",
-      budgetInput: "monthly_budget_micro_usd",
-      warningPercent: 80,
-      criticalPercent: 95,
-      exhaustedPercent: 100,
     },
   },
   dashboardViews: {
