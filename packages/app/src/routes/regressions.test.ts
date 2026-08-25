@@ -262,7 +262,7 @@ describe("route regressions", () => {
   });
 
   it("returns a terse 404 for missing preview assets", async () => {
-    await storage.createProject(userId, "preview-project", "Preview Project");
+    await storage.createProjectIfAbsent(userId, "preview-project", "Preview Project");
     await storage.writeFile(userId, "preview-project", "index.html", "<h1>Hello</h1>");
 
     const response = await app.request(
@@ -277,7 +277,7 @@ describe("route regressions", () => {
   });
 
   it("serves the styled 404 page for missing preview navigations", async () => {
-    await storage.createProject(userId, "preview-project", "Preview Project");
+    await storage.createProjectIfAbsent(userId, "preview-project", "Preview Project");
     await storage.writeFile(userId, "preview-project", "index.html", "<h1>Hello</h1>");
 
     const response = await app.request(
@@ -294,7 +294,7 @@ describe("route regressions", () => {
   });
 
   it("serves the styled 404 page for missing published navigations", async () => {
-    await storage.createProject(userId, "pub", "Pub");
+    await storage.createProjectIfAbsent(userId, "pub", "Pub");
     await storage.writeFile(userId, "pub", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "pub", {
       published: true,
@@ -332,7 +332,7 @@ describe("route regressions", () => {
   });
 
   it("honors a project 404.html for missing published navigations", async () => {
-    await storage.createProject(userId, "pub2", "Pub2");
+    await storage.createProjectIfAbsent(userId, "pub2", "Pub2");
     await storage.writeFile(userId, "pub2", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "pub2", "404.html", "<h1>Custom missing</h1>");
     await storage.updateProjectMetadata(userId, "pub2", {
@@ -351,7 +351,7 @@ describe("route regressions", () => {
   });
 
   it("keeps a terse 404 for missing published assets", async () => {
-    await storage.createProject(userId, "pub3", "Pub3");
+    await storage.createProjectIfAbsent(userId, "pub3", "Pub3");
     await storage.writeFile(userId, "pub3", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "pub3", {
       published: true,
@@ -370,7 +370,7 @@ describe("route regressions", () => {
   });
 
   it("returns 404 for protected published bookkeeping files", async () => {
-    await storage.createProject(userId, "protected-publish", "Protected Publish");
+    await storage.createProjectIfAbsent(userId, "protected-publish", "Protected Publish");
     await storage.writeFile(userId, "protected-publish", "index.html", "<h1>Home</h1>");
     await storage.writeThumbnail(userId, "protected-publish", pngBytes());
     await storage.updateProjectMetadata(userId, "protected-publish", {
@@ -396,7 +396,7 @@ describe("route regressions", () => {
   });
 
   it("returns 404 for missing project file reads and downloads", async () => {
-    await storage.createProject(userId, "files-project", "Files Project");
+    await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
 
     const fileResponse = await app.request(
       "http://site-studio.test/api/projects/files-project/file?path=missing.txt",
@@ -418,7 +418,7 @@ describe("route regressions", () => {
   // SS-18: PROTECTED_FILE_NAMES were guarded on delete/rename but not on write,
   // so a caller could overwrite their own .metadata.json (flip published/slug).
   it("SS-18: rejects a write to .metadata.json via POST /file", async () => {
-    await storage.createProject(userId, "protproj", "Prot Proj");
+    await storage.createProjectIfAbsent(userId, "protproj", "Prot Proj");
     const before = await storage.getProjectMetadata(userId, "protproj");
 
     const response = await app.request(
@@ -447,7 +447,7 @@ describe("route regressions", () => {
   // header token; the ASCII fallback is quote-stripped and the real name rides in
   // the RFC 5987 filename* form.
   it("SS-20: download emits a well-formed Content-Disposition for a quoted filename", async () => {
-    await storage.createProject(userId, "dlproj", "Dl Proj");
+    await storage.createProjectIfAbsent(userId, "dlproj", "Dl Proj");
     await storage.writeFile(userId, "dlproj", 'a"b.txt', "hello");
 
     const response = await app.request(
@@ -466,7 +466,7 @@ describe("route regressions", () => {
   });
 
   it("assigns a unique slug when another published project already owns it", async () => {
-    await storage.createProject(userId, "bar", "Bar");
+    await storage.createProjectIfAbsent(userId, "bar", "Bar");
     await storage.writeFile(userId, "bar", "index.html", "<h1>Alpha</h1>");
     await storage.updateProjectMetadata(userId, "bar", {
       published: true,
@@ -474,7 +474,7 @@ describe("route regressions", () => {
       publishedAt: "2026-04-01T00:00:00.000Z"
     });
 
-    await storage.createProject(userId, "foo", "Foo");
+    await storage.createProjectIfAbsent(userId, "foo", "Foo");
     await storage.writeFile(userId, "foo", "index.html", "<h1>Beta</h1>");
 
     const publishResponse = await app.request(
@@ -515,7 +515,7 @@ describe("route regressions", () => {
   });
 
   it("returns the committed publish when terminal-record RPC outcomes remain ambiguous", async () => {
-    await storage.createProject(userId, "terminal-rpc", "Terminal RPC");
+    await storage.createProjectIfAbsent(userId, "terminal-rpc", "Terminal RPC");
     await storage.writeFile(userId, "terminal-rpc", "index.html", "<h1>Committed</h1>");
     actionAttemptRpc.terminal.mockRejectedValue(new Error("ambiguous Durable Object RPC"));
 
@@ -538,9 +538,9 @@ describe("route regressions", () => {
   });
 
   it("fences a stale publisher after another project reclaims its slug", async () => {
-    await storage.createProject(userId, "former-owner", "Shared");
+    await storage.createProjectIfAbsent(userId, "former-owner", "Shared");
     await storage.writeFile(userId, "former-owner", "index.html", "<h1>Former</h1>");
-    await storage.createProject(userId, "new-owner", "Shared");
+    await storage.createProjectIfAbsent(userId, "new-owner", "Shared");
     await storage.writeFile(userId, "new-owner", "index.html", "<h1>New</h1>");
 
     const reservationKey = `slugreservations/${userId}/shared.json`;
@@ -636,7 +636,7 @@ describe("route regressions", () => {
   });
 
   it("uses the configured published base URL when provided", async () => {
-    await storage.createProject(userId, "configured-url", "Configured Url");
+    await storage.createProjectIfAbsent(userId, "configured-url", "Configured Url");
     await storage.writeFile(userId, "configured-url", "index.html", "<h1>Configured</h1>");
 
     const response = await app.request(
@@ -656,7 +656,7 @@ describe("route regressions", () => {
   });
 
   it("uses the local worker origin for published URLs during loopback development", async () => {
-    await storage.createProject(userId, "local-publish", "Local Publish");
+    await storage.createProjectIfAbsent(userId, "local-publish", "Local Publish");
     await storage.writeFile(userId, "local-publish", "index.html", "<h1>Local</h1>");
 
     const response = await app.request(
@@ -676,7 +676,7 @@ describe("route regressions", () => {
   });
 
   it("derives existing published links from the current base without mutating metadata", async () => {
-    await storage.createProject(userId, "portable", "Portable");
+    await storage.createProjectIfAbsent(userId, "portable", "Portable");
     await storage.writeFile(userId, "portable", "index.html", "<h1>Portable</h1>");
     await storage.updateProjectMetadata(userId, "portable", {
       published: true,
@@ -745,7 +745,7 @@ describe("route regressions", () => {
 
   it("skips malformed project metadata instead of failing the projects list", async () => {
     await bucket.put(`projects/${userId}/broken-project/.metadata.json`, "{not valid json");
-    await storage.createProject(userId, "healthy-project", "Healthy Project");
+    await storage.createProjectIfAbsent(userId, "healthy-project", "Healthy Project");
 
     const response = await app.request(
       "http://site-studio.test/api/projects",
@@ -775,7 +775,7 @@ describe("route regressions", () => {
   });
 
   it("serves the most recently published project when legacy duplicate slugs exist", async () => {
-    await storage.createProject(userId, "bar", "Bar");
+    await storage.createProjectIfAbsent(userId, "bar", "Bar");
     await storage.writeFile(userId, "bar", "index.html", "<h1>Alpha</h1>");
     await storage.updateProjectMetadata(userId, "bar", {
       published: true,
@@ -783,7 +783,7 @@ describe("route regressions", () => {
       publishedAt: "2026-04-01T00:00:00.000Z"
     });
 
-    await storage.createProject(userId, "foo", "Foo");
+    await storage.createProjectIfAbsent(userId, "foo", "Foo");
     await storage.writeFile(userId, "foo", "index.html", "<h1>Beta</h1>");
     await storage.updateProjectMetadata(userId, "foo", {
       published: true,
@@ -805,7 +805,7 @@ describe("route regressions", () => {
     bucket.store.delete(`userhandles/${userId}.json`);
     bucket.store.delete(`handles/${handle}.json`);
 
-    await storage.createProject(userId, "nohandle", "No Handle");
+    await storage.createProjectIfAbsent(userId, "nohandle", "No Handle");
     await storage.writeFile(userId, "nohandle", "index.html", "<h1>Hi</h1>");
 
     const response = await app.request(
@@ -827,7 +827,7 @@ describe("route regressions", () => {
     });
     bucket.store.delete(`handles/${handle}.json`);
 
-    await storage.createProject(userId, "stalepair", "Stale Pair");
+    await storage.createProjectIfAbsent(userId, "stalepair", "Stale Pair");
     await storage.writeFile(userId, "stalepair", "index.html", "<h1>Hi</h1>");
 
     const response = await app.request(
@@ -841,7 +841,7 @@ describe("route regressions", () => {
   });
 
   it("301s a slashless canonical root to the trailing-slash URL with its query", async () => {
-    await storage.createProject(userId, "slashroot", "Slash Root");
+    await storage.createProjectIfAbsent(userId, "slashroot", "Slash Root");
     await storage.writeFile(userId, "slashroot", "index.html", '<link href="styles.css">');
     await storage.updateProjectMetadata(userId, "slashroot", {
       published: true,
@@ -859,7 +859,7 @@ describe("route regressions", () => {
   });
 
   it("retains the configured ingress prefix in slashless redirects", async () => {
-    await storage.createProject(userId, "prefixed-root", "Prefixed Root");
+    await storage.createProjectIfAbsent(userId, "prefixed-root", "Prefixed Root");
     await storage.writeFile(userId, "prefixed-root", "index.html", "<h1>Prefixed</h1>");
     await storage.updateProjectMetadata(userId, "prefixed-root", {
       published: true,
@@ -880,7 +880,7 @@ describe("route regressions", () => {
   });
 
   it("retains the configured ingress prefix in styled 404 home links", async () => {
-    await storage.createProject(userId, "prefixed-404", "Prefixed 404");
+    await storage.createProjectIfAbsent(userId, "prefixed-404", "Prefixed 404");
     await storage.writeFile(userId, "prefixed-404", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "prefixed-404", {
       published: true,
@@ -901,7 +901,7 @@ describe("route regressions", () => {
   });
 
   it("SS-14: resolves an extensionless path to {path}.html", async () => {
-    await storage.createProject(userId, "flat", "Flat");
+    await storage.createProjectIfAbsent(userId, "flat", "Flat");
     await storage.writeFile(userId, "flat", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "flat", "about.html", "<h1>Flat About</h1>");
     await storage.updateProjectMetadata(userId, "flat", { published: true, slug: "flat" });
@@ -916,7 +916,7 @@ describe("route regressions", () => {
   });
 
   it("SS-14: prefers {path}.html over {path}/index.html", async () => {
-    await storage.createProject(userId, "both", "Both");
+    await storage.createProjectIfAbsent(userId, "both", "Both");
     await storage.writeFile(userId, "both", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "both", "about.html", "<h1>Flat</h1>");
     await storage.writeFile(userId, "both", "about/index.html", "<h1>Nested</h1>");
@@ -932,7 +932,7 @@ describe("route regressions", () => {
   });
 
   it("published HTML revalidates mutable URLs and carries ETag with the CSP", async () => {
-    await storage.createProject(userId, "cache", "Cache");
+    await storage.createProjectIfAbsent(userId, "cache", "Cache");
     await storage.writeFile(userId, "cache", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "cache", { published: true, slug: "cache" });
 
@@ -949,7 +949,7 @@ describe("route regressions", () => {
   });
 
   it("returns 304 when a published file validator still matches", async () => {
-    await storage.createProject(userId, "cache-304", "Cache 304");
+    await storage.createProjectIfAbsent(userId, "cache-304", "Cache 304");
     await storage.writeFile(userId, "cache-304", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "cache-304", { published: true, slug: "cache-304" });
 
@@ -974,7 +974,7 @@ describe("route regressions", () => {
   });
 
   it("SS-27: a missing published ASSET does not download the project 404.html", async () => {
-    await storage.createProject(userId, "gate", "Gate");
+    await storage.createProjectIfAbsent(userId, "gate", "Gate");
     await storage.writeFile(userId, "gate", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "gate", "404.html", "<h1>Custom missing</h1>");
     await storage.updateProjectMetadata(userId, "gate", { published: true, slug: "gate" });
@@ -1022,7 +1022,7 @@ describe("served-bytes security headers (§3¾)", () => {
   }
 
   it("sandboxes a served published page (/u/)", async () => {
-    await storage.createProject(userId, "sec", "Sec");
+    await storage.createProjectIfAbsent(userId, "sec", "Sec");
     await storage.writeFile(userId, "sec", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "sec", { published: true, slug: "sec" });
 
@@ -1036,7 +1036,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("sandboxes a served published asset (e.g. .svg)", async () => {
-    await storage.createProject(userId, "sec2", "Sec2");
+    await storage.createProjectIfAbsent(userId, "sec2", "Sec2");
     await storage.writeFile(userId, "sec2", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "sec2", "art.svg", "<svg xmlns='http://www.w3.org/2000/svg'></svg>");
     await storage.updateProjectMetadata(userId, "sec2", { published: true, slug: "sec2" });
@@ -1052,7 +1052,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("sandboxes a project-supplied 404.html", async () => {
-    await storage.createProject(userId, "sec3", "Sec3");
+    await storage.createProjectIfAbsent(userId, "sec3", "Sec3");
     await storage.writeFile(userId, "sec3", "index.html", "<h1>Home</h1>");
     await storage.writeFile(userId, "sec3", "404.html", "<h1>Custom missing</h1>");
     await storage.updateProjectMetadata(userId, "sec3", { published: true, slug: "sec3" });
@@ -1068,7 +1068,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("sandboxes a served preview page", async () => {
-    await storage.createProject(userId, "prev", "Prev");
+    await storage.createProjectIfAbsent(userId, "prev", "Prev");
     await storage.writeFile(userId, "prev", "index.html", "<h1>Preview</h1>");
 
     const response = await app.request(
@@ -1081,7 +1081,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("does NOT sandbox the JSON publish API response", async () => {
-    await storage.createProject(userId, "apisec", "ApiSec");
+    await storage.createProjectIfAbsent(userId, "apisec", "ApiSec");
     await storage.writeFile(userId, "apisec", "index.html", "<h1>Home</h1>");
 
     const response = await app.request(
@@ -1094,7 +1094,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("hardens the styled fallback 404 without sandboxing our own trusted markup", async () => {
-    await storage.createProject(userId, "fb", "Fb");
+    await storage.createProjectIfAbsent(userId, "fb", "Fb");
     await storage.writeFile(userId, "fb", "index.html", "<h1>Home</h1>");
     await storage.updateProjectMetadata(userId, "fb", { published: true, slug: "fb" });
 
@@ -1110,7 +1110,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("adds nosniff but does NOT sandbox the owner thumbnail PNG", async () => {
-    await storage.createProject(userId, "thumb", "Thumb");
+    await storage.createProjectIfAbsent(userId, "thumb", "Thumb");
     await storage.writeThumbnail(userId, "thumb", pngBytes());
 
     const response = await app.request(
@@ -1127,7 +1127,7 @@ describe("served-bytes security headers (§3¾)", () => {
   // SS-21: the thumbnail POST previously trusted image.type === "image/png".
   // Sniff the magic bytes and reject a non-PNG body posted as image/png.
   it("SS-21: rejects a non-PNG body posted to the thumbnail route as image/png", async () => {
-    await storage.createProject(userId, "thumbsniff", "Thumb Sniff");
+    await storage.createProjectIfAbsent(userId, "thumbsniff", "Thumb Sniff");
     const html = new TextEncoder().encode("<!DOCTYPE html><html></html>");
     const form = new FormData();
     // SAFETY: The encoder's backing buffer is an ArrayBuffer in this fixture.
@@ -1149,7 +1149,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("rejects a PNG signature without a valid IHDR chunk", async () => {
-    await storage.createProject(userId, "thumbihdr", "Thumb IHDR");
+    await storage.createProjectIfAbsent(userId, "thumbihdr", "Thumb IHDR");
     const signatureOnly = new Uint8Array(32);
     signatureOnly.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const form = new FormData();
@@ -1166,7 +1166,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
-    await storage.createProject(userId, "thumbok", "Thumb OK");
+    await storage.createProjectIfAbsent(userId, "thumbok", "Thumb OK");
     const form = new FormData();
     // SAFETY: The PNG fixture's backing buffer is an ArrayBuffer.
     form.append(
@@ -1185,7 +1185,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("rejects a thumbnail whose IHDR dimensions exceed the render ceiling", async () => {
-    await storage.createProject(userId, "thumbdimensions", "Thumb Dimensions");
+    await storage.createProjectIfAbsent(userId, "thumbdimensions", "Thumb Dimensions");
     const png = pngBytes();
     new DataView(png.buffer).setUint32(16, 5000);
     const form = new FormData();
@@ -1203,7 +1203,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("rejects a thumbnail body above the thumbnail byte ceiling before buffering it again", async () => {
-    await storage.createProject(userId, "thumbbytes", "Thumb Bytes");
+    await storage.createProjectIfAbsent(userId, "thumbbytes", "Thumb Bytes");
     const form = new FormData();
     // SAFETY: pngBytes returns an ArrayBuffer-backed Uint8Array fixture.
     form.append("image", new File([pngBytes(2 * 1024 * 1024 + 1).buffer as ArrayBuffer], "thumb.png", { type: "image/png" }));
@@ -1261,7 +1261,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-33: unpublish keeps 400 for an existing unpublished project", async () => {
-    await storage.createProject(userId, "draft", "Draft");
+    await storage.createProjectIfAbsent(userId, "draft", "Draft");
 
     const response = await app.request(
       "http://site-studio.test/api/projects/draft/unpublish",
@@ -1274,7 +1274,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-40: GET file returns the content ETag", async () => {
-    await storage.createProject(userId, "editor-etag", "Editor ETag");
+    await storage.createProjectIfAbsent(userId, "editor-etag", "Editor ETag");
     const etag = await storage.writeFile(userId, "editor-etag", "index.html", "first");
 
     const response = await app.request(
@@ -1292,7 +1292,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-40: POST file rejects a stale base ETag without overwriting", async () => {
-    await storage.createProject(userId, "editor-conflict", "Editor Conflict");
+    await storage.createProjectIfAbsent(userId, "editor-conflict", "Editor Conflict");
     const staleEtag = await storage.writeFile(userId, "editor-conflict", "index.html", "first");
     const currentEtag = await storage.writeFile(userId, "editor-conflict", "index.html", "newer");
 
@@ -1316,7 +1316,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-40: POST file rejects a missing base ETag without overwriting", async () => {
-    await storage.createProject(userId, "editor-missing-etag", "Editor Missing ETag");
+    await storage.createProjectIfAbsent(userId, "editor-missing-etag", "Editor Missing ETag");
     await storage.writeFile(userId, "editor-missing-etag", "index.html", "current");
 
     const response = await app.request(
@@ -1335,7 +1335,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-40: POST file cannot create a file through a fabricated base ETag", async () => {
-    await storage.createProject(userId, "editor-no-create", "Editor No Create");
+    await storage.createProjectIfAbsent(userId, "editor-no-create", "Editor No Create");
 
     const response = await app.request(
       "http://site-studio.test/api/projects/editor-no-create/file",
@@ -1357,7 +1357,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-40: POST file accepts a matching base ETag and returns the new ETag", async () => {
-    await storage.createProject(userId, "editor-save", "Editor Save");
+    await storage.createProjectIfAbsent(userId, "editor-save", "Editor Save");
     const baseEtag = await storage.writeFile(userId, "editor-save", "index.html", "first");
 
     const response = await app.request(
@@ -1379,7 +1379,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-31: PATCH rename returns 409 if the target project appears after preflight", async () => {
-    await storage.createProject(userId, "old-name", "Old Name");
+    await storage.createProjectIfAbsent(userId, "old-name", "Old Name");
     await storage.writeFile(userId, "old-name", "index.html", "<h1>Old</h1>");
     const targetMetadataKey = `projects/${userId}/new-name/.metadata.json`;
     const originalPut = bucket.put;
@@ -1421,7 +1421,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-50: PUT files/rename returns 409 when the destination appears after the preflight", async () => {
-    await storage.createProject(userId, "rename-race", "Rename Race");
+    await storage.createProjectIfAbsent(userId, "rename-race", "Rename Race");
     await storage.writeFile(userId, "rename-race", "a.html", "mine");
     const destKey = `projects/${userId}/rename-race/b.html`;
     const originalPut = bucket.put;
@@ -1457,7 +1457,7 @@ describe("served-bytes security headers (§3¾)", () => {
   });
 
   it("SS-51: publish racing a delete returns 404 instead of resurrecting a published ghost", async () => {
-    await storage.createProject(userId, "pub-race", "Pub Race");
+    await storage.createProjectIfAbsent(userId, "pub-race", "Pub Race");
     await storage.writeFile(userId, "pub-race", "index.html", "<h1>Hi</h1>");
     const metadataKey = `projects/${userId}/pub-race/.metadata.json`;
     const originalPut = bucket.put;
@@ -1525,7 +1525,7 @@ describe("image upload hardening", () => {
     app = createTestApp();
     kv = createMockKV();
     csrf = await mintCsrfSession(bucket, userId);
-    await storage.createProject(userId, "imgproj", "Image Project");
+    await storage.createProjectIfAbsent(userId, "imgproj", "Image Project");
   });
 
   it("accepts an image whose magic bytes match its extension", async () => {
@@ -1760,7 +1760,7 @@ describe("images inventory endpoint", () => {
   });
 
   it("lists project images and placeholder findings with an extractable src", async () => {
-    await storage.createProject(userId, "inv", "Inventory");
+    await storage.createProjectIfAbsent(userId, "inv", "Inventory");
     await storage.uploadToProject(userId, "inv", "images/hero.png", pngBytes());
     await storage.writeFile(
       userId,
@@ -1908,7 +1908,7 @@ describe("SS-28 manual snapshot cap (over-cap → 413, normal → 201)", () => {
     app = createTestApp();
     kv = createMockKV();
     csrf = await mintCsrfSession(bucket, userId);
-    await storage.createProject(userId, "snapproj", "Snap Project");
+    await storage.createProjectIfAbsent(userId, "snapproj", "Snap Project");
   });
 
   it("normal-sized project → 201 with a snapshot", async () => {

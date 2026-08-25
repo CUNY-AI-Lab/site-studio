@@ -210,7 +210,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     const patch = (raw: string): RequestInit => ({ ...jsonBody(raw), method: "PATCH" });
 
     beforeEach(async () => {
-      await storage.createProject(userId, "proj-x", "Proj X");
+      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
     });
 
     it("non-JSON body → 400", async () => {
@@ -244,7 +244,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     const url = "http://site-studio.test/api/projects/proj-x/file";
 
     beforeEach(async () => {
-      await storage.createProject(userId, "proj-x", "Proj X");
+      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
     });
 
     it("non-JSON body → 400", async () => {
@@ -282,7 +282,7 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     const put = (raw: string): RequestInit => ({ ...jsonBody(raw), method: "PUT" });
 
     beforeEach(async () => {
-      await storage.createProject(userId, "proj-x", "Proj X");
+      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
       await storage.writeFile(userId, "proj-x", "a.html", "<h1>A</h1>");
     });
 

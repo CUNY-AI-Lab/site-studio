@@ -176,9 +176,9 @@ describe("R2ProjectStorage", () => {
     );
   });
 
-  describe("createProject", () => {
+  describe("createProjectIfAbsent", () => {
     it("creates metadata in R2", async () => {
-      const result = await storage.createProject(userId, projectId, "My Project");
+      const result = await storage.createProjectIfAbsent(userId, projectId, "My Project");
       expect(result.id).toBe(projectId);
       expect(result.name).toBe("My Project");
       expect(result.published).toBe(false);
@@ -227,7 +227,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("returns true when metadata exists", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       expect(await storage.projectExists(userId, projectId)).toBe(true);
     });
 
@@ -240,7 +240,7 @@ describe("R2ProjectStorage", () => {
   describe("listProjects", () => {
     it("returns projects across paginated delimiter listings", async () => {
       for (let index = 0; index < 7; index += 1) {
-        await storage.createProject(userId, `project-${index}`, `Project ${index}`);
+        await storage.createProjectIfAbsent(userId, `project-${index}`, `Project ${index}`);
       }
 
       await expect(storage.listProjects(userId)).resolves.toEqual([
@@ -257,7 +257,7 @@ describe("R2ProjectStorage", () => {
 
   describe("readFile / writeFile", () => {
     it("writes and reads a text file", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
       const content = await storage.readFile(userId, projectId, "index.html");
       expect(content).toBe("<h1>Hello</h1>");
@@ -359,7 +359,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("suffixes when the desired slug is already published by another project", async () => {
-      await storage.createProject(userId, "p1", "P1");
+      await storage.createProjectIfAbsent(userId, "p1", "P1");
       await storage.updateProjectMetadata(userId, "p1", { published: true, slug: "blog" });
       const claim = await storage.resolvePublishedSlug(userId, "blog", "p2");
       expect(claim.slug).toBe("blog-2");
@@ -409,13 +409,13 @@ describe("R2ProjectStorage", () => {
 
   describe("listFiles", () => {
     it("returns empty list for empty project", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       const files = await storage.listFiles(userId, projectId);
       expect(files).toEqual([]);
     });
 
     it("lists files excluding metadata", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hi</h1>");
       await storage.writeFile(userId, projectId, "styles.css", "body {}");
 
@@ -429,7 +429,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("returns all files across paginated listings", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       for (let index = 0; index < 7; index += 1) {
         await storage.writeFile(userId, projectId, `page-${index}.html`, `<h1>${index}</h1>`);
       }
@@ -447,7 +447,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("excludes protected files", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "hi");
       // .metadata.json is already excluded by the listing logic
       const files = await storage.listFiles(userId, projectId);
@@ -460,7 +460,7 @@ describe("R2ProjectStorage", () => {
     // "images" also caught "images2.txt" and "images-old/…". The prefix must be a
     // directory boundary.
     it("SS-7: a prefix listing does not include sibling keys sharing the prefix", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "images/a.png", "A");
       await storage.writeFile(userId, projectId, "images/b.png", "B");
       await storage.writeFile(userId, projectId, "images2.txt", "sibling file");
@@ -474,7 +474,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-7: a prefix already ending in / is not double-slashed", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "images/a.png", "A");
 
       const files = await storage.listFiles(userId, projectId, "images/");
@@ -482,7 +482,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("marks binary files as non-text", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "paper.pdf", new Uint8Array([1, 2, 3]));
 
       const files = await storage.listFiles(userId, projectId);
@@ -555,7 +555,7 @@ describe("R2ProjectStorage", () => {
 
   describe("renameProject", () => {
     it("SS-43: moves files, snapshots, and thumbnail only after every copy succeeds", async () => {
-      await storage.createProject(userId, "old-complete", "Old Complete");
+      await storage.createProjectIfAbsent(userId, "old-complete", "Old Complete");
       await storage.writeFile(userId, "old-complete", "index.html", "<h1>Hi</h1>");
       await storage.writeThumbnail(userId, "old-complete", new Uint8Array([137, 80, 78, 71]));
       // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
@@ -579,7 +579,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("keeps a published rename target hidden until every object is copied", async () => {
-      await storage.createProject(userId, "aaa-source", "Published");
+      await storage.createProjectIfAbsent(userId, "aaa-source", "Published");
       await storage.writeFile(userId, "aaa-source", "index.html", "complete");
       await storage.updateProjectMetadata(userId, "aaa-source", {
         published: true,
@@ -616,7 +616,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-43: rolls back a partial target and preserves the source when a snapshot copy fails", async () => {
-      await storage.createProject(userId, "old-atomic", "Old Atomic");
+      await storage.createProjectIfAbsent(userId, "old-atomic", "Old Atomic");
       await storage.writeFile(userId, "old-atomic", "index.html", "source file");
       // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, "old-atomic", {
@@ -651,7 +651,7 @@ describe("R2ProjectStorage", () => {
     // SS-25: thumbnailUrl embeds the project id, so after a rename it must point
     // at the new id (or be cleared), never at the old/now-deleted project.
     it("SS-25: re-points thumbnailUrl to the new project id", async () => {
-      await storage.createProject(userId, "old-id", "Old");
+      await storage.createProjectIfAbsent(userId, "old-id", "Old");
       await storage.writeFile(userId, "old-id", "index.html", "<h1>Hi</h1>");
       await storage.updateProjectMetadata(userId, "old-id", {
         thumbnailUrl: "/api/projects/old-id/thumbnail"
@@ -667,7 +667,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-25: leaves thumbnailUrl unset when the old metadata had none", async () => {
-      await storage.createProject(userId, "old-id2", "Old2");
+      await storage.createProjectIfAbsent(userId, "old-id2", "Old2");
       await storage.writeFile(userId, "old-id2", "index.html", "<h1>Hi</h1>");
 
       await storage.renameProject(userId, "old-id2", "new-id2");
@@ -677,9 +677,9 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-31: throws when the target metadata appears and leaves the target untouched", async () => {
-      await storage.createProject(userId, "old-id3", "Old3");
+      await storage.createProjectIfAbsent(userId, "old-id3", "Old3");
       await storage.writeFile(userId, "old-id3", "index.html", "<h1>Old</h1>");
-      await storage.createProject(userId, "new-id3", "Existing");
+      await storage.createProjectIfAbsent(userId, "new-id3", "Existing");
       await storage.writeFile(userId, "new-id3", "index.html", "<h1>Existing</h1>");
 
       await expect(storage.renameProject(userId, "old-id3", "new-id3")).rejects.toBeInstanceOf(ProjectExistsError);
@@ -693,7 +693,7 @@ describe("R2ProjectStorage", () => {
 
   describe("deleteProject", () => {
     it("removes all project files and metadata", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "hi");
       await storage.writeFile(userId, projectId, "styles.css", "body {}");
 
@@ -703,7 +703,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("removes project and snapshot keys across paginated listings", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       for (let index = 0; index < 7; index += 1) {
         await storage.writeFile(userId, projectId, `file-${index}.html`, `<h1>${index}</h1>`);
       }
@@ -726,7 +726,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("returns metadata for existing project", async () => {
-      await storage.createProject(userId, projectId, "My Project");
+      await storage.createProjectIfAbsent(userId, projectId, "My Project");
       const metadata = await storage.getProjectMetadata(userId, projectId);
       expect(metadata?.name).toBe("My Project");
       expect(metadata?.published).toBe(false);
@@ -739,7 +739,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("updates metadata fields", async () => {
-      await storage.createProject(userId, projectId, "My Project");
+      await storage.createProjectIfAbsent(userId, projectId, "My Project");
       const updated = await storage.updateProjectMetadata(userId, projectId, {
         published: true,
         slug: "example"
@@ -758,7 +758,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-51: a publish update racing a delete fails instead of resurrecting the project", async () => {
-      await storage.createProject(userId, projectId, "My Project");
+      await storage.createProjectIfAbsent(userId, projectId, "My Project");
       const key = `projects/${userId}/${projectId}/.metadata.json`;
       const originalPut = bucket.put;
       let injected = false;
@@ -784,7 +784,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-30: retries a stale metadata write and preserves both concurrent updates", async () => {
-      await storage.createProject(userId, projectId, "My Project");
+      await storage.createProjectIfAbsent(userId, projectId, "My Project");
       const key = `projects/${userId}/${projectId}/.metadata.json`;
       const originalPut = bucket.put;
       let injected = false;
@@ -820,7 +820,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-30: throws after repeated metadata CAS conflicts", async () => {
-      await storage.createProject(userId, projectId, "My Project");
+      await storage.createProjectIfAbsent(userId, projectId, "My Project");
       const key = `projects/${userId}/${projectId}/.metadata.json`;
       const original = await storage.getProjectMetadata(userId, projectId);
       // SAFETY: This replacement preserves the R2 put signature while forcing
@@ -856,7 +856,7 @@ describe("R2ProjectStorage", () => {
 
   describe("exportProjectZip", () => {
     it("creates a zip archive of project files", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
       await storage.writeFile(userId, projectId, "styles.css", "body {}");
 
@@ -866,7 +866,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("adds README for projects without index.html", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "about.html", "<p>About</p>");
 
       const zip = await storage.exportProjectZip(userId, projectId);
@@ -876,7 +876,7 @@ describe("R2ProjectStorage", () => {
 
   describe("snapshots", () => {
     it("creates and lists snapshots", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
       const result = await storage.createSnapshot(userId, projectId, {
@@ -898,7 +898,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("returns snapshots across paginated listings", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
       for (let index = 0; index < 7; index += 1) {
@@ -923,7 +923,7 @@ describe("R2ProjectStorage", () => {
     it("SS-38: keeps exactly 50 snapshots without pruning at the boundary", async () => {
       vi.useFakeTimers();
       try {
-        await storage.createProject(userId, projectId, "Test");
+        await storage.createProjectIfAbsent(userId, projectId, "Test");
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
         for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
@@ -947,7 +947,7 @@ describe("R2ProjectStorage", () => {
     it("SS-38: prunes exactly the oldest archive and metadata on the 51st snapshot", async () => {
       vi.useFakeTimers();
       try {
-        await storage.createProject(userId, projectId, "Test");
+        await storage.createProjectIfAbsent(userId, projectId, "Test");
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
         const created: ProjectSnapshot[] = [];
@@ -977,7 +977,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-39: lists modern snapshots without GETs for snapshot metadata objects", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
       for (let index = 0; index < 4; index += 1) {
@@ -1000,7 +1000,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-39: falls back to one GET for a legacy snapshot without custom metadata", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
       await storage.createSnapshot(userId, projectId, {
@@ -1041,7 +1041,7 @@ describe("R2ProjectStorage", () => {
       // The prune failure is surfaced through the structured Worker sink.
       const logSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        await storage.createProject(userId, projectId, "Test");
+        await storage.createProjectIfAbsent(userId, projectId, "Test");
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
         for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
@@ -1102,7 +1102,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("restores a snapshot", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Original</h1>");
 
       // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
@@ -1126,7 +1126,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("rolls back every partial write when restoring a snapshot fails", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "a.txt", "snapshot-a");
       await storage.writeFile(userId, projectId, "b.txt", "snapshot-b");
       // SAFETY: This project contains files, so createSnapshot returns a full snapshot.
@@ -1167,7 +1167,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("rolls back overwritten and deleted files when a restore delete fails", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "snapshot");
       // SAFETY: This project contains a file, so createSnapshot returns a full snapshot.
       const snapshot = (await storage.createSnapshot(userId, projectId, {
@@ -1211,7 +1211,7 @@ describe("R2ProjectStorage", () => {
     // over it SKIPS (no read+zip of every file) and returns a visible skip
     // signal instead of a ProjectSnapshot.
     it("SS-28: snapshots a project under MAX_SNAPSHOT_BYTES normally", async () => {
-      await storage.createProject(userId, projectId, "Small");
+      await storage.createProjectIfAbsent(userId, projectId, "Small");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Small site</h1>");
 
       const result = await storage.createSnapshot(userId, projectId, { trigger: "agent" });
@@ -1222,7 +1222,7 @@ describe("R2ProjectStorage", () => {
     });
 
     it("SS-28: skips (visibly) when the project exceeds MAX_SNAPSHOT_BYTES and writes no archive", async () => {
-      await storage.createProject(userId, projectId, "Huge");
+      await storage.createProjectIfAbsent(userId, projectId, "Huge");
       // One oversized file pushes the summed project size past the cap.
       const oversized = "x".repeat(MAX_SNAPSHOT_BYTES + 1);
       await storage.writeFile(userId, projectId, "big.txt", oversized);
@@ -1258,13 +1258,13 @@ describe("R2ProjectStorage", () => {
 
   describe("findPublishedProjectBySlug", () => {
     it("returns null when no published project matches", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       const result = await storage.findPublishedProjectBySlug(userId, "my-slug");
       expect(result).toBeNull();
     });
 
     it("finds published project by slug", async () => {
-      await storage.createProject(userId, projectId, "Test");
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.updateProjectMetadata(userId, projectId, {
         published: true,
         slug: "my-slug"
@@ -1319,7 +1319,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "existing", "Existing");
+    await storage.createProjectIfAbsent("user-a", "existing", "Existing");
     await storage.writeFile("user-a", "existing", "index.html", "keep me");
     journal.values.set("owner-mutation", {
       type: "create",
@@ -1339,7 +1339,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     await storage.writeFile("user-a", "site", "old.txt", "content");
     await storage.writeFile("user-a", "site", "new.txt", "content");
     journal.values.set("owner-mutation", {
@@ -1363,7 +1363,7 @@ describe("OwnerMutationService recovery journal", () => {
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     const admission = {
       type: "upload-if-absent" as const,
       projectId: "site",
@@ -1387,7 +1387,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     const originalPut = journal.put.bind(journal);
     journal.put = vi.fn(async (key, value) => {
       if (key === "upload-admissions") throw new Error("injected DO storage failure");
@@ -1413,7 +1413,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     const prior = [
       { id: "prior-upload", timestamp: 100_000 },
       { id: "corrupt-upload", timestamp: "100_000" },
@@ -1440,7 +1440,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const service = new OwnerMutationService(bucket, journalStore());
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     await storage.writeFile("user-a", "site", "images/photo.png", "existing");
     const operation = {
       type: "upload-if-absent" as const,
@@ -1475,7 +1475,7 @@ describe("OwnerMutationService recovery journal", () => {
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     const existingBytes = (await bucket.list({ prefix: "projects/user-a/site/" })).objects
       .reduce((sum, object) => sum + object.size, 0);
     const policy = {
@@ -1507,7 +1507,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const service = new OwnerMutationService(bucket, journalStore());
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     await service.execute("user-a", { type: "delete-project", projectId: "site" });
 
     await expect(service.execute("user-a", {
@@ -1532,7 +1532,7 @@ describe("OwnerMutationService recovery journal", () => {
       move: vi.fn(async () => undefined)
     };
     const service = new OwnerMutationService(bucket, journal, undefined, history);
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
 
     await expect(service.execute("user-a", {
       type: "delete-project",
@@ -1566,7 +1566,7 @@ describe("OwnerMutationService recovery journal", () => {
       })
     };
     const service = new OwnerMutationService(bucket, journal, undefined, history);
-    await storage.createProject("user-a", "source", "Site");
+    await storage.createProjectIfAbsent("user-a", "source", "Site");
     await storage.writeFile("user-a", "source", "index.html", "complete");
 
     await expect(service.execute("user-a", {
@@ -1593,7 +1593,7 @@ describe("OwnerMutationService recovery journal", () => {
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     await storage.writeFile("user-a", "site", "index.html", "public");
     await storage.updateProjectMetadata("user-a", "site", {
       published: true,
@@ -1641,7 +1641,7 @@ describe("OwnerMutationService recovery journal", () => {
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
-    await storage.createProject("user-a", "aaa-source", "Site");
+    await storage.createProjectIfAbsent("user-a", "aaa-source", "Site");
     await storage.writeFile("user-a", "aaa-source", "index.html", "complete");
     await service.execute("user-a", {
       type: "publish-project",
@@ -1710,14 +1710,14 @@ describe("OwnerMutationService recovery journal", () => {
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
     const service = new OwnerMutationService(bucket, journal);
-    await storage.createProject("user-a", "source", "Site");
+    await storage.createProjectIfAbsent("user-a", "source", "Site");
     await storage.writeFile("user-a", "source", "index.html", "complete");
     await service.execute("user-a", {
       type: "publish-project",
       projectId: "source",
       desiredSlug: "site"
     });
-    await storage.createProject("user-a", "target", "Site");
+    await storage.createProjectIfAbsent("user-a", "target", "Site");
     await storage.writeFile("user-a", "target", "index.html", "complete");
     await storage.updateProjectMetadata("user-a", "target", {
       published: false,
@@ -1754,7 +1754,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const service = new OwnerMutationService(bucket, journalStore());
-    await storage.createProject("user-a", "old-site", "Blog");
+    await storage.createProjectIfAbsent("user-a", "old-site", "Blog");
 
     await expect(service.execute("user-a", {
       type: "publish-project",
@@ -1778,7 +1778,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "existing", "Existing");
+    await storage.createProjectIfAbsent("user-a", "existing", "Existing");
     await storage.writeFile("user-a", "existing", "index.html", "keep me");
     const service = new OwnerMutationService(bucket, journal);
     const journalPut = vi.spyOn(journal, "put");
@@ -1806,7 +1806,7 @@ describe("OwnerMutationService recovery journal", () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
     const journal = journalStore();
-    await storage.createProject("user-a", "site", "Site");
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
     await storage.writeFile("user-a", "site", "old.txt", "source");
     await storage.writeFile("user-a", "site", "new.txt", "existing destination");
     const service = new OwnerMutationService(bucket, journal);
