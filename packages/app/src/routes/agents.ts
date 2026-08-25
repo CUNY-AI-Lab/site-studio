@@ -133,10 +133,11 @@ export function createAgentRouter(resolveAgent: AgentResolver = resolveAgentByNa
 
   async function handleAgentRequest(c: Context<{ Bindings: Env; Variables: AgentRouterVariables }>) {
     const user = getUser(c);
-    // Rule 4 (docs/INTEGRATION.md §3¾): origin-check + token-gate WebSocket
-    // upgrades BEFORE accepting. The browser enforces no same-origin policy on
-    // WS handshakes. The identity JWT is captured on connect, then replaced by
-    // the authenticated refresh route immediately before each model frame.
+    // WebSocket origin-check and token-gating follow docs/security-and-recovery.md
+    // (browser and serving defenses) BEFORE accepting. The browser enforces no
+    // same-origin policy on WS handshakes. The identity JWT is captured on
+    // connect, then replaced by the authenticated refresh route immediately
+    // before each model frame.
     //
     // Judgment call on "gate the first state-changing WS message on your CSRF
     // token": the WS message protocol is owned by @cloudflare/ai-chat, so we

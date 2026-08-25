@@ -361,7 +361,7 @@ async function migrateAnonymousSessionIfPresent(
 /**
  * Auth middleware for protected routes.
  *
- * Identity contract (docs/INTEGRATION.md §3):
+ * Identity contract (docs/security-and-recovery.md, identity and ownership):
  *   1. `X-CAIL-Identity-JWT` must verify as RS256 against
  *      `CAIL_IDENTITY_JWKS`; `CAIL_IDENTITY_ISSUER` must match CAIL's
  *      canonical issuer exactly for audience `cail:site-studio`. The durable

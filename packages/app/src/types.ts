@@ -17,10 +17,10 @@ export interface Env {
   APP_PUBLIC_DOMAIN?: string;
   PUBLISHED_BASE_URL?: string;
   LOADER: WorkerLoader;
-  // ---- CAIL backbone (docs/INTEGRATION.md) ----
+  // ---- CAIL model gateway (cail-gateway docs/gateway-contract.md) ----
   // The public base URL of the CAIL model proxy. The checked-in value is source
   // configuration, not proof of the live deployment; verify operations state
-  // against the gateway integration contract.
+  // against the Gateway runtime contract.
   CAIL_API_BASE?: string;
   // Workers AI model id for the gateway's OpenAI-compatible path (`@cf/...`
   // only under current CAIL policy).

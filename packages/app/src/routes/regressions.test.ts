@@ -991,7 +991,8 @@ describe("route regressions", () => {
 });
 
 /**
- * INTEGRATION.md §3¾ active-content invariant. Every served user/agent byte
+ * docs/security-and-recovery.md (browser and serving defenses) active-content
+ * invariant. Every served user/agent byte
  * (published sites, previews, a project-supplied 404.html) must carry the
  * opaque-origin CSP (`sandbox allow-scripts`, NEVER allow-same-origin) + nosniff
  * so it can never read our cookie/session. JSON API responses and the styled
@@ -1799,7 +1800,8 @@ describe("images inventory endpoint", () => {
 });
 
 /**
- * INTEGRATION.md §3¾ rules 2+3 over every state-changing route. Each mutation
+ * docs/security-and-recovery.md (browser and serving defenses) rules over every
+ * state-changing route. Each mutation
  * must: reject without the token (403 + exact envelope), reject a valid token
  * arriving with `Sec-Fetch-Site: cross-site` (403), and proceed past CSRF with
  * the token + compliant same-origin posture (whatever domain-level status the

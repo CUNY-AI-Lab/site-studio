@@ -46,6 +46,9 @@ stable source owner and original project id so interrupted sweeps reuse the same
 destination instead of creating another suffix. Source deletion happens only
 after copying and chat transfer have succeeded.
 
+Resumable legacy metadata migration drops any obsolete stored `publishedUrl`;
+public links are derived from the configured `PUBLISHED_BASE_URL`.
+
 The app records the empty marker `imports/:subject` only after a successful
 import, or after the first verified login establishes that no resolvable source
 exists. A failure returns a

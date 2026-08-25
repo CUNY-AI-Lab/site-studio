@@ -117,9 +117,10 @@ export async function getRequestIdentity(
 }
 
 /**
- * The CAIL `authentication_required` envelope (docs/INTEGRATION.md §2), returned
- * verbatim so the frontend treats worker-issued and gate-issued 401s alike and
- * redirects to the protected Doorway Site Studio path.
+ * The CAIL `authentication_required` envelope (docs/security-and-recovery.md,
+ * identity and ownership), returned verbatim so the frontend treats worker-issued
+ * and gate-issued 401s alike and redirects to the protected Doorway Site Studio
+ * path.
  */
 export function cailAuthRequiredResponse(): Response {
   const body = createCailAuthError(

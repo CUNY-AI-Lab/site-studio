@@ -76,8 +76,9 @@ export function createApp(agentResolver?: AgentResolver) {
   // including the error and not-found paths.
   app.use("*", requestLogging());
 
-  // Rule 5 (docs/INTEGRATION.md §3¾): credentialed CORS must use a strict
-  // allowlist — never a wildcard or reflected origin. Pinned by test.
+  // Credentialed CORS follows docs/security-and-recovery.md (browser and
+  // serving defenses): strict allowlist, never wildcard or reflected origin.
+  // Pinned by test.
 const allowedOrigins = new Set([
 	"http://localhost:5173",
 	"http://127.0.0.1:5173",
@@ -119,12 +120,13 @@ app.use("/preview/*", cors({
   app.use("/api/projects/:id", requireProject());
   app.use("/api/projects/:id/*", requireProject());
 
-  // Token issuance for the shared contract (INTEGRATION.md §3¾ rule 3): GET
-  // /api/csrf mints/looks-up the stable per-session R2 token and DELIVERS it via
-  // a path-scoped Set-Cookie (setCsrfCookie) — never in the response body. A body
-  // token would be readable by any same-origin sibling or published-site script that
-  // fetches this endpoint with the ambient session cookie, defeating rule 3. The
-  // body is 204 with no token anywhere.
+  // Token issuance for the local CSRF contract (docs/security-and-recovery.md,
+  // browser and serving defenses): GET /api/csrf mints/looks-up the stable
+  // per-session R2 token and DELIVERS it via a path-scoped Set-Cookie
+  // (setCsrfCookie) — never in the response body. A body token would be readable
+  // by any same-origin sibling or published-site script that fetches this
+  // endpoint with the ambient session cookie, defeating the contract. The body
+  // is 204 with no token anywhere.
   app.get("/api/csrf", async (c) => {
     const user = c.get("user");
     const token = await getOrMintCsrfToken(c.env.SITE_STUDIO_BUCKET, user.id);
