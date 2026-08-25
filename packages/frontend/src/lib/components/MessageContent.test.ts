@@ -121,6 +121,21 @@ describe('MessageContent legitimate markdown formatting', () => {
 		expect(pre?.textContent).toContain('const x = 1;');
 	});
 
+	it('renders plain and unknown fenced code without breaking the assistant response', () => {
+		const el = renderContent([
+			'```plaintext',
+			'index.html',
+			'```',
+			'```unregistered-language',
+			'nested-marker.js',
+			'```'
+		].join('\n'));
+		const codeBlocks = el.querySelectorAll('pre code');
+		expect(codeBlocks).toHaveLength(2);
+		expect(codeBlocks[0]).toHaveTextContent('index.html');
+		expect(codeBlocks[1]).toHaveTextContent('nested-marker.js');
+	});
+
 	it('renders a safe https link with its real href intact', () => {
 		const el = renderContent('[link](https://example.com)');
 		const anchor = el.querySelector('a');
