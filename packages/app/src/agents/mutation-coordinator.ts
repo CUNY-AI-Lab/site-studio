@@ -62,15 +62,11 @@ export class MutationCoordinator extends DurableObject<Env> {
         logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
         createProjectHistoryLifecycle(this.env),
       ).recover(anonUserId);
-      if (!this.env.PUBLISHED_BASE_URL) {
-        throw new Error("PUBLISHED_BASE_URL is not configured");
-      }
       return migrateAnonymousData({
         bucket: this.env.SITE_STUDIO_BUCKET,
         kv: this.env.SESSION_KV,
         anonUserId,
         subject,
-        publishedBaseUrl: this.env.PUBLISHED_BASE_URL,
         anonSessionId,
         porter: createAgentHistoryPorter(this.env),
         logging: logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,

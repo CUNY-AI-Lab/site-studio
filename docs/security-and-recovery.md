@@ -124,9 +124,14 @@ longer belong to the active load.
 ## Publishing and rollback
 
 Publishing reserves an owner-local slug and makes current project objects
-public at `/u/:handle/:slug/*`. There is no release generation, copied publish
-directory, manifest, publisher Worker, or publish-specific rollback. Edits and
-restores immediately change a published site's bytes.
+public at `/u/:handle/:slug/*`. The durable public identity is the verified
+handle plus project slug; project metadata does not treat a full host URL as
+authoritative. API links are derived from the current `PUBLISHED_BASE_URL`, so
+moving the public mount does not require rewriting or republishing records.
+DNS and redirects from an old mount are deployment responsibilities. There is
+no release generation, copied publish directory, manifest, publisher Worker,
+or publish-specific rollback. Edits and restores immediately change a
+published site's bytes.
 
 Published responses revalidate mutable paths with ETag and Last-Modified.
 Unpublish removes visibility but cannot revoke bytes already downloaded.

@@ -32,7 +32,7 @@
 
 import type { ProjectMetadata, ProjectSnapshot } from "../types";
 import { z } from "zod";
-import { getMigrationHandle, migrateHandle } from "./handles";
+import { migrateHandle } from "./handles";
 import { readR2Json } from "./r2-json";
 import {
   emitDiagnostic,
@@ -45,7 +45,6 @@ const projectMetadataSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   published: z.boolean(),
-  publishedUrl: z.string().optional(),
   publishedAt: z.string().optional(),
   unpublishedAt: z.string().optional(),
   thumbnailUrl: z.string().optional(),
@@ -127,17 +126,6 @@ function uploadsPrefix(userId: string): string {
 
 function isAnonymousUserId(id: string): boolean {
   return id.startsWith("user_");
-}
-
-/**
- * Build the published URL from the current production base. Imported metadata
- * may contain a host and mount from an older deployment, but that value is not
- * authoritative and must never survive into the subject-owned record.
- */
-function canonicalPublishedUrl(publishedBaseUrl: string, handle: string, slug: string): string {
-  const base = new URL(publishedBaseUrl);
-  const mountPath = base.pathname.replace(/\/+$/, "");
-  return `${base.origin}${mountPath}/u/${handle}/${slug}/`;
 }
 
 async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
@@ -313,8 +301,6 @@ async function copyAnonymousNamespace(options: {
   bucket: R2Bucket;
   anonUserId: string;
   subject: string;
-  subjectHandle: string | null;
-  publishedBaseUrl: string;
   porter?: ChatHistoryPorter;
   /** old anonymous projectId -> subject projectId from an earlier sweep */
   knownProjects?: Record<string, string>;
@@ -325,7 +311,7 @@ async function copyAnonymousNamespace(options: {
   projectMap: Record<string, string>;
   slugMap: Record<string, string>;
 }> {
-  const { bucket, anonUserId, subject, subjectHandle, publishedBaseUrl, porter, logging } = options;
+  const { bucket, anonUserId, subject, porter, logging } = options;
   const projectMap = { ...options.knownProjects };
   const slugMap = { ...options.knownSlugs };
 
@@ -377,15 +363,6 @@ async function copyAnonymousNamespace(options: {
         importedOriginalId: plan.oldId,
       };
       if (plan.newSlug) rewritten.slug = plan.newSlug;
-      if (plan.metadata.publishedUrl && plan.newSlug) {
-        // Never let the subject id or an old host enter a client-visible URL.
-        // When the subject has a handle, build the canonical configured-base
-        // /u/{handle}/ form; otherwise drop the stored URL so it is regenerated
-        // on the next publish once a handle exists.
-        rewritten.publishedUrl = subjectHandle
-          ? canonicalPublishedUrl(publishedBaseUrl, subjectHandle, plan.newSlug)
-          : undefined;
-      }
       await putJsonIfAbsentOrEqual(bucket, `${toPrefix}.metadata.json`, rewritten);
     }
 
@@ -449,8 +426,6 @@ export async function migrateAnonymousData(options: {
   kv: KVNamespace;
   anonUserId: string;
   subject: string;
-  /** Current production public base used to canonicalize imported published URLs. */
-  publishedBaseUrl: string;
   /** The anonymous KV session id (cookie value), deleted on completion. */
   anonSessionId?: string;
   /** Durable Object chat-history porter; failures retain the source for retry. */
@@ -458,7 +433,7 @@ export async function migrateAnonymousData(options: {
   logging?: SiteStudioLoggingContext;
   now?: () => string;
 }): Promise<MigrationResult> {
-  const { bucket, kv, anonUserId, subject, publishedBaseUrl, anonSessionId, porter, logging } = options;
+  const { bucket, kv, anonUserId, subject, anonSessionId, porter, logging } = options;
   const now = options.now ?? (() => new Date().toISOString());
 
   if (!isAnonymousUserId(anonUserId) || anonUserId === subject) {
@@ -509,13 +484,6 @@ export async function migrateAnonymousData(options: {
     return { status, projects };
   };
 
-  // Plan the handle without mutating ownership. The destination metadata can
-  // use the effective handle during the copy sweeps, but the forward/reverse
-  // records must remain anonymous-authoritative until every chat port has
-  // succeeded. Otherwise a failed chat import would make /u/{handle} resolve
-  // to a partial migration while the source is still the retry boundary.
-  const subjectHandle = await getMigrationHandle(bucket, anonUserId, subject);
-
   // ---- Inventory ----
   const anonProjectIds = await listProjectIds(bucket, anonUserId);
   const uploadKeys = await listKeys(bucket, uploadsPrefix(anonUserId));
@@ -532,8 +500,6 @@ export async function migrateAnonymousData(options: {
     bucket,
     anonUserId,
     subject,
-    subjectHandle,
-    publishedBaseUrl,
     porter,
     knownProjects: {},
     knownSlugs: {},
@@ -549,8 +515,6 @@ export async function migrateAnonymousData(options: {
     bucket,
     anonUserId,
     subject,
-    subjectHandle,
-    publishedBaseUrl,
     porter,
     knownProjects: firstSweep.projectMap,
     knownSlugs: firstSweep.slugMap,

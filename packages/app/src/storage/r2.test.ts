@@ -742,10 +742,10 @@ describe("R2ProjectStorage", () => {
       await storage.createProject(userId, projectId, "My Project");
       const updated = await storage.updateProjectMetadata(userId, projectId, {
         published: true,
-        publishedUrl: "https://example.com"
+        slug: "example"
       });
       expect(updated.published).toBe(true);
-      expect(updated.publishedUrl).toBe("https://example.com");
+      expect(updated.slug).toBe("example");
       expect(updated.name).toBe("My Project"); // preserved
     });
 
@@ -805,13 +805,11 @@ describe("R2ProjectStorage", () => {
 
       const updated = await storage.updateProjectMetadata(userId, projectId, {
         published: true,
-        publishedUrl: "https://example.com/u/janedoe/my-project/",
         slug: "my-project"
       });
 
       expect(updated).toMatchObject({
         published: true,
-        publishedUrl: "https://example.com/u/janedoe/my-project/",
         slug: "my-project",
         thumbnailUrl: "/api/projects/my-project/thumbnail"
       });
@@ -1648,9 +1646,7 @@ describe("OwnerMutationService recovery journal", () => {
     await service.execute("user-a", {
       type: "publish-project",
       projectId: "aaa-source",
-      desiredSlug: "site",
-      publishedBaseUrl: "https://published.example",
-      handle: "jane"
+      desiredSlug: "site"
     });
 
     const phases: Array<{
@@ -1719,16 +1715,13 @@ describe("OwnerMutationService recovery journal", () => {
     await service.execute("user-a", {
       type: "publish-project",
       projectId: "source",
-      desiredSlug: "site",
-      publishedBaseUrl: "https://published.example",
-      handle: "jane"
+      desiredSlug: "site"
     });
     await storage.createProject("user-a", "target", "Site");
     await storage.writeFile("user-a", "target", "index.html", "complete");
     await storage.updateProjectMetadata("user-a", "target", {
       published: false,
-      slug: "site",
-      publishedUrl: "https://published.example/u/jane/site/"
+      slug: "site"
     });
     journal.values.set("owner-mutation", {
       type: "rename-project",
@@ -1766,9 +1759,7 @@ describe("OwnerMutationService recovery journal", () => {
     await expect(service.execute("user-a", {
       type: "publish-project",
       projectId: "old-site",
-      desiredSlug: "blog",
-      publishedBaseUrl: "https://published.example",
-      handle: "jane"
+      desiredSlug: "blog"
     })).resolves.toMatchObject({ published: { slug: "blog" } });
     await service.execute("user-a", {
       type: "rename-project",
@@ -1779,9 +1770,7 @@ describe("OwnerMutationService recovery journal", () => {
     await expect(service.execute("user-a", {
       type: "publish-project",
       projectId: "new-site",
-      desiredSlug: "blog",
-      publishedBaseUrl: "https://published.example",
-      handle: "jane"
+      desiredSlug: "blog"
     })).resolves.toMatchObject({ published: { slug: "blog" } });
   });
 

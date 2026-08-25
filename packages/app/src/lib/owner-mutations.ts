@@ -18,7 +18,7 @@ export type OwnerMutation =
   | { type: "rename-project"; projectId: string; nextProjectId: string; name: string }
   | { type: "rename-project-display"; projectId: string; name: string }
   | { type: "delete-project"; projectId: string }
-  | { type: "publish-project"; projectId: string; desiredSlug: string; publishedBaseUrl: string; handle: string }
+  | { type: "publish-project"; projectId: string; desiredSlug: string }
   | { type: "unpublish-project"; projectId: string; unpublishedAt: string }
   | { type: "write-file"; projectId: string; path: string; content: string; baseEtag: string }
   | { type: "write-file-if-absent"; projectId: string; path: string; content: string }
@@ -35,7 +35,7 @@ export type OwnerMutationResult =
   | { written: boolean }
   | { snapshot: SnapshotResult }
   | { restoredSnapshot: ProjectSnapshot; restorePoint: ProjectSnapshot }
-  | { published: { slug: string; url: string } }
+  | { published: { slug: string } }
   | { ok: true };
 
 type Journal =
@@ -392,15 +392,13 @@ export class OwnerMutationService {
             operation.desiredSlug,
             operation.projectId
           );
-          const url = `${operation.publishedBaseUrl.replace(/\/+$/, "")}/u/${operation.handle}/${claim.slug}/`;
           try {
             await this.storage.updateProjectMetadataForSlugClaim(ownerId, operation.projectId, claim, {
               published: true,
-              publishedUrl: url,
               publishedAt: new Date().toISOString(),
               slug: claim.slug
             });
-            return { published: { slug: claim.slug, url } };
+            return { published: { slug: claim.slug } };
           } catch (error) {
             if (!(error instanceof SlugReservationLostError) || attempt === 4) throw error;
           }
@@ -411,7 +409,6 @@ export class OwnerMutationService {
         await this.requireProject(ownerId, operation.projectId);
         await this.storage.updateProjectMetadata(ownerId, operation.projectId, {
           published: false,
-          publishedUrl: undefined,
           unpublishedAt: operation.unpublishedAt
         });
         return { ok: true };

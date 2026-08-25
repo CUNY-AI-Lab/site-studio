@@ -111,7 +111,6 @@ export interface ProjectMetadata {
   createdAt: string;
   updatedAt: string;
   published: boolean;
-  publishedUrl?: string;
   publishedAt?: string;
   unpublishedAt?: string;
   thumbnailUrl?: string;

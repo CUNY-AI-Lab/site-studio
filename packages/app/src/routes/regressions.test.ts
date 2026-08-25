@@ -471,8 +471,7 @@ describe("route regressions", () => {
     await storage.updateProjectMetadata(userId, "bar", {
       published: true,
       slug: "foo",
-      publishedAt: "2026-04-01T00:00:00.000Z",
-      publishedUrl: "https://tools.cuny.qzz.io/u/janedoe/foo/"
+      publishedAt: "2026-04-01T00:00:00.000Z"
     });
 
     await storage.createProject(userId, "foo", "Foo");
@@ -674,6 +673,74 @@ describe("route regressions", () => {
       success: true,
       url: "http://localhost:8792/u/janedoe/local-publish/"
     });
+  });
+
+  it("derives existing published links from the current base without mutating metadata", async () => {
+    await storage.createProject(userId, "portable", "Portable");
+    await storage.writeFile(userId, "portable", "index.html", "<h1>Portable</h1>");
+    await storage.updateProjectMetadata(userId, "portable", {
+      published: true,
+      slug: "portable",
+      publishedAt: "2026-04-01T00:00:00.000Z"
+    });
+    seedHandle(bucket, userId, handle);
+
+    // An older record may still contain the former derived field. Reading it
+    // must ignore that extra data and must not rewrite the project.
+    const metadataKey = `projects/${userId}/portable/.metadata.json`;
+    const metadataObject = await bucket.get(metadataKey);
+    if (!metadataObject) throw new Error("Expected portable metadata fixture");
+    const rawMetadata = z.object({
+      id: z.string(),
+      name: z.string(),
+      createdAt: z.string(),
+      updatedAt: z.string(),
+      published: z.boolean(),
+      publishedAt: z.string().optional(),
+      slug: z.string().optional(),
+      publishedUrl: z.string().optional(),
+    }).parse(JSON.parse(await metadataObject.text()));
+    rawMetadata.publishedUrl = "https://old.example/u/janedoe/portable/";
+    await bucket.put(metadataKey, JSON.stringify(rawMetadata));
+    const before = await bucket.get(metadataKey);
+    if (!before) throw new Error("Expected portable metadata after legacy-field seed");
+    const beforeBytes = await before.text();
+
+    const oldBase = "https://tools.example.edu/site-studio";
+    const oldListResponse = await app.request(
+      "https://site-studio.test/api/projects",
+      undefined,
+      { ...createEnv(bucket), PUBLISHED_BASE_URL: oldBase }
+    );
+    expect(oldListResponse.status).toBe(200);
+    const projectListResponseSchema = z.object({
+      projects: z.array(z.object({ id: z.string(), publishedUrl: z.string().optional() })),
+    });
+    const oldList = projectListResponseSchema.parse(await oldListResponse.json());
+    const oldProject = oldList.projects.find((project) => project.id === "portable");
+    expect(oldProject?.publishedUrl).toBe(`${oldBase}/u/${handle}/portable/`);
+
+    const oldPublicResponse = await app.request(
+      new URL(oldProject?.publishedUrl ?? "https://invalid.example").pathname.replace("/site-studio", ""),
+      undefined,
+      { ...createEnv(bucket), PUBLISHED_BASE_URL: oldBase }
+    );
+    expect(oldPublicResponse.status).toBe(200);
+    await expect(oldPublicResponse.text()).resolves.toContain("<h1>Portable</h1>");
+
+    const newBase = "https://projects.ailab.gc.cuny.edu";
+    const newListResponse = await app.request(
+      "https://site-studio.test/api/projects",
+      undefined,
+      { ...createEnv(bucket), PUBLISHED_BASE_URL: newBase }
+    );
+    const newList = projectListResponseSchema.parse(await newListResponse.json());
+    const newProject = newList.projects.find((project) => project.id === "portable");
+    expect(newProject?.publishedUrl).toBe(`${newBase}/u/${handle}/portable/`);
+
+    const after = await bucket.get(metadataKey);
+    if (!after) throw new Error("Portable metadata disappeared while listing");
+    expect(await after.text()).toBe(beforeBytes);
   });
 
   it("skips malformed project metadata instead of failing the projects list", async () => {

@@ -17,7 +17,6 @@ import type { MutationCoordinator } from "../agents/mutation-coordinator";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
-const PUBLISHED_BASE_URL = "https://tools.ailab.gc.cuny.edu/site-studio";
 
 beforeAll(async () => {
   // Mint the exact production Doorway issuer configured by this suite.
@@ -151,7 +150,6 @@ function createEnv(overrides?: Partial<Env>): Env {
   const env: Env = {
     CAIL_LOG_ENV: "test",
     APP_PUBLIC_DOMAIN: "https://tools.ailab.gc.cuny.edu",
-    PUBLISHED_BASE_URL,
     // SAFETY: Session tests never load a Worker module through this binding.
     LOADER: {} as WorkerLoader,
     CAIL_API_BASE: "https://cail.example/proxy",
@@ -182,7 +180,6 @@ function createEnv(overrides?: Partial<Env>): Env {
           kv: env.SESSION_KV,
           anonUserId,
           subject,
-          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId
         }),
       // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
@@ -199,7 +196,6 @@ function createEnv(overrides?: Partial<Env>): Env {
           kv: env.SESSION_KV,
           anonUserId,
           subject,
-          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId,
         }),
       [DURABLE_OBJECT_BRAND]: undefined as never,
@@ -528,7 +524,6 @@ describe("authMiddleware anonymous-data migration", () => {
           kv,
           anonUserId,
           subject,
-          publishedBaseUrl: env.PUBLISHED_BASE_URL!,
           anonSessionId,
         })
     );
@@ -617,7 +612,6 @@ describe("authMiddleware anonymous-data migration", () => {
             kv,
             anonUserId,
             subject,
-            publishedBaseUrl: env.PUBLISHED_BASE_URL!,
             anonSessionId,
           });
         });
