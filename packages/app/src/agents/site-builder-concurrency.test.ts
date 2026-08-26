@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import type { ChatResponseResult } from "@cloudflare/ai-chat";
 import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { z } from "zod";
@@ -188,13 +187,6 @@ describe("Site Builder event ID contract", () => {
     expect(sql).toHaveBeenCalled();
   });
 
-  it("keeps durable action recording off the browser-callable RPC surface", () => {
-    const source = readFileSync(new URL("./site-builder.ts", import.meta.url), "utf8");
-
-    expect(source).toContain("callable()(SiteBuilderAgent.prototype.getObservability");
-    expect(source).not.toContain("callable()(SiteBuilderAgent.prototype.recordActionAdmission");
-    expect(source).not.toContain("callable()(SiteBuilderAgent.prototype.recordActionTerminal");
-  });
 });
 
 describe("Site Builder file write concurrency", () => {

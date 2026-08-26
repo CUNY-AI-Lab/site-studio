@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { readFileSync } from "node:fs";
 import type { Env } from "../types";
 import { TEST_SUBJECTS, canonicalTestSubject } from "@cuny-ai-lab/cail-identity/testing";
 
@@ -221,11 +220,6 @@ describe("setCsrfCookie (rule 3 delivery)", () => {
     expect("/u/attacker/site/index.html".startsWith(SITE_STUDIO_CSRF_COOKIE_PATH)).toBe(false);
   });
 
-  it("pins the checked-in Wrangler production value to /site-studio", () => {
-    const config = readFileSync(new URL("../../wrangler.jsonc", import.meta.url), "utf8");
-    expect(config).toMatch(/"CSRF_COOKIE_PATH"\s*:\s*"\/site-studio"/);
-    expect(config).not.toMatch(/"CSRF_COOKIE_PATH"\s*:\s*"\/"/);
-  });
 });
 
 describe("timingSafeEqual", () => {

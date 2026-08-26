@@ -24,8 +24,13 @@ import {
   tool,
 } from "ai";
 import { z } from "zod";
-import type { Env, SiteBuilderAgentProps, SnapshotResult } from "../types";
-import { isSnapshotSkipped } from "../types";
+import {
+  isSnapshotSkipped,
+  parsePositiveInteger,
+  type Env,
+  type SiteBuilderAgentProps,
+  type SnapshotResult,
+} from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
@@ -2932,8 +2937,8 @@ callable()(SiteBuilderAgent.prototype.getObservability, {
 });
 
 function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+  const parsed = parsePositiveInteger(value);
+  if (parsed === null) {
     throw new Error(`${name} is not configured`);
   }
   return parsed;

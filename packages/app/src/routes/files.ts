@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../types";
+import { parsePositiveInteger, type Env } from "../types";
 import {
   IMAGE_MAX_UPLOAD_BYTES,
   MAX_UPLOAD_BODY_BYTES,
@@ -106,11 +106,7 @@ function validateUpload(file: File, fileName: string) {
 }
 
 function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    jsonError(`${name} is not configured`, 503);
-  }
-  return parsed;
+  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
 }
 
 /**
