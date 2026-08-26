@@ -6,6 +6,11 @@ import type {
   CailLogEnvironment,
 } from "@cuny-ai-lab/cail-log";
 
+export function parsePositiveInteger(value: string | undefined): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export interface Env {
   // Cloudflare Version Metadata binding. It is unavailable in local/test
   // runtimes, so the health response treats it as optional.

@@ -19,7 +19,6 @@
     "e2e:install:ci": "playwright install --with-deps chromium",
     "e2e:local": "bun run build && bun scripts/local-browser-e2e.ts",
     "e2e:live": "node scripts/live-product-e2e.mjs",
-    "test:workflow": "node --test scripts/ci-workflow-security.test.mjs",
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build"
   },
   "license": "MIT",

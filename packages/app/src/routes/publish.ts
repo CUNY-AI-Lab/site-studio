@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import type { Env } from "../types";
+import { parsePositiveInteger, type Env } from "../types";
 import {
   getServedContentType,
   MAX_THUMBNAIL_BODY_BYTES,
@@ -51,9 +51,7 @@ import {
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
 function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) jsonError(`${name} is not configured`, 503);
-  return parsed;
+  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
 }
 
 /**

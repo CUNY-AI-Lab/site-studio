@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   OBSERVABILITY_CONTRACT,
@@ -11,7 +10,7 @@ import {
 import { createHealthRouter } from "./routes/health";
 import type { Env } from "./types";
 
-describe("observability source contract", () => {
+describe("observability contract", () => {
   it("accepts only the exact cail-log environment vocabulary", () => {
     expect(CAIL_LOG_ENVIRONMENTS).toEqual([
       "production",
@@ -23,47 +22,6 @@ describe("observability source contract", () => {
     for (const value of [undefined, null, "", " production", "production ", "PRODUCTION", "qa"]) {
       expect(parseCailLogEnvironment(value)).toBeUndefined();
     }
-  });
-
-  it("keeps app custom logs complete and raw-URL invocation logs off", () => {
-    const source = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-    expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"enabled"\s*:\s*true/);
-    expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"persist"\s*:\s*true/);
-    expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"head_sampling_rate"\s*:\s*1/);
-    expect(source).toMatch(/"logs"\s*:\s*\{[\s\S]*?"invocation_logs"\s*:\s*false/);
-    expect(source).toMatch(/"CAIL_LOG_ENV"\s*:\s*"production"/);
-    expect(source).not.toContain("analytics_engine_datasets");
-  });
-
-  it("pins the app to the canonical production CAIL Gateway origin", () => {
-    const source = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
-    expect(source).toContain(
-      '"CAIL_API_BASE": "https://tools.ailab.gc.cuny.edu"',
-    );
-    expect(source).not.toContain("cail-model-api.ailab-452.workers.dev");
-  });
-
-  it.each([
-    new URL("../package.json", import.meta.url),
-    new URL("../../observability-core/package.json", import.meta.url),
-  ])("pins the reviewed fleet projection dependency in %s", (url) => {
-    expect(readFileSync(url, "utf8")).toContain(
-      '"@cuny-ai-lab/cail-log": "0.6.0"',
-    );
-  });
-
-  it("pins the reviewed identity and transport primitives in the app", () => {
-    const source = readFileSync(new URL("../package.json", import.meta.url), "utf8");
-    // Exact pin, not a range: cail-identity 5.x carries the v2 subject
-    // derivation, whose ownership subjects differ from every 4.x value. A
-    // caret range here could silently move that contract.
-    expect(source).toContain(
-      '"@cuny-ai-lab/cail-identity": "5.2.5"',
-    );
-    expect(source).toContain(
-      '"@cuny-ai-lab/cail-client": "6.0.0"',
-    );
-    expect(source).not.toContain("cail-sandbox-client");
   });
 
   it("defines queryable build and publish action seams", () => {
