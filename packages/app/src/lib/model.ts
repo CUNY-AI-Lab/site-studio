@@ -26,6 +26,8 @@ export interface CailModelEnv {
 export interface CailModelOptions {
   /** Enable provider JSON-schema output only for a proven model path. */
   supportsStructuredOutputs?: boolean;
+  /** Stable project identifier used for Gateway session affinity. */
+  sessionId?: string;
 }
 
 const WORKERS_AI_MODEL_ID_RE = /^@cf\/[a-z0-9][a-z0-9._/-]*$/i;
@@ -117,6 +119,7 @@ const SAFE_GATEWAY_HEADERS = [
 export function createCailAuthorityFetch(
   identityJwt: string,
   fetchImpl: typeof fetch = fetch,
+  sessionId?: string,
 ): typeof fetch {
   const authorityFetch: typeof fetch = (input, init) => {
     assertCailJwtFresh(identityJwt);
@@ -140,6 +143,7 @@ export function createCailAuthorityFetch(
     safeHeaders.set("content-type", "application/json");
     safeHeaders.set("authorization", `Bearer ${identityJwt}`);
     safeHeaders.set("x-cail-app", CAIL_APP_SLUG);
+    if (sessionId) safeHeaders.set("x-cail-session-id", sessionId);
 
     return fetchImpl(sourceRequest ?? input, {
       ...init,
@@ -191,7 +195,7 @@ export function createCailModel(
   }
 
   const baseUrl = canonicalCailApiBase(env.CAIL_API_BASE);
-  const gatewayFetch = createCailAuthorityFetch(identityJwt, fetchImpl);
+  const gatewayFetch = createCailAuthorityFetch(identityJwt, fetchImpl, options.sessionId);
 
   const provider = createOpenAICompatible({
     name: "cail",
