@@ -2523,7 +2523,9 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // this request's traceparent + X-CAIL-Request-Id so spend and upstream
       // errors are followable end to end (browser → worker → DO → gateway).
       const gatewayFetch = withCorrelationFetch(correlation);
-      const model = createCailModel(this.env, identityJwt, gatewayFetch);
+      const model = createCailModel(this.env, identityJwt, gatewayFetch, {
+        sessionId: scope.projectId,
+      });
       const parsedBody = chatRequestBodySchema.safeParse(options?.body);
       const bodyMessages: RequestMessage[] | undefined = parsedBody.success
         ? parsedBody.data.messages

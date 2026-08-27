@@ -53,9 +53,10 @@ model and quota paths. The active default is the Workers AI catalog model
 `@cf/zai-org/glm-5.2`; any configured override must also be a `@cf/...` model.
 The app forwards only the separately verified,
 subject-bound gateway identity and stamps `X-CAIL-App: site-studio`. Site Studio
-has no provider keys and does not impose an output-token or model-step cap.
-Billed model POSTs use `maxRetries: 0` because an uncertain automatic retry can
-duplicate a paid execution.
+uses the project id as the Gateway session identifier; Gateway namespaces and
+hashes it before provider egress. Site Studio has no provider keys and does not
+impose an output-token or model-step cap. Billed model POSTs use `maxRetries: 0`
+because an uncertain automatic retry can duplicate a paid execution.
 
 ## One-time first-login import
 

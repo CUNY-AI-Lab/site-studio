@@ -355,13 +355,19 @@ describe("createCailModel wire contract", () => {
       }
       return chatCompletionResponse();
     });
-    const model = createCailModel({ CAIL_API_BASE: "https://cail.example" }, "verified-jwt", stub);
+    const model = createCailModel(
+      { CAIL_API_BASE: "https://cail.example" },
+      "verified-jwt",
+      stub,
+      { sessionId: "project-123" },
+    );
     const hostileHeaders = {
       Authorization: "Bearer attacker",
       Cookie: "session=attacker",
       "X-CAIL-App": "attacker-app",
       "X-CAIL-Identity-JWT": "attacker-jwt",
       "X-CAIL-Request-Id": "attacker-request",
+      "X-CAIL-Session-Id": "attacker-session",
       "cf-aig-provider": "attacker-provider",
       "cf-aig-cache-ttl": "9999",
       "x-openwebui-model": "attacker-model",
@@ -381,6 +387,7 @@ describe("createCailModel wire contract", () => {
       expect(call.url).toBe("https://cail.example/v1/chat/completions");
       expect(call.headers.get("authorization")).toBe("Bearer verified-jwt");
       expect(call.headers.get("x-cail-app")).toBe("site-studio");
+      expect(call.headers.get("x-cail-session-id")).toBe("project-123");
       expect(call.headers.get("x-cail-identity-jwt")).toBeNull();
       expect(call.headers.get("x-cail-request-id")).toBeNull();
       expect(call.headers.get("cookie")).toBeNull();
