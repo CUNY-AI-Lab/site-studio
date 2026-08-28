@@ -41,6 +41,37 @@ export function createTestR2Object(
   return object as R2Object;
 }
 
+export function createStoredR2Object(key: string): R2Object {
+  const object = {
+    key,
+    version: "test-version",
+    size: 0,
+    etag: `${key}:etag`,
+    httpEtag: `"${key}:etag"`,
+    checksums: {},
+    uploaded: new Date(0),
+    storageClass: "Standard",
+  };
+  // SAFETY: Test boundaries inspect only key/text; the remaining R2 metadata
+  // is inert fixture data and the runtime binding supplies the complete object.
+  return object as R2Object;
+}
+
+export function createStoredR2Body(key: string, value: string): R2ObjectBody {
+  const body = {
+    ...createStoredR2Object(key),
+    body: new ReadableStream<Uint8Array>(),
+    bodyUsed: false,
+    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
+    blob: async () => new Blob([value]),
+    json: async () => JSON.parse(value),
+    text: async () => value,
+  };
+  // SAFETY: Test boundaries consume only text(); other body methods are inert
+  // deterministic implementations for the R2 object contract.
+  return body as R2ObjectBody;
+}
+
 /** In-memory KV mock matching the house mock conventions. */
 export function createMockKV(): MockKV {
   const store = new Map<string, string>();

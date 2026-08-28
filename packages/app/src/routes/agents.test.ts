@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { CSRF_ERROR_BODY, csrfProtect } from "../lib/csrf";
-import { createMockKV, mintCsrfSession, type CsrfSession } from "../lib/test-utils";
+import {
+  createMockKV,
+  createStoredR2Body,
+  createStoredR2Object,
+  mintCsrfSession,
+  type CsrfSession,
+} from "../lib/test-utils";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import { SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER } from "../lib/logging";
 import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
@@ -19,37 +25,6 @@ const OWN_ORIGIN = "https://site-studio.example";
 const APP_PUBLIC_DOMAIN = "https://tools.ailab.gc.cuny.edu";
 type AgentFetchState = { lastRequest: Request | null };
 const forwardedUrlSchema = z.object({ forwardedUrl: z.string() });
-
-function createStoredR2Object(key: string): R2Object {
-  const object = {
-    key,
-    version: "test-version",
-    size: 0,
-    etag: `${key}:etag`,
-    httpEtag: `"${key}:etag"`,
-    checksums: {},
-    uploaded: new Date(0),
-    storageClass: "Standard",
-  };
-  // SAFETY: The route tests inspect only key/text; the remaining R2 metadata
-  // is inert fixture data and production supplies the complete object.
-  return object as R2Object;
-}
-
-function createStoredR2Body(key: string, value: string): R2ObjectBody {
-  const body = {
-    ...createStoredR2Object(key),
-    body: new ReadableStream<Uint8Array>(),
-    bodyUsed: false,
-    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
-    blob: async () => new Blob([value]),
-    json: async () => JSON.parse(value),
-    text: async () => value,
-  };
-  // SAFETY: The route tests consume only text(); the other body methods are
-  // deterministic inert implementations for the R2 object contract.
-  return body as R2ObjectBody;
-}
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>([[

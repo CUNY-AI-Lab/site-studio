@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { CailError } from "@cuny-ai-lab/cail-client";
 import { cailErrorEnvelope, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
-import { buildProjectContext } from "./project-context";
+import { buildProjectContext, buildProjectTree } from "./project-context";
+import { createProjectTools, type ProjectStorageLike } from "./site-builder";
 import { describeModelStreamError } from "../lib/model-stream-error";
+import type { StorageFile } from "../types";
 
 describe("describeModelStreamError", () => {
   it("finds quota details nested in an AI_RetryError", () => {
@@ -160,5 +162,85 @@ describe("project context", () => {
     expect(context).toContain("assets/");
     expect(context).toContain("assets/cv.pdf");
     expect(context).toContain("extract_document_text");
+  });
+});
+
+describe("project tree", () => {
+  it("renders nested directories before sorted flat files", () => {
+    expect(buildProjectTree(["b.txt", "a.txt"])).toBe("a.txt\nb.txt");
+    expect(buildProjectTree([
+      "styles.css",
+      "src/z.ts",
+      "index.html",
+      "src/components/Button.tsx",
+      "src/a.ts",
+    ])).toBe([
+      "src/",
+      "  components/",
+      "    Button.tsx",
+      "  a.ts",
+      "  z.ts",
+      "index.html",
+      "styles.css",
+    ].join("\n"));
+  });
+
+  it("list_files returns the storage paths and shared tree, including its empty result", async () => {
+    const projectFiles: StorageFile[] = [
+      {
+        path: "components/Button.tsx",
+        name: "Button.tsx",
+        size: 10,
+        lastModified: "2026-01-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "text/typescript",
+        isText: true,
+      },
+      {
+        path: "index.ts",
+        name: "index.ts",
+        size: 10,
+        lastModified: "2026-01-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "text/typescript",
+        isText: true,
+      },
+    ];
+    const storage: ProjectStorageLike = {
+      fileExists: async () => false,
+      listFiles: vi.fn(async (_userId: string, _projectId: string, prefix = "") => (
+        prefix === "src" ? projectFiles : []
+      )),
+      readFile: async () => "",
+      readFileWithEtag: async () => null,
+      readFileBuffer: async () => new Uint8Array(),
+    };
+    const tools = createProjectTools(
+      // SAFETY: list_files uses the injected storage override and never reads the bucket.
+      { SITE_STUDIO_BUCKET: {} as R2Bucket },
+      { userId: "user-1", projectId: "project-1" },
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      storage,
+    );
+    if (!tools.list_files.execute) {
+      throw new Error("list_files has no execute handler");
+    }
+    // SAFETY: The list_files execute callback does not inspect the SDK execution context.
+    const toolExecutionOptions = undefined as never;
+
+    const nested = await tools.list_files.execute({ prefix: "src" }, toolExecutionOptions);
+    expect(nested).toEqual({
+      count: 2,
+      tree: "components/\n  Button.tsx\nindex.ts",
+      paths: ["components/Button.tsx", "index.ts"],
+    });
+    const empty = await tools.list_files.execute({}, toolExecutionOptions);
+    expect(empty).toEqual({ count: 0, tree: "(project is empty)", paths: [] });
+    expect(storage.listFiles).toHaveBeenNthCalledWith(1, "user-1", "project-1", "src");
+    expect(storage.listFiles).toHaveBeenNthCalledWith(2, "user-1", "project-1", "");
   });
 });
