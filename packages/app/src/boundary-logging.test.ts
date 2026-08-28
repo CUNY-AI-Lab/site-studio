@@ -7,7 +7,7 @@ import {
 } from "@cuny-ai-lab/cail-log";
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
-import { createMockKV, type MockKV } from "./lib/test-utils";
+import { createMockKV, createStoredR2Body, createStoredR2Object, type MockKV } from "./lib/test-utils";
 import { z } from "zod";
 
 import app from "./app";
@@ -38,37 +38,6 @@ const capturedLogEventSchema = z.record(
   z.string(),
   z.union([z.string(), z.number(), z.boolean(), z.null()]),
 );
-
-function createStoredR2Object(key: string): R2Object {
-  const object = {
-    key,
-    version: "test-version",
-    size: 0,
-    etag: `${key}:etag`,
-    httpEtag: `"${key}:etag"`,
-    checksums: {},
-    uploaded: new Date(0),
-    storageClass: "Standard",
-  };
-  // SAFETY: Boundary tests inspect only key/text; remaining R2 metadata is
-  // inert fixture data and the runtime binding supplies the complete object.
-  return object as R2Object;
-}
-
-function createStoredR2Body(key: string, value: string): R2ObjectBody {
-  const body = {
-    ...createStoredR2Object(key),
-    body: new ReadableStream<Uint8Array>(),
-    bodyUsed: false,
-    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
-    blob: async () => new Blob([value]),
-    json: async () => JSON.parse(value),
-    text: async () => value,
-  };
-  // SAFETY: Boundary tests consume only text(); other body methods are inert
-  // deterministic implementations for the R2 object contract.
-  return body as R2ObjectBody;
-}
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();

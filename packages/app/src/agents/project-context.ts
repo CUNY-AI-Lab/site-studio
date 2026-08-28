@@ -7,7 +7,7 @@ type TreeNode = {
   files: string[];
 };
 
-function buildTree(paths: string[]): string {
+export function buildProjectTree(paths: string[]): string {
   const root: TreeNode = {
     dirs: {},
     files: []
@@ -53,7 +53,7 @@ export function buildProjectContext(files: StorageFile[]): string {
 
   const sortedFiles = [...files].sort((left, right) => left.path.localeCompare(right.path));
   const shownFiles = sortedFiles.slice(0, MAX_PROJECT_CONTEXT_FILES);
-  const tree = buildTree(shownFiles.map((file) => file.path));
+  const tree = buildProjectTree(shownFiles.map((file) => file.path));
   const extraFileCount = sortedFiles.length - shownFiles.length;
   const uploadedDocuments = sortedFiles.filter((file) => {
     return !file.isText && (

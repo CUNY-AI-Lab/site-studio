@@ -40,7 +40,7 @@ import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
 import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
-import { buildProjectContext } from "./project-context";
+import { buildProjectContext, buildProjectTree } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
 import {
   type CailOutcome,
@@ -619,50 +619,6 @@ function createPageHtml(title: string): string {
 </html>`;
 }
 
-type TreeNode = {
-  dirs: Record<string, TreeNode>;
-  files: string[];
-};
-
-function buildTree(paths: string[]): string {
-  const root: TreeNode = {
-    dirs: {},
-    files: []
-  };
-
-  for (const filePath of paths) {
-    const parts = filePath.split("/");
-    let current = root;
-
-    parts.forEach((part, index) => {
-      if (index === parts.length - 1) {
-        current.files.push(part);
-        return;
-      }
-
-      current.dirs[part] ||= { dirs: {}, files: [] };
-      current = current.dirs[part];
-    });
-  }
-
-  function lines(node: TreeNode, prefix = ""): string[] {
-    const result: string[] = [];
-
-    for (const key of Object.keys(node.dirs).sort()) {
-      result.push(`${prefix}${key}/`);
-      result.push(...lines(node.dirs[key], `${prefix}  `));
-    }
-
-    for (const fileName of node.files.sort()) {
-      result.push(`${prefix}${fileName}`);
-    }
-
-    return result;
-  }
-
-  return lines(root).join("\n");
-}
-
 function isTextFile(filePath: string): boolean {
   return isTextContentType(getContentType(filePath));
 }
@@ -781,7 +737,7 @@ export function createProjectTools(
 
         return {
           count: paths.length,
-          tree: paths.length > 0 ? buildTree(paths) : "(project is empty)",
+          tree: paths.length > 0 ? buildProjectTree(paths) : "(project is empty)",
           paths
         };
       }

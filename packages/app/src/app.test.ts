@@ -7,44 +7,20 @@ import {
 } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "./types";
 import { CSRF_ERROR_BODY, CSRF_HEADER_NAME } from "./lib/csrf";
-import { createMockKV, createMockMutationCoordinator, createTestNamespace, type MockKV } from "./lib/test-utils";
+import {
+  createMockKV,
+  createMockMutationCoordinator,
+  createStoredR2Body,
+  createStoredR2Object,
+  createTestNamespace,
+  type MockKV,
+} from "./lib/test-utils";
 import type { MutationCoordinator } from "./agents/mutation-coordinator";
 
 import app from "./app";
 
 const BASE = "https://site-studio.example";
 const ALLOWED_ORIGIN = "https://tools.ailab.gc.cuny.edu";
-
-function createStoredR2Object(key: string): R2Object {
-  const object = {
-    key,
-    version: "test-version",
-    size: 0,
-    etag: `${key}:etag`,
-    httpEtag: `"${key}:etag"`,
-    checksums: {},
-    uploaded: new Date(0),
-    storageClass: "Standard",
-  };
-  // SAFETY: The app tests inspect only key/text; the remaining R2 metadata is
-  // an inert fixture value and the runtime binding supplies the full object.
-  return object as R2Object;
-}
-
-function createStoredR2Body(key: string, value: string): R2ObjectBody {
-  const body = {
-    ...createStoredR2Object(key),
-    body: new ReadableStream<Uint8Array>(),
-    bodyUsed: false,
-    arrayBuffer: async () => new TextEncoder().encode(value).buffer,
-    blob: async () => new Blob([value]),
-    json: async () => JSON.parse(value),
-    text: async () => value,
-  };
-  // SAFETY: The app tests consume only text(); the other body methods are
-  // deterministic inert implementations for the R2 object contract.
-  return body as R2ObjectBody;
-}
 
 function createMockBucket(): R2Bucket {
   const store = new Map<string, string>();
