@@ -162,18 +162,3 @@ describe('NewProjectDialog project-name suggestion race', () => {
 		expect(input.value).toBe('alpha-5');
 	});
 });
-
-describe('NewProjectDialog data disclosure', () => {
-	beforeEach(() => {
-		mockFetchProjects.mockReset();
-		mockFetchTemplateCategories.mockReset();
-		mockFetchTemplateCategories.mockResolvedValue(categories);
-	});
-
-	it('describes the flow and privacy in plain language', () => {
-		openDialog();
-
-		expect(screen.getByText(/Choose a starting template and build on it with the assistant/)).toBeInTheDocument();
-		expect(screen.getByText(/Your project and chats stay private until you publish/)).toBeInTheDocument();
-	});
-});

@@ -56,7 +56,7 @@ const approvalSchema = z.object({
   signature: z.string().optional(),
 }).catchall(jsonValueSchema);
 
-const chatPartSchema = z.object({
+const chatPartFieldsSchema = z.object({
   type: z.string(),
   text: z.string().optional(),
   state: partStateSchema.optional(),
@@ -80,110 +80,103 @@ const chatPartSchema = z.object({
   providerMetadata: jsonObjectSchema.optional(),
   preliminary: z.boolean().optional(),
   approval: approvalSchema.optional(),
-}).catchall(jsonValueSchema).superRefine((part, context) => {
-  const issue = (path: string, message: string) => {
-    context.addIssue({ code: "custom", path: [path], message });
-  };
-  const has = (value: z.infer<typeof jsonValueSchema> | undefined): boolean => value !== undefined;
-  const requireString = (field: "text" | "sourceId" | "url" | "mediaType" | "title" | "filename" | "data") => {
-    if (field === "data") {
-      if (!has(part.data)) issue(field, "data parts require data");
-      return;
-    }
-    if (!z.string().safeParse(part[field]).success) issue(field, `${field} is required`);
-  };
+}).catchall(jsonValueSchema);
 
-  if (part.type === "text" || part.type === "reasoning") {
-    requireString("text");
-    if (part.state !== undefined && (part.state !== "streaming" && part.state !== "done")) {
-      issue("state", "text and reasoning parts use streaming or done state");
-    }
-    return;
-  }
+const standardPartSchema = z.discriminatedUnion("type", [
+  chatPartFieldsSchema.extend({
+    type: z.enum(["text", "reasoning"]),
+    text: z.string(),
+    state: z.enum(["streaming", "done"]).optional(),
+  }),
+  chatPartFieldsSchema.extend({
+    type: z.literal("source-url"),
+    sourceId: z.string(),
+    url: z.string(),
+  }),
+  chatPartFieldsSchema.extend({
+    type: z.literal("source-document"),
+    sourceId: z.string(),
+    mediaType: z.string(),
+    title: z.string(),
+  }),
+  chatPartFieldsSchema.extend({
+    type: z.literal("file"),
+    mediaType: z.string(),
+    url: z.string(),
+  }),
+  chatPartFieldsSchema.extend({ type: z.literal("step-start") }),
+]);
 
-  if (part.type === "source-url") {
-    requireString("sourceId");
-    requireString("url");
-    return;
-  }
-  if (part.type === "source-document") {
-    requireString("sourceId");
-    requireString("mediaType");
-    requireString("title");
-    return;
-  }
-  if (part.type === "file") {
-    requireString("mediaType");
-    requireString("url");
-    return;
-  }
-  if (part.type === "step-start") return;
-  if (part.type.startsWith("data-")) {
-    requireString("data");
-    return;
-  }
-
-  const isDynamicTool = part.type === "dynamic-tool";
-  if (!isDynamicTool && !toolTypeSchema.safeParse(part.type).success) {
-    issue("type", "unsupported chat part type");
-    return;
-  }
-  if (isDynamicTool && part.toolName === undefined) issue("toolName", "dynamic tools require a tool name");
-  if (part.toolCallId === undefined) issue("toolCallId", "tool parts require a call id");
-  if (part.state === undefined || !toolStateSchema.safeParse(part.state).success) {
-    issue("state", "tool parts require a valid state");
-    return;
-  }
-
-  const requiresInput = part.state !== "input-streaming" && part.state !== "output-error";
-  if (requiresInput && !has(part.input)) issue("input", "this tool state requires input");
-  if (part.state === "output-available" && !has(part.output)) issue("output", "output-available requires output");
-  if (part.state === "output-error" && part.errorText === undefined) issue("errorText", "output-error requires errorText");
-
-  if (part.state === "input-streaming" || part.state === "input-available") {
-    if (has(part.output) || has(part.errorText) || has(part.approval)) {
-      issue("state", `${part.state} cannot contain output, error, or approval`);
-    }
-  }
-  if (part.state === "approval-requested") {
-    if (
-      !part.approval
-      || part.approval.approved !== undefined
-      || part.approval.reason !== undefined
-    ) {
-      issue("approval", "approval-requested requires an undecided approval");
-    }
-    if (has(part.output) || has(part.errorText)) {
-      issue("state", "approval-requested cannot contain output or error");
-    }
-  }
-  if (part.state === "approval-responded") {
-    if (!part.approval || !z.boolean().safeParse(part.approval.approved).success) {
-      issue("approval", "approval-responded requires an approval decision");
-    }
-    if (has(part.output) || has(part.errorText)) {
-      issue("state", "approval-responded cannot contain output or error");
-    }
-  }
-  if (part.state === "output-available") {
-    if (part.approval && part.approval.approved !== true) {
-      issue("approval", `${part.state} approvals must be approved`);
-    }
-    if (has(part.errorText)) issue("state", "output-available cannot contain error");
-  }
-  if (part.state === "output-error") {
-    if (part.approval && part.approval.approved !== true) {
-      issue("approval", "output-error approvals must be approved");
-    }
-    if (has(part.output)) issue("state", "output-error cannot contain output");
-  }
-  if (part.state === "output-denied") {
-    if (!part.approval || part.approval.approved !== false) {
-      issue("approval", "output-denied requires a rejected approval");
-    }
-    if (has(part.output) || has(part.errorText)) issue("state", "output-denied cannot contain output or error");
-  }
+const dataPartSchema = chatPartFieldsSchema.extend({
+  type: z.string().startsWith("data-"),
+  data: jsonValueSchema,
 });
+
+const undecidedApprovalSchema = approvalSchema.extend({
+  approved: z.never().optional(),
+  reason: z.never().optional(),
+});
+const decidedApprovalSchema = approvalSchema.extend({ approved: z.boolean() });
+const approvedApprovalSchema = approvalSchema.extend({ approved: z.literal(true) });
+const rejectedApprovalSchema = approvalSchema.extend({ approved: z.literal(false) });
+const toolPartFieldsSchema = chatPartFieldsSchema.extend({ toolCallId: z.string() });
+
+const toolPartSchema = z.discriminatedUnion("state", [
+  toolPartFieldsSchema.extend({
+    state: z.literal("input-streaming"),
+    input: jsonValueSchema.optional(),
+    output: z.never().optional(),
+    errorText: z.never().optional(),
+    approval: z.never().optional(),
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("input-available"),
+    input: jsonValueSchema,
+    output: z.never().optional(),
+    errorText: z.never().optional(),
+    approval: z.never().optional(),
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("approval-requested"),
+    input: jsonValueSchema,
+    output: z.never().optional(),
+    errorText: z.never().optional(),
+    approval: undecidedApprovalSchema,
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("approval-responded"),
+    input: jsonValueSchema,
+    output: z.never().optional(),
+    errorText: z.never().optional(),
+    approval: decidedApprovalSchema,
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("output-available"),
+    input: jsonValueSchema,
+    output: jsonValueSchema,
+    errorText: z.never().optional(),
+    approval: approvedApprovalSchema.optional(),
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("output-error"),
+    input: jsonValueSchema.optional(),
+    output: z.never().optional(),
+    errorText: z.string(),
+    approval: approvedApprovalSchema.optional(),
+  }),
+  toolPartFieldsSchema.extend({
+    state: z.literal("output-denied"),
+    input: jsonValueSchema,
+    output: z.never().optional(),
+    errorText: z.never().optional(),
+    approval: rejectedApprovalSchema,
+  }),
+]).and(z.union([
+  z.object({ type: toolTypeSchema }),
+  z.object({ type: z.literal("dynamic-tool"), toolName: z.string() }),
+]));
+
+const chatPartSchema = z.union([standardPartSchema, dataPartSchema, toolPartSchema]);
 
 const chatMessageSchema = z.object({
   id: z.string(),

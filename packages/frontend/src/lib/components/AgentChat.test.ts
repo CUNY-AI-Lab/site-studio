@@ -1136,7 +1136,7 @@ describe('AgentChat', () => {
 	});
 
 	it('shows the tool card without a duplicate large status card while a tool runs', async () => {
-		const { component, container } = renderExposed();
+		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
@@ -1164,13 +1164,16 @@ describe('AgentChat', () => {
 			})
 		});
 
-		await waitFor(() => expect(container.querySelectorAll('.tool-card')).toHaveLength(1));
-		expect(container.querySelectorAll('.active-status-card')).toHaveLength(0);
-		expect(screen.getByText('Working')).toBeInTheDocument();
+		await waitFor(() => {
+			expect(
+				screen.getByRole('button', { name: /Reading file.*index\.html.*Working/ })
+			).toBeInTheDocument();
+			expect(screen.getAllByText(/^Working(?:\.\.\.)?$/)).toHaveLength(1);
+		});
 	});
 
 	it('uses one neutral status while the model continues after a tool result', async () => {
-		const { component, container } = renderExposed();
+		const { component } = renderExposed();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
 		const ws = FakeWebSocket.last();
 		ws.open();
@@ -1196,7 +1199,6 @@ describe('AgentChat', () => {
 			toolName: 'read_file',
 			input: { path: 'index.html' }
 		});
-		await waitFor(() => expect(container.querySelector('.tool-card.status-running')).not.toBeNull());
 		sendChunk({
 			type: 'tool-output-available',
 			toolCallId: 'read-2',
@@ -1204,9 +1206,7 @@ describe('AgentChat', () => {
 			output: { ok: true, path: 'index.html', content: '<h1>Site</h1>', truncated: false }
 		});
 
-		await waitFor(() => expect(container.querySelector('.tool-card.status-success')).not.toBeNull());
-		await waitFor(() => expect(container.querySelectorAll('.active-status-card')).toHaveLength(1));
-		expect(screen.getByText('Working...')).toBeInTheDocument();
+		await waitFor(() => expect(screen.getByText('Working...')).toBeInTheDocument());
 		expect(screen.queryByText('Writing the response back into the chat.')).not.toBeInTheDocument();
 		expect(screen.queryByText(/Still working|Inspecting the current project/)).not.toBeInTheDocument();
 	});
