@@ -1,11 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
   IMAGE_MAX_UPLOAD_BYTES,
   MAX_UPLOAD_BODY_BYTES,
   MAX_UPLOAD_BYTES,
-  PROTECTED_FILE_NAMES
+  PROTECTED_FILE_NAMES,
+  uploadPolicy
 } from "../lib/constants";
 import { binaryBody, jsonError } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
@@ -103,10 +104,6 @@ function validateUpload(file: File, fileName: string) {
   if (!allowed.has(ext)) {
     jsonError(`Unsupported file extension: ${ext || "unknown"}`, 400);
   }
-}
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
 }
 
 /**
@@ -357,20 +354,14 @@ export function createFileRouter() {
     const buffer = new Uint8Array(await entry.arrayBuffer());
     validateImageBytes(sanitized, buffer);
 
-    const uploadPolicy = {
-      maxProjectBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_PROJECT_BYTES,
-        "SITE_STUDIO_MAX_PROJECT_BYTES"
-      ),
-      maxOwnerBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_OWNER_BYTES,
-        "SITE_STUDIO_MAX_OWNER_BYTES"
-      ),
-      uploadsPerMinute: requiredPositiveInteger(
-        c.env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-        "SITE_STUDIO_UPLOADS_PER_MINUTE"
-      )
-    };
+    const policy = (() => {
+      try {
+        return uploadPolicy(c.env);
+      } catch (error) {
+        if (error instanceof Error) jsonError(error.message, 503);
+        throw error;
+      }
+    })();
 
     // Collision-suffix within the target prefix so images/photo.png and
     // photo.png at the root never clobber each other. The write itself is
@@ -396,7 +387,7 @@ export function createFileRouter() {
           path: candidate,
           content: buffer,
           admissionId: uploadAdmissionId,
-          ...uploadPolicy
+          ...policy
         }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Upload admission failed";

@@ -6,7 +6,8 @@
 	import type { UIMessage as SDKUIMessage } from 'ai';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError, UserFacingError } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage, isApiError, UserFacingError } from '$lib/api/errors';
+	import { handleApiErrorResponse } from '$lib/api/error-handler';
 	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
 import {
 		decodeToolInput,
@@ -1381,7 +1382,7 @@ import {
 		});
 
 		if (!response.ok) {
-			await handleApiError(response);
+			await handleApiErrorResponse(response);
 		}
 
 		const data = await response.json();

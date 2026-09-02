@@ -1,4 +1,4 @@
-export type ToastKind = 'error' | 'success' | 'info';
+export type ToastKind = 'error' | 'success';
 
 export interface Toast {
 	id: number;
@@ -47,8 +47,5 @@ export const toast = {
 	},
 	success(message: string): number {
 		return push('success', message, 5000);
-	},
-	info(message: string): number {
-		return push('info', message, 5000);
 	}
 };

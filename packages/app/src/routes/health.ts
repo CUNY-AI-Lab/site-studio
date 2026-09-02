@@ -5,7 +5,7 @@ import {
   healthResponse,
   parseCailLogEnvironment,
   serviceUnavailableResponse,
-} from "../../../observability-core/src/contract";
+} from "../lib/observability/contract";
 
 export function createHealthRouter() {
   const app = new Hono<{ Bindings: Env }>();

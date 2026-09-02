@@ -1,8 +1,7 @@
 # CAIL logging alignment
 
 This source alignment uses the exact published `@cuny-ai-lab/cail-log`
-`0.6.0`; the committed Bun lockfile resolves that one version for the app and
-shared observability workspace package.
+`0.6.0`; the committed Bun lockfile resolves that one version for the app.
 
 ## Identity and ownership
 
@@ -37,16 +36,15 @@ The project-scoped Durable Object stores a bounded 48-hour action-attempt
 record before an admitted build or publish mutation proceeds. A terminal can
 only update an existing admission, and the existing authenticated
 `/api/projects/{id}/observability` read returns the versioned authoritative
-records. Build and publish remain separate action/route pairs. Exact success and
-terminal coverage are calculated from these records rather than either log sink.
-This owner-scoped application read is not the external `kale-admin` fleet-data
-surface described below.
+records. Build and publish remain separate action/route pairs. This owner-scoped
+application read is not the external `kale-admin` fleet-data surface described
+below; log sinks remain diagnostic projections rather than product state.
 
 After an R2 publish commits, the route retries an identical terminal RPC once
 because the first rejection may have an ambiguous outcome. If both attempts
 remain unavailable, it returns the committed publish result instead of a false
-failure and emits `publish_terminal_record_failed`; the lifecycle auditor then
-surfaces the missing terminal. Product state remains authoritative.
+failure and emits `publish_terminal_record_failed`. Product state remains
+authoritative.
 
 Routes are fixed templates such as `/api/projects/{id}/publish`,
 `/api/agents/site-builder/{project_id}`, and `/u/{handle}/{slug}/{path}`. Events do
@@ -79,19 +77,16 @@ matching limit, and returns `Cache-Control: no-store`. They do not probe R2, KV,
 Durable Objects, or the model gateway. Cloudflare's native request/error/CPU/
 wall-time signals remain the canonical platform-health layer.
 
-The shared source contract in `packages/observability-core/src/contract.ts`
-defines the app service, action route templates, dashboard measures/groupings, and
-an offline lifecycle-pair auditor. The auditor detects missing or duplicate
-request/action events, route drift, and invalid terminal duration in a closed
-export window. It evaluates the diagnostic projection, never product state.
+The shared source contract in `packages/app/src/lib/observability/contract.ts`
+defines the app service, action route templates, dashboard measures/groupings,
+and fleet projection settings. Durable action-attempt records remain the
+owner-scoped source for lifecycle state; exported telemetry is diagnostic only.
 
 Contract version 2 defines the initial operating posture: full-sampled
 bounded custom events, invocation logs off, no v1 external exporter, default-
 deny `kale-admin` access, a one-minute `ENAM` synthetic profile, rolling 24-hour
-SLOs and latency/reliability thresholds. Its action SLI sub-contract versions
-admission-window assignment, a
-15-minute terminal grace period, exact terminal matching, durable-success
-semantics, and separate build/publish denominators.
+SLOs and latency/reliability thresholds. The action-attempt record is versioned
+separately for owner-scoped reads and durable mutation acknowledgement.
 
 The initial profile uses one 60-second `ENAM` synthetic check for the Worker, a
 five-second timeout, two retries, and two consecutive intervals for a state

@@ -1,4 +1,4 @@
-import { CONTENT_TYPES } from "./constants";
+import { getServedContentType } from "./content-types";
 import type { ProjectTreeNode, StorageFile } from "../types";
 import { parse as parseModuleSyntax } from "es-module-lexer/js";
 
@@ -33,10 +33,7 @@ export function sanitizeFilePath(filePath: string): string {
 }
 
 export function getContentType(filePath: string): string {
-  const match = filePath.toLowerCase().match(/\.[^.]+$/);
-  if (!match) return "application/octet-stream";
-  return Object.entries(CONTENT_TYPES).find(([extension]) => extension === match[0])?.[1]
-    || "application/octet-stream";
+  return getServedContentType(filePath).split(";")[0];
 }
 
 export function isTextContentType(contentType: string): boolean {

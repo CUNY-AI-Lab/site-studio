@@ -9,7 +9,7 @@ import {
   collectPreviewResourcePaths,
   decodeServedPath
 } from "../lib/path";
-import { getServedContentType } from "../lib/constants";
+import { getServedContentType } from "../lib/content-types";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";
@@ -130,68 +130,47 @@ async function servePreviewFile(
   // in preview and on the published route.
   const contentType = getServedContentType(resolvedPath);
 
-  c.header("Content-Type", contentType);
-  c.header("X-Frame-Options", "SAMEORIGIN");
-  c.header("Cache-Control", "no-cache");
-  c.header("Pragma", "no-cache");
+  const rewritePlan = [
+    {
+      match: (type: string) => type.startsWith("text/html") || type.startsWith("image/svg+xml"),
+      collect: (source: string) => collectPreviewResourcePaths(source, requestedPath, siteRootPath),
+      rewrite: async (source: string, version: string | undefined, params: Record<string, string>) => {
+        // Root-relative authored URLs belong to this project, not the app shell.
+        // Include the public mount so production ingress requests return to the
+        // same preview route after the Worker strips /site-studio internally.
+        const rewritten = await addCacheBusterToHtml(
+          source,
+          version,
+          params,
+          siteRootPath,
+          requestedPath
+        );
+        return contentType.startsWith("text/html")
+          ? addPreviewReadySignal(rewritten, c.req.query("ready") || undefined)
+          : rewritten;
+      }
+    },
+    {
+      match: (type: string) => type.startsWith("text/css"),
+      collect: (source: string) => collectPreviewCssResourcePaths(source, requestedPath, siteRootPath),
+      rewrite: (source: string, version: string | undefined, params: Record<string, string>) =>
+        addCacheBusterToCss(source, version, params, siteRootPath, requestedPath)
+    },
+    {
+      match: (type: string) => type.includes("javascript"),
+      collect: (source: string) => collectPreviewJavaScriptResourcePaths(source, resolvedPath, siteRootPath),
+      rewrite: (source: string, version: string | undefined, params: Record<string, string>) =>
+        addCacheBusterToJavaScript(source, version, params, siteRootPath, resolvedPath)
+    }
+  ].find(({ match }) => match(contentType));
 
-  const isMarkup = contentType.startsWith("text/html")
-    || contentType.startsWith("image/svg+xml");
-  if (isMarkup) {
+  if (rewritePlan) {
     const version = c.req.query("v") || undefined;
     // The ownership check above ensures preview tokens are never minted for a
     // non-owner. Opaque-origin sandbox documents cannot send the session cookie,
     // so carry this short-lived, project-scoped token on rewritten requests.
-    const html = new TextDecoder().decode(content);
-    const allowedPaths = await collectPreviewResourcePaths(html, requestedPath, siteRootPath);
-    const previewToken = allowedPaths.length > 0
-      ? await mintPreviewToken(
-          c.env.SESSION_KV,
-          user.id,
-          projectId,
-          allowedPaths,
-          c.get("previewTokenExpiresAt") ?? undefined
-        )
-      : null;
-    // Root-relative authored URLs belong to this project, not the app shell.
-    // Include the public mount so production ingress requests return to the
-    // same preview route after the Worker strips /site-studio internally.
-    const rewritten = await addCacheBusterToHtml(
-      html,
-      version,
-      previewToken ? { pt: previewToken } : {},
-      siteRootPath,
-      requestedPath
-    );
-    const signaled = contentType.startsWith("text/html")
-      ? await addPreviewReadySignal(rewritten, c.req.query("ready") || undefined)
-      : rewritten;
-    if (signaled !== html) content = new TextEncoder().encode(signaled);
-  } else if (contentType.startsWith("text/css")) {
-    const version = c.req.query("v") || undefined;
-    const css = new TextDecoder().decode(content);
-    const allowedPaths = collectPreviewCssResourcePaths(css, requestedPath, siteRootPath);
-    const previewToken = allowedPaths.length > 0
-      ? await mintPreviewToken(
-          c.env.SESSION_KV,
-          user.id,
-          projectId,
-          allowedPaths,
-          c.get("previewTokenExpiresAt") ?? undefined
-        )
-      : null;
-    const rewritten = addCacheBusterToCss(
-      css,
-      version,
-      previewToken ? { pt: previewToken } : {},
-      siteRootPath,
-      requestedPath
-    );
-    if (rewritten !== css) content = new TextEncoder().encode(rewritten);
-  } else if (contentType.includes("javascript")) {
-    const version = c.req.query("v") || undefined;
     const source = new TextDecoder().decode(content);
-    const allowedPaths = collectPreviewJavaScriptResourcePaths(source, resolvedPath, siteRootPath);
+    const allowedPaths = await rewritePlan.collect(source);
     const previewToken = allowedPaths.length > 0
       ? await mintPreviewToken(
           c.env.SESSION_KV,
@@ -201,12 +180,10 @@ async function servePreviewFile(
           c.get("previewTokenExpiresAt") ?? undefined
         )
       : null;
-    const rewritten = addCacheBusterToJavaScript(
+    const rewritten = await rewritePlan.rewrite(
       source,
       version,
-      previewToken ? { pt: previewToken } : {},
-      siteRootPath,
-      resolvedPath
+      previewToken ? { pt: previewToken } : {}
     );
     if (rewritten !== source) content = new TextEncoder().encode(rewritten);
   }

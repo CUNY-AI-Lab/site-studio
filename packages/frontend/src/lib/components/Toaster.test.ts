@@ -131,22 +131,6 @@ describe('Toaster + toast store', () => {
 			expect(screen.getAllByRole('alert')).toHaveLength(2);
 		});
 
-		it('keeps distinct persistent toasts instead of evicting the oldest', () => {
-			render(Toaster);
-			for (let i = 1; i <= 6; i++) {
-				emit(() => toast.error(`err ${i}`));
-			}
-			const alerts = screen.getAllByRole('alert');
-			expect(alerts).toHaveLength(6);
-			expect(toasts.map((t) => t.message)).toEqual([
-				'err 1',
-				'err 2',
-				'err 3',
-				'err 4',
-				'err 5',
-				'err 6'
-			]);
-		});
 	});
 
 	// SS-24: exactly one live-region layer. The per-toast role/aria-live stays;

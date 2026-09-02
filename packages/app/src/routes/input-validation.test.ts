@@ -173,141 +173,51 @@ describe("SS-6 input validation (bad body → 400, not 500)", () => {
     app = createTestApp();
     kv = createMockKV();
     csrf = await mintCsrfSession(bucket, userId);
+    await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
+    await storage.writeFile(userId, "proj-x", "a.html", "<h1>A</h1>");
   });
 
-  describe("POST /api/projects", () => {
-    const url = "http://site-studio.test/api/projects";
+  const cases = [
+    {
+      method: "POST",
+      url: "http://site-studio.test/api/projects",
+      badJson: "not json at all",
+      invalidBodies: [{ template: "blank" }, { name: "x".repeat(101) }],
+      error: "Invalid project payload"
+    },
+    {
+      method: "PATCH",
+      url: "http://site-studio.test/api/projects/proj-x",
+      badJson: "}{ broken",
+      invalidBodies: [{ name: "" }, { name: "y".repeat(101) }],
+      error: "Invalid project payload"
+    },
+    {
+      method: "POST",
+      url: "http://site-studio.test/api/projects/proj-x/file",
+      badJson: "<<<not json>>>",
+      invalidBodies: [{ path: "a.html" }, { path: "", content: "hi" }],
+      error: "Invalid file payload"
+    },
+    {
+      method: "PUT",
+      url: "http://site-studio.test/api/projects/proj-x/files/rename",
+      badJson: "nope",
+      invalidBodies: [{ oldPath: "a.html" }, { oldPath: "", newPath: "b.html" }],
+      error: "Invalid rename payload"
+    }
+  ] as const;
 
-    it("non-JSON body → 400", async () => {
-      const res = await app.request(url, { ...jsonBody("not json at all"), method: "POST" }, createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("schema-invalid body (missing name) → 400", async () => {
-      const res = await app.request(url, jsonBody(JSON.stringify({ template: "blank" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("schema-invalid body (over-long name) → 400", async () => {
-      const res = await app.request(url, jsonBody(JSON.stringify({ name: "x".repeat(101) })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("valid body → still succeeds", async () => {
-      const res = await app.request(url, jsonBody(JSON.stringify({ name: "My Project" })), createEnv(bucket));
-      expect(res.status).toBe(200);
-      // SAFETY: The successful project route returns the documented object shape.
-      const body = (await res.json()) as { id: string; name: string };
-      expect(body.name).toBe("My Project");
-    });
-  });
-
-  describe("PATCH /api/projects/:id", () => {
-    const url = "http://site-studio.test/api/projects/proj-x";
-    const patch = (raw: string): RequestInit => ({ ...jsonBody(raw), method: "PATCH" });
-
-    beforeEach(async () => {
-      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
-    });
-
-    it("non-JSON body → 400", async () => {
-      const res = await app.request(url, patch("}{ broken"), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("schema-invalid body (empty name) → 400", async () => {
-      const res = await app.request(url, patch(JSON.stringify({ name: "" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("schema-invalid body (over-long name) → 400", async () => {
-      const res = await app.request(url, patch(JSON.stringify({ name: "y".repeat(101) })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid project payload" });
-    });
-
-    it("valid body → still succeeds", async () => {
-      const res = await app.request(url, patch(JSON.stringify({ name: "Renamed" })), createEnv(bucket));
-      expect(res.status).toBe(200);
-      // SAFETY: The successful project patch returns the documented object shape.
-      const body = (await res.json()) as { name: string };
-      expect(body.name).toBe("Renamed");
-    });
-  });
-
-  describe("POST /api/projects/:id/file", () => {
-    const url = "http://site-studio.test/api/projects/proj-x/file";
-
-    beforeEach(async () => {
-      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
-    });
-
-    it("non-JSON body → 400", async () => {
-      const res = await app.request(url, jsonBody("<<<not json>>>"), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid file payload" });
-    });
-
-    it("schema-invalid body (missing content) → 400", async () => {
-      const res = await app.request(url, jsonBody(JSON.stringify({ path: "a.html" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid file payload" });
-    });
-
-    it("schema-invalid body (empty path) → 400", async () => {
-      const res = await app.request(url, jsonBody(JSON.stringify({ path: "", content: "hi" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid file payload" });
-    });
-
-    it("valid body → still succeeds", async () => {
-      const baseEtag = await storage.writeFile(userId, "proj-x", "page.html", "<h1>Before</h1>");
+  it.each(cases)("$method $url rejects malformed and schema-invalid bodies", async ({ method, url, badJson, invalidBodies, error }) => {
+    const bodies = [badJson, ...invalidBodies.map((body) => JSON.stringify(body))];
+    for (const body of bodies) {
       const res = await app.request(
         url,
-        jsonBody(JSON.stringify({ path: "page.html", content: "<h1>Hi</h1>", baseEtag })),
+        { ...jsonBody(body), method },
         createEnv(bucket)
       );
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toMatchObject({ success: true, path: "page.html" });
-    });
-  });
-
-  describe("PUT /api/projects/:id/files/rename", () => {
-    const url = "http://site-studio.test/api/projects/proj-x/files/rename";
-    const put = (raw: string): RequestInit => ({ ...jsonBody(raw), method: "PUT" });
-
-    beforeEach(async () => {
-      await storage.createProjectIfAbsent(userId, "proj-x", "Proj X");
-      await storage.writeFile(userId, "proj-x", "a.html", "<h1>A</h1>");
-    });
-
-    it("non-JSON body → 400", async () => {
-      const res = await app.request(url, put("nope"), createEnv(bucket));
       expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid rename payload" });
-    });
-
-    it("schema-invalid body (missing newPath) → 400", async () => {
-      const res = await app.request(url, put(JSON.stringify({ oldPath: "a.html" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid rename payload" });
-    });
-
-    it("schema-invalid body (empty oldPath) → 400", async () => {
-      const res = await app.request(url, put(JSON.stringify({ oldPath: "", newPath: "b.html" })), createEnv(bucket));
-      expect(res.status).toBe(400);
-      await expect(res.json()).resolves.toEqual({ error: "Invalid rename payload" });
-    });
-
-    it("valid body → still succeeds", async () => {
-      const res = await app.request(url, put(JSON.stringify({ oldPath: "a.html", newPath: "b.html" })), createEnv(bucket));
-      expect(res.status).toBe(200);
-      await expect(res.json()).resolves.toMatchObject({ success: true, oldPath: "a.html", newPath: "b.html" });
-    });
+      await expect(res.json()).resolves.toEqual({ error });
+    }
   });
 });

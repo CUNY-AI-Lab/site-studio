@@ -13,7 +13,6 @@ import {
   SITE_STUDIO_ACTION_ROUTES,
 } from "./action-attempt";
 import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./fleet-projection";
-import { z } from "zod";
 
 export const OBSERVABILITY_CONTRACT_VERSION = 4;
 export const PRODUCT_ID = "site-studio";
@@ -116,22 +115,6 @@ export const OBSERVABILITY_CONTRACT = {
       "saved_queries",
       "monitor_configuration",
     ],
-  },
-  syntheticMonitor: {
-    provider: "cloudflare-health-checks",
-    type: "HTTPS",
-    checkRegions: ["ENAM"],
-    intervalSeconds: 60,
-    timeoutSeconds: 5,
-    retries: 2,
-    consecutiveFailures: 2,
-    consecutiveSuccesses: 2,
-    method: "GET",
-    port: 443,
-    expectedCodes: ["200"],
-    followRedirects: false,
-    allowInsecure: false,
-    notifyOn: ["unhealthy", "healthy"],
   },
   serviceLevels: {
     evaluation: {
@@ -329,213 +312,10 @@ export const OBSERVABILITY_CONTRACT = {
       ],
     },
   },
-  telemetryQuality: {
-    requestPair: {
-      admittedEventName: "cail.request.received",
-      terminalEventName: "cail.request.completed",
-      joinKey: "cail.request.id",
-    },
-    actionPair: {
-      admittedEventName: "cail.action.admitted",
-      terminalEventName: "cail.action.terminal",
-      joinKey: "cail.action.id",
-    },
-    violationSignals: {
-      unacknowledgedMutation: {
-        eventName: "cail.action.terminal",
-        field: "error.type",
-        equals: "mutation_unacknowledged",
-      },
-      unclassifiedRoute: {
-        field: "url.template",
-        equals: "/unclassified",
-      },
-    },
-  },
 } as const;
 
 export type SiteStudioService = keyof typeof OBSERVABILITY_CONTRACT.services;
 export type SiteStudioAction = keyof typeof OBSERVABILITY_CONTRACT.actions;
-
-export type TelemetryQualityIssue = Readonly<{
-  code:
-    | "admission_missing"
-    | "admission_duplicate"
-    | "terminal_missing"
-    | "terminal_duplicate"
-    | "route_mismatch"
-    | "action_route_unrecognized"
-    | "terminal_duration_invalid";
-  lifecycle: "request" | "action";
-  service: string;
-  id: string;
-}>;
-
-export type TelemetryValue = string | number | boolean | null | undefined;
-export type TelemetryRecord = Readonly<Record<string, TelemetryValue>>;
-
-export type CloudflareHealthCheckSpec = Readonly<{
-  address: string;
-  name: string;
-  description: string;
-  type: "HTTPS";
-  check_regions: readonly ["ENAM"];
-  interval: number;
-  timeout: number;
-  retries: number;
-  consecutive_fails: number;
-  consecutive_successes: number;
-  http_config: Readonly<{
-    allow_insecure: false;
-    expected_body: string;
-    expected_codes: readonly ["200"];
-    follow_redirects: false;
-    method: "GET";
-    path: string;
-    port: 443;
-  }>;
-}>;
-
-/** Build an API-ready standalone Cloudflare Health Check without mutating Cloudflare. */
-export function createCloudflareHealthCheckSpec(
-  service: SiteStudioService,
-  hostname: string,
-): CloudflareHealthCheckSpec {
-  const address = hostname.trim().toLowerCase();
-  const labels = address.split(".");
-  const validLabel = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
-  if (
-    address.length > 253
-    || labels.length < 2
-    || labels.some((label) => !validLabel.test(label))
-  ) {
-    throw new TypeError("hostname must be a DNS hostname without a scheme, port, or path");
-  }
-
-  const definition = OBSERVABILITY_CONTRACT.services[service];
-  const monitor = OBSERVABILITY_CONTRACT.syntheticMonitor;
-  return {
-    address,
-    name: `${PRODUCT_ID}-${service}`,
-    description: `${definition.name} liveness (${definition.healthPath})`,
-    type: monitor.type,
-    check_regions: monitor.checkRegions,
-    interval: monitor.intervalSeconds,
-    timeout: monitor.timeoutSeconds,
-    retries: monitor.retries,
-    consecutive_fails: monitor.consecutiveFailures,
-    consecutive_successes: monitor.consecutiveSuccesses,
-    http_config: {
-      allow_insecure: monitor.allowInsecure,
-      expected_body: definition.healthMarker,
-      expected_codes: monitor.expectedCodes,
-      follow_redirects: monitor.followRedirects,
-      method: monitor.method,
-      path: definition.healthPath,
-      port: monitor.port,
-    },
-  };
-}
-
-/**
- * Audit a closed export window after its terminal grace period. This checks log
- * projection quality only; it never decides whether a product action succeeded.
- */
-export function auditTelemetryLifecyclePairs(
-  records: readonly TelemetryRecord[],
-): TelemetryQualityIssue[] {
-  const issues: TelemetryQualityIssue[] = [];
-  const actionRoutes = new Set<string>(
-    Object.values(OBSERVABILITY_CONTRACT.actions).map((action) => action.route),
-  );
-
-  for (const lifecycle of ["request", "action"] as const) {
-    const definition = lifecycle === "request"
-      ? OBSERVABILITY_CONTRACT.telemetryQuality.requestPair
-      : OBSERVABILITY_CONTRACT.telemetryQuality.actionPair;
-    const groups = new Map<string, {
-      id: string;
-      service: string;
-      admissions: TelemetryRecord[];
-      terminals: TelemetryRecord[];
-    }>();
-
-    for (const record of records) {
-      if (record["cail.product.id"] !== PRODUCT_ID) continue;
-      const eventName = record["event.name"];
-      if (
-        eventName !== definition.admittedEventName
-        && eventName !== definition.terminalEventName
-      ) continue;
-      const idResult = z.string().safeParse(record[definition.joinKey]);
-      const serviceResult = z.string().safeParse(record["service.name"]);
-      if (!idResult.success || !serviceResult.success) continue;
-      const id = idResult.data;
-      const service = serviceResult.data;
-      const key = `${service}\u0000${id}`;
-      const group = groups.get(key) ?? {
-        id,
-        service,
-        admissions: [],
-        terminals: [],
-      };
-      (eventName === definition.admittedEventName
-        ? group.admissions
-        : group.terminals).push(record);
-      groups.set(key, group);
-    }
-
-    for (const group of groups.values()) {
-      if (group.admissions.length === 0) {
-        issues.push({ code: "admission_missing", lifecycle, service: group.service, id: group.id });
-      } else if (group.admissions.length > 1) {
-        issues.push({ code: "admission_duplicate", lifecycle, service: group.service, id: group.id });
-      }
-      if (group.terminals.length === 0) {
-        issues.push({ code: "terminal_missing", lifecycle, service: group.service, id: group.id });
-      } else if (group.terminals.length > 1) {
-        issues.push({ code: "terminal_duplicate", lifecycle, service: group.service, id: group.id });
-      }
-
-      const admittedRouteResult = z.string().safeParse(group.admissions[0]?.["url.template"]);
-      const terminalRouteResult = z.string().safeParse(group.terminals[0]?.["url.template"]);
-      if (
-        admittedRouteResult.success
-        && terminalRouteResult.success
-        && admittedRouteResult.data !== terminalRouteResult.data
-      ) {
-        issues.push({ code: "route_mismatch", lifecycle, service: group.service, id: group.id });
-      }
-      if (
-        lifecycle === "action"
-        && terminalRouteResult.success
-        && !actionRoutes.has(terminalRouteResult.data)
-      ) {
-        issues.push({
-          code: "action_route_unrecognized",
-          lifecycle,
-          service: group.service,
-          id: group.id,
-        });
-      }
-      for (const terminal of group.terminals) {
-        const durationResult = z.number().finite().nonnegative().safeParse(
-          terminal["cail.operation.duration_ms"],
-        );
-        if (!durationResult.success) {
-          issues.push({
-            code: "terminal_duration_invalid",
-            lifecycle,
-            service: group.service,
-            id: group.id,
-          });
-        }
-      }
-    }
-  }
-
-  return issues;
-}
 
 /**
  * The Cloudflare version-metadata binding is absent in local development and

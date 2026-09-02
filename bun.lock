@@ -85,14 +85,6 @@
         "vitest": "4.1.10",
       },
     },
-    "packages/observability-core": {
-      "name": "@site-studio/observability-core",
-      "version": "0.1.0",
-      "dependencies": {
-        "@cuny-ai-lab/cail-log": "0.6.0",
-        "zod": "4.4.3",
-      },
-    },
   },
   "overrides": {
     "@hono/node-server": "2.0.12",
@@ -510,8 +502,6 @@
     "@site-studio/app": ["@site-studio/app@workspace:packages/app"],
 
     "@site-studio/frontend": ["@site-studio/frontend@workspace:packages/frontend"],
-
-    "@site-studio/observability-core": ["@site-studio/observability-core@workspace:packages/observability-core"],
 
     "@speed-highlight/core": ["@speed-highlight/core@1.2.17", "", {}, "sha512-Z92FwKpCtfaW1V0jTU/fh3QzYEZN8wDwrzRIBoADCJfn4mJCNcJN/XegifX7BDrQ8/h9Xh/JnbyMchL0FqXrkg=="],
 

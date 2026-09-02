@@ -12,7 +12,7 @@ import {
 import { TEST_SUBJECTS } from "@cuny-ai-lab/cail-identity/testing";
 import { SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER } from "../lib/logging";
 import { SITE_STUDIO_AGENT_PROPS_HEADER } from "../lib/agent-identity";
-import { ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION, ACTION_ATTEMPT_RETENTION_HOURS } from "../../../observability-core/src/action-attempt";
+import { ACTION_ATTEMPT_ADMIN_SCHEMA_VERSION, ACTION_ATTEMPT_RETENTION_HOURS } from "../lib/observability/action-attempt";
 import { z } from "zod";
 
 import { createAgentRouter } from "./agents";

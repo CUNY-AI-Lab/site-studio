@@ -9,20 +9,8 @@ import {
 } from './error-handler';
 
 export {
-	ApiError,
-	parseApiErrorEnvelope,
-	type ApiErrorEnvelope,
-	type ValidationDetail
+	ApiError
 } from './error-handler';
-
-/**
- * Parse an error response from either the canonical Doorway envelope or the
- * direct Worker's non-gate API envelope, redirecting canonical auth failures.
- */
-export async function handleApiError(response: Response): Promise<never> {
-	return handleApiErrorResponse(response);
-}
-
 /**
  * Wrapper for callers that need the raw Response (blob downloads or status
  * branching) while still honoring the canonical Doorway auth redirect.
@@ -54,7 +42,7 @@ export async function apiFetch<T = JsonValue>(
 ): Promise<T> {
 	const response = await csrfFetch(url, options);
 	if (!response.ok) {
-		await handleApiError(response);
+		await handleApiErrorResponse(response);
 	}
 
 	return response.json();

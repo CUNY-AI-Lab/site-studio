@@ -6,8 +6,8 @@ import {
   ROUTE_TEMPLATE_RE,
   type CailAnalyticsEngineDataPoint,
 } from "@cuny-ai-lab/cail-log";
-import { OBSERVABILITY_CONTRACT } from "../../observability-core/src/contract";
-import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "../../observability-core/src/fleet-projection";
+import { OBSERVABILITY_CONTRACT } from "./lib/observability/contract";
+import { SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION } from "./lib/observability/fleet-projection";
 import { createSiteStudioBoundaryLogger } from "./lib/logging";
 
 const REQUEST_ID = "8b9ec144-39aa-4f1f-bda5-4c645facf2cd";

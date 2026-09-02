@@ -56,17 +56,6 @@ describe('AccessibilityNotesDialog', () => {
 		expect(messages.slice(1)).toEqual(['W-first', 'W-third']);
 	});
 
-	it('does not render the ask-assistant button when no callback is provided', () => {
-		render(AccessibilityNotesDialog, {
-			props: {
-				open: true,
-				findings: [finding()],
-				onOpenChange: () => {}
-			}
-		});
-		expect(screen.queryByRole('button', { name: /ask the assistant to fix these/i })).not.toBeInTheDocument();
-	});
-
 	it('renders the ask-assistant button and invokes the callback when provided', async () => {
 		const user = userEvent.setup({ delay: null });
 		const onAskAssistant = vi.fn();

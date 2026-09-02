@@ -1,21 +1,20 @@
 <script lang="ts">
-	import { CheckCircle2, AlertCircle, Info, X } from 'lucide-svelte';
+	import { CheckCircle2, AlertCircle, X } from 'lucide-svelte';
 	import { toasts, dismiss, type ToastKind } from '$lib/toast.svelte';
 
 	const icons = {
 		success: CheckCircle2,
 		error: AlertCircle,
-		info: Info
 	} as const;
 
 	function label(kind: ToastKind): string {
-		return kind === 'error' ? 'Error' : kind === 'success' ? 'Success' : 'Notice';
+		return kind === 'error' ? 'Error' : 'Success';
 	}
 </script>
 
 <!--
 	SS-24: exactly ONE live-region layer. Each toast carries its own live-region
-	semantics (errors assertive via role="alert", info/success polite via
+	semantics (errors assertive via role="alert", success polite via
 	role="status"); the CONTAINER must NOT also be a live region, or nested live
 	regions double-announce in some screen readers. Each toast is
 	keyboard-dismissible (button + Esc).
@@ -89,10 +88,6 @@
 	.toast.error {
 		border-left-color: #ef4444;
 	}
-	.toast.info {
-		border-left-color: #14b8a6;
-	}
-
 	@keyframes toastIn {
 		from {
 			opacity: 0;
@@ -117,10 +112,6 @@
 	.toast.error .icon {
 		color: #f87171;
 	}
-	.toast.info .icon {
-		color: #5eead4;
-	}
-
 	.body {
 		flex: 1;
 		min-width: 0;
