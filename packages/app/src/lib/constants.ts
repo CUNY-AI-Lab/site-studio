@@ -1,3 +1,5 @@
+import { parsePositiveInteger, type Env } from "../types";
+
 export const SESSION_COOKIE_NAME = "site-studio-session";
 /**
  * Delivery cookie for the anti-CSRF token (docs/security-and-recovery.md,
@@ -60,46 +62,29 @@ export const MAX_SNAPSHOT_BYTES = 50 * 1024 * 1024;
 export const SNAPSHOT_KEEP_COUNT = 50;
 export { PROTECTED_FILE_NAMES } from "./protected-files";
 
-export const CONTENT_TYPES = {
-  ".html": "text/html",
-  ".htm": "text/html",
-  ".css": "text/css",
-  ".js": "application/javascript",
-  ".mjs": "application/javascript",
-  ".json": "application/json",
-  ".xml": "application/xml",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".csv": "text/csv",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".webp": "image/webp",
-  ".avif": "image/avif",
-  ".ico": "image/x-icon",
-  ".pdf": "application/pdf",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".eot": "application/vnd.ms-fontobject",
-  ".otf": "font/otf",
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg",
-} as const satisfies Readonly<Record<string, string>>;
+export function uploadPolicy(
+  env: Pick<Env, "SITE_STUDIO_MAX_PROJECT_BYTES" | "SITE_STUDIO_MAX_OWNER_BYTES" | "SITE_STUDIO_UPLOADS_PER_MINUTE">
+) {
+  const requiredPositiveInteger = (value: string | undefined, name: string): number => {
+    const parsed = parsePositiveInteger(value);
+    if (parsed === null) {
+      throw new Error(`${name} is not configured`);
+    }
+    return parsed;
+  };
 
-/**
- * `SERVED_CONTENT_TYPES` differs from `CONTENT_TYPES` above (which stays bare
- * for the editor's file tree / isText classification and document.ts's
- * exact-match probes): text types carry `; charset=utf-8` and `.mjs` pins the
- * served charset. Keep this re-export so existing app callers can continue to
- * import served types from lib/constants.
- */
-export {
-  SERVED_CONTENT_TYPES,
-  getServedContentType
-} from "./content-types";
+  return {
+    maxProjectBytes: requiredPositiveInteger(
+      env.SITE_STUDIO_MAX_PROJECT_BYTES,
+      "SITE_STUDIO_MAX_PROJECT_BYTES"
+    ),
+    maxOwnerBytes: requiredPositiveInteger(
+      env.SITE_STUDIO_MAX_OWNER_BYTES,
+      "SITE_STUDIO_MAX_OWNER_BYTES"
+    ),
+    uploadsPerMinute: requiredPositiveInteger(
+      env.SITE_STUDIO_UPLOADS_PER_MINUTE,
+      "SITE_STUDIO_UPLOADS_PER_MINUTE"
+    )
+  };
+}

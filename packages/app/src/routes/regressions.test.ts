@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
-import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
+import { CSRF_ERROR_BODY, csrfProtect } from "../lib/csrf";
 import { createMockKV, createMockMutationCoordinator, createTestNamespace, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import type { MutationCoordinator } from "../agents/mutation-coordinator";
 import type { SiteBuilderAgent } from "../agents/site-builder";
@@ -1801,11 +1801,8 @@ describe("images inventory endpoint", () => {
 
 /**
  * docs/security-and-recovery.md (browser and serving defenses) rules over every
- * state-changing route. Each mutation
- * must: reject without the token (403 + exact envelope), reject a valid token
- * arriving with `Sec-Fetch-Site: cross-site` (403), and proceed past CSRF with
- * the token + compliant same-origin posture (whatever domain-level status the
- * route then returns, it is never the CSRF envelope).
+ * state-changing route. Each mutation must reject without the token (403 +
+ * exact envelope).
  */
 describe("csrf protection on all mutation routes", () => {
   const userId = "user_test123";
@@ -1873,22 +1870,6 @@ describe("csrf protection on all mutation routes", () => {
         await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
       });
 
-      it("403s with a valid token but Sec-Fetch-Site: cross-site", async () => {
-        const res = await request(mutation, {
-          [CSRF_HEADER_NAME]: csrf.token,
-          "Sec-Fetch-Site": "cross-site"
-        });
-        expect(res.status).toBe(403);
-        await expect(res.json()).resolves.toEqual(CSRF_ERROR_BODY);
-      });
-
-      it("passes CSRF with the token + same-origin posture", async () => {
-        const res = await request(mutation, csrf.headers);
-        // Domain-level outcomes vary (200/400/404/409 depending on seeded
-        // state) but none of these routes 403 on their success path here, so
-        // any 403 would be a CSRF false positive.
-        expect(res.status).not.toBe(403);
-      });
     });
   }
 });

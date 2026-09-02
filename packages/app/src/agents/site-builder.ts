@@ -26,14 +26,13 @@ import {
 import { z } from "zod";
 import {
   isSnapshotSkipped,
-  parsePositiveInteger,
   type Env,
   type SiteBuilderAgentProps,
   type SnapshotResult,
 } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
-import { PROTECTED_FILE_NAMES } from "../lib/constants";
+import { PROTECTED_FILE_NAMES, uploadPolicy } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { lintProject } from "../lib/a11y-lint";
@@ -57,8 +56,8 @@ import {
   type ActionAttemptAdminRead,
   type ActionAttemptTerminal,
   type DurableActionAttempt,
-} from "../../../observability-core/src/action-attempt";
-import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
+} from "../lib/observability/action-attempt";
+import { OBSERVABILITY_CONTRACT } from "../lib/observability/contract";
 import {
   SiteStudioActionLifecycle,
   createSiteStudioConnectionLoggingState,
@@ -1352,18 +1351,7 @@ export function createProjectTools(
               path,
               content: bytes,
               admissionId: uploadAdmissionId,
-              maxProjectBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_PROJECT_BYTES,
-                "SITE_STUDIO_MAX_PROJECT_BYTES"
-              ),
-              maxOwnerBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_OWNER_BYTES,
-                "SITE_STUDIO_MAX_OWNER_BYTES"
-              ),
-              uploadsPerMinute: requiredPositiveInteger(
-                env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-                "SITE_STUDIO_UPLOADS_PER_MINUTE"
-              )
+              ...uploadPolicy(env)
             }, serializedLogging);
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
             return saved.written;
@@ -2893,11 +2881,3 @@ callable()(SiteBuilderAgent.prototype.getObservability, {
   addInitializer: () => undefined,
   metadata: {},
 });
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = parsePositiveInteger(value);
-  if (parsed === null) {
-    throw new Error(`${name} is not configured`);
-  }
-  return parsed;
-}

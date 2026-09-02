@@ -20,12 +20,12 @@ import {
   parseCailLogEnvironment,
   PRODUCT_ID,
   serviceUnavailableResponse,
-} from "../../../observability-core/src/contract";
-import { createSiteStudioBoundarySink } from "../../../observability-core/src/fleet-projection";
+} from "./observability/contract";
+import { createSiteStudioBoundarySink } from "./observability/fleet-projection";
 import type {
   ActionAttemptRecorder,
   ActionAttemptTerminal,
-} from "../../../observability-core/src/action-attempt";
+} from "./observability/action-attempt";
 import type { Env } from "../types";
 
 export const LOG_SERVICE = OBSERVABILITY_CONTRACT.services.app.name;

@@ -15,8 +15,6 @@
       "packages/app/src/**/*.ts",
       "packages/app/src/**/*.js",
       "packages/app/src/**/*.mjs",
-      "packages/observability-core/src/**/*.ts",
-      "packages/observability-core/src/**/*.js",
       "packages/frontend/src/**/*.ts",
       "packages/frontend/src/**/*.js",
       "packages/frontend/src/**/*.mjs",

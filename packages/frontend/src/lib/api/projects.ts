@@ -1,5 +1,6 @@
 import { resolvePath } from '$lib/utils/paths';
-import { apiFetch, handleApiError } from './errors';
+import { apiFetch } from './errors';
+import { handleApiErrorResponse } from './error-handler';
 import { csrfFetch } from './csrf';
 import { z } from 'zod';
 import { downloadBlob } from '$lib/browser/download';
@@ -108,7 +109,7 @@ export async function uploadProjectImage(projectId: string, file: File): Promise
 	});
 
 	if (!response.ok) {
-		await handleApiError(response);
+		await handleApiErrorResponse(response);
 	}
 
 	const parsed = uploadResponseSchema.safeParse(JSON.parse(await response.text()));
@@ -157,7 +158,7 @@ export async function downloadFile(projectId: string, filePath: string): Promise
 	);
 
 	if (!response.ok) {
-		await handleApiError(response);
+		await handleApiErrorResponse(response);
 	}
 
 	const blob = await response.blob();
@@ -243,7 +244,7 @@ export async function publishProject(projectId: string): Promise<PublishResult> 
 	}
 
 	if (!response.ok) {
-		await handleApiError(response);
+		await handleApiErrorResponse(response);
 	}
 
 	const parsed = publishSuccessResponseSchema.safeParse(JSON.parse(await response.text()));

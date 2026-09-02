@@ -197,65 +197,70 @@ describe('ImageManagerDialog', () => {
 	});
 
 	describe('exact prompt strings for all four combos', () => {
-		it('insert + described', async () => {
-			const user = userEvent.setup({ delay: null });
-			const { onAskAssistant } = open();
-			await waitForImages();
-			await user.click(thumbnail(0));
-			await user.type(screen.getByLabelText(/describe this image/i), 'A student poster');
-			await clickSubmit(user);
-			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Insert images/one.png into the site. Use alt text: "A student poster".'
-			);
-		});
+		const promptCases: Array<{
+			name: string;
+			mode: 'insert' | 'replace';
+			altText?: string;
+			locationHint?: string;
+			decorative: boolean;
+			expected: string;
+		}> = [
+			{
+				name: 'insert + described',
+				mode: 'insert',
+				altText: 'A student poster',
+				decorative: false,
+				expected: 'Insert images/one.png into the site. Use alt text: "A student poster".'
+			},
+			{
+				name: 'insert + decorative',
+				mode: 'insert',
+				decorative: true,
+				expected: 'Insert images/one.png into the site. It is decorative, so use alt="".'
+			},
+			{
+				name: 'insert + described with a location hint',
+				mode: 'insert',
+				altText: 'A photo',
+				locationHint: 'top of About page',
+				decorative: false,
+				expected: 'Insert images/one.png into the site ("top of About page"). Use alt text: "A photo".'
+			},
+			{
+				name: 'replace + described',
+				mode: 'replace',
+				altText: 'A lab bench',
+				decorative: false,
+				expected: 'Replace the placeholder image at index.html:20 with images/one.png and set its alt text to "A lab bench".'
+			},
+			{
+				name: 'replace + decorative',
+				mode: 'replace',
+				decorative: true,
+				expected: 'Replace the placeholder image at index.html:20 with images/one.png and mark it decorative with alt="".'
+			}
+		];
 
-		it('insert + decorative', async () => {
+		it.each(promptCases)('$name', async ({ mode, altText, locationHint, decorative, expected }) => {
 			const user = userEvent.setup({ delay: null });
 			const { onAskAssistant } = open();
 			await waitForImages();
-			await user.click(thumbnail(0));
-			await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
+			if (mode === 'replace') {
+				await user.click(screen.getByRole('button', { name: /^replace$/i }));
+			} else {
+				await user.click(thumbnail(0));
+			}
+			if (altText) {
+				await user.type(screen.getByLabelText(/describe this image/i), altText);
+			}
+			if (locationHint) {
+				await user.type(screen.getByLabelText(/where should it go/i), locationHint);
+			}
+			if (decorative) {
+				await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
+			}
 			await clickSubmit(user);
-			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Insert images/one.png into the site. It is decorative, so use alt="".'
-			);
-		});
-
-		it('insert + described with a location hint', async () => {
-			const user = userEvent.setup({ delay: null });
-			const { onAskAssistant } = open();
-			await waitForImages();
-			await user.click(thumbnail(0));
-			await user.type(screen.getByLabelText(/describe this image/i), 'A photo');
-			await user.type(screen.getByLabelText(/where should it go/i), 'top of About page');
-			await clickSubmit(user);
-			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Insert images/one.png into the site ("top of About page"). Use alt text: "A photo".'
-			);
-		});
-
-		it('replace + described', async () => {
-			const user = userEvent.setup({ delay: null });
-			const { onAskAssistant } = open();
-			await waitForImages();
-			await user.click(screen.getByRole('button', { name: /^replace$/i }));
-			await user.type(screen.getByLabelText(/describe this image/i), 'A lab bench');
-			await clickSubmit(user);
-			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Replace the placeholder image at index.html:20 with images/one.png and set its alt text to "A lab bench".'
-			);
-		});
-
-		it('replace + decorative', async () => {
-			const user = userEvent.setup({ delay: null });
-			const { onAskAssistant } = open();
-			await waitForImages();
-			await user.click(screen.getByRole('button', { name: /^replace$/i }));
-			await user.click(screen.getByRole('checkbox', { name: /this image is decorative/i }));
-			await clickSubmit(user);
-			expect(onAskAssistant).toHaveBeenCalledWith(
-				'Replace the placeholder image at index.html:20 with images/one.png and mark it decorative with alt="".'
-			);
+			expect(onAskAssistant).toHaveBeenCalledWith(expected);
 		});
 	});
 

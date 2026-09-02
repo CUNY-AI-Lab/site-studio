@@ -1,12 +1,13 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
-  getServedContentType,
   MAX_THUMBNAIL_BODY_BYTES,
   MAX_THUMBNAIL_BYTES,
-  MAX_THUMBNAIL_DIMENSION
+  MAX_THUMBNAIL_DIMENSION,
+  uploadPolicy
 } from "../lib/constants";
+import { getServedContentType } from "../lib/content-types";
 import { binaryBody, jsonError } from "../lib/http";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
@@ -26,7 +27,7 @@ import {
   rewriteRootRelativeHtmlUrls,
   rewriteRootRelativeJavaScriptUrls
 } from "../lib/path";
-import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
+import { OBSERVABILITY_CONTRACT } from "../lib/observability/contract";
 import {
   SiteStudioActionLifecycle,
   createSiteStudioBoundaryContext,
@@ -49,10 +50,6 @@ import {
 } from "../lib/published-url";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
-}
 
 /**
  * Run the accessibility linter over the project's HTML after a successful
@@ -405,9 +402,14 @@ export function createPublishRouter() {
         projectId,
         content,
         admissionId: crypto.randomUUID(),
-        maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
-        maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
-        uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
+        ...(() => {
+          try {
+            return uploadPolicy(c.env);
+          } catch (error) {
+            if (error instanceof Error) jsonError(error.message, 503);
+            throw error;
+          }
+        })()
       }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Thumbnail admission failed";
@@ -466,15 +468,6 @@ export function createPublishRouter() {
   return app;
 }
 
-async function resolvePublishedSite(
-  storage: R2ProjectStorage,
-  ownerId: string,
-  slug: string
-): Promise<{ ownerId: string; resolved: { projectId: string } } | null> {
-  const resolved = await storage.findPublishedProjectBySlug(ownerId, slug);
-  return resolved ? { ownerId, resolved } : null;
-}
-
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
 async function serveByHandle(c: AppContext, rawPath: string) {
   const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
@@ -491,8 +484,8 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return publishedNotFound(c, rawPath);
   }
 
-  const site = await resolvePublishedSite(storage, ownerId, slug);
-  if (!site) {
+  const resolved = await storage.findPublishedProjectBySlug(ownerId, slug);
+  if (!resolved) {
     return publishedNotFound(c, rawPath);
   }
 
@@ -501,7 +494,7 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return c.redirect(`${getPublishedPathPrefix(c)}${url.pathname}/${url.search}`, 301);
   }
 
-  return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
+  return servePublishedFile(c, storage, ownerId, resolved.projectId, rawPath, siteRootPath);
 }
 
 /** Read and return a file within an already-resolved published project. */

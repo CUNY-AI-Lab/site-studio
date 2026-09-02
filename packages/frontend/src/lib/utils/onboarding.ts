@@ -12,6 +12,22 @@ export function markOnboardingComplete(): void {
 	browserStorage()?.setItem(ONBOARDING_KEY, 'true');
 }
 
+function tourConfig(steps: DriveStep[]): Config {
+	return {
+		showProgress: true,
+		showButtons: ['next', 'previous', 'close'],
+		progressText: '{{current}} of {{total}}',
+		nextBtnText: 'Continue',
+		prevBtnText: 'Back',
+		doneBtnText: 'Done',
+		disableActiveInteraction: true,
+		onDestroyed: () => {
+			markOnboardingComplete();
+		},
+		steps
+	};
+}
+
 export function createDashboardTour() {
 	const steps: DriveStep[] = [
 		{
@@ -52,21 +68,7 @@ export function createDashboardTour() {
 		}
 	];
 
-	const config: Config = {
-		showProgress: true,
-		showButtons: ['next', 'previous', 'close'],
-		progressText: '{{current}} of {{total}}',
-		nextBtnText: 'Continue',
-		prevBtnText: 'Back',
-		doneBtnText: 'Done',
-		disableActiveInteraction: true,
-		onDestroyed: () => {
-			markOnboardingComplete();
-		},
-		steps
-	};
-
-	return driver(config);
+	return driver(tourConfig(steps));
 }
 
 export function createEditorTour() {
@@ -121,19 +123,5 @@ export function createEditorTour() {
 		}
 	];
 
-	const config: Config = {
-		showProgress: true,
-		showButtons: ['next', 'previous', 'close'],
-		progressText: '{{current}} of {{total}}',
-		nextBtnText: 'Continue',
-		prevBtnText: 'Back',
-		doneBtnText: 'Done',
-		disableActiveInteraction: true,
-		onDestroyed: () => {
-			markOnboardingComplete();
-		},
-		steps
-	};
-
-	return driver(config);
+	return driver(tourConfig(steps));
 }

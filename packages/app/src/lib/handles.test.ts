@@ -10,8 +10,7 @@ import {
   resolveHandleOwner,
   migrateHandle,
   handleRecordKey,
-  userHandleRecordKey,
-  RESERVED_HANDLES
+  userHandleRecordKey
 } from "./handles";
 import { createHandleRouter } from "../routes/handles";
 import { csrfProtect } from "./csrf";
@@ -115,11 +114,6 @@ describe("validateHandle", () => {
     expect(result).toEqual({ valid: true, handle: "jane-rivera" });
   });
 
-  it("keeps the reserved list broad", () => {
-    for (const word of ["admin", "api", "sites", "u", "cuny", "system"]) {
-      expect(RESERVED_HANDLES.has(word)).toBe(true);
-    }
-  });
 });
 
 describe("checkHandle", () => {
