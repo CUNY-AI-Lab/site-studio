@@ -33,10 +33,12 @@ const imagesResult: ProjectImagesResult = {
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason: Error) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 function open(overrides: DialogOverrides = {}) {
@@ -187,6 +189,36 @@ describe('ImageManagerDialog', () => {
 
 		expect(screen.queryByText('images/stale.png')).not.toBeInTheDocument();
 		expect(screen.getByText('images/current.png')).toBeInTheDocument();
+	});
+
+	it('discards previous-project placement actions when the next inventory fails, then recovers', async () => {
+		const user = userEvent.setup({ delay: null });
+		const nextInventory = deferred<ProjectImagesResult>();
+		const fetchImages = vi.fn<typeof fetchProjectImages>()
+			.mockResolvedValueOnce(imagesResult)
+			.mockReturnValueOnce(nextInventory.promise)
+			.mockResolvedValueOnce({ images: [{ path: 'images/current.png', size: 1 }], placeholders: [] });
+		const view = open({ fetchProjectImages: fetchImages });
+		await waitForImages();
+		await user.click(screen.getByRole('button', { name: /^replace$/i }));
+		await user.type(screen.getByLabelText(/describe this image/i), 'Old project image');
+
+		await view.rerender({ projectId: 'proj2' });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj2'));
+		expect(screen.queryByRole('button', { name: /^replace$/i })).not.toBeInTheDocument();
+		nextInventory.reject(new Error('inventory unavailable'));
+		await screen.findByRole('alert');
+		expect(screen.queryByRole('button', { name: /insert this image/i })).not.toBeInTheDocument();
+		expect(view.onAskAssistant).not.toHaveBeenCalled();
+
+		await view.rerender({ open: false });
+		await view.rerender({ open: true });
+		await user.click(await screen.findByRole('button', { name: 'Insert this image: images/current.png' }));
+		await user.type(screen.getByLabelText(/describe this image/i), 'Current project image');
+		await clickSubmit(user);
+		expect(view.onAskAssistant).toHaveBeenCalledExactlyOnceWith(
+			'Insert images/current.png into the site. Use alt text: "Current project image".'
+		);
 	});
 
 	it('reports a refresh failure separately after a successful upload', async () => {

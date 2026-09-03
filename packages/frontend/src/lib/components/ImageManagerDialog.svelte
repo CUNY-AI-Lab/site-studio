@@ -66,6 +66,9 @@
 		const requestedProjectId = projectId;
 		loading = true;
 		loadError = null;
+		images = [];
+		placeholders = [];
+		resetForm();
 		try {
 			const result = await fetchProjectImages(requestedProjectId);
 			if (sequence !== loadSequence || !open || projectId !== requestedProjectId) return 'stale';
@@ -84,7 +87,6 @@
 	// Load fresh data each time the dialog opens; reset the transient form state.
 	$effect(() => {
 		if (open) {
-			resetForm();
 			void load();
 		} else {
 			// Invalidate a request that resolves after the dialog closes. The open
@@ -246,6 +248,8 @@
 				<h3 id="your-images-heading" class="block-heading">Your images</h3>
 				{#if loading}
 					<p class="muted">Loading…</p>
+				{:else if loadError}
+					<p class="muted">Reopen Images to try again.</p>
 				{:else if !hasImages}
 					<p class="muted">
 						No images yet. Upload one above, then the assistant can place it on your site.
