@@ -614,6 +614,11 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await handleDialog.getByRole("button", { name: "Save and publish", exact: true }).click();
     const publishedButton = page.getByRole("button", { name: `View published site for ${projectName}`, exact: true });
     await expect(publishedButton).toBeVisible();
+    const accessibilityHeading = page.getByRole("heading", { name: /^Published, with \d+ accessibility notes?$/ });
+    if (await accessibilityHeading.count() > 0) {
+      await expect(accessibilityHeading).toBeVisible();
+      await page.getByRole("button", { name: "Got it", exact: true }).click();
+    }
     const publishedPage = await Promise.all([
       page.waitForEvent("popup"),
       publishedButton.click(),
@@ -634,6 +639,8 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     });
     await makePrivate.click();
     await expect(page.getByRole("button", { name: `Publish ${projectName}`, exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).not.toBeVisible();
     const privatePage = await context.newPage();
     const privateResponse = await privatePage.goto(publishedUrl, { waitUntil: "domcontentloaded" });
     if (!privateResponse || privateResponse.status() !== 404) {
