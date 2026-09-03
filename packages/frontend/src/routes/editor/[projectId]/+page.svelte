@@ -1180,6 +1180,8 @@
 		flex-direction: column;
 		height: 100vh;
 		position: relative;
+		/* Keep editor layers below the portaled dialogs and menus. */
+		isolation: isolate;
 		background: var(--color-bg-primary);
 	}
 
