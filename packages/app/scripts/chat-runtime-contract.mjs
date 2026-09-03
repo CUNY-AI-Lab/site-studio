@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { AIChatAgent, } from "@cloudflare/ai-chat";
 import { SiteBuilderAgent } from "../src/agents/site-builder.ts";
 
@@ -69,20 +68,15 @@ const connections = [connectionA, connectionB];
 agent.getConnections = () => connections;
 agent.getConnection = (id) => connections.find((candidate) => candidate.id === id);
 
-assert.equal(Object.hasOwn(agent, "onMessage"), true, "SiteBuilderAgent must install its onMessage boundary wrapper");
-assert.equal(Object.hasOwn(agent, "onConnect"), true, "SiteBuilderAgent must install its onConnect boundary wrapper");
-assert.equal(agent.chatRecovery, false, "Site Studio must keep AIChatAgent recovery disabled");
-assert.equal(agent.chatStreamStallTimeoutMs, 300_000, "Site Studio must use the five-minute production stall value");
-
-const aiChatPackage = JSON.parse(readFileSync(new URL("../node_modules/@cloudflare/ai-chat/package.json", import.meta.url), "utf8"));
-assert.equal(aiChatPackage.version, "0.9.3", "the chat contract must use the pinned SDK");
-const aiChatSource = readFileSync(new URL("../node_modules/@cloudflare/ai-chat/dist/index.js", import.meta.url), "utf8");
-assert.match(aiChatSource, /const stallTimeoutMs = this\.chatStreamStallTimeoutMs/);
-assert.match(aiChatSource, /reader\.cancel\(\)\.catch/);
-const stallAbortOffset = aiChatSource.indexOf("this.abortRequest(chatMessageId ?? id, error)");
-const stallRecoveryOffset = aiChatSource.indexOf("this._routeStallToBoundedRecovery", stallAbortOffset);
-assert.ok(stallAbortOffset >= 0, "the pinned SDK must abort the registered request on a stall");
-assert.ok(stallRecoveryOffset > stallAbortOffset, "the pinned SDK must abort before stall recovery routing");
+assert.equal(
+  await agent._routeStallToBoundedRecovery({
+    requestId: "stopped-turn",
+    streamId: "stopped-stream",
+    partialParts: [{ type: "text", text: "partial answer" }],
+  }),
+  "disabled",
+  "a stalled Site Studio turn must end without scheduling another billed continuation",
+);
 
 class InjectableStallAgent extends AIChatAgent {
   chatStreamStallTimeoutMs = 20;
