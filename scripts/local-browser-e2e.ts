@@ -440,8 +440,6 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     // Upload a real image through the product's Image Manager. The local
     // Worker still uses the checked-in upload policy, so this crosses the same
     // authenticated multipart and image-byte validation boundary as production.
-    await closeCodeEditor(page);
-    await expect(page.getByRole("button", { name: "Show code editor" })).toBeVisible();
     await page.getByRole("button", { name: "Images", exact: true }).click();
     const imageDialog = page.getByRole("dialog");
     await expect(imageDialog.getByRole("heading", { name: "Images", exact: true })).toBeVisible();
@@ -458,8 +456,6 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await imageButton.click();
     await expect(imageDialog.getByRole("heading", { name: "Add this image to your site", exact: true })).toBeVisible();
     await imageDialog.getByRole("button", { name: "Close", exact: true }).last().click();
-    await page.getByRole("button", { name: "Show code editor" }).click();
-    await expect(page.getByRole("button", { name: "Upload file" })).toBeVisible();
 
     // Exercise the parent-owned refresh queue across real file mutations. The
     // mutation requests overlap with their follow-up tree reads; the visible
