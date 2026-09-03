@@ -86,6 +86,14 @@ import {
 		generation: number;
 	}
 
+	interface ChatFinishEvent {
+		message: SiteChatMessage;
+		messages: SiteChatMessage[];
+		isAbort: boolean;
+		isDisconnect: boolean;
+		isError: boolean;
+	}
+
 	import type { UserQuestionPrompt, UserQuestionSubmission } from './AskUserQuestionCard.svelte';
 
 	let {
@@ -165,11 +173,16 @@ import {
 		activeRequestIds,
 		cancelOnClientAbort: false
 	});
-	const chat = new Chat<SiteChatMessage>({
-		transport: chatTransport,
-		onError: handleChatError,
-		onFinish: handleChatFinish
-	});
+	let chatGeneration = 0;
+	function createChat() {
+		const generation = chatGeneration;
+		return new Chat<SiteChatMessage>({
+			transport: chatTransport,
+			onError: handleChatError,
+			onFinish: (event) => handleChatFinish(event, generation)
+		});
+	}
+	let chat = $state<Chat<SiteChatMessage>>(createChat());
 
 	function adaptChatMessage(message: SiteChatMessage): UIChatMessage {
 		const parts = message.parts.map((part) => {
@@ -573,8 +586,17 @@ import {
 		currentRequestId = null;
 	}
 
-	function closeSocket() {
+	function closeSocket(replaceChat: boolean) {
 		connectionEpoch += 1;
+		const retiringChat = chat;
+		chatGeneration += 1;
+		void retiringChat.stop().catch((error) => {
+			console.error('Error stopping chat stream before socket teardown:', error);
+		});
+		if (replaceChat) {
+			chat = createChat();
+			setChatMessages(uiMessages);
+		}
 		if (reconnectTimer) {
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
@@ -737,7 +759,7 @@ import {
 			(socket && socketProjectId !== targetProjectId) ||
 			(socketPromise && socketPromiseProjectId !== targetProjectId)
 		) {
-			closeSocket();
+			closeSocket(true);
 		}
 
 		// SS-11: on a reconnect (reconnectAttempts > 0) a stale CSRF token is the
@@ -1004,13 +1026,10 @@ import {
 		isAbort,
 		isDisconnect,
 		isError
-	}: {
-		message: SiteChatMessage;
-		messages: SiteChatMessage[];
-		isAbort: boolean;
-		isDisconnect: boolean;
-		isError: boolean;
-	}) {
+	}: ChatFinishEvent, generation: number) {
+		if (generation !== chatGeneration) {
+			return;
+		}
 		syncChatMessages();
 		if (isDisconnect && isReconnecting) {
 			return;
@@ -1257,7 +1276,7 @@ import {
 
 	$effect(() => {
 		return () => {
-			closeSocket();
+			closeSocket(false);
 		};
 	});
 
@@ -1316,8 +1335,8 @@ import {
 		pendingHistoryReconciliations = [];
 		historyRefreshPending = false;
 		resetRequestState();
+		closeSocket(true);
 		setChatMessages([]);
-		closeSocket();
 
 		void (async () => {
 			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {

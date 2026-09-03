@@ -1396,6 +1396,88 @@ describe('AgentChat', () => {
 		expect(screen.queryByText('change the old project')).not.toBeInTheDocument();
 	});
 
+	it('stops an old turn before switching projects so its late finish cannot reset the new project', async () => {
+		let projectBHistoryRequested = false;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/proj-b/get-messages')) {
+				projectBHistoryRequested = true;
+				return new Response(
+					JSON.stringify([
+						{ id: 'project-b-history', role: 'assistant', parts: [{ type: 'text', text: 'Project B history' }] }
+					]),
+					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const result = renderExposed({ projectId: 'proj-a' });
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const projectASocket = FakeWebSocket.last();
+		projectASocket.open();
+		await settle();
+
+		await result.component.sendPrompt('project A turn');
+		await settle();
+		const projectARequest = projectASocket.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(projectARequest).toBeTruthy();
+		projectASocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectARequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'project-a-text' })
+		});
+		projectASocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectARequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'project-a-text', delta: 'Project A partial' })
+		});
+		await waitFor(() => expect(screen.getByText('Project A partial')).toBeInTheDocument());
+
+		await result.rerender({ projectId: 'proj-b', onUpdate: result.onUpdate });
+		await waitFor(() => expect(projectBHistoryRequested).toBe(true));
+		await waitFor(() => expect(screen.getByText('Project B history')).toBeInTheDocument());
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+		const projectBSocket = FakeWebSocket.last();
+		projectBSocket.open();
+		await settle();
+
+		await result.component.sendPrompt('project B turn');
+		await settle();
+		const projectBRequest = projectBSocket.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(projectBRequest).toBeTruthy();
+
+		// The old transport stream still owns A's listener. A late close must not
+		// invoke Chat's finish callback against B's reset/new-turn state.
+		projectASocket.serverClose();
+		await settle();
+		await waitFor(() => expect(screen.getByTitle('Stop request')).toBeInTheDocument());
+
+		expect(screen.getByText('Project B history')).toBeInTheDocument();
+		expect(screen.getByText('project B turn')).toBeInTheDocument();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		projectBSocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectBRequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'project-b-text' })
+		});
+		projectBSocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectBRequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'project-b-text', delta: 'Project B answer' })
+		});
+		await waitFor(() => expect(screen.getByText('Project B answer')).toBeInTheDocument());
+	});
+
 	it('waits for the credential refresh before sending a new chat frame', async () => {
 		let resolveRefresh!: (response: Response) => void;
 		let refreshRequested = false;
