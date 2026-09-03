@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { CailError } from "@cuny-ai-lab/cail-client";
 import { cailErrorEnvelope, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
+import type { UIMessage } from "ai";
 import { buildProjectContext, buildProjectTree } from "./project-context";
 import {
   createProjectTools,
+  SiteBuilderAgent,
   type ProjectMutationExecutor,
   type ProjectStorageLike,
 } from "./site-builder";
@@ -126,6 +128,60 @@ describe("describeModelStreamError", () => {
       quota: true,
       message: verbatim
     });
+  });
+});
+
+describe("chat history migration", () => {
+  const importedMessages = [
+    {
+      id: "user-1",
+      role: "user",
+      parts: [{ type: "text", text: "Imported project brief" }],
+    },
+  ] satisfies UIMessage[];
+
+  it("persists imported history without starting a model turn", async () => {
+    const persistMessages = vi.fn(async () => undefined);
+    const saveMessages = vi.fn(() => {
+      throw new Error("migration must not start a chat turn");
+    });
+    // SAFETY: This fixture invokes only the migration method and replaces the
+    // framework persistence entrypoints; no Durable Object bindings are read.
+    const agent = Object.assign(Object.create(SiteBuilderAgent.prototype), {
+      messages: [],
+      persistMessages,
+      saveMessages,
+    }) as SiteBuilderAgent;
+
+    await expect(agent.importChatHistoryForMigration(importedMessages)).resolves.toBe(true);
+
+    expect(persistMessages).toHaveBeenCalledOnce();
+    expect(persistMessages).toHaveBeenCalledWith(importedMessages);
+    expect(saveMessages).not.toHaveBeenCalled();
+  });
+
+  it("accepts an exact retry but refuses different existing history", async () => {
+    const persistMessages = vi.fn(async () => undefined);
+    const saveMessages = vi.fn(async () => undefined);
+    // SAFETY: This fixture invokes only the migration method and replaces the
+    // framework persistence entrypoints; no Durable Object bindings are read.
+    const agent = Object.assign(Object.create(SiteBuilderAgent.prototype), {
+      messages: importedMessages,
+      persistMessages,
+      saveMessages,
+    }) as SiteBuilderAgent;
+    const differentMessages = [
+      {
+        id: "user-2",
+        role: "user",
+        parts: [{ type: "text", text: "Different project brief" }],
+      },
+    ] satisfies UIMessage[];
+
+    await expect(agent.importChatHistoryForMigration(importedMessages)).resolves.toBe(true);
+    await expect(agent.importChatHistoryForMigration(differentMessages)).resolves.toBe(false);
+    expect(persistMessages).not.toHaveBeenCalled();
+    expect(saveMessages).not.toHaveBeenCalled();
   });
 });
 

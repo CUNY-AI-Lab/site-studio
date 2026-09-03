@@ -2464,7 +2464,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // it already imported, while still refusing to overwrite different work.
       return JSON.stringify(this.messages) === JSON.stringify(messages);
     }
-    await this.saveMessages(messages);
+    await this.persistMessages(messages);
     return true;
   }
 
