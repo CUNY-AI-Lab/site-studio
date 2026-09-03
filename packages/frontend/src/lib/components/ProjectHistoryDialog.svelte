@@ -109,6 +109,7 @@
 			return;
 		}
 
+		const targetProjectId = projectId;
 		isCreating = true;
 		try {
 			const canCreate = onBeforeCreateSnapshot ? await onBeforeCreateSnapshot() : true;
@@ -117,7 +118,11 @@
 			}
 
 			errorMessage = '';
-			const snapshot = await createProjectSnapshot(projectId, snapshotLabel.trim() || undefined);
+			const snapshot = await createProjectSnapshot(targetProjectId, snapshotLabel.trim() || undefined);
+			if (!open || targetProjectId !== projectId) return;
+			// The saved snapshot supersedes any list request that was already in flight.
+			loadVersion += 1;
+			isLoading = false;
 			snapshots = [snapshot, ...snapshots];
 			snapshotLabel = '';
 		} catch (error) {

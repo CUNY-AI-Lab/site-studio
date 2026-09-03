@@ -167,4 +167,30 @@ describe('ProjectHistoryDialog', () => {
 		expect(onBeforeCreateSnapshot).toHaveBeenCalledTimes(2);
 		expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
 	});
+
+	it('keeps a newly saved version when the initial list response settles later', async () => {
+		const initialList = deferred<Response>();
+		fetchMock.mockImplementation(async (_input, init) => {
+			if ((init?.method || 'GET') === 'POST') {
+				return new Response(JSON.stringify({ snapshot: agentSnapshot }), { status: 200 });
+			}
+			return initialList.promise;
+		});
+		render(ProjectHistoryDialog, {
+			props: {
+				open: true,
+				projectId: 'project-a',
+				onOpenChange: vi.fn()
+			}
+		});
+
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+		await fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+		await screen.findByText('Agent changes');
+
+		initialList.resolve(new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 }));
+		await initialList.promise;
+		await waitFor(() => expect(screen.getByText('Agent changes')).toBeInTheDocument());
+		expect(screen.queryByText('Before the agent run')).not.toBeInTheDocument();
+	});
 });
