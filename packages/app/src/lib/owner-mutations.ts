@@ -24,7 +24,7 @@ export type OwnerMutation =
   | { type: "write-file-if-absent"; projectId: string; path: string; content: string }
   | { type: "delete-file"; projectId: string; path: string }
   | { type: "rename-file"; projectId: string; oldPath: string; newPath: string }
-  | { type: "upload-if-absent"; projectId: string; path: string; content: Uint8Array }
+  | { type: "upload-if-absent"; projectId: string; path: string; content: ReadableStream<Uint8Array> }
   | { type: "write-thumbnail"; projectId: string; content: Uint8Array }
   | { type: "create-snapshot"; projectId: string; label?: string; trigger: "agent" | "manual" }
   | { type: "restore-snapshot"; projectId: string; snapshotId: string }

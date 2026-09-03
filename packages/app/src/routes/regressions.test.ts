@@ -22,13 +22,14 @@ const actionAttemptRpc = vi.hoisted(() => ({
   terminal: vi.fn(async () => undefined),
 }));
 
-type MockDataInput = string | ArrayBuffer | Uint8Array;
+type MockStoredData = string | ArrayBuffer | Uint8Array;
+type MockDataInput = MockStoredData | ReadableStream<Uint8Array>;
 type PublishBody = { success: boolean; url: string; a11yFindings: Array<{ [key: string]: string | number | boolean | null | undefined }> };
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type MockData =
   | { kind: "text"; value: string }
   | { kind: "bytes"; value: ArrayBuffer };
-type MockEntry = { data: MockDataInput; httpMetadata?: R2HTTPMetadata; etag?: string };
+type MockEntry = { data: MockStoredData; httpMetadata?: R2HTTPMetadata; etag?: string };
 type MockBucket = R2Bucket & { store: Map<string, MockEntry> };
 function testConditional(options?: R2PutOptions): R2Conditional | undefined {
   const conditional = options?.onlyIf;
@@ -42,8 +43,10 @@ const mockDataSchema = z.union([
     value: value.slice().buffer,
   })),
 ]);
+const reservationRecordSchema = z.object({ projectId: z.string().optional() });
+const formerMetadataSchema = z.object({ slug: z.string().optional() });
 
-function parseMockData(value: MockDataInput): MockData {
+function parseMockData(value: MockStoredData): MockData {
   return mockDataSchema.parse(value);
 }
 
@@ -106,6 +109,9 @@ function createMockBucket() {
       data: MockDataInput,
       options?: { httpMetadata?: R2HTTPMetadata; onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } }
     ) => {
+      const storedData = data instanceof ReadableStream
+        ? new Uint8Array(await new Response(data).arrayBuffer())
+        : data;
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
       // key is empty; a failed condition returns null (no write, no throw).
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
@@ -115,7 +121,7 @@ function createMockBucket() {
         return null;
       }
       const etag = nextEtag(key);
-      store.set(key, { data, httpMetadata: options?.httpMetadata, etag });
+      store.set(key, { data: storedData, httpMetadata: options?.httpMetadata, etag });
       return createStoredR2Object(key, etag);
     }),
     delete: vi.fn(async (key: string) => {
@@ -630,8 +636,8 @@ describe("route regressions", () => {
     putMock.mockImplementation(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
       // SAFETY: Reservation writes at this key are JSON strings in this fixture.
       const record =
-        key === reservationKey && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)
-          ? (JSON.parse(data) as { projectId?: string })
+        key === reservationKey
+          ? reservationRecordSchema.parse(JSON.parse(z.string().parse(data)))
           : null;
       if (
         !paused &&
@@ -684,11 +690,11 @@ describe("route regressions", () => {
     });
     expect(
       putMock.mock.calls.some(([key, data]) => {
-        if (key !== `projects/${userId}/former-owner/.metadata.json` || data instanceof ArrayBuffer || data instanceof Uint8Array) {
+        if (key !== `projects/${userId}/former-owner/.metadata.json`) {
           return false;
         }
         // SAFETY: This reservation fixture writes JSON strings at this key.
-        const written = JSON.parse(data) as { slug?: string };
+        const written = formerMetadataSchema.parse(JSON.parse(z.string().parse(data)));
         return written.slug === "shared";
       })
     ).toBe(false);
@@ -1626,7 +1632,7 @@ describe("image upload hardening", () => {
     expect(body.error).toContain("not a valid PNG");
   });
 
-  it("rejects an oversized image with 400", async () => {
+  it("rejects an oversized image with 413", async () => {
     // 10MB cap + 1 byte, filled with the PNG signature so only size can fail.
     const big = pngBytes(10 * 1024 * 1024 + 1);
     const response = await app.request(
@@ -1635,7 +1641,7 @@ describe("image upload hardening", () => {
       createEnv(bucket)
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(413);
     // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("too large");

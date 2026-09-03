@@ -715,7 +715,7 @@ export class R2ProjectStorage {
     userId: string,
     projectId: string,
     fileName: string,
-    content: Uint8Array
+    content: Uint8Array | ReadableStream<Uint8Array>
   ): Promise<boolean> {
     return this.putIfAbsent(fileKey(userId, projectId, fileName), content);
   }
@@ -1171,7 +1171,7 @@ export class R2ProjectStorage {
    */
   async putIfAbsent(
     key: string,
-    value: string | Uint8Array | ArrayBuffer,
+    value: string | Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
     opts?: { httpMetadata?: R2HTTPMetadata }
   ): Promise<boolean> {
     const putOptions: R2PutOptions = {

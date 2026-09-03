@@ -93,7 +93,7 @@ function validateUpload(file: File, fileName: string) {
   // Images get a tighter cap; everything else keeps the generic 32MB limit.
   const maxBytes = isImage ? IMAGE_MAX_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
   if (file.size > maxBytes) {
-    jsonError(`File too large. Max ${maxBytes / (1024 * 1024)}MB`, 400);
+    jsonError(`File too large. Max ${maxBytes / (1024 * 1024)}MB`, 413);
   }
 
   const allowed = new Set([
@@ -342,8 +342,10 @@ export function createFileRouter() {
     }
     validateUpload(entry, sanitized);
 
-    const buffer = new Uint8Array(await entry.arrayBuffer());
-    validateImageBytes(sanitized, buffer);
+    if (isImageExtension(fileExtension(sanitized))) {
+      const buffer = new Uint8Array(await entry.arrayBuffer());
+      validateImageBytes(sanitized, buffer);
+    }
 
     // Collision-suffix within the target prefix so images/photo.png and
     // photo.png at the root never clobber each other. The write itself is
@@ -362,7 +364,10 @@ export function createFileRouter() {
         type: "upload-if-absent",
         projectId,
         path: candidate,
-        content: buffer
+        // ReadableStream is a native RPC transport for large bodies. A fresh
+        // File stream is required for each collision candidate because the
+        // conditional write consumes the stream it receives.
+        content: entry.stream()
       }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       if (!("written" in result)) throw new Error("Unexpected mutation result");
       if (result.written) {

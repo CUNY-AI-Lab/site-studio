@@ -35,6 +35,7 @@ import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-g
 import { inspectImage } from "../lib/image-inspection";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
+import { binaryBody } from "../lib/http";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
@@ -1399,7 +1400,7 @@ export function createProjectTools(
               type: "upload-if-absent",
               projectId: scope.projectId,
               path,
-              content: bytes
+              content: binaryBody(bytes).stream()
             }, serializedLogging);
             abortSignal?.throwIfAborted();
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
