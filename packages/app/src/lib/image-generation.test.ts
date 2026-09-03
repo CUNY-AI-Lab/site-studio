@@ -172,6 +172,31 @@ describe("generateImage wire contract", () => {
     }
   });
 
+  it("propagates cancellation from a pending image-generation request", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    let seenSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const stub: typeof fetch = async (_input, init) => {
+      calls += 1;
+      seenSignal = init?.signal ?? undefined;
+      started();
+      const signal = init?.signal;
+      if (!signal) throw new Error("Expected request cancellation signal");
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const generating = generateImage(env, "jwt", { prompt: "x" }, stub, controller.signal);
+    await ready;
+    controller.abort(new DOMException("Stopped", "AbortError"));
+
+    await expect(generating).rejects.toThrow("Stopped");
+    expect(seenSignal).toBe(controller.signal);
+    expect(calls).toBe(1);
+  });
+
   it("rejects a provider image larger than the interactive 10MB image cap", async () => {
     const oversized = new Uint8Array(10 * 1024 * 1024 + 1);
     oversized.set(PNG_BYTES);
@@ -289,6 +314,31 @@ describe("screenImage moderation gate (fail closed)", () => {
       | { image_url: { url: string } }
       | undefined;
     expect(imagePart?.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  it("propagates cancellation from a pending moderation request", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    let seenSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const stub: typeof fetch = async (_input, init) => {
+      calls += 1;
+      seenSignal = init?.signal ?? undefined;
+      started();
+      const signal = init?.signal;
+      if (!signal) throw new Error("Expected request cancellation signal");
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const screening = screenImage(env, "jwt", PNG_BYTES, stub, controller.signal);
+    await ready;
+    controller.abort(new DOMException("Stopped", "AbortError"));
+
+    await expect(screening).rejects.toThrow("Stopped");
+    expect(seenSignal).toBe(controller.signal);
+    expect(calls).toBe(1);
   });
 
   it("allows only on an explicit {\"allowed\": true}", async () => {
@@ -446,6 +496,34 @@ describe("runGenerateImageFlow ordering", () => {
     expect(calls.saveIfAbsent).toBe(0);
   });
 
+  it("does not start moderation after generation observes turn cancellation", async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    let screenCalls = 0;
+    let saveCalls = 0;
+    const deps: GenerateImageFlowDeps = {
+      generate: async (signal) => {
+        seenSignal = signal;
+        controller.abort(new Error("turn stopped"));
+        return { ok: true, bytes: PNG_BYTES, contentType: "image/png" };
+      },
+      screen: async () => {
+        screenCalls += 1;
+        return { allowed: true };
+      },
+      saveIfAbsent: async () => {
+        saveCalls += 1;
+        return true;
+      },
+    };
+
+    await expect(runGenerateImageFlow("cancelled.png", deps, controller.signal))
+      .rejects.toThrow("turn stopped");
+    expect(seenSignal).toBe(controller.signal);
+    expect(screenCalls).toBe(0);
+    expect(saveCalls).toBe(0);
+  });
+
   it("non-image bytes: screen and saveIfAbsent never called", async () => {
     const { deps, calls } = trackedDeps({
       generate: async () => ({ ok: true, bytes: new Uint8Array([1, 2, 3, 4]), contentType: "image/png" })
@@ -469,6 +547,22 @@ describe("runGenerateImageFlow ordering", () => {
     expect(saved).toHaveLength(1);
     expect(saved[0].path).toBe("images/Head_shot.png");
     expect(calls.screen).toBe(1);
+  });
+
+  it("does not report a completed atomic save after cancellation", async () => {
+    const controller = new AbortController();
+    let saveCalls = 0;
+    const { deps } = trackedDeps({
+      saveIfAbsent: async () => {
+        saveCalls += 1;
+        controller.abort(new Error("turn stopped"));
+        return true;
+      },
+    });
+
+    await expect(runGenerateImageFlow("cancelled.png", deps, controller.signal))
+      .rejects.toThrow("turn stopped");
+    expect(saveCalls).toBe(1);
   });
 
   it("collision: advances the suffix when the atomic write loses the race", async () => {

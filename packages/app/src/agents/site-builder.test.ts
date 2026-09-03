@@ -2,7 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { CailError } from "@cuny-ai-lab/cail-client";
 import { cailErrorEnvelope, quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { buildProjectContext, buildProjectTree } from "./project-context";
-import { createProjectTools, type ProjectStorageLike } from "./site-builder";
+import {
+  createProjectTools,
+  type ProjectMutationExecutor,
+  type ProjectStorageLike,
+} from "./site-builder";
 import { describeModelStreamError } from "../lib/model-stream-error";
 import type { StorageFile } from "../types";
 
@@ -126,7 +130,7 @@ describe("describeModelStreamError", () => {
 });
 
 describe("project context", () => {
-  it("buildProjectContext includes existing files and uploaded documents", () => {
+  it("buildProjectContext includes existing files and truthful PDF/image/link guidance", () => {
     const context = buildProjectContext([
       {
         path: "index.html",
@@ -154,6 +158,24 @@ describe("project context", () => {
         isDirectory: false,
         contentType: "text/css",
         isText: true
+      },
+      {
+        path: "assets/poster.png",
+        name: "poster.png",
+        size: 2000,
+        lastModified: "2026-04-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "image/png",
+        isText: false
+      },
+      {
+        path: "assets/legacy.docx",
+        name: "legacy.docx",
+        size: 2000,
+        lastModified: "2026-04-01T00:00:00.000Z",
+        isDirectory: false,
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        isText: false
       }
     ]);
 
@@ -162,6 +184,11 @@ describe("project context", () => {
     expect(context).toContain("assets/");
     expect(context).toContain("assets/cv.pdf");
     expect(context).toContain("extract_document_text");
+    expect(context).toContain("assets/poster.png");
+    expect(context).toContain("inspect_image");
+    expect(context).toContain("read_url");
+    expect(context).not.toContain("Uploaded documents in the project: assets/legacy.docx");
+    expect(context).not.toContain("supported documents");
   });
 });
 
@@ -242,5 +269,57 @@ describe("project tree", () => {
     expect(empty).toEqual({ count: 0, tree: "(project is empty)", paths: [] });
     expect(storage.listFiles).toHaveBeenNthCalledWith(1, "user-1", "project-1", "src");
     expect(storage.listFiles).toHaveBeenNthCalledWith(2, "user-1", "project-1", "");
+  });
+
+  it("stops a project mutation after an in-flight snapshot when the turn is cancelled", async () => {
+    const controller = new AbortController();
+    const storage: ProjectStorageLike = {
+      fileExists: async () => false,
+      listFiles: async () => [],
+      readFile: async () => "",
+      readFileWithEtag: async () => null,
+      readFileBuffer: async () => new Uint8Array(),
+    };
+    const executeMutation = vi.fn(async (_ownerId: string, operation: Parameters<ProjectMutationExecutor>[1]) => {
+      if (operation.type !== "create-snapshot") {
+        throw new Error(`unexpected mutation: ${operation.type}`);
+      }
+      controller.abort(new Error("turn stopped"));
+      return {
+        snapshot: {
+          id: "snapshot-1",
+          createdAt: "2026-04-01T00:00:00.000Z",
+          projectId: "project-1",
+          trigger: "agent" as const,
+          fileCount: 0,
+        },
+      };
+    });
+    // SAFETY: This test injects storage and mutation seams; the bucket is never read.
+    const bucket = {} as R2Bucket;
+    const tools = createProjectTools(
+      { SITE_STUDIO_BUCKET: bucket },
+      { userId: "user-1", projectId: "project-1" },
+      null,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      storage,
+      executeMutation,
+      controller.signal,
+    );
+    if (!tools.write_file.execute) {
+      throw new Error("write_file has no execute handler");
+    }
+
+    // SAFETY: This deterministic tool test does not use AI SDK execution options.
+    await expect(tools.write_file.execute({
+      path: "new.txt",
+      content: "new content",
+      mode: "replace",
+    }, undefined as never)).rejects.toThrow("turn stopped");
+    expect(executeMutation).toHaveBeenCalledOnce();
+    expect(executeMutation.mock.calls[0]?.[1]).toMatchObject({ type: "create-snapshot" });
   });
 });

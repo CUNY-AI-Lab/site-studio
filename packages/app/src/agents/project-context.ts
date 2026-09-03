@@ -56,13 +56,16 @@ export function buildProjectContext(files: StorageFile[]): string {
   const tree = buildProjectTree(shownFiles.map((file) => file.path));
   const extraFileCount = sortedFiles.length - shownFiles.length;
   const uploadedDocuments = sortedFiles.filter((file) => {
-    return !file.isText && (
-      file.contentType === "application/pdf" ||
-      file.path.toLowerCase().endsWith(".docx")
-    );
+    return !file.isText && file.contentType === "application/pdf";
+  });
+  const uploadedImages = sortedFiles.filter((file) => {
+    return !file.isText && file.contentType?.startsWith("image/");
   });
 
-  const sections = [`Current project files:\n${tree}`];
+  const sections = [
+    `Current project files:\n${tree}`,
+    "For a public link supplied by the user, use read_url to read page text and links. General web search, private or sign-in pages, and page JavaScript are not available."
+  ];
 
   if (extraFileCount > 0) {
     sections.push(`${extraFileCount} additional files are present but omitted from this summary.`);
@@ -71,7 +74,14 @@ export function buildProjectContext(files: StorageFile[]): string {
   if (uploadedDocuments.length > 0) {
     sections.push(
       `Uploaded documents in the project: ${uploadedDocuments.map((file) => file.path).join(", ")}. `
-      + `Use extract_document_text for supported documents before summarizing or rewriting their contents.`
+      + `Use extract_document_text for these PDFs before summarizing or rewriting their contents.`
+    );
+  }
+
+  if (uploadedImages.length > 0) {
+    sections.push(
+      `Images in the project: ${uploadedImages.map((file) => file.path).join(", ")}. `
+      + `Use inspect_image to get a visual observation before choosing alt text or placement.`
     );
   }
 

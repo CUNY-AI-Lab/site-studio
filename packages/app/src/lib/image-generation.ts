@@ -119,14 +119,20 @@ function decodeBase64(data: string): Uint8Array {
   return bytes;
 }
 
-async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
+async function readBoundedText(
+  response: Response,
+  maxBytes: number,
+  abortSignal?: AbortSignal,
+): Promise<string | null> {
   if (!response.body) return "";
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     while (true) {
+      abortSignal?.throwIfAborted();
       const { done, value } = await reader.read();
+      abortSignal?.throwIfAborted();
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
@@ -190,8 +196,10 @@ export async function generateImage(
   env: CailImageEnv,
   jwt: string | null,
   input: GenerateImageInput,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  abortSignal?: AbortSignal,
 ): Promise<GenerateImageResult> {
+  abortSignal?.throwIfAborted();
   if (!env.CAIL_API_BASE) {
     return { ok: false, message: "Site Studio isn't set up correctly right now. Email ailab@gc.cuny.edu." };
   }
@@ -201,6 +209,7 @@ export async function generateImage(
     return { ok: false, message: "Sign in to make images." };
   }
   assertCailJwtFresh(jwt);
+  abortSignal?.throwIfAborted();
 
   const model = resolveImageModelId(env);
   const width = clampDimension(input.width);
@@ -217,8 +226,11 @@ export async function generateImage(
     response = await cailClient(env.CAIL_API_BASE, billedFetch).run(
       { model, input: { prompt: input.prompt, width, height } },
       jwt,
+      { signal: abortSignal },
     );
+    abortSignal?.throwIfAborted();
   } catch (error) {
+    abortSignal?.throwIfAborted();
     if (error instanceof CailError) {
       // The envelope message, verbatim.
       return { ok: false, message: error.message };
@@ -234,12 +246,14 @@ export async function generateImage(
     return { ok: false, message: "Image generation returned an image larger than 10MB" };
   }
   try {
-    const responseText = await readBoundedText(response, maxResponseBytes);
+    const responseText = await readBoundedText(response, maxResponseBytes, abortSignal);
+    abortSignal?.throwIfAborted();
     if (responseText === null) {
       return { ok: false, message: "Image generation returned an image larger than 10MB" };
     }
     payload = JSON.parse(responseText);
   } catch {
+    abortSignal?.throwIfAborted();
     return { ok: false, message: "Image generation returned a non-JSON response" };
   }
 
@@ -256,6 +270,7 @@ export async function generateImage(
   try {
     bytes = decodeBase64(base64);
   } catch {
+    abortSignal?.throwIfAborted();
     return { ok: false, message: "Image generation returned an undecodable image payload" };
   }
 
@@ -295,12 +310,15 @@ export async function screenImage(
   env: CailImageEnv,
   jwt: string | null,
   bytes: Uint8Array,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  abortSignal?: AbortSignal,
 ): Promise<ScreenImageResult> {
+  abortSignal?.throwIfAborted();
   if (!env.CAIL_API_BASE || !jwt) {
     return { allowed: false };
   }
   assertCailJwtFresh(jwt);
+  abortSignal?.throwIfAborted();
 
   const model = resolveImageClassifierId(env);
   const imageType = sniffImageType(bytes);
@@ -336,7 +354,9 @@ export async function screenImage(
         }),
       }),
       temperature: 0,
+      abortSignal,
     });
+    abortSignal?.throwIfAborted();
 
     const verdict = result.output;
     if (!verdict || verdict.allowed !== true) {
@@ -344,6 +364,7 @@ export async function screenImage(
     }
     return { allowed: true, reason: verdict.reason };
   } catch {
+    abortSignal?.throwIfAborted();
     // FAIL CLOSED: provider errors, malformed structured output, and network
     // throws alike.
     return { allowed: false };
@@ -374,9 +395,9 @@ export function sanitizeGeneratedImageName(raw: string | undefined, type: ImageT
 
 export interface GenerateImageFlowDeps {
   /** Produce the image (already bound to env/jwt/input). */
-  generate: () => Promise<GenerateImageResult>;
+  generate: (abortSignal?: AbortSignal) => Promise<GenerateImageResult>;
   /** The REQUIRED moderation gate (already bound to env/jwt). */
-  screen: (bytes: Uint8Array) => Promise<ScreenImageResult>;
+  screen: (bytes: Uint8Array, abortSignal?: AbortSignal) => Promise<ScreenImageResult>;
   /**
    * Collision-safe persist, project-scoped. Writes the image at `path` ONLY if
    * no file already exists there, returning `true` when this call performed the
@@ -402,9 +423,12 @@ export type GenerateImageFlowResult =
  */
 export async function runGenerateImageFlow(
   filename: string | undefined,
-  deps: GenerateImageFlowDeps
+  deps: GenerateImageFlowDeps,
+  abortSignal?: AbortSignal,
 ): Promise<GenerateImageFlowResult> {
-  const generated = await deps.generate();
+  abortSignal?.throwIfAborted();
+  const generated = await deps.generate(abortSignal);
+  abortSignal?.throwIfAborted();
   if (!generated.ok) {
     // CAIL error envelope passed through unmodified.
     return { ok: false, message: generated.message };
@@ -421,8 +445,11 @@ export async function runGenerateImageFlow(
   // refactors of either side.
   let allowed = false;
   try {
-    allowed = (await deps.screen(generated.bytes)).allowed === true;
+    abortSignal?.throwIfAborted();
+    allowed = (await deps.screen(generated.bytes, abortSignal)).allowed === true;
+    abortSignal?.throwIfAborted();
   } catch {
+    abortSignal?.throwIfAborted();
     allowed = false;
   }
   if (!allowed) {
@@ -442,8 +469,13 @@ export async function runGenerateImageFlow(
   let path = "";
   let written = false;
   for (let counter = 0; counter < MAX_SAVE_ATTEMPTS; counter += 1) {
+    abortSignal?.throwIfAborted();
     const candidate = counter === 0 ? `images/${safeName}` : `images/${stem}_${counter}.${ext}`;
-    if (await deps.saveIfAbsent(candidate, generated.bytes)) {
+    const saved = await deps.saveIfAbsent(candidate, generated.bytes);
+    // The atomic write may already have completed when cancellation arrives;
+    // do not report or acknowledge it as part of this cancelled turn.
+    abortSignal?.throwIfAborted();
+    if (saved) {
       path = candidate;
       written = true;
       break;
