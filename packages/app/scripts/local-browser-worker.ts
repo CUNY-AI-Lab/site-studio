@@ -17,7 +17,7 @@ type StoredObject = {
   customMetadata: Record<string, string>;
 };
 
-function toUint8Array(value: string | ArrayBuffer | ArrayBufferView | Blob): Promise<Uint8Array> {
+function toUint8Array(value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream<Uint8Array>): Promise<Uint8Array> {
   // SAFETY: R2PutValue is accepted by the Fetch BodyInit boundary in Bun; the
   // resulting bytes are the exact upload payload needed by this fixture.
   return new Response(value as BodyInit).arrayBuffer().then((bytes) => new Uint8Array(bytes));
@@ -89,16 +89,16 @@ class MemoryR2Bucket {
 
   async put(
     key: string,
-    value: string | ArrayBuffer | ArrayBufferView | Blob,
+    value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream<Uint8Array>,
     options?: R2PutOptions,
   ): Promise<R2Object | null> {
+    const bytes = await toUint8Array(value);
+    const etag = await objectEtag(bytes);
     const current = this.objects.get(key);
     const condition = options?.onlyIf;
     if (condition?.etagDoesNotMatch === "*" && current) return null;
     if (condition?.etagMatches !== undefined && (!current || current.etag !== condition.etagMatches)) return null;
 
-    const bytes = await toUint8Array(value);
-    const etag = await objectEtag(bytes);
     const stored: StoredObject = {
       bytes: bytes.slice(),
       etag,
