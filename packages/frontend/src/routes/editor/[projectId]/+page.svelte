@@ -359,8 +359,10 @@
 		currentFileEtag = null;
 		currentFileIsText = nextIsText;
 		currentFileContentType = selectedFile?.contentType || '';
-		// SS-47: the buffer still holds the PREVIOUS file until the fetch below
-		// resolves; block autosave until this selection is actually loaded.
+		// SS-47: clear the old buffer and keep the editor out of the editable
+		// branch until the fetch below resolves. Autosave is also gated on this
+		// status so a selection in flight cannot write stale text to the new path.
+		fileContent = '';
 		currentFileOpenStatus = 'loading';
 
 		if (!nextIsText) {
@@ -562,19 +564,26 @@
 			return;
 		}
 
-		if (!isCurrentFileContext(targetProjectId, loadVersion) || filesLoadError || !loadedProjects) {
+		if (!isCurrentFileContext(targetProjectId, loadVersion) || !loadedProjects) {
 			return;
 		}
 
-		filesLoadError = null;
 		allProjects = loadedProjects;
 		currentProject = loadedProjects.find((project) => project.id === targetProjectId) || null;
 		projectMissing = currentProject === null;
 		stableProjectId = targetProjectId;
 	}
 
-	/** Retry/refresh the file tree from CodeView; failures surface, never blank. */
+	/**
+	 * Retry the complete project load when either half of the initial load failed.
+	 * Ordinary file-tree invalidations stay on the lighter file-only path.
+	 */
 	async function handleRefreshFiles(): Promise<void> {
+		if (filesLoadError || !currentProject || allProjects.length === 0) {
+			await refreshProjectState(projectId);
+			return;
+		}
+
 		await requestFileRefresh('manual');
 	}
 
@@ -1149,6 +1158,7 @@
 						{fileContent}
 						{currentFileIsText}
 						{currentFileContentType}
+						currentFileLoading={currentFileOpenStatus === 'loading'}
 						currentFileLoadFailed={currentFileOpenStatus === 'failed'}
 						{isSaving}
 						onFileSelect={onFileSelect}

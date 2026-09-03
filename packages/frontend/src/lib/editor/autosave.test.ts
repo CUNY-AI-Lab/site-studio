@@ -229,4 +229,32 @@ describe('createAutosave', () => {
 		await expect(autosave.flush()).resolves.toBe(true);
 		expect(persist).toHaveBeenCalledOnce();
 	});
+
+	it('drains a newer snapshot after a timed-out operation settles', async () => {
+		const first = deferred<boolean>();
+		const persist = vi
+			.fn<(snapshot: SaveSnapshot, signal: AbortSignal) => Promise<boolean>>()
+			.mockReturnValueOnce(first.promise)
+			.mockResolvedValueOnce(true);
+		const autosave = createAutosave({ persist, delayMs: 100, persistTimeoutMs: 50 });
+
+		autosave.queue(snapshot('A'));
+		const flushPromise = autosave.flush();
+		await flushMicrotasks();
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(flushPromise).resolves.toBe(false);
+
+		// A remains the sole in-flight write after timeout. B is retained rather
+		// than retried concurrently, then should proceed once A settles.
+		autosave.queue(snapshot('B'));
+		await vi.advanceTimersByTimeAsync(100);
+		expect(persist).toHaveBeenCalledTimes(1);
+
+		first.resolve(false);
+		await flushMicrotasks();
+
+		expect(persist).toHaveBeenCalledTimes(2);
+		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'), expect.any(AbortSignal));
+		await expect(autosave.flush()).resolves.toBe(true);
+	});
 });

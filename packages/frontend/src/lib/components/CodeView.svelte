@@ -14,6 +14,7 @@
 		fileContent = '',
 		currentFileIsText = true,
 		currentFileContentType = '',
+		currentFileLoading = false,
 		currentFileLoadFailed = false,
 		onFileSelect,
 		onEditorChange,
@@ -29,6 +30,8 @@
 		fileContent: string;
 		currentFileIsText: boolean;
 		currentFileContentType: string;
+		/** SS-47: set while the selected file's content is still loading. */
+		currentFileLoading?: boolean;
 		/** SS-47: set when the selected file's content failed to load. */
 		currentFileLoadFailed?: boolean;
 		onFileSelect: (path: string) => void;
@@ -92,7 +95,19 @@
 				{#if isSaving && currentFileIsText}
 					<div class="save-indicator">Saving...</div>
 				{/if}
-				{#if currentFile && currentFileLoadFailed}
+				{#if currentFile && currentFileLoading}
+					<div class="binary-view" role="status" aria-live="polite">
+						<div class="binary-header">
+							<span class="binary-filename">{currentFile}</span>
+						</div>
+						<div class="binary-body">
+							<p class="binary-title">Loading file...</p>
+							<p class="binary-description">
+								Editing is disabled until the saved contents are available.
+							</p>
+						</div>
+					</div>
+				{:else if currentFile && currentFileLoadFailed}
 					<!-- SS-47: the buffer does not hold this file; never present stale or
 					     empty content as it, and keep editing (and autosave) disabled. -->
 					<div class="binary-view" role="alert">

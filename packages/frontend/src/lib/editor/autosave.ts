@@ -94,6 +94,20 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 			// it confirms the exact snapshot that was retained for retry.
 			queuedSave = null;
 		}
+
+		// A timed-out operation remains the sole owner of its write until it
+		// settles. Once it does, a newer queued snapshot may proceed. Do not
+		// retry the timed-out snapshot itself: its result is still uncertain, and
+		// starting it again could create a concurrent write. A regular failed
+		// operation keeps the existing explicit-retry behavior.
+		if (
+			operation.detached &&
+			!disposed &&
+			queuedSave !== null &&
+			!sameSnapshot(queuedSave, operation.snapshot)
+		) {
+			void drain();
+		}
 	}
 
 	function startPersist(snapshot: SaveSnapshot): ActivePersist {
