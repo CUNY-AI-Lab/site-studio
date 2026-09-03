@@ -1366,11 +1366,12 @@
 	});
 
 	function stopRequest() {
+		requestPreparationSequence += 1;
+		isPreparingRequest = false;
+		isUploading = false;
 		if (!currentRequestId && !isLoading && !expectingContinuation) {
 			return;
 		}
-		requestPreparationSequence += 1;
-		isPreparingRequest = false;
 		const stoppedRequestId = currentRequestId;
 		const wasAwaitingContinuation = expectingContinuation;
 		if (stoppedRequestId) {

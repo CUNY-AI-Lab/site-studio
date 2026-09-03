@@ -1535,6 +1535,45 @@ describe('AgentChat', () => {
 		expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toHaveLength(1);
 	});
 
+	it('recovers after stopping a turn that included an upload', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/projects/proj1/upload')) {
+				return uploadResponseForTest('stop.txt', 'stop.txt', 8);
+			}
+			if (url.endsWith('/refresh-credential')) {
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+		const user = userEvent.setup({ delay: null });
+		renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const socket = FakeWebSocket.last();
+		socket.open();
+		await settle();
+
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'stop after upload');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['stop me'], 'stop.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+		await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toBe(true));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Stop request' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Stop request' }).click();
+		await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop request' })).not.toBeInTheDocument());
+
+		await user.type(messageInput, 'recover after stop');
+		await user.upload(fileInput, new File(['new file'], 'new.txt', { type: 'text/plain' }));
+		expect(screen.getByText('new.txt')).toBeInTheDocument();
+	});
+
 	it('drops an upload completion when the project changes, even after returning to it', async () => {
 		let resolveUpload!: (response: Response) => void;
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
