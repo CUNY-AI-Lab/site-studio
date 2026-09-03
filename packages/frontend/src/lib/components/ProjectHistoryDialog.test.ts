@@ -6,10 +6,12 @@ import { invalidateCsrfToken } from '$lib/api/csrf';
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason?: Error) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 const firstSnapshot: ProjectSnapshot = {
@@ -192,5 +194,189 @@ describe('ProjectHistoryDialog', () => {
 		await initialList.promise;
 		await waitFor(() => expect(screen.getByText('Agent changes')).toBeInTheDocument());
 		expect(screen.queryByText('Before the agent run')).not.toBeInTheDocument();
+	});
+
+	it('clears snapshots when a project switch load fails', async () => {
+		const switchedLoad = deferred<Response>();
+		fetchMock.mockImplementation(async (input) => {
+			const url = String(input);
+			if (url.endsWith('/projects/project-a/snapshots')) {
+				return new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 });
+			}
+			if (url.endsWith('/projects/project-b/snapshots')) return switchedLoad.promise;
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		const props = {
+			open: true,
+			projectId: 'project-a',
+			onOpenChange: vi.fn()
+		};
+		const rendered = render(ProjectHistoryDialog, { props });
+
+		await screen.findByText('Before the agent run');
+		await rendered.rerender({ ...props, projectId: 'project-b' });
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+		switchedLoad.reject(new Error('project B unavailable'));
+
+		await waitFor(() =>
+			expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong. Try again.')
+		);
+		expect(screen.queryByText('Before the agent run')).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Restore' })).not.toBeInTheDocument();
+	});
+
+	it('does not restore an old snapshot after switching projects during preflight', async () => {
+		const preflight = deferred<boolean>();
+		const restoreCalls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
+		fetchMock.mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.endsWith('/projects/project-a/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 });
+			}
+			if (url.endsWith('/projects/project-b/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [] }), { status: 200 });
+			}
+			if ((init?.method || 'GET') === 'POST') {
+				restoreCalls.push([input, init]);
+				return new Response(
+					JSON.stringify({ restoredSnapshot: firstSnapshot, restorePoint: agentSnapshot }),
+					{ status: 200 }
+				);
+			}
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		const onBeforeRestore = vi.fn(() => preflight.promise);
+		const onRestoreSuccess = vi.fn();
+		const props = {
+			open: true,
+			projectId: 'project-a',
+			onOpenChange: vi.fn(),
+			onBeforeRestore,
+			onRestoreSuccess
+		};
+		const rendered = render(ProjectHistoryDialog, { props });
+
+		await screen.findByText('Before the agent run');
+		await fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+		await rendered.rerender({ ...props, projectId: 'project-b' });
+		await screen.findByText('No saved versions yet.');
+		preflight.resolve(true);
+		await preflight.promise;
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Save version' })).toBeEnabled());
+
+		expect(restoreCalls).toHaveLength(0);
+		expect(onRestoreSuccess).not.toHaveBeenCalled();
+	});
+
+	it('does not report a restore failure after switching projects', async () => {
+		const restore = deferred<Response>();
+		fetchMock.mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.endsWith('/projects/project-a/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 });
+			}
+			if (url.endsWith('/projects/project-b/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [] }), { status: 200 });
+			}
+			if ((init?.method || 'GET') === 'POST') return restore.promise;
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		const onRestoreSuccess = vi.fn();
+		const props = {
+			open: true,
+			projectId: 'project-a',
+			onOpenChange: vi.fn(),
+			onRestoreSuccess
+		};
+		const rendered = render(ProjectHistoryDialog, { props });
+
+		await screen.findByText('Before the agent run');
+		await fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+		await waitFor(() =>
+			expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true)
+		);
+		await rendered.rerender({ ...props, projectId: 'project-b' });
+		await screen.findByText('No saved versions yet.');
+		restore.reject(new Error('old restore failed'));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Save version' })).toBeEnabled());
+
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+		expect(onRestoreSuccess).not.toHaveBeenCalled();
+	});
+
+	it('does not finish a restore callback after switching projects', async () => {
+		const restore = deferred<Response>();
+		fetchMock.mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.endsWith('/projects/project-a/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 });
+			}
+			if (url.endsWith('/projects/project-b/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [] }), { status: 200 });
+			}
+			if ((init?.method || 'GET') === 'POST') return restore.promise;
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		const onRestoreSuccess = vi.fn();
+		const props = {
+			open: true,
+			projectId: 'project-a',
+			onOpenChange: vi.fn(),
+			onRestoreSuccess
+		};
+		const rendered = render(ProjectHistoryDialog, { props });
+
+		await screen.findByText('Before the agent run');
+		await fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+		await waitFor(() =>
+			expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true)
+		);
+		await rendered.rerender({ ...props, projectId: 'project-b' });
+		await screen.findByText('No saved versions yet.');
+		restore.resolve(
+			new Response(
+				JSON.stringify({ restoredSnapshot: firstSnapshot, restorePoint: agentSnapshot }),
+				{ status: 200 }
+			)
+		);
+		await restore.promise;
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Save version' })).toBeEnabled());
+
+		expect(onRestoreSuccess).not.toHaveBeenCalled();
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+	});
+
+	it('does not show a save failure after closing and reopening another project', async () => {
+		const save = deferred<Response>();
+		fetchMock.mockImplementation(async (input, init) => {
+			const url = String(input);
+			if (url.endsWith('/projects/project-a/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [firstSnapshot] }), { status: 200 });
+			}
+			if (url.endsWith('/projects/project-b/snapshots') && (init?.method || 'GET') === 'GET') {
+				return new Response(JSON.stringify({ snapshots: [] }), { status: 200 });
+			}
+			if ((init?.method || 'GET') === 'POST') return save.promise;
+			throw new Error(`Unexpected request: ${url}`);
+		});
+		const props = {
+			open: true,
+			projectId: 'project-a',
+			onOpenChange: vi.fn()
+		};
+		const rendered = render(ProjectHistoryDialog, { props });
+
+		await screen.findByText('Before the agent run');
+		await fireEvent.click(screen.getByRole('button', { name: 'Save version' }));
+		await waitFor(() =>
+			expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true)
+		);
+		await rendered.rerender({ ...props, open: false });
+		await rendered.rerender({ ...props, open: true, projectId: 'project-b' });
+		await screen.findByText('No saved versions yet.');
+		save.reject(new Error('old save failed'));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Save version' })).toBeEnabled());
+
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 	});
 });

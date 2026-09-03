@@ -39,12 +39,29 @@
 
 	onMount(() => {
 		dashboardMounted = true;
+		const initialLoadVersion = loadVersion + 1;
 		void loadProjects().then(() => {
 			// Show onboarding tour for first-time users with no projects
-			if (dashboardMounted && !loading && projects.length === 0 && !hasCompletedOnboarding()) {
+			if (
+				dashboardMounted &&
+				initialLoadVersion === loadVersion &&
+				!loading &&
+				!error &&
+				projects.length === 0 &&
+				!hasCompletedOnboarding()
+			) {
 				dashboardTourTimer = setTimeout(() => {
 					dashboardTourTimer = null;
-					if (!dashboardMounted) return;
+					if (
+						!dashboardMounted ||
+						initialLoadVersion !== loadVersion ||
+						loading ||
+						error ||
+						projects.length > 0 ||
+						hasCompletedOnboarding()
+					) {
+						return;
+					}
 					dashboardTour?.destroy();
 					dashboardTour = createDashboardTour();
 					dashboardTour.drive();

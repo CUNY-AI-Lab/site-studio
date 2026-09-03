@@ -34,9 +34,11 @@
 
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let checkSeq = 0;
+	let claimSeq = 0;
 
-	function invalidateHandleCheck() {
+	function invalidateDialogOperations() {
 		checkSeq += 1;
+		claimSeq += 1;
 		if (debounceTimer !== null) {
 			clearTimeout(debounceTimer);
 			debounceTimer = null;
@@ -51,7 +53,7 @@
 	// Focus the input when the dialog opens; reset state on close.
 	$effect(() => {
 		if (!open) {
-			invalidateHandleCheck();
+			invalidateDialogOperations();
 			value = '';
 			result = null;
 			claimError = null;
@@ -70,9 +72,14 @@
 
 		return () => {
 			clearTimeout(focusTimer);
-			invalidateHandleCheck();
+			invalidateDialogOperations();
 		};
 	});
+
+	function handleDialogOpenChange(nextOpen: boolean) {
+		if (!nextOpen) invalidateDialogOperations();
+		onOpenChange(nextOpen);
+	}
 
 	function onInput(event: Event) {
 		// Lowercase as the user types (handles are lowercase-only).
@@ -88,6 +95,7 @@
 			debounceTimer = null;
 		}
 		const seq = ++checkSeq;
+		claimSeq += 1;
 		const trimmed = raw.trim();
 		if (trimmed.length === 0) {
 			checking = false;
@@ -120,19 +128,23 @@
 	async function handleClaim() {
 		const trimmed = value.trim();
 		if (!trimmed || claiming) return;
+		const seq = ++claimSeq;
 		claiming = true;
 		claimError = null;
 		try {
 			const res = await claimHandle(trimmed);
+			if (!open || seq !== claimSeq) return;
 			if (res.ok) {
 				onClaimed(res.handle);
 			} else {
 				claimError = res.message;
 			}
 		} catch (e) {
-			claimError = e instanceof Error ? e.message : "We couldn't save that address.";
+			if (open && seq === claimSeq) {
+				claimError = e instanceof Error ? e.message : "We couldn't save that address.";
+			}
 		} finally {
-			claiming = false;
+			if (seq === claimSeq) claiming = false;
 		}
 	}
 
@@ -154,7 +166,7 @@
 	});
 </script>
 
-<Dialog.Root {open} {onOpenChange}>
+<Dialog.Root {open} onOpenChange={handleDialogOpenChange}>
 	<Dialog.Content class="handle-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Choose your public address</Dialog.Title>
@@ -178,6 +190,7 @@
 					spellcheck="false"
 					placeholder="e.g. jane-rivera"
 					aria-describedby="handle-status handle-preview"
+					disabled={claiming}
 					value={value}
 					oninput={onInput}
 					onkeydown={onKeydown}

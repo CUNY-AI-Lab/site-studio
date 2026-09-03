@@ -39,6 +39,8 @@
 	let errorMessage = $state('');
 	let snapshotLabel = $state('');
 	let loadVersion = 0;
+	let createVersion = 0;
+	let restoreVersion = 0;
 
 	const TRIGGER_LABELS = {
 		agent: 'AI run',
@@ -74,6 +76,7 @@
 		const version = ++loadVersion;
 		isLoading = true;
 		errorMessage = '';
+		snapshots = [];
 
 		try {
 			const loadedSnapshots = await fetchProjectSnapshots(targetProjectId);
@@ -104,31 +107,58 @@
 		}
 	});
 
+	function handleDialogOpenChange(nextOpen: boolean) {
+		if (!nextOpen) loadVersion += 1;
+		onOpenChange(nextOpen);
+	}
+
 	async function handleCreateSnapshot() {
 		if (!projectId || isCreating || restoringSnapshotId !== null) {
 			return;
 		}
 
 		const targetProjectId = projectId;
+		const targetLoadVersion = loadVersion;
+		const version = ++createVersion;
 		isCreating = true;
 		try {
 			const canCreate = onBeforeCreateSnapshot ? await onBeforeCreateSnapshot() : true;
-			if (!canCreate) {
+			if (
+				!canCreate ||
+				!open ||
+				targetProjectId !== projectId ||
+				targetLoadVersion !== loadVersion ||
+				version !== createVersion
+			) {
 				return;
 			}
 
 			errorMessage = '';
 			const snapshot = await createProjectSnapshot(targetProjectId, snapshotLabel.trim() || undefined);
-			if (!open || targetProjectId !== projectId) return;
+			if (
+				!open ||
+				targetProjectId !== projectId ||
+				targetLoadVersion !== loadVersion ||
+				version !== createVersion
+			) {
+				return;
+			}
 			// The saved snapshot supersedes any list request that was already in flight.
 			loadVersion += 1;
 			isLoading = false;
 			snapshots = [snapshot, ...snapshots];
 			snapshotLabel = '';
 		} catch (error) {
-			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
+			if (
+				open &&
+				targetProjectId === projectId &&
+				targetLoadVersion === loadVersion &&
+				version === createVersion
+			) {
+				errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
+			}
 		} finally {
-			isCreating = false;
+			if (version === createVersion) isCreating = false;
 		}
 	}
 
@@ -137,28 +167,63 @@
 			return;
 		}
 
+		const targetProjectId = projectId;
+		const targetLoadVersion = loadVersion;
+		const version = ++restoreVersion;
 		restoringSnapshotId = snapshotId;
 		try {
 			const canRestore = onBeforeRestore ? await onBeforeRestore() : true;
-			if (!canRestore) {
+			if (
+				!canRestore ||
+				!open ||
+				targetProjectId !== projectId ||
+				targetLoadVersion !== loadVersion ||
+				version !== restoreVersion
+			) {
 				return;
 			}
 
 			errorMessage = '';
-			await restoreProjectSnapshot(projectId, snapshotId);
+			await restoreProjectSnapshot(targetProjectId, snapshotId);
+			if (
+				!open ||
+				targetProjectId !== projectId ||
+				targetLoadVersion !== loadVersion ||
+				version !== restoreVersion
+			) {
+				return;
+			}
+
+			const refreshVersion = loadVersion + 1;
 			await loadSnapshots();
+			if (
+				!open ||
+				targetProjectId !== projectId ||
+				refreshVersion !== loadVersion ||
+				version !== restoreVersion
+			) {
+				return;
+			}
+
 			if (onRestoreSuccess) {
 				await onRestoreSuccess();
 			}
 		} catch (error) {
-			errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
+			if (
+				open &&
+				targetProjectId === projectId &&
+				targetLoadVersion === loadVersion &&
+				version === restoreVersion
+			) {
+				errorMessage = getErrorMessage(error instanceof Error ? error : undefined);
+			}
 		} finally {
-			restoringSnapshotId = null;
+			if (version === restoreVersion) restoringSnapshotId = null;
 		}
 	}
 </script>
 
-<Dialog.Root {open} onOpenChange={onOpenChange}>
+<Dialog.Root {open} onOpenChange={handleDialogOpenChange}>
 	<Dialog.Content class="history-dialog !bg-white dark:!bg-gray-900">
 		<Dialog.Header>
 			<Dialog.Title>Version history</Dialog.Title>

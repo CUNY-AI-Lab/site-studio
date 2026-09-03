@@ -273,4 +273,52 @@ describe('HandleClaimDialog', () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it('does not publish from a claim that finishes after close and reopen', async () => {
+		vi.useFakeTimers();
+		try {
+			const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+			const claim = deferred<Awaited<ReturnType<typeof claimHandle>>>();
+			mockCheck
+				.mockResolvedValueOnce({ handle: 'jane', valid: true, available: true })
+				.mockResolvedValueOnce({
+					handle: 'jane',
+					valid: true,
+					available: false,
+					reason: 'That address is already taken.'
+				});
+			mockClaim.mockReturnValueOnce(claim.promise);
+			const onClaimed = vi.fn();
+			const props = {
+				open: true,
+				onOpenChange: vi.fn(),
+				onClaimed,
+				checkHandle: mockCheck,
+				claimHandle: mockClaim
+			};
+			const view = render(HandleClaimDialog, { props });
+
+			await user.type(addressInput(), 'jane');
+			await vi.advanceTimersByTimeAsync(400);
+			await user.click(screen.getByRole('button', { name: /save and publish/i }));
+			expect(mockClaim).toHaveBeenCalledOnce();
+
+			await view.rerender({ ...props, open: false });
+			await view.rerender({ ...props, open: true });
+			claim.resolve({ ok: true, handle: 'jane', alreadyOwned: false });
+			await claim.promise;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(onClaimed).not.toHaveBeenCalled();
+			expect(addressInput().value).toBe('');
+			expect(screen.getByRole('button', { name: /save and publish/i })).toBeDisabled();
+
+			await user.type(addressInput(), 'jane');
+			await vi.advanceTimersByTimeAsync(400);
+			expect(screen.getByText('That address is already taken.')).toBeInTheDocument();
+			expect(screen.getByRole('button', { name: /save and publish/i })).toBeDisabled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

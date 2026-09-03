@@ -6,10 +6,12 @@ import ProjectDashboard from './ProjectDashboard.svelte';
 
 function deferred<T>() {
 	let resolve!: (value: T | PromiseLike<T>) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason?: Error) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 const oldProject: Project = { id: 'old-project', name: 'Old project' };
@@ -65,7 +67,7 @@ describe('ProjectDashboard project-list race', () => {
 			}
 			throw new Error(`Unexpected request: ${method} ${url}`);
 		});
-		render(ProjectDashboard);
+		const view = render(ProjectDashboard);
 
 		await waitFor(() => expect(projectListRequest).toBe(1));
 		await fireEvent.click(screen.getByRole('button', { name: 'New Project' }));
@@ -87,5 +89,59 @@ describe('ProjectDashboard project-list race', () => {
 		const createCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
 		expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({ name: 'new-project', template: 'blank' });
 		expect(projectListRequest).toBe(3);
+		view.unmount();
+	});
+
+	it('does not start onboarding from an initial load superseded by a failed refresh', async () => {
+		localStorage.removeItem('site-studio-onboarding-completed');
+		const initialLoad = deferred<Project[]>();
+		const newerLoad = deferred<Project[]>();
+		let projectListRequest = 0;
+		fetchMock.mockImplementation(async (input, init) => {
+			const url = String(input);
+			const method = init?.method?.toUpperCase() ?? 'GET';
+			if (url.endsWith('/templates')) {
+				return new Response(JSON.stringify({ categories }), { status: 200 });
+			}
+			if (url.endsWith('/projects') && method === 'GET') {
+				projectListRequest += 1;
+				if (projectListRequest === 1) {
+					return new Response(JSON.stringify({ projects: await initialLoad.promise }), { status: 200 });
+				}
+				if (projectListRequest === 2) {
+					return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+				}
+				if (projectListRequest === 3) {
+					const projects = await newerLoad.promise;
+					return new Response(JSON.stringify({ projects }), { status: 200 });
+				}
+			}
+			if (url.endsWith('/projects') && method === 'POST') {
+				return new Response(JSON.stringify(newProject), { status: 200 });
+			}
+			throw new Error(`Unexpected request: ${method} ${url}`);
+		});
+		const view = render(ProjectDashboard);
+
+		await waitFor(() => expect(projectListRequest).toBe(1));
+		await fireEvent.click(screen.getByRole('button', { name: 'New Project' }));
+		await screen.findByRole('button', { name: /Blank template/ });
+		await fireEvent.click(screen.getByRole('button', { name: /Blank template/ }));
+		await waitFor(() => expect(projectListRequest).toBe(2));
+		const nameInput = await screen.findByLabelText('Project Name (optional)');
+		await fireEvent.input(nameInput, { target: { value: 'new-project' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Create Project' }));
+		await waitFor(() => expect(projectListRequest).toBe(3));
+
+		newerLoad.reject(new Error('newer list failed'));
+		await screen.findByRole('alert');
+		initialLoad.resolve([]);
+		await initialLoad.promise;
+		await new Promise((resolve) => setTimeout(resolve, 650));
+
+		expect(document.querySelector('.driver-popover')).not.toBeInTheDocument();
+		expect(screen.getByRole('alert')).toHaveTextContent("We couldn't load your projects.");
+		view.unmount();
+		localStorage.removeItem('site-studio-onboarding-completed');
 	});
 });
