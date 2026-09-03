@@ -1,5 +1,4 @@
 import type { Env, ProjectSnapshot, SnapshotResult } from "../types";
-import { z } from "zod";
 import { isSnapshotSkipped } from "../types";
 import {
   FileExistsError,
@@ -25,8 +24,8 @@ export type OwnerMutation =
   | { type: "write-file-if-absent"; projectId: string; path: string; content: string }
   | { type: "delete-file"; projectId: string; path: string }
   | { type: "rename-file"; projectId: string; oldPath: string; newPath: string }
-  | ({ type: "upload-if-absent"; projectId: string; path: string; content: Uint8Array } & UploadPolicy)
-  | ({ type: "write-thumbnail"; projectId: string; content: Uint8Array } & UploadPolicy)
+  | { type: "upload-if-absent"; projectId: string; path: string; content: Uint8Array }
+  | { type: "write-thumbnail"; projectId: string; content: Uint8Array }
   | { type: "create-snapshot"; projectId: string; label?: string; trigger: "agent" | "manual" }
   | { type: "restore-snapshot"; projectId: string; snapshotId: string }
   | { type: "replace-files"; projectId: string; files: Record<string, string>; label?: string };
@@ -75,33 +74,6 @@ export interface ProjectHistoryLifecycle {
 }
 
 const JOURNAL_KEY = "owner-mutation";
-const UPLOAD_ADMISSIONS_KEY = "upload-admissions";
-
-type UploadPolicy = {
-  maxProjectBytes: number;
-  maxOwnerBytes: number;
-  uploadsPerMinute: number;
-  /** Stable across collision-suffix attempts for one user-visible upload. */
-  admissionId?: string;
-  now?: number;
-};
-
-type UploadAdmissionRecord = {
-  id: string;
-  timestamp: number;
-};
-
-type UploadAdmission = {
-  recent: UploadAdmissionRecord[];
-  now: number;
-  admissionId: string;
-  alreadyRecorded: boolean;
-};
-
-const uploadAdmissionRecordSchema = z.object({
-  id: z.string(),
-  timestamp: z.number(),
-});
 
 export class OwnerMutationService {
   private readonly storage: R2ProjectStorage;
@@ -115,73 +87,12 @@ export class OwnerMutationService {
     this.storage = new R2ProjectStorage(bucket, logging);
   }
 
-  private async prefixBytes(prefix: string): Promise<number> {
-    let total = 0;
-    let cursor: string | undefined;
-    do {
-      const listed = await this.bucket.list({ prefix, cursor });
-      total += listed.objects.reduce((sum, object) => sum + object.size, 0);
-      cursor = listed.truncated ? listed.cursor : undefined;
-    } while (cursor);
-    return total;
-  }
-
   private async putJournal(journal: Journal): Promise<void> {
     await this.journalStore.put(JOURNAL_KEY, journal);
   }
 
   private async clearJournal(): Promise<void> {
     await this.journalStore.delete(JOURNAL_KEY);
-  }
-
-  private async checkUploadAdmission(
-    ownerId: string,
-    projectId: string,
-    additionalBytes: number,
-    policy: UploadPolicy
-  ): Promise<UploadAdmission> {
-    const now = policy.now ?? Date.now();
-    const stored = await this.journalStore.get<UploadAdmissionRecord[] | undefined>(UPLOAD_ADMISSIONS_KEY);
-    let prior: UploadAdmissionRecord[] = [];
-    if (stored !== undefined) {
-      if (!Array.isArray(stored)) {
-        throw new Error("Invalid upload admission journal.");
-      }
-      const parsedEntries = stored.map((entry) => uploadAdmissionRecordSchema.safeParse(entry));
-      if (parsedEntries.some((entry) => !entry.success)) {
-        throw new Error("Invalid upload admission journal.");
-      }
-      prior = parsedEntries.flatMap((entry) => entry.success ? [entry.data] : []);
-    }
-    const recent = prior
-      .filter(
-        (entry) => entry.timestamp > now - 60_000
-      );
-    const admissionId = policy.admissionId ?? crypto.randomUUID();
-    const alreadyRecorded = recent.some((entry) => entry.id === admissionId);
-    if (!alreadyRecorded && recent.length >= policy.uploadsPerMinute) {
-      throw new Error("Upload rate limit exceeded. Try again in a minute.");
-    }
-    const projectBytes = await this.prefixBytes(`projects/${ownerId}/${projectId}/`);
-    if (projectBytes + additionalBytes > policy.maxProjectBytes) {
-      throw new Error("This project is out of storage space. Delete some files or images, then try again.");
-    }
-    const ownerBytes =
-      await this.prefixBytes(`projects/${ownerId}/`) +
-      await this.prefixBytes(`snapshots/${ownerId}/`) +
-      await this.prefixBytes(`uploads/${ownerId}/`);
-    if (ownerBytes + additionalBytes > policy.maxOwnerBytes) {
-      throw new Error("Your account is out of storage space. Delete files from a project, then try again.");
-    }
-    return { recent, now, admissionId, alreadyRecorded };
-  }
-
-  private async recordUploadAdmission(admission: UploadAdmission): Promise<void> {
-    if (admission.alreadyRecorded) return;
-    await this.journalStore.put(UPLOAD_ADMISSIONS_KEY, [
-      ...admission.recent,
-      { id: admission.admissionId, timestamp: admission.now }
-    ]);
   }
 
   private async requireProject(ownerId: string, projectId: string): Promise<void> {
@@ -518,17 +429,6 @@ export class OwnerMutationService {
       }
       case "upload-if-absent": {
         await this.requireProject(ownerId, operation.projectId);
-        const admission = await this.checkUploadAdmission(
-          ownerId,
-          operation.projectId,
-          operation.content.byteLength,
-          operation
-        );
-        // Persist admission before the external write. If Durable Object
-        // storage is unavailable, fail before R2 can commit an upload whose
-        // rate record would be missing. An external failure may conservatively
-        // consume an attempt, which is safer than a bypass after ambiguity.
-        await this.recordUploadAdmission(admission);
         const written = await this.storage.uploadToProjectIfAbsent(
           ownerId,
           operation.projectId,
@@ -539,10 +439,6 @@ export class OwnerMutationService {
       }
       case "write-thumbnail": {
         await this.requireProject(ownerId, operation.projectId);
-        const existing = await this.bucket.head(`projects/${ownerId}/${operation.projectId}/.thumbnail.png`);
-        const additionalBytes = Math.max(0, operation.content.byteLength - (existing?.size ?? 0));
-        const admission = await this.checkUploadAdmission(ownerId, operation.projectId, additionalBytes, operation);
-        await this.recordUploadAdmission(admission);
         await this.storage.writeThumbnail(ownerId, operation.projectId, operation.content);
         await this.storage.updateProjectMetadata(ownerId, operation.projectId, {
           thumbnailUrl: `/api/projects/${operation.projectId}/thumbnail`

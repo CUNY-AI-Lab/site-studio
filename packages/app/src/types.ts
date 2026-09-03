@@ -45,9 +45,6 @@ export interface Env {
   // Exact CAIL issuer assigned to this deployment. It cannot define a new
   // trust root; runtime verification accepts CAIL's canonical issuer only.
   CAIL_IDENTITY_ISSUER?: string;
-  SITE_STUDIO_MAX_PROJECT_BYTES?: string;
-  SITE_STUDIO_MAX_OWNER_BYTES?: string;
-  SITE_STUDIO_UPLOADS_PER_MINUTE?: string;
   // Path scope for the anti-CSRF delivery cookie (cail_csrf_sitestudio).
   // Production is mounted at /site-studio on a shared origin alongside
   // sibling tools and untrusted published content. Runtime validation rejects a

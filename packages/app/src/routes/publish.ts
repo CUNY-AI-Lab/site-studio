@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
   getServedContentType,
   MAX_THUMBNAIL_BODY_BYTES,
@@ -49,10 +49,6 @@ import {
 } from "../lib/published-url";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
-}
 
 /**
  * Run the accessibility linter over the project's HTML after a successful
@@ -403,17 +399,10 @@ export function createPublishRouter() {
       await executeOwnerMutation(c.env, user.id, {
         type: "write-thumbnail",
         projectId,
-        content,
-        admissionId: crypto.randomUUID(),
-        maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
-        maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
-        uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
+        content
       }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Thumbnail admission failed";
-      if (message.includes("rate limit")) jsonError(message, 429);
-      if (message.includes("storage quota")) jsonError(message, 413);
-      if (message.includes("Project not found") || message.includes("Project metadata not found")) {
+      if (error instanceof Error && (error.message.includes("Project not found") || error.message.includes("Project metadata not found"))) {
         jsonError("Project not found", 404);
       }
       throw error;

@@ -26,7 +26,6 @@ import {
 import { z } from "zod";
 import {
   isSnapshotSkipped,
-  parsePositiveInteger,
   type Env,
   type SiteBuilderAgentProps,
   type SnapshotResult,
@@ -656,7 +655,7 @@ export function summarizeLatestUserRequest(messages: RequestMessage[] | UIMessag
 }
 
 export function createProjectTools(
-  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "SITE_STUDIO_MAX_PROJECT_BYTES" | "SITE_STUDIO_MAX_OWNER_BYTES" | "SITE_STUDIO_UPLOADS_PER_MINUTE" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
+  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
   scope: Scope,
   identityJwt: string | null,
   snapshotOptions?: {
@@ -1391,7 +1390,6 @@ export function createProjectTools(
 
         // Ordering (generate → sniff → gate → save) lives in the extracted,
         // integration-tested flow — keep this body a thin binding.
-        const uploadAdmissionId = crypto.randomUUID();
         const result = await runGenerateImageFlow(filename, {
           generate: (signal) => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl, signal),
           screen: (bytes, signal) => screenImage(env, identityJwt, bytes, fetchImpl, signal),
@@ -1401,20 +1399,7 @@ export function createProjectTools(
               type: "upload-if-absent",
               projectId: scope.projectId,
               path,
-              content: bytes,
-              admissionId: uploadAdmissionId,
-              maxProjectBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_PROJECT_BYTES,
-                "SITE_STUDIO_MAX_PROJECT_BYTES"
-              ),
-              maxOwnerBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_OWNER_BYTES,
-                "SITE_STUDIO_MAX_OWNER_BYTES"
-              ),
-              uploadsPerMinute: requiredPositiveInteger(
-                env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-                "SITE_STUDIO_UPLOADS_PER_MINUTE"
-              )
+              content: bytes
             }, serializedLogging);
             abortSignal?.throwIfAborted();
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
@@ -3022,11 +3007,3 @@ callable()(SiteBuilderAgent.prototype.getObservability, {
   addInitializer: () => undefined,
   metadata: {},
 });
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = parsePositiveInteger(value);
-  if (parsed === null) {
-    throw new Error(`${name} is not configured`);
-  }
-  return parsed;
-}

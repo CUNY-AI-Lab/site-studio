@@ -220,9 +220,6 @@ function createEnv(bucket: R2Bucket): Env {
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     // SAFETY: Regression tests exercise only the coordinator execute RPC.
     MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>(createMockMutationCoordinator(bucket)),
-    SITE_STUDIO_MAX_PROJECT_BYTES: String(512 * 1024 * 1024),
-    SITE_STUDIO_MAX_OWNER_BYTES: String(2 * 1024 * 1024 * 1024),
-    SITE_STUDIO_UPLOADS_PER_MINUTE: "100",
     // SAFETY: Route regressions do not load Worker modules through this binding.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
@@ -1227,13 +1224,14 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(await storage.readThumbnail(userId, "thumbihdr")).toBeNull();
   });
 
-  it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
+  it("SS-21: accepts a real PNG body on the thumbnail route and preserves its bytes", async () => {
     await storage.createProjectIfAbsent(userId, "thumbok", "Thumb OK");
+    const bytes = pngBytes();
     const form = new FormData();
     // SAFETY: The PNG fixture's backing buffer is an ArrayBuffer.
     form.append(
       "image",
-      new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
+      new File([new Blob([bytes.buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
     );
 
     const response = await app.request(
@@ -1243,7 +1241,7 @@ describe("served-bytes security headers (§3¾)", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await storage.readThumbnail(userId, "thumbok")).not.toBeNull();
+    expect(Array.from(await storage.readThumbnail(userId, "thumbok") ?? [])).toEqual(Array.from(bytes));
   });
 
   it("rejects a thumbnail whose IHDR dimensions exceed the render ceiling", async () => {
@@ -1792,18 +1790,27 @@ describe("image upload hardening", () => {
     expect(body.path).toBe("nolen.png");
   });
 
-  it("fails closed when upload storage/rate policy is not configured", async () => {
-    const environment = createEnv(bucket);
-    delete environment.SITE_STUDIO_MAX_PROJECT_BYTES;
+  it("suffixes beyond 50 occupied names without clobbering their bytes", async () => {
+    const original = new Uint8Array([1, 2, 3]);
+    await storage.uploadToProject(userId, "imgproj", "photo.png", original);
+    for (let counter = 1; counter <= 51; counter += 1) {
+      await storage.uploadToProject(userId, "imgproj", `photo_${counter}.png`, new Uint8Array([counter]));
+    }
 
+    const replacement = pngBytes();
+    replacement[replacement.length - 1] = 0x42;
     const response = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
-      uploadRequest("policy.png", pngBytes()),
-      environment
+      uploadRequest("photo.png", replacement),
+      createEnv(bucket)
     );
 
-    expect(response.status).toBe(503);
-    expect(await storage.fileExists(userId, "imgproj", "policy.png")).toBe(false);
+    expect(response.status).toBe(200);
+    // SAFETY: Successful upload responses contain the documented path field.
+    const body = (await response.json()) as { path: string };
+    expect(body.path).toBe("photo_52.png");
+    expect(Array.from(await storage.readFileBuffer(userId, "imgproj", "photo.png"))).toEqual(Array.from(original));
+    expect(Array.from(await storage.readFileBuffer(userId, "imgproj", "photo_52.png"))).toEqual(Array.from(replacement));
   });
 });
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
   IMAGE_MAX_UPLOAD_BYTES,
   MAX_UPLOAD_BODY_BYTES,
@@ -103,10 +103,6 @@ function validateUpload(file: File, fileName: string) {
   if (!allowed.has(ext)) {
     jsonError(`Unsupported file extension: ${ext || "unknown"}`, 400);
   }
-}
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
 }
 
 /**
@@ -357,21 +353,6 @@ export function createFileRouter() {
     const buffer = new Uint8Array(await entry.arrayBuffer());
     validateImageBytes(sanitized, buffer);
 
-    const uploadPolicy = {
-      maxProjectBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_PROJECT_BYTES,
-        "SITE_STUDIO_MAX_PROJECT_BYTES"
-      ),
-      maxOwnerBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_OWNER_BYTES,
-        "SITE_STUDIO_MAX_OWNER_BYTES"
-      ),
-      uploadsPerMinute: requiredPositiveInteger(
-        c.env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-        "SITE_STUDIO_UPLOADS_PER_MINUTE"
-      )
-    };
-
     // Collision-suffix within the target prefix so images/photo.png and
     // photo.png at the root never clobber each other. The write itself is
     // atomic (put-if-absent): rather than probe with fileExists() and then
@@ -382,38 +363,20 @@ export function createFileRouter() {
     const base = dotIndex >= 0 ? sanitized.slice(0, dotIndex) : sanitized;
     const ext = dotIndex >= 0 ? sanitized.slice(dotIndex) : "";
 
-    const MAX_UPLOAD_ATTEMPTS = 50;
-    const uploadAdmissionId = crypto.randomUUID();
     let filename = "";
-    let written = false;
-    for (let counter = 0; counter < MAX_UPLOAD_ATTEMPTS; counter += 1) {
+    for (let counter = 0; ; counter += 1) {
       const candidate = counter === 0 ? `${prefix}${sanitized}` : `${prefix}${base}_${counter}${ext}`;
-      let result;
-      try {
-        result = await executeOwnerMutation(c.env, user.id, {
-          type: "upload-if-absent",
-          projectId,
-          path: candidate,
-          content: buffer,
-          admissionId: uploadAdmissionId,
-          ...uploadPolicy
-        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Upload admission failed";
-        if (message.includes("rate limit")) jsonError(message, 429);
-        if (message.includes("storage quota")) jsonError(message, 413);
-        throw error;
-      }
+      const result = await executeOwnerMutation(c.env, user.id, {
+        type: "upload-if-absent",
+        projectId,
+        path: candidate,
+        content: buffer
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       if (!("written" in result)) throw new Error("Unexpected mutation result");
       if (result.written) {
         filename = candidate;
-        written = true;
         break;
       }
-    }
-
-    if (!written) {
-      jsonError("Could not find a free filename for the upload. Rename the file and try again.", 409);
     }
 
     return c.json({
