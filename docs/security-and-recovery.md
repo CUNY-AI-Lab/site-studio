@@ -31,6 +31,14 @@ A `SiteBuilderAgent` is keyed by `ownerId:projectId`. An owner-keyed
 `MutationCoordinator` serializes project/file mutations from that owner's tabs
 and agent connections.
 
+`read_url` uses the host Worker's public fetch without app cookies, Gateway
+credentials, or a private-network binding. Each redirect is validated before
+following it; Cloudflare's network proxy supplies the public/internal
+destination boundary. Extracted text and links are untrusted source material.
+The Code Mode sandbox still has no outbound network access. `inspect_image`
+reads only the authenticated project's storage, checks image bytes and size,
+and sends them through the existing Gateway vision-model path.
+
 ## One-time legacy import
 
 The only compatibility behavior is a lazy import during a user's first
@@ -39,12 +47,23 @@ session record whose server-stored user id has the anonymous `user_…` shape.
 Caller input and email cannot name an import source.
 
 A `MigrationCoordinator` keyed by the anonymous owner grants that namespace to
-at most one subject. The owner mutation coordinator copies project files and
+at most one subject. Before claiming it, the subject's mutation coordinator
+durably reserves the selected cookie before resolving its R2 session.
+Concurrent first-login requests and
+retries cannot replace that reservation with another cookie or close it with
+no cookie. The copy runs on the distinct anonymous-owner coordinator, avoiding
+re-entry into the subject queue. Already-completed imports read their immutable
+R2 marker without a coordinator round trip.
+The owner mutation coordinator copies project files and
 metadata, snapshots, uploads, chat history, published state, and handle
 relationships. Destination writes are conditional; imported metadata stamps a
 stable source owner and original project id so interrupted sweeps reuse the same
 destination instead of creating another suffix. Source deletion happens only
 after copying and chat transfer have succeeded.
+
+Chat transfer uses persistence-only SDK storage and broadcasts; it does not
+start an AI response. The subject's pending mutation journal is recovered
+before first-login import writes into that namespace.
 
 Resumable legacy metadata migration drops any obsolete stored `publishedUrl`;
 public links are derived from the configured `PUBLISHED_BASE_URL`.
@@ -91,7 +110,11 @@ navigation can commit.
 
 Stop resets the whole agent turn, not only the current response id. The client
 and agent retain cancellation identity long enough to reject late stream frames
-and successor continuations. Unexpected socket loss reconnects with bounded
+and successor continuations. Project switches retire the old client chat
+instance. Fetch/model operations receive the active abort signal, and tools
+check it before starting further mutations. A mutation already dispatched to
+the owner coordinator can complete; cancellation does not undo stored data.
+Unexpected socket loss reconnects with bounded
 backoff while the project is mounted; a reconnect refreshes the CSRF token once
 per cycle and may resume only the same subject's owned request. Successful
 persisted turns emit a targeted commit frame. That frame or an authenticated
@@ -109,9 +132,17 @@ fails closed. These are storage and safety boundaries, not model-output caps.
 Multi-object R2 operations are not transactions. The mutation coordinator
 records recovery intent for create, rename, delete, restore, and template
 replacement. Conditional claims identify the generation an operation owns.
+Rename intent is durable before the destination claim; an incomplete target
+carries its operation marker until activation. Recovery never deletes a target
+based only on its existence or matching bytes.
 Recovery runs before the next owner mutation and either finishes a committed
 transition or removes only that operation's partial destination. Out-of-band R2
 writes remain outside this contract.
+
+Snapshot archives are written before their metadata so incomplete snapshots
+are not listed as restorable. Serialized retention also removes orphan archives
+only when their paired metadata object is absent; malformed but present
+metadata is preserved with its archive for recovery.
 
 Editor writes carry the loaded ETag. Conflicts preserve the local draft instead
 of overwriting remote content. Drafts are encrypted with the per-owner CSRF
