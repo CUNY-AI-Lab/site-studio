@@ -677,20 +677,20 @@ export function createProjectTools(
   let snapshotPromise: Promise<SnapshotResult> | null = null;
 
   async function writeIfAbsent(path: string, content: string): Promise<string | null> {
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     const result = await executeMutation(scope.userId, {
       type: "write-file-if-absent",
       projectId: scope.projectId,
       path,
       content
     }, serializedLogging);
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
 
   async function writeIfMatch(path: string, content: string, baseEtag: string): Promise<string | null> {
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     const result = await executeMutation(scope.userId, {
       type: "write-file",
       projectId: scope.projectId,
@@ -698,7 +698,7 @@ export function createProjectTools(
       content,
       baseEtag
     }, serializedLogging);
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
@@ -709,7 +709,7 @@ export function createProjectTools(
   // skip visible via observability (a structured wide event) rather than
   // swallowing it.
   async function ensureSnapshot() {
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     if (!snapshotPromise) {
       snapshotPromise = executeMutation(scope.userId, {
         type: "create-snapshot",
@@ -723,7 +723,7 @@ export function createProjectTools(
     }
 
     const result = await snapshotPromise;
-        abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     if (isSnapshotSkipped(result)) {
       emitDiagnostic("warning", "snapshot_too_large", {}, logging);
     }
@@ -827,9 +827,9 @@ export function createProjectTools(
             continue;
           }
 
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           const content = await storage.readFile(scope.userId, scope.projectId, file.path);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           const lines = content.split(/\r?\n/);
 
           lines.forEach((line, index) => {
@@ -929,7 +929,7 @@ export function createProjectTools(
             };
           }
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
         }
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -945,7 +945,7 @@ export function createProjectTools(
               };
             }
             current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+            abortSignal?.throwIfAborted();
             continue;
           }
 
@@ -973,7 +973,7 @@ export function createProjectTools(
           }
 
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
         }
 
         return {
@@ -1064,7 +1064,7 @@ export function createProjectTools(
           }
 
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           if (!current || !current.content.includes(oldText)) {
             return {
               ok: false,
@@ -1145,16 +1145,16 @@ export function createProjectTools(
         // claims the destination atomically; losing that claim means a
         // concurrent write or rename took the destination after the preflight.
         try {
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           await executeMutation(scope.userId, {
             type: "rename-file",
             projectId: scope.projectId,
             oldPath: currentPath,
             newPath: nextPath
           }, serializedLogging);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
         } catch (error) {
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
             return {
               ok: false,
@@ -1351,9 +1351,9 @@ export function createProjectTools(
           if (!/\.html?$/i.test(file.path)) {
             continue;
           }
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           htmlFiles[file.path] = await storage.readFile(scope.userId, scope.projectId, file.path);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
         }
 
         const findings = lintProject(htmlFiles);
@@ -1396,7 +1396,7 @@ export function createProjectTools(
           generate: (signal) => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl, signal),
           screen: (bytes, signal) => screenImage(env, identityJwt, bytes, fetchImpl, signal),
           saveIfAbsent: async (path, bytes) => {
-        abortSignal?.throwIfAborted();
+            abortSignal?.throwIfAborted();
             const saved = await executeMutation(scope.userId, {
               type: "upload-if-absent",
               projectId: scope.projectId,
@@ -1416,7 +1416,7 @@ export function createProjectTools(
                 "SITE_STUDIO_UPLOADS_PER_MINUTE"
               )
             }, serializedLogging);
-        abortSignal?.throwIfAborted();
+            abortSignal?.throwIfAborted();
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
             return saved.written;
           }
@@ -1477,10 +1477,10 @@ function createChatTools(
           // Deliberately omit the Gateway/test fetch seam: this host capability
           // uses the Worker global fetch and never forwards model credentials.
           const page = await readWebPage(url, abortSignal);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           return { ok: true as const, ...page };
         } catch (error) {
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           return { ok: false as const, message: summarizeError(error) };
         }
       }
@@ -1508,18 +1508,18 @@ function createChatTools(
         const filePath = sanitizeFilePath(path);
         try {
           const bytes = await storage.readFileBuffer(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           const result = await inspectImage(env, identityJwt, bytes, {
             sessionId: scope.projectId,
             fetchImpl,
             abortSignal,
           });
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           return result.ok
             ? { ok: true as const, path: filePath, contentType: result.contentType, observation: result.observation }
             : { ok: false as const, path: filePath, message: result.message };
         } catch (error) {
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           return { ok: false as const, path: filePath, message: summarizeError(error) };
         }
       }
@@ -1556,9 +1556,9 @@ function createChatTools(
 
         try {
           const data = await storage.readFileBuffer(scope.userId, scope.projectId, filePath);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           const extracted = await extractDocumentText(filePath, data);
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           const clipped = clipText(extracted.text, maxChars || MAX_DOCUMENT_CONTENT_CHARS);
 
           return {
@@ -1573,7 +1573,7 @@ function createChatTools(
             warnings: extracted.warnings
           };
         } catch (error) {
-        abortSignal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
           return {
             ok: false as const,
             path: filePath,
