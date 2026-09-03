@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import ImageManagerDialog from './ImageManagerDialog.svelte';
@@ -7,6 +7,7 @@ import {
 	uploadProjectImage,
 	type ProjectImagesResult
 } from '$lib/api/projects';
+import { toast, toasts } from '$lib/toast.svelte';
 
 const mockFetch = vi.fn<typeof fetchProjectImages>();
 const mockUpload = vi.fn<typeof uploadProjectImage>();
@@ -30,6 +31,14 @@ const imagesResult: ProjectImagesResult = {
 	]
 };
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 function open(overrides: DialogOverrides = {}) {
 	const onOpenChange = vi.fn();
 	const onAskAssistant = vi.fn();
@@ -44,7 +53,7 @@ function open(overrides: DialogOverrides = {}) {
 			...overrides
 		}
 	});
-	return { onOpenChange, onAskAssistant, unmount: view.unmount };
+	return { onOpenChange, onAskAssistant, rerender: view.rerender, unmount: view.unmount };
 }
 
 function labeledInput(label: RegExp): HTMLInputElement {
@@ -88,6 +97,11 @@ describe('ImageManagerDialog', () => {
 		mockFetch.mockResolvedValue(imagesResult);
 	});
 
+	afterEach(() => {
+		toasts.splice(0);
+		vi.restoreAllMocks();
+	});
+
 	it('fully tears down an immediately unmounted dialog', async () => {
 		vi.useFakeTimers();
 		try {
@@ -114,6 +128,60 @@ describe('ImageManagerDialog', () => {
 		await waitForImages();
 		expect(screen.getByText('images/two.jpg')).toBeInTheDocument();
 		expect(mockFetch).toHaveBeenCalledWith('proj1');
+	});
+
+	it('ignores an inventory response from a previous project', async () => {
+		const projectA = deferred<ProjectImagesResult>();
+		const projectB = deferred<ProjectImagesResult>();
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockReturnValueOnce(projectA.promise)
+			.mockReturnValueOnce(projectB.promise);
+		const view = open({ fetchProjectImages: fetchImages });
+
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(1, 'proj1'));
+		await view.rerender({ projectId: 'proj2' });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj2'));
+
+		projectB.resolve({
+			images: [{ path: 'images/project-b.png', size: 1 }],
+			placeholders: []
+		});
+		await waitFor(() => expect(screen.getByText('images/project-b.png')).toBeInTheDocument());
+
+		projectA.resolve({
+			images: [{ path: 'images/project-a.png', size: 1 }],
+			placeholders: []
+		});
+		await Promise.resolve();
+
+		expect(screen.queryByText('images/project-a.png')).not.toBeInTheDocument();
+		expect(screen.getByText('images/project-b.png')).toBeInTheDocument();
+	});
+
+	it('reports a refresh failure separately after a successful upload', async () => {
+		const user = userEvent.setup({ delay: null });
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockResolvedValueOnce(imagesResult)
+			.mockRejectedValueOnce(new Error('inventory unavailable'));
+		const upload = vi.fn<typeof uploadProjectImage>().mockResolvedValue('images/new.png');
+		const errorToast = vi.spyOn(toast, 'error');
+		open({ fetchProjectImages: fetchImages, uploadProjectImage: upload });
+		await waitForImages();
+
+		const input = document.querySelector('input[type="file"]');
+		if (!(input instanceof HTMLInputElement)) throw new Error('expected image file input');
+		const file = new File(['image bytes'], 'new.png', { type: 'image/png' });
+		await user.upload(input, file);
+
+		await waitFor(() => expect(upload).toHaveBeenCalledWith('proj1', file));
+		await waitFor(() =>
+			expect(errorToast).toHaveBeenCalledWith(
+				'Image uploaded, but the gallery could not refresh. Reopen Images to see it.'
+			)
+		);
+		expect(errorToast).not.toHaveBeenCalledWith(expect.stringContaining('Could not upload image.'));
 	});
 
 	describe('alt-text validation', () => {

@@ -36,6 +36,7 @@
 	let placeholders = $state<PlaceholderFinding[]>([]);
 	let loading = $state(false);
 	let loadError = $state<string | null>(null);
+	let loadSequence = 0;
 
 	let uploading = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -60,17 +61,23 @@
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
-	async function load() {
+	async function load(): Promise<'applied' | 'failed' | 'stale'> {
+		const sequence = ++loadSequence;
+		const requestedProjectId = projectId;
 		loading = true;
 		loadError = null;
 		try {
-			const result = await fetchProjectImages(projectId);
+			const result = await fetchProjectImages(requestedProjectId);
+			if (sequence !== loadSequence || !open || projectId !== requestedProjectId) return 'stale';
 			images = result.images;
 			placeholders = result.placeholders;
+			return 'applied';
 		} catch (e) {
+			if (sequence !== loadSequence || !open || projectId !== requestedProjectId) return 'stale';
 			loadError = getErrorMessage(e instanceof Error ? e : undefined);
+			return 'failed';
 		} finally {
-			loading = false;
+			if (sequence === loadSequence) loading = false;
 		}
 	}
 
@@ -79,6 +86,12 @@
 		if (open) {
 			resetForm();
 			void load();
+		} else {
+			// Invalidate a request that resolves after the dialog closes. The open
+			// check in load() is still useful for the same event-loop turn, while
+			// this sequence prevents a late finally block from changing state after
+			// a newer open has started its own request.
+			loadSequence += 1;
 		}
 	});
 
@@ -95,13 +108,26 @@
 		if (!(input instanceof HTMLInputElement)) return;
 		const file = input.files?.[0];
 		if (!file) return;
+		const targetProjectId = projectId;
 
 		uploading = true;
 		try {
-			await uploadProjectImage(projectId, file);
-			await load();
-		} catch (e) {
-			toast.error(`Could not upload image. ${getErrorMessage(e instanceof Error ? e : undefined)}`);
+			try {
+				await uploadProjectImage(targetProjectId, file);
+			} catch (e) {
+				toast.error(`Could not upload image. ${getErrorMessage(e instanceof Error ? e : undefined)}`);
+				return;
+			}
+
+			// The upload and inventory are separate requests. Keep a successful write
+			// honest when the follow-up inventory request fails, and do not refresh a
+			// different project if navigation happened while the upload was pending.
+			if (open && projectId === targetProjectId) {
+				const refreshResult = await load();
+				if (refreshResult === 'failed' && open && projectId === targetProjectId) {
+					toast.error('Image uploaded, but the gallery could not refresh. Reopen Images to see it.');
+				}
+			}
 		} finally {
 			uploading = false;
 			input.value = '';
