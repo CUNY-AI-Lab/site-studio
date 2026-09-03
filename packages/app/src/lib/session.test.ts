@@ -12,6 +12,7 @@ import { authMiddleware, getCailIdentityJwt } from "./session";
 import { migrateAnonymousData } from "./migration";
 import type { MigrationResult } from "./migration";
 import {
+  IMPORT_STATE_STORAGE_KEY,
   runSubjectImport,
   type SubjectImportOptions,
 } from "./anonymous-import";
@@ -19,7 +20,7 @@ import { createMockKV, createTestNamespace, createTestR2Object, DURABLE_OBJECT_B
 import type { MigrationCoordinator } from "../agents/migration-coordinator";
 import { SerializedOperationQueue, type MutationCoordinator } from "../agents/mutation-coordinator";
 import type { SiteStudioLoggingContextData } from "./logging";
-import type { MutationJournalStore } from "./owner-mutations";
+import { OwnerMutationService, type MutationJournalStore } from "./owner-mutations";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
@@ -91,8 +92,8 @@ function createImportStorage(store: Map<string, unknown>): MutationJournalStore 
 function createMutationCoordinatorNamespace(
   env: Pick<Env, "SITE_STUDIO_BUCKET" | "SESSION_KV" | "MIGRATION_COORDINATOR">,
   migrateAnonymous: MigrationRpc,
+  stateStores = new Map<string, Map<string, unknown>>(),
 ): Env["MUTATION_COORDINATOR"] {
-  const stateStores = new Map<string, Map<string, unknown>>();
   const queues = new Map<string, SerializedOperationQueue>();
   const storageFor = (subject: string): MutationJournalStore => {
     let store = stateStores.get(subject);
@@ -144,7 +145,8 @@ function createMutationCoordinatorNamespace(
           await stub.markComplete(anonUserId, completeSubject);
         },
       };
-      return runSubjectImport(options);
+      return new OwnerMutationService(env.SITE_STUDIO_BUCKET, options.storage).recover(importSubject)
+        .then(() => runSubjectImport(options));
     }),
     // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
     // implements the methods exposed over the migration RPC boundary.
@@ -558,6 +560,46 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
   });
 
+  it("recovers a subject mutation journal before importing into that namespace", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-recover-subject", ANON);
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+    bucket.store.set(`projects/${SUBJECT}/stale/index.html`, "<h1>partial delete</h1>");
+
+    const stateStores = new Map<string, Map<string, unknown>>();
+    stateStores.set(SUBJECT, new Map([
+      ["owner-mutation", { type: "delete", projectId: "stale" }],
+    ]));
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(
+      env,
+      (anonUserId, subject, anonSessionId) => migrateAnonymousData({
+        bucket,
+        kv,
+        anonUserId,
+        subject,
+        anonSessionId,
+      }),
+      stateStores,
+    );
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-recover-subject" } },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(bucket.store.has(`projects/${SUBJECT}/stale/index.html`)).toBe(false);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+  });
+
   it("does not rerun import after the per-subject completion record exists", async () => {
     const kv = createLiveKV();
     const bucket = createLiveBucket();
@@ -916,6 +958,78 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
     expect(bucket.store.has("sessions/anon-cookie-refused.json")).toBe(true);
+  });
+
+  it("clears a persisted cookie reservation after refusal so a restarted subject can choose another source", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const anonA = "user_refused-a";
+    const anonB = "user_refused-b";
+    const cookieA = "anon-cookie-refused-restart-a";
+    const cookieB = "anon-cookie-refused-restart-b";
+    const otherSubject = canonicalTestSubject("refusal-owner");
+    seedLegacySession(bucket, cookieA, anonA);
+    seedLegacySession(bucket, cookieB, anonB);
+    bucket.store.set(`projects/${anonA}/blog/index.html`, "<h1>A remains</h1>");
+    bucket.store.set(`projects/${anonB}/blog/index.html`, "<h1>B imports</h1>");
+
+    const stateStores = new Map<string, Map<string, unknown>>();
+    stateStores.set(SUBJECT, new Map([
+      [IMPORT_STATE_STORAGE_KEY, {
+        status: "pending",
+        origin: "cookie-reservation",
+        anonUserId: anonA,
+        anonSessionId: cookieA,
+      }],
+    ]));
+    const claimCoordinator = createCoordinatorNamespace();
+    claimCoordinator.records.set(anonA, { subject: otherSubject, status: "complete" });
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      MIGRATION_COORDINATOR: claimCoordinator.namespace,
+    });
+    const migrateAnonymous = (anonUserId: string, subject: string, anonSessionId?: string) =>
+      migrateAnonymousData({
+        bucket,
+        kv,
+        anonUserId,
+        subject,
+        anonSessionId,
+      });
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(
+      env,
+      migrateAnonymous,
+      stateStores,
+    );
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const refused = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: `site-studio-session=${cookieA}` } },
+      env,
+    );
+    expect(refused.status).toBe(503);
+    expect(stateStores.get(SUBJECT)?.has(IMPORT_STATE_STORAGE_KEY)).toBe(false);
+    expect(bucket.store.get(`projects/${anonA}/blog/index.html`)).toBe("<h1>A remains</h1>");
+
+    // Recreate the subject coordinator to model a restart; the durable state
+    // map is the same journal storage that survived the restart.
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(
+      env,
+      migrateAnonymous,
+      stateStores,
+    );
+    const recovered = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: `site-studio-session=${cookieB}` } },
+      env,
+    );
+    expect(recovered.status).toBe(200);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>B imports</h1>");
+    expect(bucket.store.has(`projects/${anonA}/blog/index.html`)).toBe(true);
+    expect(bucket.store.has(`projects/${anonB}/blog/index.html`)).toBe(false);
   });
 
   it("retries when legacy session retirement fails before completion", async () => {

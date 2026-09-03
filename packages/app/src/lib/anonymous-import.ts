@@ -192,7 +192,6 @@ export async function runSubjectImport(
   // copied/retired; retrying it would be an unintended re-import.
   if (await hasCompletedImport(env, subject)) return "closed";
 
-  let reservationCreatedHere = false;
   let pendingState = await storage.get<PendingImportState>(IMPORT_STATE_STORAGE_KEY);
   if (pendingState !== undefined) {
     pendingState = importStateSchema.parse(pendingState);
@@ -263,7 +262,6 @@ export async function runSubjectImport(
       anonSessionId: cookieValue,
     };
     await storage.put(IMPORT_STATE_STORAGE_KEY, resolvingState);
-    reservationCreatedHere = true;
     cookieResolutionWasAlreadyAttempted = true;
     const legacyUser = await readLegacySession(env, cookieValue, logging);
     if (legacyUser?.id.startsWith("user_")) {
@@ -296,10 +294,11 @@ export async function runSubjectImport(
 
   const decision = await claimAnonymous(pendingState.anonUserId, subject);
   if (!decision.granted) {
-    if (reservationCreatedHere) {
+    if (pendingState.origin === "cookie-reservation") {
       // This reservation has not yet written the KV claim and belongs only to
-      // this subject. Remove it after a definitive cross-subject refusal;
-      // retain pre-existing pending state so historical resumes stay intact.
+      // this subject. Remove it after a definitive cross-subject refusal,
+      // including when it was persisted by an earlier request; retain only a
+      // legacy-marker state so historical resumes stay intact.
       await storage.delete(IMPORT_STATE_STORAGE_KEY);
     }
     throw new SessionStoreUnavailableError("Import ownership claim was refused");
@@ -312,7 +311,7 @@ export async function runSubjectImport(
   );
 
   if (result.status === "refused") {
-    if (reservationCreatedHere) {
+    if (pendingState.origin === "cookie-reservation") {
       await storage.delete(IMPORT_STATE_STORAGE_KEY);
     }
     throw new SessionStoreUnavailableError("Import ownership claim was refused");

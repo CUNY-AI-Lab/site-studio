@@ -95,6 +95,17 @@ export class MutationCoordinator extends DurableObject<Env> {
         ? createSiteStudioBoundaryContext(this.env, logging)
         : undefined;
 
+      // The subject queue also owns ordinary project mutations. Recover an
+      // interrupted subject operation before import can copy into or close
+      // that namespace; otherwise a pending delete/restore/rename journal
+      // could be applied only after this import has retired its source.
+      await new OwnerMutationService(
+        this.env.SITE_STUDIO_BUCKET,
+        this.ctx.storage,
+        loggingContext,
+        createProjectHistoryLifecycle(this.env),
+      ).recover(subject);
+
       const claimAnonymous = async (
         anonUserId: string,
         claimSubject: string,
