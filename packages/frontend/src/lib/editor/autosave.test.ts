@@ -257,4 +257,29 @@ describe('createAutosave', () => {
 		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'), expect.any(AbortSignal));
 		await expect(autosave.flush()).resolves.toBe(true);
 	});
+
+	it('drains a newer snapshot when timeout and settlement share an abort boundary', async () => {
+		const first = deferred<boolean>();
+		const persist = vi
+			.fn<(snapshot: SaveSnapshot, signal: AbortSignal) => Promise<boolean>>()
+			.mockImplementationOnce((_snapshot, signal) => {
+				signal.addEventListener('abort', () => first.resolve(false), { once: true });
+				return first.promise;
+			})
+			.mockResolvedValueOnce(true);
+		const autosave = createAutosave({ persist, delayMs: 100, persistTimeoutMs: 50 });
+
+		autosave.queue(snapshot('A'));
+		const flushPromise = autosave.flush();
+		await flushMicrotasks();
+		autosave.queue(snapshot('B'));
+
+		await vi.advanceTimersByTimeAsync(50);
+		await expect(flushPromise).resolves.toBe(false);
+		await flushMicrotasks();
+
+		expect(persist).toHaveBeenCalledTimes(2);
+		expect(persist).toHaveBeenNthCalledWith(2, snapshot('B'), expect.any(AbortSignal));
+		await expect(autosave.flush()).resolves.toBe(true);
+	});
 });
