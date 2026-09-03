@@ -159,6 +159,36 @@ describe('ImageManagerDialog', () => {
 		expect(screen.getByText('images/project-b.png')).toBeInTheDocument();
 	});
 
+	it('ignores an inventory response after closing and reopening', async () => {
+		const firstOpen = deferred<ProjectImagesResult>();
+		const secondOpen = deferred<ProjectImagesResult>();
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockReturnValueOnce(firstOpen.promise)
+			.mockReturnValueOnce(secondOpen.promise);
+		const view = open({ fetchProjectImages: fetchImages });
+
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(1, 'proj1'));
+		await view.rerender({ open: false });
+		await view.rerender({ open: true });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj1'));
+
+		secondOpen.resolve({
+			images: [{ path: 'images/current.png', size: 1 }],
+			placeholders: []
+		});
+		await waitFor(() => expect(screen.getByText('images/current.png')).toBeInTheDocument());
+
+		firstOpen.resolve({
+			images: [{ path: 'images/stale.png', size: 1 }],
+			placeholders: []
+		});
+		await Promise.resolve();
+
+		expect(screen.queryByText('images/stale.png')).not.toBeInTheDocument();
+		expect(screen.getByText('images/current.png')).toBeInTheDocument();
+	});
+
 	it('reports a refresh failure separately after a successful upload', async () => {
 		const user = userEvent.setup({ delay: null });
 		const fetchImages = vi
