@@ -11,9 +11,15 @@ import type { Env } from "../types";
 import { authMiddleware, getCailIdentityJwt } from "./session";
 import { migrateAnonymousData } from "./migration";
 import type { MigrationResult } from "./migration";
+import {
+  runSubjectImport,
+  type SubjectImportOptions,
+} from "./anonymous-import";
 import { createMockKV, createTestNamespace, createTestR2Object, DURABLE_OBJECT_BRAND } from "./test-utils";
 import type { MigrationCoordinator } from "../agents/migration-coordinator";
-import type { MutationCoordinator } from "../agents/mutation-coordinator";
+import { SerializedOperationQueue, type MutationCoordinator } from "../agents/mutation-coordinator";
+import type { SiteStudioLoggingContextData } from "./logging";
+import type { MutationJournalStore } from "./owner-mutations";
 
 let identityIssuer: TestIdentityIssuer;
 let identityJwks: string;
@@ -65,28 +71,95 @@ function testDurableObjectId(name: string): DurableObjectId {
   } as DurableObjectId;
 }
 
-type MigrationRpc = (anonUserId: string, subject: string, anonSessionId?: string) => Promise<MigrationResult>;
+type MigrationRpc = (
+  anonUserId: string,
+  subject: string,
+  anonSessionId?: string,
+  logging?: SiteStudioLoggingContextData,
+) => Promise<MigrationResult>;
 
-function createMutationCoordinatorNamespace(migrateAnonymous: MigrationRpc): Env["MUTATION_COORDINATOR"] {
-  const rpc = {
-    id: testDurableObjectId("rpc"),
+function createImportStorage(store: Map<string, unknown>): MutationJournalStore {
+  // SAFETY: This map is the isolated per-subject journal used only by the
+  // extracted import state machine; its generic values cross that typed seam.
+  return {
+    get: async <T>(key: string) => store.get(key) as T | undefined,
+    put: async <T>(key: string, value: T) => { store.set(key, value); },
+    delete: async (key: string) => store.delete(key),
+  };
+}
+
+function createMutationCoordinatorNamespace(
+  env: Pick<Env, "SITE_STUDIO_BUCKET" | "SESSION_KV" | "MIGRATION_COORDINATOR">,
+  migrateAnonymous: MigrationRpc,
+): Env["MUTATION_COORDINATOR"] {
+  const stateStores = new Map<string, Map<string, unknown>>();
+  const queues = new Map<string, SerializedOperationQueue>();
+  const storageFor = (subject: string): MutationJournalStore => {
+    let store = stateStores.get(subject);
+    if (!store) {
+      store = new Map<string, unknown>();
+      stateStores.set(subject, store);
+    }
+    return createImportStorage(store);
+  };
+  const queueFor = (subject: string): SerializedOperationQueue => {
+    let queue = queues.get(subject);
+    if (!queue) {
+      queue = new SerializedOperationQueue();
+      queues.set(subject, queue);
+    }
+    return queue;
+  };
+  const rpcFor = (subject: string) => ({
+    id: testDurableObjectId(`owner:${subject}`),
     fetch: async (_request: Request) => new Response(null, { status: 404 }),
     execute: async () => { throw new Error("execute is not part of this session fixture"); },
     migrateAnonymous,
+    migrateAnonymousForSubject: (
+      importSubject: string,
+      cookieValue?: string,
+      logging?: SiteStudioLoggingContextData,
+    ) => queueFor(importSubject).run(() => {
+      const options: SubjectImportOptions = {
+        env,
+        storage: storageFor(importSubject),
+        subject: importSubject,
+        cookieValue,
+        // Session tests assert the auth outcome, while production recreates
+        // the full logger context inside the Durable Object method.
+        logging: undefined,
+        claimAnonymous: async (anonUserId, claimSubject) => {
+          const stub = env.MIGRATION_COORDINATOR.get(
+            env.MIGRATION_COORDINATOR.idFromName(anonUserId),
+          );
+          const decision = await stub.claim(anonUserId, claimSubject);
+          return { granted: decision.granted };
+        },
+        migrateAnonymous: (anonUserId, migrationSubject, anonSessionId) =>
+          migrateAnonymous(anonUserId, migrationSubject, anonSessionId, logging),
+        markAnonymousComplete: async (anonUserId, completeSubject) => {
+          const stub = env.MIGRATION_COORDINATOR.get(
+            env.MIGRATION_COORDINATOR.idFromName(anonUserId),
+          );
+          await stub.markComplete(anonUserId, completeSubject);
+        },
+      };
+      return runSubjectImport(options);
+    }),
     // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
     // implements the methods exposed over the migration RPC boundary.
     [DURABLE_OBJECT_BRAND]: undefined as never,
-  };
+  });
   const namespace = {
     newUniqueId: () => testDurableObjectId("new"),
     idFromName: testDurableObjectId,
     idFromString: testDurableObjectId,
-    get: () => rpc,
-    getByName: () => rpc,
+    get: (id: DurableObjectId) => rpcFor(id.toString().replace(/^owner:/, "")),
+    getByName: (name: string) => rpcFor(name.replace(/^owner:/, "")),
     jurisdiction: () => namespace,
   };
-  // SAFETY: Session tests exercise only migrateAnonymous; the other namespace
-  // methods are inert binding-contract stubs.
+  // SAFETY: The fixture models both the owner migration RPC and the extracted
+  // subject import gate; Cloudflare adds only transport metadata around it.
   return createTestNamespace<MutationCoordinator>(namespace);
 }
 
@@ -105,7 +178,9 @@ function createStubBucket(): R2Bucket {
   return fixture as R2Bucket;
 }
 
-function createCoordinatorNamespace(): MockCoordinator {
+function createCoordinatorNamespace(
+  beforeClaim?: () => Promise<void>,
+): MockCoordinator {
   const records = new Map<string, CoordinatorRecord>();
   // SAFETY: The namespace fixture models the claim/markComplete RPCs used by
   // authMiddleware; Cloudflare adds only transport metadata around them.
@@ -117,6 +192,7 @@ function createCoordinatorNamespace(): MockCoordinator {
       id: testDurableObjectId(id.toString()),
       fetch: async (_request: Request) => new Response(null, { status: 404 }),
       claim: async (anonId: string, subject: string) => {
+        await beforeClaim?.();
         const existing = records.get(anonId);
         if (!existing) {
           records.set(anonId, { subject, status: "pending" });
@@ -165,32 +241,10 @@ function createEnv(overrides?: Partial<Env>): Env {
     ASSETS: undefined,
     ...overrides
   };
-  // SAFETY: The migration coordinator fixture exposes the RPC used by auth;
-  // Cloudflare adds only transport metadata around this test stub.
-  const mutationNamespace = {
-    newUniqueId: () => testDurableObjectId("new"),
-    idFromName: testDurableObjectId,
-    idFromString: testDurableObjectId,
-    get: () => ({
-      id: testDurableObjectId("rpc"),
-      fetch: async (_request: Request) => new Response(null, { status: 404 }),
-      migrateAnonymous: (anonUserId: string, subject: string, anonSessionId?: string) =>
-        migrateAnonymousData({
-          bucket: env.SITE_STUDIO_BUCKET,
-          kv: env.SESSION_KV,
-          anonUserId,
-          subject,
-          anonSessionId
-        }),
-      // SAFETY: Cloudflare's RPC brand is nominal type metadata; this fixture
-      // implements the migration method used by authMiddleware.
-      [DURABLE_OBJECT_BRAND]: undefined as never,
-    }),
-    getByName: () => ({
-      id: testDurableObjectId("rpc"),
-      fetch: async (_request: Request) => new Response(null, { status: 404 }),
-      execute: async () => { throw new Error("execute is not part of this session fixture"); },
-      migrateAnonymous: async (anonUserId: string, subject: string, anonSessionId?: string) =>
+  if (!env.MUTATION_COORDINATOR) {
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(
+      env,
+      (anonUserId, subject, anonSessionId) =>
         migrateAnonymousData({
           bucket: env.SITE_STUDIO_BUCKET,
           kv: env.SESSION_KV,
@@ -198,11 +252,8 @@ function createEnv(overrides?: Partial<Env>): Env {
           subject,
           anonSessionId,
         }),
-      [DURABLE_OBJECT_BRAND]: undefined as never,
-    }),
-    jurisdiction: () => mutationNamespace,
-  };
-  env.MUTATION_COORDINATOR ??= createTestNamespace<MutationCoordinator>(mutationNamespace);
+    );
+  }
   return env;
 }
 
@@ -531,9 +582,10 @@ describe("authMiddleware anonymous-data migration", () => {
       CAIL_IDENTITY_JWKS: identityJwks,
       SESSION_KV: kv,
       SITE_STUDIO_BUCKET: bucket,
-      // SAFETY: The fixture exposes only the migration RPC used by authMiddleware.
-      MUTATION_COORDINATOR: createMutationCoordinatorNamespace(migrateAnonymous),
     });
+    // SAFETY: The fixture exposes the same extracted subject gate used by the
+    // production coordinator, with this test's migration callback injected.
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(env, migrateAnonymous);
     const token = await mintIdentityJwt(SUBJECT);
 
     const first = await buildApp().request(
@@ -552,6 +604,37 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(repeat.status).toBe(200);
     expect(migrateAnonymous).toHaveBeenCalledTimes(1);
     expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+  });
+
+  it("uses the immutable completion marker without waiting for the owner coordinator", async () => {
+    const bucket = createLiveBucket();
+    const kv = createLiveKV();
+    bucket.store.set(`imports/${encodeURIComponent(SUBJECT)}`, "");
+    const get = vi.fn(() => {
+      throw new Error("completed imports must not enter the owner queue");
+    });
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>({
+        idFromName: testDurableObjectId,
+        idFromString: testDurableObjectId,
+        newUniqueId: () => testDurableObjectId("new"),
+        get,
+        getByName: get,
+        jurisdiction: () => undefined,
+      }),
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const response = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token } },
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(get).not.toHaveBeenCalled();
   });
 
   it("closes first-login import without guessing when no legacy source resolves", async () => {
@@ -604,7 +687,7 @@ describe("authMiddleware anonymous-data migration", () => {
       SITE_STUDIO_BUCKET: bucket,
     });
     // SAFETY: The fixture exposes only the migration RPC used by authMiddleware.
-    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(async (anonUserId: string, subject: string, anonSessionId?: string) => {
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(env, async (anonUserId: string, subject: string, anonSessionId?: string) => {
           attempts += 1;
           if (attempts === 1) throw new Error("injected import failure");
           return migrateAnonymousData({
@@ -641,6 +724,170 @@ describe("authMiddleware anonymous-data migration", () => {
     expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
     expect(bucket.store.has(`projects/${ANON}/blog/index.html`)).toBe(false);
     expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+  });
+
+  it("retains a cookie reservation when its first R2 lookup fails before no-cookie retry", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-lookup", ANON);
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    const originalGet = bucket.get;
+    let failLookup = true;
+    // SAFETY: The replacement preserves the fixture's R2 get signature while
+    // injecting one deterministic session lookup failure.
+    bucket.get = vi.fn(async (key: string) => {
+      if (key === "sessions/anon-cookie-lookup.json" && failLookup) {
+        failLookup = false;
+        throw new Error("injected first session lookup failure");
+      }
+      return originalGet(key);
+    }) as typeof bucket.get;
+
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-lookup" } },
+      env,
+    );
+    expect(first.status).toBe(503);
+    expect(first.headers.get("set-cookie")).toBeNull();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+    expect(bucket.store.has("sessions/anon-cookie-lookup.json")).toBe(true);
+
+    const retryWithoutCookie = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token } },
+      env,
+    );
+    expect(retryWithoutCookie.status).toBe(200);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
+    expect(bucket.store.has(`projects/${ANON}/blog/index.html`)).toBe(false);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+  });
+
+  it("keeps the first selected source when a retry presents a different cookie", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    const anonA = "user_import-a";
+    const anonB = "user_import-b";
+    seedLegacySession(bucket, "anon-cookie-a", anonA);
+    seedLegacySession(bucket, "anon-cookie-b", anonB);
+    bucket.store.set(`projects/${anonA}/blog/index.html`, "<h1>A</h1>");
+    bucket.store.set(`projects/${anonB}/blog/index.html`, "<h1>B</h1>");
+
+    const seenSources: string[] = [];
+    let attempts = 0;
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+    });
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(env, async (anonUserId, subject, anonSessionId) => {
+      seenSources.push(anonUserId);
+      attempts += 1;
+      if (attempts === 1) throw new Error("injected copy failure");
+      return migrateAnonymousData({
+        bucket,
+        kv,
+        anonUserId,
+        subject,
+        anonSessionId,
+      });
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const first = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-a" } },
+      env,
+    );
+    expect(first.status).toBe(503);
+    expect(kv.store.get(`migration-pending:${SUBJECT}`)).toBeUndefined();
+    expect(bucket.store.get(`projects/${anonA}/blog/index.html`)).toBe("<h1>A</h1>");
+
+    const retryWithDifferentCookie = await buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-b" } },
+      env,
+    );
+    expect(retryWithDifferentCookie.status).toBe(200);
+    expect(seenSources).toEqual([anonA, anonA]);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>A</h1>");
+    expect(bucket.store.get(`projects/${anonB}/blog/index.html`)).toBe("<h1>B</h1>");
+    expect(bucket.store.has("sessions/anon-cookie-b.json")).toBe(true);
+  });
+
+  it("does not let a queued no-cookie close race discard an admitted source", async () => {
+    const kv = createLiveKV();
+    const bucket = createLiveBucket();
+    seedLegacySession(bucket, "anon-cookie-admitted", ANON);
+    bucket.store.set(`projects/${ANON}/blog/index.html`, "<h1>anon blog</h1>");
+
+    let releaseClaim!: () => void;
+    const claimGate = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    let claimStarted!: () => void;
+    const claimStartedSignal = new Promise<void>((resolve) => {
+      claimStarted = resolve;
+    });
+    let firstClaim = true;
+    const coordinator = createCoordinatorNamespace(async () => {
+      if (firstClaim) {
+        firstClaim = false;
+        claimStarted();
+        await claimGate;
+      }
+    });
+    const env = createEnv({
+      CAIL_IDENTITY_JWKS: identityJwks,
+      SESSION_KV: kv,
+      SITE_STUDIO_BUCKET: bucket,
+      MIGRATION_COORDINATOR: coordinator.namespace,
+    });
+    let attempts = 0;
+    env.MUTATION_COORDINATOR = createMutationCoordinatorNamespace(env, async (anonUserId, subject, anonSessionId) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("injected copy failure");
+      return migrateAnonymousData({
+        bucket,
+        kv,
+        anonUserId,
+        subject,
+        anonSessionId,
+      });
+    });
+    const token = await mintIdentityJwt(SUBJECT);
+
+    const admitted = buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token, Cookie: "site-studio-session=anon-cookie-admitted" } },
+      env,
+    );
+    await claimStartedSignal;
+
+    const noCookie = buildApp().request(
+      "http://site-studio.test/api/test",
+      { headers: { "X-CAIL-Identity-JWT": token } },
+      env,
+    );
+    await Promise.resolve();
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(false);
+
+    releaseClaim();
+    const [admittedResponse, noCookieResponse] = await Promise.all([admitted, noCookie]);
+    expect(admittedResponse.status).toBe(503);
+    expect(noCookieResponse.status).toBe(200);
+    expect(attempts).toBe(2);
+    expect(bucket.store.has(`imports/${encodeURIComponent(SUBJECT)}`)).toBe(true);
+    expect(bucket.store.get(`projects/${SUBJECT}/blog/index.html`)).toBe("<h1>anon blog</h1>");
   });
 
   it("does not complete or retire a legacy session when the durable migration claim refuses", async () => {
