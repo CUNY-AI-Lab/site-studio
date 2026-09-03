@@ -6,7 +6,8 @@ import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
 import { createMockKV, createMockMutationCoordinator, createTestNamespace, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import type { MutationCoordinator } from "../agents/mutation-coordinator";
 import type { SiteBuilderAgent } from "../agents/site-builder";
-import { R2ProjectStorage } from "../storage/r2";
+import { OwnerMutationService } from "../lib/owner-mutations";
+import { ProjectNotFoundError, R2ProjectStorage, SnapshotNotFoundError } from "../storage/r2";
 import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 import { createFileRouter } from "./files";
 import { createHandleRouter } from "./handles";
@@ -413,6 +414,67 @@ describe("route regressions", () => {
     );
     expect(downloadResponse.status).toBe(404);
     await expect(downloadResponse.json()).resolves.toEqual({ error: "File not found" });
+  });
+
+  it.each([
+    ["typed ProjectNotFoundError", new ProjectNotFoundError("files-project")],
+    ["RPC-like plain Error", new Error("Project not found")],
+  ])("maps stale rename failures from %s to 404", async (_label, error) => {
+    await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
+    const executeSpy = vi.spyOn(OwnerMutationService.prototype, "execute").mockImplementation(async () => {
+      throw error;
+    });
+
+    try {
+      const response = await app.request(
+        "http://site-studio.test/api/projects/files-project",
+        {
+          method: "PATCH",
+          body: JSON.stringify({ name: "Renamed Project" }),
+          headers: { "Content-Type": "application/json", ...csrf.headers },
+        },
+        createEnv(bucket),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+      expect(executeSpy).toHaveBeenCalledOnce();
+    } finally {
+      executeSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["typed SnapshotNotFoundError", new SnapshotNotFoundError("snapshot-a")],
+    ["RPC-like plain Error", new Error("Snapshot not found")],
+  ])("maps stale restore failures from %s to 404", async (_label, error) => {
+    await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
+    bucket.store.set("snapshots/user_test123/files-project/snapshot-a.json", {
+      data: JSON.stringify({
+        id: "snapshot-a",
+        projectId: "files-project",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        trigger: "manual",
+        fileCount: 0,
+      }),
+    });
+    const executeSpy = vi.spyOn(OwnerMutationService.prototype, "execute").mockImplementation(async () => {
+      throw error;
+    });
+
+    try {
+      const response = await app.request(
+        "http://site-studio.test/api/projects/files-project/snapshots/snapshot-a/restore",
+        { method: "POST", headers: csrf.headers },
+        createEnv(bucket),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Snapshot not found" });
+      expect(executeSpy).toHaveBeenCalledOnce();
+    } finally {
+      executeSpy.mockRestore();
+    }
   });
 
   // SS-18: PROTECTED_FILE_NAMES were guarded on delete/rename but not on write,
