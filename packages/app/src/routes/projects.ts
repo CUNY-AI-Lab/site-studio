@@ -3,7 +3,12 @@ import { z } from "zod";
 import type { Env, ProjectMetadata } from "../types";
 import { isSnapshotSkipped } from "../types";
 import { getUser } from "../lib/session";
-import { ProjectExistsError, ProjectNotFoundError, R2ProjectStorage } from "../storage/r2";
+import {
+  ProjectExistsError,
+  ProjectNotFoundError,
+  R2ProjectStorage,
+  SnapshotNotFoundError,
+} from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
 import { binaryBody, jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
@@ -46,6 +51,18 @@ function toProjectSummary(
     publishedUrl,
     thumbnailUrl: metadata?.thumbnailUrl
   };
+}
+
+function isProjectNotFound(error: Error): boolean {
+  return error instanceof ProjectNotFoundError
+    || error.name === "ProjectNotFoundError"
+    || error.message === "Project not found";
+}
+
+function isSnapshotNotFound(error: Error): boolean {
+  return error instanceof SnapshotNotFoundError
+    || error.name === "SnapshotNotFoundError"
+    || error.message === "Snapshot not found";
 }
 
 export function createProjectRouter() {
@@ -139,6 +156,9 @@ export function createProjectRouter() {
         if (error instanceof ProjectExistsError || (error instanceof Error && error.message.includes("already exists"))) {
           jsonError("Project already exists", 409);
         }
+        if (error instanceof Error && isProjectNotFound(error)) {
+          jsonError("Project not found", 404);
+        }
         throw error;
       }
 
@@ -159,7 +179,7 @@ export function createProjectRouter() {
       }
       updated = await storage.getProjectMetadata(user.id, nextId);
     } catch (error) {
-      if (error instanceof ProjectNotFoundError || (error instanceof Error && error.message.includes("Project not found"))) {
+      if (error instanceof Error && isProjectNotFound(error)) {
         jsonError("Project not found", 404);
       }
       throw error;
@@ -219,12 +239,20 @@ export function createProjectRouter() {
       jsonError("Invalid snapshot payload", 400);
     }
 
-    const result = await executeOwnerMutation(c.env, user.id, {
-      type: "create-snapshot",
-      projectId,
-      trigger: "manual",
-      label: parsed.data.label
-    }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
+    let result;
+    try {
+      result = await executeOwnerMutation(c.env, user.id, {
+        type: "create-snapshot",
+        projectId,
+        trigger: "manual",
+        label: parsed.data.label
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
+    } catch (error) {
+      if (error instanceof Error && isProjectNotFound(error)) {
+        jsonError("Project not found", 404);
+      }
+      throw error;
+    }
     if (!("snapshot" in result)) throw new Error("Unexpected mutation result");
     const snapshot = result.snapshot;
 
@@ -255,11 +283,22 @@ export function createProjectRouter() {
       jsonError("Snapshot not found", 404);
     }
 
-    const result = await executeOwnerMutation(c.env, user.id, {
-      type: "restore-snapshot",
-      projectId,
-      snapshotId
-    }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
+    let result;
+    try {
+      result = await executeOwnerMutation(c.env, user.id, {
+        type: "restore-snapshot",
+        projectId,
+        snapshotId
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
+    } catch (error) {
+      if (error instanceof Error && isProjectNotFound(error)) {
+        jsonError("Project not found", 404);
+      }
+      if (error instanceof Error && isSnapshotNotFound(error)) {
+        jsonError("Snapshot not found", 404);
+      }
+      throw error;
+    }
     if (!("restoredSnapshot" in result)) throw new Error("Unexpected mutation result");
 
     return c.json({

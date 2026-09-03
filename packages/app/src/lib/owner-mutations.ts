@@ -6,6 +6,7 @@ import {
   ProjectExistsError,
   ProjectNotFoundError,
   R2ProjectStorage,
+  SnapshotNotFoundError,
   SlugReservationLostError
 } from "../storage/r2";
 import {
@@ -46,12 +47,20 @@ type Journal =
       projectId: string;
       nextProjectId: string;
       name: string;
+      operationId: string;
       slug?: string;
       /** Optional for compatibility with journals written before this field. */
       published?: boolean;
       stage: "preparing" | "activating" | "committing";
     }
-  | { type: "rename-file"; projectId: string; oldPath: string; newPath: string; stage: "preparing" | "committing" }
+  | {
+      type: "rename-file";
+      projectId: string;
+      oldPath: string;
+      newPath: string;
+      operationId: string;
+      stage: "preparing" | "committing";
+    }
   | { type: "restore" | "replace-files"; projectId: string; restorePointId: string };
 
 export interface MutationJournalStore {
@@ -195,9 +204,9 @@ export class OwnerMutationService {
     switch (journal.type) {
       case "create":
         if (!journal.operationId) {
-          // Compatibility with journals written before create claims carried a
-          // generation marker.
-          await this.storage.deleteProject(ownerId, journal.projectId);
+          // An operation-less create journal cannot prove which generation it
+          // owns. Preserve the project and discard only the ambiguous journal;
+          // recovery must never delete a complete destination on a stale claim.
           break;
         }
         {
@@ -216,20 +225,37 @@ export class OwnerMutationService {
         await this.storage.deleteProject(ownerId, journal.projectId);
         break;
       case "rename-project":
+        if (!journal.operationId) {
+          // Older journals do not identify the target generation. Preserve the
+          // target rather than risking deletion of an unrelated project.
+          break;
+        }
         if (journal.stage === "preparing") {
-          if (journal.slug) {
-            await this.storage.transferPublishedSlugReservation(
-              ownerId,
-              journal.slug,
-              journal.nextProjectId,
-              journal.projectId
-            );
+          const target = await this.storage.getProjectMetadata(ownerId, journal.nextProjectId);
+          if (target?.creatingOperationId === journal.operationId) {
+            if (journal.slug) {
+              await this.storage.transferPublishedSlugReservation(
+                ownerId,
+                journal.slug,
+                journal.nextProjectId,
+                journal.projectId
+              );
+            }
+            await this.storage.deleteProject(ownerId, journal.nextProjectId);
           }
-          await this.storage.deleteProject(ownerId, journal.nextProjectId);
         } else if (journal.stage === "activating") {
+          const target = await this.storage.getProjectMetadata(ownerId, journal.nextProjectId);
+          if (!target || (target.creatingOperationId && target.creatingOperationId !== journal.operationId)) {
+            break;
+          }
           if (journal.published) {
             await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
-              published: true
+              published: true,
+              creatingOperationId: undefined,
+            });
+          } else {
+            await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
+              creatingOperationId: undefined,
             });
           }
           if (journal.slug) {
@@ -247,27 +273,48 @@ export class OwnerMutationService {
           await this.projectHistory?.move(ownerId, journal.projectId, journal.nextProjectId);
           await this.storage.deleteProject(ownerId, journal.projectId);
           await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
-            name: journal.name
+            name: journal.name,
+            creatingOperationId: undefined,
           });
         } else {
           // New journals hide the source before entering `committing`. The slug
           // check also safely fences published journals written by the previous
           // schema, which did not persist the `published` boolean.
+          const target = await this.storage.getProjectMetadata(ownerId, journal.nextProjectId);
+          if (!target || (target.creatingOperationId && target.creatingOperationId !== journal.operationId)) {
+            break;
+          }
           if (journal.published || journal.slug) {
             await this.hideProjectFromPublic(ownerId, journal.projectId);
           }
           await this.projectHistory?.move(ownerId, journal.projectId, journal.nextProjectId);
           await this.storage.deleteProject(ownerId, journal.projectId);
-          await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, { name: journal.name });
+          await this.storage.updateProjectMetadata(ownerId, journal.nextProjectId, {
+            name: journal.name,
+            creatingOperationId: undefined,
+          });
         }
         break;
       case "rename-file":
+        if (!journal.operationId) {
+          // No operation id means no ownership proof for either path.
+          break;
+        }
         if (journal.stage === "preparing") {
-          if (await this.storage.fileExists(ownerId, journal.projectId, journal.oldPath)) {
-            await this.storage.deleteFile(ownerId, journal.projectId, journal.newPath);
-          }
+          await this.storage.deleteFileIfRenameClaimed(
+            ownerId,
+            journal.projectId,
+            journal.newPath,
+            journal.operationId,
+          );
         } else {
-          await this.storage.deleteFile(ownerId, journal.projectId, journal.oldPath);
+          await this.storage.completeRenameFileIfClaimed(
+            ownerId,
+            journal.projectId,
+            journal.oldPath,
+            journal.newPath,
+            journal.operationId,
+          );
         }
         break;
       case "restore":
@@ -322,26 +369,33 @@ export class OwnerMutationService {
       case "rename-project": {
         const sourceMetadata = await this.storage.getProjectMetadata(ownerId, operation.projectId);
         if (!sourceMetadata) throw new ProjectNotFoundError(operation.projectId);
+        const operationId = crypto.randomUUID();
         const journal: Extract<Journal, { type: "rename-project" }> = {
           type: "rename-project",
           projectId: operation.projectId,
           nextProjectId: operation.nextProjectId,
           name: operation.name,
+          operationId,
           published: sourceMetadata.published,
           stage: "preparing"
         };
         if (sourceMetadata.published && sourceMetadata.slug) journal.slug = sourceMetadata.slug;
         try {
           await this.storage.renameProject(ownerId, operation.projectId, operation.nextProjectId, {
-            afterTargetClaim: async () => this.putJournal(journal),
+            operationId,
+            beforeTargetClaim: async () => this.putJournal(journal),
             beforeSourceDelete: async (activateTarget) => {
               if (journal.published) {
                 // The target is complete but still hidden. Record the roll-
                 // forward phase before exposing it, then hide the source before
                 // its files begin disappearing.
                 await this.putJournal({ ...journal, stage: "activating" });
-                await activateTarget();
+              } else {
+                // The target is complete but unpublished. Durably mark the
+                // committing phase before clearing its hidden-generation marker.
+                await this.putJournal({ ...journal, stage: "committing" });
               }
+              await activateTarget();
               if (journal.slug) {
                 await this.storage.transferPublishedSlugReservation(
                   ownerId,
@@ -352,8 +406,8 @@ export class OwnerMutationService {
               }
               if (journal.published) {
                 await this.hideProjectFromPublic(ownerId, operation.projectId);
+                await this.putJournal({ ...journal, stage: "committing" });
               }
-              await this.putJournal({ ...journal, stage: "committing" });
               await this.projectHistory?.move(
                 ownerId,
                 operation.projectId,
@@ -369,7 +423,10 @@ export class OwnerMutationService {
           }
           throw error;
         }
-        await this.storage.updateProjectMetadata(ownerId, operation.nextProjectId, { name: operation.name });
+        await this.storage.updateProjectMetadata(ownerId, operation.nextProjectId, {
+          name: operation.name,
+          creatingOperationId: undefined,
+        });
         await this.clearJournal();
         return { ok: true };
       }
@@ -433,16 +490,27 @@ export class OwnerMutationService {
         return { ok: true };
       case "rename-file": {
         await this.requireProject(ownerId, operation.projectId);
-        const journal: Extract<Journal, { type: "rename-file" }> = { ...operation, stage: "preparing" };
+        const operationId = crypto.randomUUID();
+        const journal: Extract<Journal, { type: "rename-file" }> = {
+          ...operation,
+          operationId,
+          stage: "preparing",
+        };
+        await this.putJournal(journal);
         try {
           await this.storage.renameFile(ownerId, operation.projectId, operation.oldPath, operation.newPath, {
+            operationId,
             // renameFile invokes this only after its conditional destination
-            // claim. From that point, recovery can safely complete by deleting
-            // the source; before it, no destructive journal exists.
+            // claim. From that point, recovery can safely complete only when
+            // the destination still carries this operation's marker.
             beforeSourceDelete: async () => this.putJournal({ ...journal, stage: "committing" })
           });
         } catch (error) {
-          if (error instanceof FileExistsError) await this.clearJournal();
+          if (error instanceof FileExistsError) {
+            await this.clearJournal();
+          } else {
+            await this.recover(ownerId).catch(() => undefined);
+          }
           throw error;
         }
         await this.clearJournal();
@@ -487,7 +555,7 @@ export class OwnerMutationService {
       case "restore-snapshot": {
         await this.requireProject(ownerId, operation.projectId);
         const target = await this.storage.getSnapshot(ownerId, operation.projectId, operation.snapshotId);
-        if (!target) throw new Error("Snapshot not found");
+        if (!target) throw new SnapshotNotFoundError(operation.snapshotId);
         const restorePoint = await this.storage.createSnapshot(ownerId, operation.projectId, {
           trigger: "restore",
           label: `Before restore to ${target.label || target.id}`,

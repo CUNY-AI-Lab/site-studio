@@ -6,6 +6,7 @@ import { MAX_SNAPSHOT_BYTES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
 import { OwnerMutationService, type MutationJournalStore } from "../lib/owner-mutations";
 import { createSiteStudioBoundaryContext } from "../lib/logging";
 import { createTestR2Object } from "../lib/test-utils";
+import { unzipSync } from "fflate";
 
 type R2TestData = string | ArrayBuffer | Uint8Array;
 type DiagnosticEvent = { [key: string]: string | number | boolean | null | undefined };
@@ -56,7 +57,16 @@ function createMockBucket() {
     store,
     head: vi.fn(async (key: string) => {
       const entry = store.get(key);
-      return entry ? { key, size: objectSize(entry.data), etag: entry.etag, uploaded: entry.uploaded } : null;
+      return entry
+        ? {
+            key,
+            size: objectSize(entry.data),
+            etag: entry.etag,
+            uploaded: entry.uploaded,
+            httpMetadata: entry.httpMetadata || {},
+            customMetadata: entry.customMetadata || {},
+          }
+        : null;
     }),
     get: vi.fn(async (key: string) => {
       const entry = store.get(key);
@@ -500,13 +510,27 @@ describe("R2ProjectStorage", () => {
   describe("renameFile", () => {
     it("renames a file by copy + delete", async () => {
       await storage.writeFile(userId, projectId, "old.html", "content");
-      await storage.renameFile(userId, projectId, "old.html", "new.html");
+      const sourceKey = `projects/${userId}/${projectId}/old.html`;
+      const source = bucket.store.get(sourceKey);
+      if (!source) throw new Error("source fixture missing");
+      source.httpMetadata = {
+        contentType: "text/custom",
+        cacheControl: "public, max-age=60",
+      };
+      source.customMetadata = { author: "test" };
+      await storage.renameFile(userId, projectId, "old.html", "new.html", { operationId: "rename-op" });
 
       expect(await storage.fileExists(userId, projectId, "old.html")).toBe(false);
       expect(await storage.fileExists(userId, projectId, "new.html")).toBe(true);
 
       const content = await storage.readFile(userId, projectId, "new.html");
       expect(content).toBe("content");
+      const destination = bucket.store.get(`projects/${userId}/${projectId}/new.html`);
+      expect(destination?.httpMetadata).toEqual(source.httpMetadata);
+      expect(destination?.customMetadata).toEqual({
+        author: "test",
+        "site-studio-rename-operation-id": "rename-op",
+      });
     });
 
     it("SS-50: refuses to clobber an existing destination and keeps the source", async () => {
@@ -592,6 +616,7 @@ describe("R2ProjectStorage", () => {
             published: false,
             slug: "published"
           });
+          expect(await storage.listProjects(userId)).not.toContain("zzz-target");
           expect(await storage.fileExists(userId, "zzz-target", "index.html")).toBe(false);
           expect(await storage.findPublishedProjectBySlug(userId, "published")).toMatchObject({
             projectId: "aaa-source"
@@ -868,9 +893,10 @@ describe("R2ProjectStorage", () => {
     it("adds README for projects without index.html", async () => {
       await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "about.html", "<p>About</p>");
+      await storage.writeFile(userId, projectId, "README.txt", "authored readme");
 
       const zip = await storage.exportProjectZip(userId, projectId);
-      expect(zip.length).toBeGreaterThan(0);
+      expect(new TextDecoder().decode(unzipSync(zip)["README.txt"])).toBe("authored readme");
     });
   });
 
@@ -951,7 +977,7 @@ describe("R2ProjectStorage", () => {
         await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
 
         const created: ProjectSnapshot[] = [];
-        for (let index = 0; index < SNAPSHOT_KEEP_COUNT + 1; index += 1) {
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
           vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
           // SAFETY: Each seeded project contains a file, so snapshot creation succeeds.
           created.push(
@@ -962,6 +988,13 @@ describe("R2ProjectStorage", () => {
           );
         }
 
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, SNAPSHOT_KEEP_COUNT)));
+        // SAFETY: The project has a file, so this snapshot cannot be skipped.
+        const newest = (await storage.createSnapshot(userId, projectId, {
+          trigger: "manual",
+          label: `Snapshot ${SNAPSHOT_KEEP_COUNT}`
+        })) as ProjectSnapshot;
+
         const oldest = created[0];
         expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.zip`)).toBe(false);
         expect(bucket.store.has(`snapshots/${userId}/${projectId}/${oldest.id}.json`)).toBe(false);
@@ -969,7 +1002,7 @@ describe("R2ProjectStorage", () => {
         const snapshots = await storage.listSnapshots(userId, projectId);
         expect(snapshots).toHaveLength(SNAPSHOT_KEEP_COUNT);
         expect(new Set(snapshots.map((snapshot) => snapshot.id))).toEqual(
-          new Set(created.slice(1).map((snapshot) => snapshot.id))
+          new Set([...created.slice(1), newest].map((snapshot) => snapshot.id))
         );
       } finally {
         vi.useRealTimers();
@@ -1094,6 +1127,88 @@ describe("R2ProjectStorage", () => {
         logSpy.mockRestore();
         vi.useRealTimers();
       }
+    });
+
+    it("removes an archive when snapshot metadata fails before committing", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      const originalPut = bucket.put;
+      // SAFETY: This replacement preserves the R2 put signature while injecting
+      // the requested snapshot-metadata failure.
+      bucket.put = vi.fn(async (key: string, data: R2TestData, options?: R2PutOptions) => {
+        if (key.startsWith(`snapshots/${userId}/${projectId}/`) && key.endsWith(".json")) {
+          throw new Error("snapshot metadata write failed");
+        }
+        return originalPut(key, data, options);
+      }) as typeof bucket.put;
+
+      await expect(storage.createSnapshot(userId, projectId, { trigger: "manual" })).rejects.toThrow(
+        "snapshot metadata write failed",
+      );
+      expect([...bucket.store.keys()].some((key) =>
+        key.startsWith(`snapshots/${userId}/${projectId}/`) && key.endsWith(".zip")
+      )).toBe(false);
+    });
+
+    it("sweeps an orphan archive after metadata-first prune deletion fails", async () => {
+      vi.useFakeTimers();
+      try {
+        await storage.createProjectIfAbsent(userId, projectId, "Test");
+        await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+        const created: ProjectSnapshot[] = [];
+        for (let index = 0; index < SNAPSHOT_KEEP_COUNT; index += 1) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, index)));
+          // SAFETY: The project has a file, so this snapshot cannot be skipped.
+          created.push((await storage.createSnapshot(userId, projectId, {
+            trigger: "manual",
+            label: `Snapshot ${index}`,
+          })) as ProjectSnapshot);
+        }
+
+        const oldestArchiveKey = `snapshots/${userId}/${projectId}/${created[0].id}.zip`;
+        const originalDelete = bucket.delete;
+        let failed = false;
+        // SAFETY: This replacement preserves the R2 delete signature while
+        // injecting the requested archive-delete failure.
+        bucket.delete = vi.fn(async (key: string) => {
+          if (!failed && key === oldestArchiveKey) {
+            failed = true;
+            throw new Error("archive delete failed");
+          }
+          return originalDelete(key);
+        }) as typeof bucket.delete;
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 0)));
+        await storage.createSnapshot(userId, projectId, { trigger: "manual", label: "After failure" });
+        expect(bucket.store.has(oldestArchiveKey)).toBe(true);
+
+        vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 1, 1)));
+        await storage.createSnapshot(userId, projectId, { trigger: "manual", label: "Converged" });
+        expect(bucket.store.has(oldestArchiveKey)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retains an archive paired with malformed metadata for recovery", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
+
+      const corruptMetadataKey = `snapshots/${userId}/${projectId}/corrupt.json`;
+      const corruptArchiveKey = `snapshots/${userId}/${projectId}/corrupt.zip`;
+      await bucket.put(corruptMetadataKey, "{not valid snapshot metadata", {
+        httpMetadata: { contentType: "application/json" },
+      });
+      await bucket.put(corruptArchiveKey, new Uint8Array([1, 2, 3]), {
+        httpMetadata: { contentType: "application/zip" },
+      });
+
+      await storage.createSnapshot(userId, projectId, { trigger: "manual" });
+
+      expect(bucket.store.has(corruptMetadataKey)).toBe(true);
+      expect(bucket.store.has(corruptArchiveKey)).toBe(true);
     });
 
     it("returns empty list when no snapshots exist", async () => {
@@ -1335,6 +1450,21 @@ describe("OwnerMutationService recovery journal", () => {
     expect(journal.values.size).toBe(0);
   });
 
+  it("does not delete a complete project for an operation-less create journal", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProjectIfAbsent("user-a", "existing", "Existing");
+    await storage.writeFile("user-a", "existing", "index.html", "keep me");
+    journal.values.set("owner-mutation", { type: "create", projectId: "existing" });
+
+    const service = new OwnerMutationService(bucket, journal);
+    await service.recover("user-a");
+
+    await expect(storage.readFile("user-a", "existing", "index.html")).resolves.toBe("keep me");
+    expect(journal.values.size).toBe(0);
+  });
+
   it("finishes the committed half of an interrupted file rename before the next mutation", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
@@ -1347,14 +1477,72 @@ describe("OwnerMutationService recovery journal", () => {
       projectId: "site",
       oldPath: "old.txt",
       newPath: "new.txt",
+      operationId: "rename-op",
       stage: "committing"
     });
+    bucket.store.get("projects/user-a/site/new.txt")!.customMetadata = {
+      "site-studio-rename-operation-id": "rename-op"
+    };
 
     const service = new OwnerMutationService(bucket, journal);
     await service.execute("user-a", { type: "delete-file", projectId: "site", path: "unrelated.txt" });
 
     expect(await storage.fileExists("user-a", "site", "old.txt")).toBe(false);
     expect(await storage.readFile("user-a", "site", "new.txt")).toBe("content");
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("does not delete an unowned destination during file-rename recovery", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "old.txt", "source");
+    await storage.writeFile("user-a", "site", "new.txt", "unowned destination");
+    journal.values.set("owner-mutation", {
+      type: "rename-file",
+      projectId: "site",
+      oldPath: "old.txt",
+      newPath: "new.txt",
+      operationId: "different-operation",
+      stage: "committing"
+    });
+
+    const service = new OwnerMutationService(bucket, journal);
+    await service.recover("user-a");
+
+    await expect(storage.readFile("user-a", "site", "old.txt")).resolves.toBe("source");
+    await expect(storage.readFile("user-a", "site", "new.txt")).resolves.toBe("unowned destination");
+    expect(journal.values.size).toBe(0);
+  });
+
+  it("recovers a file rename when the committing journal write fails after claiming the destination", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProjectIfAbsent("user-a", "site", "Site");
+    await storage.writeFile("user-a", "site", "old.txt", "source");
+
+    let ownerJournalWrites = 0;
+    const originalJournalPut = journal.put.bind(journal);
+    journal.put = vi.fn(async <T>(key: string, value: T) => {
+      if (key === "owner-mutation") {
+        ownerJournalWrites += 1;
+        if (ownerJournalWrites === 2) throw new Error("journal commit failed");
+      }
+      await originalJournalPut(key, value);
+    });
+
+    const service = new OwnerMutationService(bucket, journal);
+    await expect(service.execute("user-a", {
+      type: "rename-file",
+      projectId: "site",
+      oldPath: "old.txt",
+      newPath: "new.txt"
+    })).rejects.toThrow("journal commit failed");
+
+    await expect(storage.readFile("user-a", "site", "old.txt")).resolves.toBe("source");
+    expect(await storage.fileExists("user-a", "site", "new.txt")).toBe(false);
     expect(journal.values.size).toBe(0);
   });
 
@@ -1588,6 +1776,47 @@ describe("OwnerMutationService recovery journal", () => {
     expect(journal.values.size).toBe(0);
   });
 
+  it("clears an activation journal when the owned target is rolled back", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const journal = journalStore();
+    await storage.createProjectIfAbsent("user-a", "source", "Site");
+    await storage.writeFile("user-a", "source", "index.html", "complete");
+
+    const targetMetadataKey = "projects/user-a/target/.metadata.json";
+    const originalPut = bucket.put;
+    let failActivation = true;
+    // SAFETY: This replacement preserves the R2 put signature while failing
+    // only the existing target metadata update that activates the rename.
+    bucket.put = vi.fn(async (key: string, data: R2TestData, options?: R2PutOptions) => {
+      if (failActivation && key === targetMetadataKey && bucket.store.has(key)) {
+        throw new Error("activation failed");
+      }
+      return originalPut(key, data, options);
+    }) as typeof bucket.put;
+
+    const service = new OwnerMutationService(bucket, journal);
+    await expect(service.execute("user-a", {
+      type: "rename-project",
+      projectId: "source",
+      nextProjectId: "target",
+      name: "Site"
+    })).rejects.toThrow("activation failed");
+
+    await expect(storage.readFile("user-a", "source", "index.html")).resolves.toBe("complete");
+    await expect(storage.projectExists("user-a", "target")).resolves.toBe(false);
+    expect(journal.values.size).toBe(0);
+
+    failActivation = false;
+    await expect(service.execute("user-a", {
+      type: "rename-project",
+      projectId: "source",
+      nextProjectId: "target",
+      name: "Site"
+    })).resolves.toEqual({ ok: true });
+    await expect(storage.readFile("user-a", "target", "index.html")).resolves.toBe("complete");
+  });
+
   it("fences a published project before deleting any of its files", async () => {
     const bucket = createMockBucket();
     const storage = new R2ProjectStorage(bucket);
@@ -1683,7 +1912,7 @@ describe("OwnerMutationService recovery journal", () => {
       {
         stage: "preparing",
         sourcePublished: true,
-        targetPublished: false,
+        targetPublished: undefined,
         targetHasFile: false
       },
       {
@@ -1728,6 +1957,7 @@ describe("OwnerMutationService recovery journal", () => {
       projectId: "source",
       nextProjectId: "target",
       name: "Site",
+      operationId: "rename-op",
       slug: "site",
       published: true,
       stage: "activating"
@@ -1822,7 +2052,14 @@ describe("OwnerMutationService recovery journal", () => {
 
     expect(await storage.readFile("user-a", "site", "old.txt")).toBe("source");
     expect(await storage.readFile("user-a", "site", "new.txt")).toBe("existing destination");
-    expect(journalPut).not.toHaveBeenCalled();
+    expect(journalPut).toHaveBeenCalledWith(
+      "owner-mutation",
+      expect.objectContaining({
+        type: "rename-file",
+        stage: "preparing",
+        operationId: expect.any(String),
+      }),
+    );
     expect(journal.values.size).toBe(0);
   });
 });

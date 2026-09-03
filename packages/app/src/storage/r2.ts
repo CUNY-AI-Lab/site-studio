@@ -36,6 +36,13 @@ export class ProjectNotFoundError extends Error {
   }
 }
 
+export class SnapshotNotFoundError extends Error {
+  constructor(public readonly snapshotId: string) {
+    super("Snapshot not found");
+    this.name = "SnapshotNotFoundError";
+  }
+}
+
 /** SS-50: an atomic claim of a destination path lost to an existing object. */
 export class FileExistsError extends Error {
   constructor(public readonly filePath: string) {
@@ -91,6 +98,8 @@ function snapshotArchiveKey(userId: string, projectId: string, snapshotId: strin
 function snapshotMetadataKey(userId: string, projectId: string, snapshotId: string): string {
   return `${snapshotPrefix(userId, projectId)}${snapshotId}.json`;
 }
+
+const RENAME_OPERATION_METADATA_KEY = "site-studio-rename-operation-id";
 
 function toIsoString(date: Date | undefined): string {
   return (date || new Date()).toISOString();
@@ -272,15 +281,30 @@ export class R2ProjectStorage {
     await this.bucket.delete(projectMetadataKey);
   }
 
+  private async deleteProjectIfOwned(
+    userId: string,
+    projectId: string,
+    operationId: string,
+  ): Promise<void> {
+    const metadata = await this.getProjectMetadata(userId, projectId);
+    if (metadata?.creatingOperationId !== operationId) {
+      return;
+    }
+    await this.deleteProject(userId, projectId);
+  }
+
   async renameProject(
     userId: string,
     oldProjectId: string,
     newProjectId: string,
     options?: {
+      operationId?: string;
+      beforeTargetClaim?: () => Promise<void>;
       afterTargetClaim?: () => Promise<void>;
       beforeSourceDelete?: (activateTarget: () => Promise<void>) => Promise<void>;
     }
   ): Promise<void> {
+    const operationId = options?.operationId ?? crypto.randomUUID();
     const files = await this.listFiles(userId, oldProjectId);
     const metadata = await this.getProjectMetadata(userId, oldProjectId);
 
@@ -296,6 +320,7 @@ export class R2ProjectStorage {
       // thumbnail, and snapshot has been copied. The owner coordinator activates
       // it through a durable journal phase immediately before source deletion.
       published: false,
+      creatingOperationId: operationId,
       // SS-25: thumbnailUrl embeds the project id (/api/projects/{id}/thumbnail).
       // Re-point it at the new id so it doesn't 404 against the old (now deleted)
       // project; clear it when the old metadata had none so we never invent one.
@@ -308,6 +333,7 @@ export class R2ProjectStorage {
     // between that check and this write, so claim the target metadata key with
     // put-if-absent before copying any files into the namespace. Losing the
     // conditional write fails loud and leaves the target project untouched.
+    await options?.beforeTargetClaim?.();
     const claimedTarget = await this.bucket.put(metadataKey(userId, newProjectId), JSON.stringify(newMetadata), {
       onlyIf: { etagDoesNotMatch: "*" },
       httpMetadata: {
@@ -355,21 +381,31 @@ export class R2ProjectStorage {
         await this.bucket.put(nextKey, await object.arrayBuffer(), copyOptions);
       }
     } catch (error) {
-      await this.deleteProject(userId, newProjectId);
+      await this.deleteProjectIfOwned(userId, newProjectId, operationId);
       throw error;
     }
 
-    const activateTarget = async () => {
-      if (metadata.published) {
-        await this.updateProjectMetadata(userId, newProjectId, { published: true });
+    try {
+      const activateTarget = async () => {
+        await this.updateProjectMetadata(userId, newProjectId, {
+          published: metadata.published,
+          creatingOperationId: undefined,
+        });
+      };
+      if (options?.beforeSourceDelete) {
+        await options.beforeSourceDelete(activateTarget);
+      } else {
+        await activateTarget();
       }
-    };
-    if (options?.beforeSourceDelete) {
-      await options.beforeSourceDelete(activateTarget);
-    } else {
-      await activateTarget();
+      await this.deleteProject(userId, oldProjectId);
+    } catch (error) {
+      // Activation happens after the copy try above. If it fails while the
+      // target still carries this operation's marker, roll back that owned
+      // target so the journal can safely preserve the complete source. Once
+      // activation clears the marker, retain the target for roll-forward.
+      await this.deleteProjectIfOwned(userId, newProjectId, operationId).catch(() => undefined);
+      throw error;
     }
-    await this.deleteProject(userId, oldProjectId);
   }
 
   async getProjectMetadata(userId: string, projectId: string): Promise<ProjectMetadata | null> {
@@ -576,9 +612,28 @@ export class R2ProjectStorage {
     projectId: string,
     oldPath: string,
     newPath: string,
-    options?: { beforeSourceDelete?: () => Promise<void> }
+    options?: {
+      operationId?: string;
+      beforeSourceDelete?: (destination: { etag: string }) => Promise<void>;
+    }
   ): Promise<void> {
-    const content = await this.readFileBuffer(userId, projectId, oldPath);
+    const source = await this.bucket.get(fileKey(userId, projectId, oldPath));
+    if (!source) {
+      throw new FileNotFoundError(oldPath);
+    }
+
+    const customMetadata = { ...source.customMetadata };
+    if (options?.operationId) {
+      customMetadata[RENAME_OPERATION_METADATA_KEY] = options.operationId;
+    }
+    const putOptions: R2PutOptions = {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: source.httpMetadata,
+    };
+    if (Object.keys(customMetadata).length > 0) {
+      putOptions.customMetadata = customMetadata;
+    }
+
     // SS-50: the copy half of copy+delete must CLAIM the destination atomically
     // (put-if-absent), not trust the callers' advisory fileExists preflights.
     // Two concurrent renames to the same target both pass a probe-then-put
@@ -587,12 +642,45 @@ export class R2ProjectStorage {
     // lost. Losing the conditional write surfaces a conflict and leaves this
     // rename's source untouched. (Uploads and agent writes already use the
     // if-absent primitives — SS-40/SS-42; rename had been left behind.)
-    const claimed = await this.putIfAbsent(fileKey(userId, projectId, newPath), content);
+    const claimed = await this.bucket.put(
+      fileKey(userId, projectId, newPath),
+      await source.arrayBuffer(),
+      putOptions,
+    );
     if (!claimed) {
       throw new FileExistsError(newPath);
     }
-    await options?.beforeSourceDelete?.();
+    await options?.beforeSourceDelete?.({ etag: claimed.etag });
     await this.deleteFile(userId, projectId, oldPath);
+  }
+
+  async deleteFileIfRenameClaimed(
+    userId: string,
+    projectId: string,
+    filePath: string,
+    operationId: string,
+  ): Promise<boolean> {
+    const object = await this.bucket.head(fileKey(userId, projectId, filePath));
+    if (object?.customMetadata?.[RENAME_OPERATION_METADATA_KEY] !== operationId) {
+      return false;
+    }
+    await this.deleteFile(userId, projectId, filePath);
+    return true;
+  }
+
+  async completeRenameFileIfClaimed(
+    userId: string,
+    projectId: string,
+    oldPath: string,
+    newPath: string,
+    operationId: string,
+  ): Promise<boolean> {
+    const object = await this.bucket.head(fileKey(userId, projectId, newPath));
+    if (object?.customMetadata?.[RENAME_OPERATION_METADATA_KEY] !== operationId) {
+      return false;
+    }
+    await this.deleteFile(userId, projectId, oldPath);
+    return true;
   }
 
   async readThumbnail(userId: string, projectId: string): Promise<Uint8Array | null> {
@@ -646,7 +734,7 @@ export class R2ProjectStorage {
       archive[file.path] = await this.readFileBuffer(userId, projectId, file.path);
     }
 
-    if (!archive["index.html"]) {
+    if (!archive["index.html"] && !archive["README.txt"]) {
       archive["README.txt"] = strToU8("This project does not currently include index.html.");
     }
 
@@ -719,16 +807,35 @@ export class R2ProjectStorage {
     if (options?.label) snapshot.label = options.label;
     if (options?.restoredFromSnapshotId) snapshot.restoredFromSnapshotId = options.restoredFromSnapshotId;
 
-    await this.bucket.put(snapshotArchiveKey(userId, projectId, snapshotId), zipSync(archive, { level: 6 }), {
+    const archiveKey = snapshotArchiveKey(userId, projectId, snapshotId);
+    const metadataKeyForSnapshot = snapshotMetadataKey(userId, projectId, snapshotId);
+    await this.bucket.put(archiveKey, zipSync(archive, { level: 6 }), {
       httpMetadata: {
         contentType: "application/zip"
       }
     });
-    await this.putJson(snapshotMetadataKey(userId, projectId, snapshotId), snapshot, {
-      customMetadata: {
-        snapshot: JSON.stringify(snapshot)
+    try {
+      await this.putJson(metadataKeyForSnapshot, snapshot, {
+        customMetadata: {
+          snapshot: JSON.stringify(snapshot)
+        }
+      });
+    } catch (error) {
+      // Archive-first ordering avoids ever listing a snapshot whose restore
+      // bytes are absent. If the metadata write definitely did not commit,
+      // remove the archive now; the next serialized snapshot prune also sweeps
+      // any archive left behind by an ambiguous failure.
+      try {
+        const metadata = await this.bucket.head(metadataKeyForSnapshot);
+        if (!metadata) {
+          await this.bucket.delete(archiveKey);
+        }
+      } catch {
+        // Preserve an ambiguous archive for the next serialized prune rather
+        // than risking deletion of a metadata object that may have committed.
       }
-    });
+      throw error;
+    }
 
     // SS-38: retention is best-effort AFTER the new snapshot's archive and
     // metadata have both succeeded. A transient LIST/DELETE failure must not
@@ -750,12 +857,12 @@ export class R2ProjectStorage {
   async restoreSnapshot(userId: string, projectId: string, snapshotId: string): Promise<ProjectSnapshot> {
     const snapshot = await this.getSnapshot(userId, projectId, snapshotId);
     if (!snapshot) {
-      throw new Error("Snapshot not found");
+      throw new SnapshotNotFoundError(snapshotId);
     }
 
     const archiveObject = await this.bucket.get(snapshotArchiveKey(userId, projectId, snapshotId));
     if (!archiveObject) {
-      throw new Error("Snapshot archive not found");
+      throw new SnapshotNotFoundError(snapshotId);
     }
 
     // Extract archive first before deleting anything
@@ -1182,6 +1289,30 @@ export class R2ProjectStorage {
       // whose archive is gone and whose restore would fail.
       await this.bucket.delete(snapshotMetadataKey(userId, projectId, snapshot.id));
       await this.bucket.delete(snapshotArchiveKey(userId, projectId, snapshot.id));
+    }
+
+    // Snapshot creation and pruning run through the owner mutation coordinator,
+    // so this sweep cannot mistake an in-flight product snapshot for an orphan.
+    // A metadata-first prune can leave a zip behind when its second delete
+    // fails; archive-first creation can likewise leave a zip after an ambiguous
+    // metadata write. Keep every surviving metadata+archive pair and remove
+    // only zip keys with no surviving metadata record.
+    const survivingIds = new Set(snapshots.slice(0, SNAPSHOT_KEEP_COUNT).map((snapshot) => snapshot.id));
+    const archivePrefix = snapshotPrefix(userId, projectId);
+    for (const key of await this.listSnapshotKeys(userId, projectId)) {
+      if (!key.startsWith(archivePrefix) || !key.endsWith(".zip")) {
+        continue;
+      }
+      const snapshotId = key.slice(archivePrefix.length, -".zip".length);
+      if (!survivingIds.has(snapshotId)) {
+        // A malformed metadata object is still a recoverable pair. Sweep only
+        // zips whose paired metadata key is genuinely absent; retaining a
+        // corrupt pair lets an explicit repair path inspect the original bytes.
+        const metadata = await this.bucket.head(snapshotMetadataKey(userId, projectId, snapshotId));
+        if (!metadata) {
+          await this.bucket.delete(key);
+        }
+      }
     }
   }
 
