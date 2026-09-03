@@ -255,6 +255,8 @@ Images. Accepted raster images are PNG, JPEG, GIF, and WebP, up to 10 MiB;
 other supported files are limited to 32 MiB. Project thumbnails are PNGs up to
 2 MiB and 4096 pixels per dimension. These are application size policies, not
 Cloudflare's object-size limits. Request-body bounds include multipart framing.
+File contents stream through the existing mutation coordinator to R2, rather
+than being serialized into an RPC message alongside its metadata.
 An upload never replaces an existing file: a name collision adds a numeric
 suffix, with a conditional R2 write protecting the selected name.
 

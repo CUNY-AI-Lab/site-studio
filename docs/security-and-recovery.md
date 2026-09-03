@@ -129,7 +129,9 @@ Uploads validate the file name, supported format, image signature, and
 application per-file size limit before writing. Request-body bounds protect
 Worker memory before form parsing. The existing owner coordinator serializes
 uploads with other project mutations, and conditional R2 writes prevent
-filename collisions from overwriting content. Thumbnail uploads also check
+filename collisions from overwriting content. File bodies cross its RPC
+boundary as native streams; a 32 MiB file is not packed into a 32 MiB-limited
+serialized RPC envelope. Thumbnail uploads also check
 PNG dimensions. None of these checks invokes a model.
 
 There is no account/project storage quota or upload-rate ledger. The retired
