@@ -13,10 +13,9 @@ import { z } from "zod";
  * Value-focused Site Studio browser acceptance against a local app process.
  *
  * The browser talks HTTP to a real Bun process running the production Hono app
- * and its CSRF/CAS mutation service. Storage is a deterministic in-memory
- * R2/KV binding because Wrangler's local R2 emulator does not implement the
- * conditional first-write operation that Site Studio requires. No model call
- * or provider credential is used.
+ * and its CSRF/CAS mutation service. Storage and model responses use
+ * deterministic test bindings; native Worker/R2 and provider behavior require
+ * separate checks. No model call or provider credential is used.
  */
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
