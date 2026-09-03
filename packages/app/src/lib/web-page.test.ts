@@ -23,11 +23,20 @@ describe("public page reading", () => {
     expect(requests.map((request) => {
       const headers: Record<string, string> = {};
       request.headers.forEach((value, key) => { headers[key] = value; });
-      return { method: request.method, credentials: request.credentials, redirect: request.redirect, headers };
+      return { method: request.method, credentials: request.credentials, redirect: request.redirect, cache: request.cache, headers };
     })).toEqual(Array.from({ length: 2 }, () => ({
-      method: "GET", credentials: "omit", redirect: "manual",
+      method: "GET", credentials: "omit", redirect: "manual", cache: "no-store",
       headers: { accept: "text/html, text/plain, text/markdown, application/json" },
     })));
+  });
+
+  it("reads HTML entities and resolves links using the document's first base URL", async () => {
+    const result = await readWebPage("https://example.edu/page", undefined, async () => new Response(
+      '<base href="https://other.example.edu/readings/"><base href="https://ignored.example.edu/">' +
+      '<p>Tom &amp; Jerry&#39;s&nbsp;class: <a href="next?a=1&amp;b=2">Next &raquo;</a></p>',
+      { headers: { "content-type": "text/html" } },
+    ));
+    expect(result.content).toBe("Tom & Jerry's\u00a0class: Next » (https://other.example.edu/readings/next?a=1&b=2)");
   });
 
   it("stops a public-page redirect before it can request a local destination", async () => {
@@ -64,6 +73,13 @@ describe("public page reading", () => {
     expect(result.content).toBe("x".repeat(120_000));
     expect(result.truncated).toBe(true);
     expect(cancelled).toBe(true);
+  });
+
+  it("does not split a Unicode character at the context boundary", async () => {
+    const result = await readWebPage("https://example.edu/long", undefined, async () => new Response(
+      `${"x".repeat(119_999)}😀 remainder`, { headers: { "content-type": "text/plain" } },
+    ));
+    expect(result).toEqual({ url: "https://example.edu/long", content: "x".repeat(119_999), truncated: true });
   });
 
   it("passes cancellation to the active request and does not retry it", async () => {

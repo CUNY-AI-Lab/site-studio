@@ -1,3 +1,5 @@
+import { decodeHTML, decodeHTMLAttribute } from "entities";
+
 // The same interactive context budget as uploaded document extraction. Return
 // a visible truncation flag instead of rejecting an otherwise readable page.
 const MAX_PAGE_CHARS = 120_000;
@@ -30,16 +32,30 @@ function publicPageUrl(value: string): URL {
 }
 
 function pageText(response: Response, baseUrl: URL): Response {
+  let linkBase = baseUrl;
+  let sawBase = false;
   return new HTMLRewriter()
     .on("script,style,noscript,template", {
       element(element) { element.remove(); },
+    })
+    .on("base[href]", {
+      element(element) {
+        if (sawBase) return;
+        sawBase = true;
+        try {
+          const base = new URL(decodeHTMLAttribute(element.getAttribute("href") ?? ""), baseUrl);
+          if (["http:", "https:"].includes(base.protocol) && !base.username && !base.password) linkBase = base;
+        } catch {
+          // Keep the document URL when its base is malformed.
+        }
+      },
     })
     .on("a[href]", {
       element(element) {
         const href = element.getAttribute("href");
         if (!href) return;
         try {
-          const link = new URL(href, baseUrl);
+          const link = new URL(decodeHTMLAttribute(href), linkBase);
           if (["http:", "https:"].includes(link.protocol) && !link.username && !link.password) {
             element.after(` (${link.href})`);
           }
@@ -68,12 +84,19 @@ async function readPageText(response: Response, signal?: AbortSignal) {
       const chunk = await reader.read();
       if (chunk.done) {
         content += decoder.decode();
-        return { content: content.trim(), truncated: false };
+        break;
       }
-      content += decoder.decode(chunk.value, { stream: true });
+      // At most four UTF-8 bytes per character; do not decode an entire large
+      // upstream chunk once enough text is available for the context budget.
+      const remaining = MAX_PAGE_CHARS + 1 - content.length;
+      content += decoder.decode(chunk.value.subarray(0, remaining * 4), { stream: true }).slice(0, remaining);
     }
-    await reader.cancel();
-    return { content: content.slice(0, MAX_PAGE_CHARS).trim(), truncated: true };
+    const truncated = content.length > MAX_PAGE_CHARS;
+    if (truncated) await reader.cancel();
+    let clipped = content.slice(0, MAX_PAGE_CHARS);
+    const last = clipped.charCodeAt(clipped.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) clipped = clipped.slice(0, -1);
+    return { content: clipped.trim(), truncated };
   } finally {
     reader.releaseLock();
   }
@@ -97,6 +120,7 @@ export async function readWebPage(
         headers: { accept: "text/html, text/plain, text/markdown, application/json" },
         credentials: "omit",
         redirect: "manual",
+        cache: "no-store",
         signal,
       });
     } catch {
@@ -122,7 +146,7 @@ export async function readWebPage(
     }
     const result = await readPageText(isHtml ? pageText(response, url) : response, signal);
     signal?.throwIfAborted();
-    return { url: url.href, ...result };
+    return { url: url.href, ...result, content: isHtml ? decodeHTML(result.content) : result.content };
   }
   throw new Error("The page redirected too many times.");
 }
