@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { cailErrorEnvelope, cailErrorResponse } from "@cuny-ai-lab/cail-client/testing";
 import { DEFAULT_CAIL_IMAGE_CLASSIFIER } from "./image-generation";
 import {
   inspectImage,
@@ -133,5 +134,16 @@ describe("inspectImage", () => {
     const capture = captureFetch(() => new Response("private provider detail", { status: 500 }));
     const result = await inspectImage(env, "jwt-token", PNG_BYTES, options(capture.fetchImpl));
     expect(result).toEqual({ ok: false, message: "Image inspection failed. Try again in a moment." });
+  });
+
+  it.each([
+    [429, "quota_exceeded", "rate_limit_error", "Your monthly AI allowance is used up."],
+    [401, "authentication_required", "authentication_error", "Sign in again to continue."],
+  ])("preserves a Gateway %s decision through the AI SDK", async (status, code, type, message) => {
+    const capture = captureFetch(() => cailErrorResponse(status, cailErrorEnvelope({ code, type, message })));
+    const result = await inspectImage(env, "jwt-token", PNG_BYTES, options(capture.fetchImpl));
+
+    expect(result).toEqual({ ok: false, message });
+    expect(capture.calls()).toBe(1);
   });
 });

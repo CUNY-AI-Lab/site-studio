@@ -418,7 +418,7 @@ describe("route regressions", () => {
 
   it.each([
     ["typed ProjectNotFoundError", new ProjectNotFoundError("files-project")],
-    ["RPC-like plain Error", new Error("Project not found")],
+    ["native RPC Error", new Error("ProjectNotFoundError: Project not found")],
   ])("maps stale rename failures from %s to 404", async (_label, error) => {
     await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
     const executeSpy = vi.spyOn(OwnerMutationService.prototype, "execute").mockImplementation(async () => {
@@ -446,7 +446,7 @@ describe("route regressions", () => {
 
   it.each([
     ["typed SnapshotNotFoundError", new SnapshotNotFoundError("snapshot-a")],
-    ["RPC-like plain Error", new Error("Snapshot not found")],
+    ["native RPC Error", new Error("SnapshotNotFoundError: Snapshot not found")],
   ])("maps stale restore failures from %s to 404", async (_label, error) => {
     await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
     bucket.store.set("snapshots/user_test123/files-project/snapshot-a.json", {

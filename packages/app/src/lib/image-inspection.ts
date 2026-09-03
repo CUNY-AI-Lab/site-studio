@@ -1,4 +1,5 @@
 import { generateText } from "ai";
+import { extractCailError } from "@cuny-ai-lab/cail-client";
 import {
   resolveImageClassifierId,
   type CailImageEnv,
@@ -9,6 +10,7 @@ import {
 } from "./model";
 import { IMAGE_MAX_UPLOAD_BYTES } from "./constants";
 import { sniffImageType, type ImageType } from "./image-validation";
+import { describeModelStreamError } from "./model-stream-error";
 
 export const IMAGE_INSPECTION_INSTRUCTION =
   "You are inspecting an image for an academic website. Describe only what is visibly present, "
@@ -98,8 +100,15 @@ export async function inspectImage(
       observation,
       contentType: imageContentType(imageType),
     };
-  } catch {
+  } catch (error) {
     abortSignal?.throwIfAborted();
+    const cail = extractCailError(error);
+    if (cail?.code === "quota_exceeded") {
+      return { ok: false, message: describeModelStreamError(cail).message };
+    }
+    if (cail?.code === "authentication_required") {
+      return { ok: false, message: cail.message || "Sign in to inspect images." };
+    }
     return { ok: false, message: "Image inspection failed. Try again in a moment." };
   }
 }

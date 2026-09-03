@@ -54,15 +54,14 @@ function toProjectSummary(
 }
 
 function isProjectNotFound(error: Error): boolean {
+  // Native DO RPC preserves custom errors as Error with a name-prefixed message.
   return error instanceof ProjectNotFoundError
-    || error.name === "ProjectNotFoundError"
-    || error.message === "Project not found";
+    || error.message === "ProjectNotFoundError: Project not found";
 }
 
 function isSnapshotNotFound(error: Error): boolean {
   return error instanceof SnapshotNotFoundError
-    || error.name === "SnapshotNotFoundError"
-    || error.message === "Snapshot not found";
+    || error.message === "SnapshotNotFoundError: Snapshot not found";
 }
 
 export function createProjectRouter() {
