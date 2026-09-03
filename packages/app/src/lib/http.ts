@@ -8,6 +8,14 @@ export function jsonError(message: string, status: HttpStatus = 400): never {
   });
 }
 
+export async function readFormData(request: Request): Promise<FormData> {
+  try {
+    return await request.formData();
+  } catch {
+    return jsonError("Invalid multipart form data", 400);
+  }
+}
+
 export function jsonHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers(extra);
   if (!headers.has("Content-Type")) {

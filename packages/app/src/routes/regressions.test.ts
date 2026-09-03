@@ -1753,9 +1753,7 @@ describe("image upload hardening", () => {
     expect(await storage.fileExists(userId, "imgproj", "huge.png")).toBe(false);
   });
 
-  it("SS-29: a valid upload within the cap still succeeds under the ceiling", async () => {
-    // A real multipart upload (Content-Length auto-set by the runtime) that is
-    // comfortably under the ceiling passes the guard and stores normally.
+  it("stores the exact bytes of a valid multipart upload", async () => {
     const response = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
       uploadRequest("ok.png", pngBytes()),
@@ -1766,28 +1764,24 @@ describe("image upload hardening", () => {
     // SAFETY: Successful upload responses contain the documented path field.
     const body = (await response.json()) as { path: string };
     expect(body.path).toBe("ok.png");
-    expect(await storage.fileExists(userId, "imgproj", "ok.png")).toBe(true);
+    expect(await storage.readFileBuffer(userId, "imgproj", "ok.png")).toEqual(pngBytes());
   });
 
-  it("SS-29: missing Content-Length uses the bounded streaming parser", async () => {
-    // Build a real multipart body but strip Content-Length. The request remains
-    // valid, but the server reads it through the same absolute body ceiling.
-    const req = uploadRequest("nolen.png", pngBytes());
-    // SAFETY: RequestInit.headers is a HeadersInit at this constructed boundary.
-    const headers = new Headers(req.headers as HeadersInit);
-    headers.delete("content-length");
-    req.headers = headers;
-
+  it("rejects malformed multipart framing without writing a file", async () => {
+    const before = await storage.listFiles(userId, "imgproj");
     const response = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
-      req,
+      {
+        method: "POST",
+        headers: { ...csrf.headers, "content-type": "multipart/form-data; boundary=broken" },
+        body: "not multipart framing"
+      },
       createEnv(bucket)
     );
 
-    expect(response.status).toBe(200);
-    // SAFETY: Successful upload responses contain the documented path field.
-    const body = (await response.json()) as { path: string };
-    expect(body.path).toBe("nolen.png");
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid multipart form data" });
+    expect(await storage.listFiles(userId, "imgproj")).toEqual(before);
   });
 
   it("suffixes beyond 50 occupied names without clobbering their bytes", async () => {

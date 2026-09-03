@@ -248,13 +248,21 @@ declared in `packages/app/wrangler.jsonc`. Runtime configuration includes:
   `CAIL_IMAGE_CLASSIFIER`
 - `PUBLISHED_BASE_URL`
 - `CSRF_COOKIE_PATH=/site-studio`
-- explicit upload byte/rate policy values
 - R2, KV, Worker Loader, and Durable Object bindings
 
-The upload policy requires `SITE_STUDIO_MAX_PROJECT_BYTES`,
-`SITE_STUDIO_MAX_OWNER_BYTES`, and `SITE_STUDIO_UPLOADS_PER_MINUTE`. They have
-no checked-in defaults. Missing values reject valid uploads with 503; the
-browser acceptance uses the same configuration and exposes this failure.
+Uploads use the same authenticated project API from chat, the file tree, and
+Images. Accepted raster images are PNG, JPEG, GIF, and WebP, up to 10 MiB;
+other supported files are limited to 32 MiB. Project thumbnails are PNGs up to
+2 MiB and 4096 pixels per dimension. These are application size policies, not
+Cloudflare's object-size limits. Request-body bounds include multipart framing.
+An upload never replaces an existing file: a name collision adds a numeric
+suffix, with a conditional R2 write protecting the selected name.
+
+Site Studio does not enforce an account/project storage quota or an upload-rate
+ledger. The former upload-only policy did not cover other storage writes and
+required values absent from production configuration. Model quotas remain
+owned by the Gateway and are separate from storing files. Uploading a file
+does not itself invoke a model; image inspection and chat do.
 
 The production frontend build uses `PUBLIC_BASE_PATH=/site-studio`, and the
 configured public base is `https://tools.ailab.gc.cuny.edu/site-studio`.

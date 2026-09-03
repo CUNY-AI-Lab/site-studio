@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import type { Env } from "../types";
 import {
@@ -7,7 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
   PROTECTED_FILE_NAMES
 } from "../lib/constants";
-import { binaryBody, jsonError } from "../lib/http";
+import { binaryBody, jsonError, readFormData } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
 import { FileExistsError, FileNotFoundError } from "../storage/r2";
@@ -20,7 +21,6 @@ import {
 import { lintProject } from "../lib/a11y-lint";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { executeOwnerMutation } from "../lib/owner-mutations";
-import { readBoundedFormData } from "../lib/multipart";
 import { getLoggingContext, serializeSiteStudioLoggingContext, type LoggingVariables } from "../lib/logging";
 
 const saveFileSchema = z.object({
@@ -309,22 +309,14 @@ export function createFileRouter() {
     return c.json({ success: true, oldPath: currentPath, newPath: nextPath, message: "File renamed successfully" });
   });
 
-  app.post("/api/projects/:id/upload", async (c) => {
+  app.post("/api/projects/:id/upload", bodyLimit({
+    maxSize: MAX_UPLOAD_BODY_BYTES,
+    onError: () => jsonError(`Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`, 413)
+  }), async (c) => {
     const user = getUser(c);
     const projectId = c.get("projectId");
 
-    // SS-29 pre-buffer guard (defense-in-depth layered on the per-file storage
-    // caps below). Plain `formData()` buffers the multipart body before any
-    // `file.size` check, so reject declared over-ceiling bodies early using
-    // the declared Content-Length, BEFORE buffering. The ceiling is the largest
-    // per-file cap plus a multipart-envelope margin so a valid 32MB file is not
-    // false-rejected by framing overhead. A missing/unparseable Content-Length
-    // uses boundedFormData, which streams into a capped buffer before parsing.
-    const form = await readBoundedFormData(
-      c.req.raw,
-      MAX_UPLOAD_BODY_BYTES,
-      `Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`
-    );
+    const form = await readFormData(c.req.raw);
     const entry = form.get("file");
 
     if (!isFileUpload(entry)) {

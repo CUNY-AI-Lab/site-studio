@@ -125,9 +125,17 @@ empty conversation.
 
 ## Storage admission and mutation recovery
 
-Uploads enforce content signatures, per-file platform limits, and configured
-owner/project byte and rate policy inside the owner coordinator. Missing policy
-fails closed. These are storage and safety boundaries, not model-output caps.
+Uploads validate the file name, supported format, image signature, and
+application per-file size limit before writing. Request-body bounds protect
+Worker memory before form parsing. The existing owner coordinator serializes
+uploads with other project mutations, and conditional R2 writes prevent
+filename collisions from overwriting content. Thumbnail uploads also check
+PNG dimensions. None of these checks invokes a model.
+
+There is no account/project storage quota or upload-rate ledger. The retired
+upload-only policy did not account for other ways to grow project storage.
+Existing unused admission records can remain untouched; removing that policy
+requires no data migration or deletion. Gateway model quotas are unchanged.
 
 Multi-object R2 operations are not transactions. The mutation coordinator
 records recovery intent for create, rename, delete, restore, and template

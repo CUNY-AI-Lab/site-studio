@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import {
@@ -7,7 +8,7 @@ import {
   MAX_THUMBNAIL_BYTES,
   MAX_THUMBNAIL_DIMENSION
 } from "../lib/constants";
-import { binaryBody, jsonError } from "../lib/http";
+import { binaryBody, jsonError, readFormData } from "../lib/http";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";
@@ -41,7 +42,6 @@ import {
   type LoggingVariables,
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
-import { readBoundedFormData } from "../lib/multipart";
 import {
   getPublishedBaseUrl,
   normalizePublishedBaseUrl,
@@ -344,14 +344,13 @@ export function createPublishRouter() {
     });
   });
 
-  app.post("/api/projects/:id/thumbnail", async (c) => {
+  app.post("/api/projects/:id/thumbnail", bodyLimit({
+    maxSize: MAX_THUMBNAIL_BODY_BYTES,
+    onError: () => jsonError(`Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`, 413)
+  }), async (c) => {
     const user = getUser(c);
     const projectId = c.get("projectId");
-    const form = await readBoundedFormData(
-      c.req.raw,
-      MAX_THUMBNAIL_BODY_BYTES,
-      `Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`
-    );
+    const form = await readFormData(c.req.raw);
     const entry = form.get("image");
 
     if (!(entry instanceof File)) {
