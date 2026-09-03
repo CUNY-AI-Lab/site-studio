@@ -6,9 +6,11 @@
 	import type { UIMessage as SDKUIMessage } from 'ai';
 	import { resolvePath } from '$lib/utils/paths';
 	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { apiResponseFetch, getErrorMessage, handleApiError, isApiError, UserFacingError } from '$lib/api/errors';
-	import { csrfFetch, getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
-import {
+	import { apiResponseFetch, getErrorMessage, isApiError, UserFacingError } from '$lib/api/errors';
+	import { getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
+	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile, type ProjectUploadResult } from '$lib/api/projects';
+	import { toast } from '$lib/toast.svelte';
+	import {
 		decodeToolInput,
 		jsonValueSchema,
 		type JsonRecord,
@@ -119,6 +121,11 @@ import {
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let currentStatus = $state<string>('');
 	let attachedFile = $state<File | null>(null);
+	let uploadedAttachment = $state<{
+		projectId: string;
+		file: File;
+		result: ProjectUploadResult;
+	} | null>(null);
 	let isUploading = $state(false);
 	let socket = $state<WebSocket | null>(null);
 	let socketProjectId: string | null = null;
@@ -1330,6 +1337,8 @@ import {
 		previousProjectId = targetProjectId;
 		input = '';
 		attachedFile = null;
+		uploadedAttachment = null;
+		isUploading = false;
 		cancelledContinuationPending = false;
 		cancelTurnDeliveryPending = false;
 		pendingHistoryReconciliations = [];
@@ -1390,23 +1399,6 @@ import {
 		resetRequestState();
 	}
 
-	async function uploadFile(file: File, targetProjectId: string): Promise<string> {
-		const formData = new FormData();
-		formData.append('file', file);
-
-		const response = await csrfFetch(resolvePath(`/api/projects/${targetProjectId}/upload`), {
-			method: 'POST',
-			body: formData
-		});
-
-		if (!response.ok) {
-			await handleApiError(response);
-		}
-
-		const data = await response.json();
-		return data.filename;
-	}
-
 	async function ensureReadyForRequest(preparation?: RequestPreparation): Promise<boolean> {
 		if (!onBeforeSend) {
 			return true;
@@ -1465,22 +1457,41 @@ import {
 		requestGeneration += 1;
 
 		const fileToUpload = attachedFile;
+		let uploadedResult: ProjectUploadResult | undefined;
+		let chatMessageAdded = false;
 		try {
 			const ready = await ensureReadyForRequest(preparation);
-			if (!ready || !isCurrentRequestPreparation(preparation)) return;
+			if (!ready || !isCurrentRequestPreparation(preparation)) {
+				if (!ready && isCurrentRequestPreparation(preparation)) {
+					toast.error('Could not prepare your message. Try again.');
+				}
+				return;
+			}
 
-			input = '';
-			attachedFile = null;
-			if (fileInput) fileInput.value = '';
-
-			// Upload file FIRST if attached (skip on retry - already uploaded)
-			// This ensures we don't show user message if upload fails
-			let uploadedFilename: string | undefined;
+			// Upload the attachment before creating a chat turn. Keep the successful
+			// result beside the still-visible attachment so a later preparation or
+			// connection failure can be retried without creating a second asset.
 			if (fileToUpload) {
-				isUploading = true;
-				uploadedFilename = await uploadFile(fileToUpload, preparation.projectId);
+				const cachedUpload = uploadedAttachment;
+				if (
+					cachedUpload?.projectId === preparation.projectId &&
+					cachedUpload.file === fileToUpload
+				) {
+					uploadedResult = cachedUpload.result;
+				} else {
+					isUploading = true;
+					const result = await uploadProjectFile(preparation.projectId, fileToUpload);
+					if (!isCurrentRequestPreparation(preparation)) return;
+					uploadedResult = result;
+					uploadedAttachment = {
+						projectId: preparation.projectId,
+						file: fileToUpload,
+						result: uploadedResult
+					};
+				}
 				if (!isCurrentRequestPreparation(preparation)) return;
 				onUpdate(); // Refresh preview - uploaded file may be referenced
+				if (!isCurrentRequestPreparation(preparation)) return;
 				isUploading = false;
 			}
 
@@ -1489,8 +1500,8 @@ import {
 			if (fileToUpload) {
 				messageContent += ` [Attached: ${fileToUpload.name}]`;
 			}
-			if (uploadedFilename) {
-				messageContent += `\n\n[File uploaded: ${uploadedFilename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
+			if (uploadedResult) {
+				messageContent += `\n\n[File uploaded: ${uploadedResult.filename} (${(fileToUpload!.size / 1024).toFixed(1)}KB)]`;
 			}
 			const nextUserMessage: UIChatMessage = {
 				id: generateId(),
@@ -1498,6 +1509,7 @@ import {
 				parts: [{ type: 'text', text: messageContent }]
 			};
 			setChatMessages([...uiMessages, nextUserMessage]);
+			chatMessageAdded = true;
 
 			scrollToBottom();
 			await sendChatRequest(
@@ -1505,10 +1517,23 @@ import {
 				preparation.projectId,
 				preparation.projectEpoch
 			);
+			if (!isCurrentRequestPreparation(preparation)) return;
+			input = '';
+			attachedFile = null;
+			uploadedAttachment = null;
+			if (fileInput) fileInput.value = '';
 		} catch (error) {
 			if (!isCurrentRequestPreparation(preparation)) return;
 			console.error('Error sending message:', error);
 			const message = getErrorMessage(error instanceof Error ? error : undefined);
+			if (!chatMessageAdded) {
+				toast.error(
+					fileToUpload && !uploadedResult
+						? `Couldn't upload file. ${message}`
+						: `Couldn't send message. ${message}`
+				);
+				return;
+			}
 			resetRequestState();
 			setChatMessages([
 				...uiMessages,
@@ -1519,7 +1544,7 @@ import {
 				}
 			]);
 		} finally {
-			isUploading = false;
+			if (preparation.id === requestPreparationSequence) isUploading = false;
 			finishRequestPreparation(preparation);
 		}
 	}
@@ -1683,12 +1708,14 @@ import {
 		if (!(target instanceof HTMLInputElement)) return;
 		if (target.files && target.files.length > 0) {
 			attachedFile = target.files[0];
+			uploadedAttachment = null;
 		}
 	}
 
 	function removeAttachment() {
 		if (isLoading || isPreparingRequest) return;
 		attachedFile = null;
+		uploadedAttachment = null;
 		if (fileInput) {
 			fileInput.value = '';
 		}
@@ -1842,7 +1869,7 @@ import {
 				bind:this={fileInput}
 				onchange={onFileSelected}
 				style="display: none;"
-				accept="image/*,.pdf,.txt,.md,.json,.csv"
+				accept={PROJECT_UPLOAD_ACCEPT}
 			/>
 			<button
 				class="icon-btn"

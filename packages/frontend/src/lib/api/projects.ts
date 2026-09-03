@@ -6,6 +6,14 @@ import { downloadBlob } from '$lib/browser/download';
 
 const API_BASE = resolvePath('/api');
 
+const uploadResponseSchema = z.object({
+	success: z.literal(true),
+	filename: z.string().min(1),
+	path: z.string().min(1),
+	size: z.number().int().nonnegative(),
+	message: z.string()
+});
+
 export interface Project {
 	id: string;
 	name: string;
@@ -48,6 +56,17 @@ export interface ProjectFile {
 	isText?: boolean;
 	children?: ProjectFile[];
 }
+
+export type ProjectUploadDirectory = 'images';
+
+export type ProjectUploadResult = z.infer<typeof uploadResponseSchema>;
+
+/** File types accepted by the project's upload endpoint. */
+export const PROJECT_UPLOAD_ACCEPT =
+	'.jpg,.jpeg,.png,.gif,.webp,.pdf,.docx,.txt,.csv,.md,.json,.html,.css,.js';
+
+/** Image file types accepted by the project's upload endpoint. */
+export const PROJECT_IMAGE_UPLOAD_ACCEPT = '.png,.jpg,.jpeg,.gif,.webp';
 
 /**
  * Fetch all projects for the current user
@@ -93,14 +112,18 @@ export async function deleteProject(projectId: string): Promise<void> {
 }
 
 /**
- * Upload an image into the project's images/ folder. The backend validates the
- * magic bytes against the extension and rejects non-image or oversized files.
- * Returns the stored path (e.g. "images/photo.png").
+ * Upload a file to the project. The backend owns filename, extension, size,
+ * and image-content validation; the browser only builds the ordinary multipart
+ * request and validates the typed success envelope.
  */
-export async function uploadProjectImage(projectId: string, file: File): Promise<string> {
+export async function uploadProjectFile(
+	projectId: string,
+	file: File,
+	directory?: ProjectUploadDirectory
+): Promise<ProjectUploadResult> {
 	const formData = new FormData();
 	formData.append('file', file);
-	formData.append('dir', 'images');
+	if (directory) formData.append('dir', directory);
 
 	const response = await csrfFetch(`${API_BASE}/projects/${projectId}/upload`, {
 		method: 'POST',
@@ -111,10 +134,16 @@ export async function uploadProjectImage(projectId: string, file: File): Promise
 		await handleApiError(response);
 	}
 
-	const parsed = uploadResponseSchema.safeParse(JSON.parse(await response.text()));
+	let payload: unknown;
+	try {
+		payload = await response.json();
+	} catch {
+		throw new Error('Invalid upload response');
+	}
+
+	const parsed = uploadResponseSchema.safeParse(payload);
 	if (!parsed.success) throw new Error('Invalid upload response');
-	const data = parsed.data;
-	return data.path;
+	return parsed.data;
 }
 
 /** An image file that exists in the project. */
@@ -199,7 +228,6 @@ interface PublishErrorResponse {
 	message?: string;
 }
 
-const uploadResponseSchema = z.object({ path: z.string() });
 const publishErrorResponseSchema = z.object({ error: z.string().optional(), message: z.string().optional() });
 const a11yFindingSchema = z.object({
 	file: z.string(),

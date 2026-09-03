@@ -4,17 +4,18 @@ import userEvent from '@testing-library/user-event';
 import ImageManagerDialog from './ImageManagerDialog.svelte';
 import {
 	fetchProjectImages,
-	uploadProjectImage,
+	uploadProjectFile,
+	type ProjectUploadResult,
 	type ProjectImagesResult
 } from '$lib/api/projects';
 import { toast, toasts } from '$lib/toast.svelte';
 
 const mockFetch = vi.fn<typeof fetchProjectImages>();
-const mockUpload = vi.fn<typeof uploadProjectImage>();
+const mockUpload = vi.fn<typeof uploadProjectFile>();
 
 interface DialogOverrides {
 	fetchProjectImages?: typeof fetchProjectImages;
-	uploadProjectImage?: typeof uploadProjectImage;
+	uploadProjectFile?: typeof uploadProjectFile;
 }
 
 declare global {
@@ -51,7 +52,7 @@ function open(overrides: DialogOverrides = {}) {
 			onOpenChange,
 			onAskAssistant,
 			fetchProjectImages: mockFetch,
-			uploadProjectImage: mockUpload,
+			uploadProjectFile: mockUpload,
 			...overrides
 		}
 	});
@@ -227,9 +228,16 @@ describe('ImageManagerDialog', () => {
 			.fn<typeof fetchProjectImages>()
 			.mockResolvedValueOnce(imagesResult)
 			.mockRejectedValueOnce(new Error('inventory unavailable'));
-		const upload = vi.fn<typeof uploadProjectImage>().mockResolvedValue('images/new.png');
+		const uploadResult: ProjectUploadResult = {
+			success: true,
+			filename: 'new.png',
+			path: 'images/new.png',
+			size: 11,
+			message: 'Uploaded new.png'
+		};
+		const upload = vi.fn<typeof uploadProjectFile>().mockResolvedValue(uploadResult);
 		const errorToast = vi.spyOn(toast, 'error');
-		open({ fetchProjectImages: fetchImages, uploadProjectImage: upload });
+		open({ fetchProjectImages: fetchImages, uploadProjectFile: upload });
 		await waitForImages();
 
 		const input = document.querySelector('input[type="file"]');
@@ -237,7 +245,7 @@ describe('ImageManagerDialog', () => {
 		const file = new File(['image bytes'], 'new.png', { type: 'image/png' });
 		await user.upload(input, file);
 
-		await waitFor(() => expect(upload).toHaveBeenCalledWith('proj1', file));
+		await waitFor(() => expect(upload).toHaveBeenCalledWith('proj1', file, 'images'));
 		await waitFor(() =>
 			expect(errorToast).toHaveBeenCalledWith(
 				'Image uploaded, but the gallery could not refresh. Reopen Images to see it.'
