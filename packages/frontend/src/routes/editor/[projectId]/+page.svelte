@@ -388,20 +388,21 @@
 			}
 			if (!response.ok) throw new Error('Failed to load file');
 
-			// Ignore stale response if user selected a different file
-			if (requestId !== fileSelectCounter || !isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
-
 			const data = parseLoadedFileResponse(await response.text());
-			currentFileContentType = data.contentType || selectedFile?.contentType || '';
-			currentFileIsText = data.isText ?? true;
 			let draft: StoredDraft | null = null;
 			try {
 				draftSecret ||= await getCsrfToken();
-				draft = await loadDraft(localStorage, projectId, filePath, draftSecret);
+				draft = await loadDraft(localStorage, targetProjectId, filePath, draftSecret);
 			} catch (error) {
 				console.error('Could not read encrypted local draft:', error);
 			}
 			if (requestId !== fileSelectCounter || !isCurrentFileContext(targetProjectId, expectedContextVersion)) return;
+			// Keep every value derived from this response local until the body and
+			// draft reads finish. A different selection may complete while either
+			// await is in flight; stale data must not change the new file's type or
+			// content state.
+			currentFileContentType = data.contentType || selectedFile?.contentType || '';
+			currentFileIsText = data.isText ?? true;
 			if (draft && draft.content !== data.content) {
 				fileContent = draft.content;
 				currentFileEtag = draft.baseEtag;
