@@ -1,13 +1,14 @@
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
   getServedContentType,
   MAX_THUMBNAIL_BODY_BYTES,
   MAX_THUMBNAIL_BYTES,
   MAX_THUMBNAIL_DIMENSION
 } from "../lib/constants";
-import { binaryBody, jsonError } from "../lib/http";
+import { binaryBody, jsonError, readFormData } from "../lib/http";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";
@@ -41,7 +42,6 @@ import {
   type LoggingVariables,
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
-import { readBoundedFormData } from "../lib/multipart";
 import {
   getPublishedBaseUrl,
   normalizePublishedBaseUrl,
@@ -49,10 +49,6 @@ import {
 } from "../lib/published-url";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
-}
 
 /**
  * Run the accessibility linter over the project's HTML after a successful
@@ -348,14 +344,13 @@ export function createPublishRouter() {
     });
   });
 
-  app.post("/api/projects/:id/thumbnail", async (c) => {
+  app.post("/api/projects/:id/thumbnail", bodyLimit({
+    maxSize: MAX_THUMBNAIL_BODY_BYTES,
+    onError: () => jsonError(`Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`, 413)
+  }), async (c) => {
     const user = getUser(c);
     const projectId = c.get("projectId");
-    const form = await readBoundedFormData(
-      c.req.raw,
-      MAX_THUMBNAIL_BODY_BYTES,
-      `Thumbnail too large. Max ${MAX_THUMBNAIL_BYTES / (1024 * 1024)}MB`
-    );
+    const form = await readFormData(c.req.raw);
     const entry = form.get("image");
 
     if (!(entry instanceof File)) {
@@ -403,17 +398,10 @@ export function createPublishRouter() {
       await executeOwnerMutation(c.env, user.id, {
         type: "write-thumbnail",
         projectId,
-        content,
-        admissionId: crypto.randomUUID(),
-        maxProjectBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_PROJECT_BYTES, "SITE_STUDIO_MAX_PROJECT_BYTES"),
-        maxOwnerBytes: requiredPositiveInteger(c.env.SITE_STUDIO_MAX_OWNER_BYTES, "SITE_STUDIO_MAX_OWNER_BYTES"),
-        uploadsPerMinute: requiredPositiveInteger(c.env.SITE_STUDIO_UPLOADS_PER_MINUTE, "SITE_STUDIO_UPLOADS_PER_MINUTE")
+        content
       }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Thumbnail admission failed";
-      if (message.includes("rate limit")) jsonError(message, 429);
-      if (message.includes("storage quota")) jsonError(message, 413);
-      if (message.includes("Project not found") || message.includes("Project metadata not found")) {
+      if (error instanceof Error && (error.message.includes("Project not found") || error.message.includes("Project metadata not found"))) {
         jsonError("Project not found", 404);
       }
       throw error;

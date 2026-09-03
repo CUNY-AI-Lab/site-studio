@@ -1,13 +1,14 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { parsePositiveInteger, type Env } from "../types";
+import type { Env } from "../types";
 import {
   IMAGE_MAX_UPLOAD_BYTES,
   MAX_UPLOAD_BODY_BYTES,
   MAX_UPLOAD_BYTES,
   PROTECTED_FILE_NAMES
 } from "../lib/constants";
-import { binaryBody, jsonError } from "../lib/http";
+import { binaryBody, jsonError, readFormData } from "../lib/http";
 import { isTextContentType, sanitizeFilePath } from "../lib/path";
 import { getUser } from "../lib/session";
 import { FileExistsError, FileNotFoundError } from "../storage/r2";
@@ -20,7 +21,6 @@ import {
 import { lintProject } from "../lib/a11y-lint";
 import type { RequireProjectVariables } from "../lib/require-project";
 import { executeOwnerMutation } from "../lib/owner-mutations";
-import { readBoundedFormData } from "../lib/multipart";
 import { getLoggingContext, serializeSiteStudioLoggingContext, type LoggingVariables } from "../lib/logging";
 
 const saveFileSchema = z.object({
@@ -93,7 +93,7 @@ function validateUpload(file: File, fileName: string) {
   // Images get a tighter cap; everything else keeps the generic 32MB limit.
   const maxBytes = isImage ? IMAGE_MAX_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
   if (file.size > maxBytes) {
-    jsonError(`File too large. Max ${maxBytes / (1024 * 1024)}MB`, 400);
+    jsonError(`File too large. Max ${maxBytes / (1024 * 1024)}MB`, 413);
   }
 
   const allowed = new Set([
@@ -103,10 +103,6 @@ function validateUpload(file: File, fileName: string) {
   if (!allowed.has(ext)) {
     jsonError(`Unsupported file extension: ${ext || "unknown"}`, 400);
   }
-}
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  return parsePositiveInteger(value) ?? jsonError(`${name} is not configured`, 503);
 }
 
 /**
@@ -313,22 +309,14 @@ export function createFileRouter() {
     return c.json({ success: true, oldPath: currentPath, newPath: nextPath, message: "File renamed successfully" });
   });
 
-  app.post("/api/projects/:id/upload", async (c) => {
+  app.post("/api/projects/:id/upload", bodyLimit({
+    maxSize: MAX_UPLOAD_BODY_BYTES,
+    onError: () => jsonError(`Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`, 413)
+  }), async (c) => {
     const user = getUser(c);
     const projectId = c.get("projectId");
 
-    // SS-29 pre-buffer guard (defense-in-depth layered on the per-file storage
-    // caps below). Plain `formData()` buffers the multipart body before any
-    // `file.size` check, so reject declared over-ceiling bodies early using
-    // the declared Content-Length, BEFORE buffering. The ceiling is the largest
-    // per-file cap plus a multipart-envelope margin so a valid 32MB file is not
-    // false-rejected by framing overhead. A missing/unparseable Content-Length
-    // uses boundedFormData, which streams into a capped buffer before parsing.
-    const form = await readBoundedFormData(
-      c.req.raw,
-      MAX_UPLOAD_BODY_BYTES,
-      `Upload too large. Max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB`
-    );
+    const form = await readFormData(c.req.raw);
     const entry = form.get("file");
 
     if (!isFileUpload(entry)) {
@@ -354,23 +342,10 @@ export function createFileRouter() {
     }
     validateUpload(entry, sanitized);
 
-    const buffer = new Uint8Array(await entry.arrayBuffer());
-    validateImageBytes(sanitized, buffer);
-
-    const uploadPolicy = {
-      maxProjectBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_PROJECT_BYTES,
-        "SITE_STUDIO_MAX_PROJECT_BYTES"
-      ),
-      maxOwnerBytes: requiredPositiveInteger(
-        c.env.SITE_STUDIO_MAX_OWNER_BYTES,
-        "SITE_STUDIO_MAX_OWNER_BYTES"
-      ),
-      uploadsPerMinute: requiredPositiveInteger(
-        c.env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-        "SITE_STUDIO_UPLOADS_PER_MINUTE"
-      )
-    };
+    if (isImageExtension(fileExtension(sanitized))) {
+      const buffer = new Uint8Array(await entry.arrayBuffer());
+      validateImageBytes(sanitized, buffer);
+    }
 
     // Collision-suffix within the target prefix so images/photo.png and
     // photo.png at the root never clobber each other. The write itself is
@@ -382,38 +357,23 @@ export function createFileRouter() {
     const base = dotIndex >= 0 ? sanitized.slice(0, dotIndex) : sanitized;
     const ext = dotIndex >= 0 ? sanitized.slice(dotIndex) : "";
 
-    const MAX_UPLOAD_ATTEMPTS = 50;
-    const uploadAdmissionId = crypto.randomUUID();
     let filename = "";
-    let written = false;
-    for (let counter = 0; counter < MAX_UPLOAD_ATTEMPTS; counter += 1) {
+    for (let counter = 0; ; counter += 1) {
       const candidate = counter === 0 ? `${prefix}${sanitized}` : `${prefix}${base}_${counter}${ext}`;
-      let result;
-      try {
-        result = await executeOwnerMutation(c.env, user.id, {
-          type: "upload-if-absent",
-          projectId,
-          path: candidate,
-          content: buffer,
-          admissionId: uploadAdmissionId,
-          ...uploadPolicy
-        }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Upload admission failed";
-        if (message.includes("rate limit")) jsonError(message, 429);
-        if (message.includes("storage quota")) jsonError(message, 413);
-        throw error;
-      }
+      const result = await executeOwnerMutation(c.env, user.id, {
+        type: "upload-if-absent",
+        projectId,
+        path: candidate,
+        // ReadableStream is a native RPC transport for large bodies. A fresh
+        // File stream is required for each collision candidate because the
+        // conditional write consumes the stream it receives.
+        content: entry.stream()
+      }, serializeSiteStudioLoggingContext(getLoggingContext(c, user.operationalSubject)));
       if (!("written" in result)) throw new Error("Unexpected mutation result");
       if (result.written) {
         filename = candidate;
-        written = true;
         break;
       }
-    }
-
-    if (!written) {
-      jsonError("Could not find a free filename for the upload. Rename the file and try again.", 409);
     }
 
     return c.json({

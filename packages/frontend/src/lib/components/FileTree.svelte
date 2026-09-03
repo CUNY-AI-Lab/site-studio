@@ -14,6 +14,7 @@
 	import { resolvePath } from '$lib/utils/paths';
 	import { csrfFetch } from '$lib/api/csrf';
 	import { apiResponseFetch, getErrorMessage, handleApiError } from '$lib/api/errors';
+	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile } from '$lib/api/projects';
 	import { toast } from '$lib/toast.svelte';
 	import { downloadBlob } from '$lib/browser/download';
 
@@ -29,8 +30,16 @@
 		onRefresh: () => void | Promise<void>
 	} = $props();
 
-	let fileInput: HTMLInputElement;
+	let fileInput = $state<HTMLInputElement | null>(null);
 	let isUploading = $state(false);
+	let uploadSequence = 0;
+
+	$effect(() => {
+		if (!projectId) return;
+		uploadSequence += 1;
+		isUploading = false;
+		if (fileInput) fileInput.value = '';
+	});
 
 	async function handleUpload(event: Event) {
 		const input = event.target;
@@ -38,29 +47,34 @@
 		const file = input.files?.[0];
 
 		if (!file) return;
+		const targetProjectId = projectId;
+		const targetUploadSequence = uploadSequence;
 
 		try {
 			isUploading = true;
-			const formData = new FormData();
-			formData.append('file', file);
+			const result = await uploadProjectFile(targetProjectId, file);
+			if (uploadSequence === targetUploadSequence) input.value = '';
 
-			const response = await csrfFetch(resolvePath(`/api/projects/${projectId}/upload`), {
-				method: 'POST',
-				body: formData
-			});
+			if (projectId !== targetProjectId || uploadSequence !== targetUploadSequence) return;
 
-			if (!response.ok) await handleApiError(response);
-
-			// Refresh file list
-			await onRefresh();
-
-			// Clear input
-			input.value = '';
+			try {
+				await onRefresh();
+			} catch (error) {
+				if (projectId !== targetProjectId || uploadSequence !== targetUploadSequence) return;
+				console.error('File uploaded, but the file list refresh failed:', error);
+				toast.error(
+					`File uploaded as ${result.path}, but the file list could not refresh. Click Refresh files to try again.`
+				);
+			}
 		} catch (error) {
+			if (projectId !== targetProjectId || uploadSequence !== targetUploadSequence) return;
 			console.error('Error uploading file:', error);
 			toast.error(`Couldn't upload file. ${getErrorMessage(error instanceof Error ? error : undefined)}`);
 		} finally {
-			isUploading = false;
+			if (uploadSequence === targetUploadSequence) {
+				isUploading = false;
+				input.value = '';
+			}
 		}
 	}
 
@@ -138,10 +152,11 @@
 			type="file"
 			bind:this={fileInput}
 			onchange={handleUpload}
+			accept={PROJECT_UPLOAD_ACCEPT}
 			style="display: none;"
 		/>
 		<button
-			onclick={() => fileInput.click()}
+			onclick={() => fileInput?.click()}
 			disabled={isUploading}
 			class="upload-button"
 			title="Upload file"

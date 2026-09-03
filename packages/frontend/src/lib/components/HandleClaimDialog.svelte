@@ -34,6 +34,16 @@
 
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let checkSeq = 0;
+	let claimSeq = 0;
+
+	function invalidateDialogOperations() {
+		checkSeq += 1;
+		claimSeq += 1;
+		if (debounceTimer !== null) {
+			clearTimeout(debounceTimer);
+			debounceTimer = null;
+		}
+	}
 
 	// Preview of the public address. Uses the live origin so it matches reality.
 	let origin = $derived(browserWindow()?.location.origin ?? '');
@@ -42,16 +52,34 @@
 
 	// Focus the input when the dialog opens; reset state on close.
 	$effect(() => {
-		if (open) {
+		if (!open) {
+			invalidateDialogOperations();
 			value = '';
 			result = null;
 			claimError = null;
 			checking = false;
 			claiming = false;
-			// Focus after the dialog content mounts.
-			setTimeout(() => inputEl?.focus(), 30);
+			return;
 		}
+
+		value = '';
+		result = null;
+		claimError = null;
+		checking = false;
+		claiming = false;
+		// Focus after the dialog content mounts.
+		const focusTimer = setTimeout(() => inputEl?.focus(), 30);
+
+		return () => {
+			clearTimeout(focusTimer);
+			invalidateDialogOperations();
+		};
 	});
+
+	function handleDialogOpenChange(nextOpen: boolean) {
+		if (!nextOpen) invalidateDialogOperations();
+		onOpenChange(nextOpen);
+	}
 
 	function onInput(event: Event) {
 		// Lowercase as the user types (handles are lowercase-only).
@@ -62,7 +90,12 @@
 		claimError = null;
 		result = null;
 
-		if (debounceTimer) clearTimeout(debounceTimer);
+		if (debounceTimer !== null) {
+			clearTimeout(debounceTimer);
+			debounceTimer = null;
+		}
+		const seq = ++checkSeq;
+		claimSeq += 1;
 		const trimmed = raw.trim();
 		if (trimmed.length === 0) {
 			checking = false;
@@ -70,8 +103,8 @@
 		}
 
 		checking = true;
-		const seq = ++checkSeq;
 		debounceTimer = setTimeout(async () => {
+			debounceTimer = null;
 			try {
 				const res = await checkHandle(trimmed);
 				// Ignore stale responses from earlier keystrokes.
@@ -88,24 +121,30 @@
 		}, 350);
 	}
 
-	let canClaim = $derived(!!result && result.valid && result.available && !claiming);
+	let canClaim = $derived(
+		value.trim().length > 0 && !!result && result.valid && result.available && !claiming
+	);
 
 	async function handleClaim() {
 		const trimmed = value.trim();
 		if (!trimmed || claiming) return;
+		const seq = ++claimSeq;
 		claiming = true;
 		claimError = null;
 		try {
 			const res = await claimHandle(trimmed);
+			if (!open || seq !== claimSeq) return;
 			if (res.ok) {
 				onClaimed(res.handle);
 			} else {
 				claimError = res.message;
 			}
 		} catch (e) {
-			claimError = e instanceof Error ? e.message : "We couldn't save that address.";
+			if (open && seq === claimSeq) {
+				claimError = e instanceof Error ? e.message : "We couldn't save that address.";
+			}
 		} finally {
-			claiming = false;
+			if (seq === claimSeq) claiming = false;
 		}
 	}
 
@@ -127,7 +166,7 @@
 	});
 </script>
 
-<Dialog.Root {open} {onOpenChange}>
+<Dialog.Root {open} onOpenChange={handleDialogOpenChange}>
 	<Dialog.Content class="handle-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Choose your public address</Dialog.Title>
@@ -151,6 +190,7 @@
 					spellcheck="false"
 					placeholder="e.g. jane-rivera"
 					aria-describedby="handle-status handle-preview"
+					disabled={claiming}
 					value={value}
 					oninput={onInput}
 					onkeydown={onKeydown}

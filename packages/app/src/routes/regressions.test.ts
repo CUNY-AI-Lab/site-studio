@@ -6,7 +6,8 @@ import { CSRF_ERROR_BODY, CSRF_HEADER_NAME, csrfProtect } from "../lib/csrf";
 import { createMockKV, createMockMutationCoordinator, createTestNamespace, mintCsrfSession, type CsrfSession, type MockKV } from "../lib/test-utils";
 import type { MutationCoordinator } from "../agents/mutation-coordinator";
 import type { SiteBuilderAgent } from "../agents/site-builder";
-import { R2ProjectStorage } from "../storage/r2";
+import { OwnerMutationService } from "../lib/owner-mutations";
+import { ProjectNotFoundError, R2ProjectStorage, SnapshotNotFoundError } from "../storage/r2";
 import { MAX_SNAPSHOT_BYTES } from "../lib/constants";
 import { createFileRouter } from "./files";
 import { createHandleRouter } from "./handles";
@@ -21,13 +22,14 @@ const actionAttemptRpc = vi.hoisted(() => ({
   terminal: vi.fn(async () => undefined),
 }));
 
-type MockDataInput = string | ArrayBuffer | Uint8Array;
+type MockStoredData = string | ArrayBuffer | Uint8Array;
+type MockDataInput = MockStoredData | ReadableStream<Uint8Array>;
 type PublishBody = { success: boolean; url: string; a11yFindings: Array<{ [key: string]: string | number | boolean | null | undefined }> };
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type MockData =
   | { kind: "text"; value: string }
   | { kind: "bytes"; value: ArrayBuffer };
-type MockEntry = { data: MockDataInput; httpMetadata?: R2HTTPMetadata; etag?: string };
+type MockEntry = { data: MockStoredData; httpMetadata?: R2HTTPMetadata; etag?: string };
 type MockBucket = R2Bucket & { store: Map<string, MockEntry> };
 function testConditional(options?: R2PutOptions): R2Conditional | undefined {
   const conditional = options?.onlyIf;
@@ -41,8 +43,10 @@ const mockDataSchema = z.union([
     value: value.slice().buffer,
   })),
 ]);
+const reservationRecordSchema = z.object({ projectId: z.string().optional() });
+const formerMetadataSchema = z.object({ slug: z.string().optional() });
 
-function parseMockData(value: MockDataInput): MockData {
+function parseMockData(value: MockStoredData): MockData {
   return mockDataSchema.parse(value);
 }
 
@@ -105,6 +109,9 @@ function createMockBucket() {
       data: MockDataInput,
       options?: { httpMetadata?: R2HTTPMetadata; onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } }
     ) => {
+      const storedData = data instanceof ReadableStream
+        ? new Uint8Array(await new Response(data).arrayBuffer())
+        : data;
       // Honor R2 put-if-absent: onlyIf.etagDoesNotMatch:"*" writes only when the
       // key is empty; a failed condition returns null (no write, no throw).
       if (options?.onlyIf?.etagDoesNotMatch === "*" && store.has(key)) {
@@ -114,7 +121,7 @@ function createMockBucket() {
         return null;
       }
       const etag = nextEtag(key);
-      store.set(key, { data, httpMetadata: options?.httpMetadata, etag });
+      store.set(key, { data: storedData, httpMetadata: options?.httpMetadata, etag });
       return createStoredR2Object(key, etag);
     }),
     delete: vi.fn(async (key: string) => {
@@ -219,9 +226,6 @@ function createEnv(bucket: R2Bucket): Env {
     MIGRATION_COORDINATOR: {} as DurableObjectNamespace<any>,
     // SAFETY: Regression tests exercise only the coordinator execute RPC.
     MUTATION_COORDINATOR: createTestNamespace<MutationCoordinator>(createMockMutationCoordinator(bucket)),
-    SITE_STUDIO_MAX_PROJECT_BYTES: String(512 * 1024 * 1024),
-    SITE_STUDIO_MAX_OWNER_BYTES: String(2 * 1024 * 1024 * 1024),
-    SITE_STUDIO_UPLOADS_PER_MINUTE: "100",
     // SAFETY: Route regressions do not load Worker modules through this binding.
     LOADER: {} as WorkerLoader,
     ASSETS: undefined,
@@ -415,6 +419,67 @@ describe("route regressions", () => {
     await expect(downloadResponse.json()).resolves.toEqual({ error: "File not found" });
   });
 
+  it.each([
+    ["typed ProjectNotFoundError", new ProjectNotFoundError("files-project")],
+    ["native RPC Error", new Error("ProjectNotFoundError: Project not found")],
+  ])("maps stale rename failures from %s to 404", async (_label, error) => {
+    await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
+    const executeSpy = vi.spyOn(OwnerMutationService.prototype, "execute").mockImplementation(async () => {
+      throw error;
+    });
+
+    try {
+      const response = await app.request(
+        "http://site-studio.test/api/projects/files-project",
+        {
+          method: "PATCH",
+          body: JSON.stringify({ name: "Renamed Project" }),
+          headers: { "Content-Type": "application/json", ...csrf.headers },
+        },
+        createEnv(bucket),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Project not found" });
+      expect(executeSpy).toHaveBeenCalledOnce();
+    } finally {
+      executeSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["typed SnapshotNotFoundError", new SnapshotNotFoundError("snapshot-a")],
+    ["native RPC Error", new Error("SnapshotNotFoundError: Snapshot not found")],
+  ])("maps stale restore failures from %s to 404", async (_label, error) => {
+    await storage.createProjectIfAbsent(userId, "files-project", "Files Project");
+    bucket.store.set("snapshots/user_test123/files-project/snapshot-a.json", {
+      data: JSON.stringify({
+        id: "snapshot-a",
+        projectId: "files-project",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        trigger: "manual",
+        fileCount: 0,
+      }),
+    });
+    const executeSpy = vi.spyOn(OwnerMutationService.prototype, "execute").mockImplementation(async () => {
+      throw error;
+    });
+
+    try {
+      const response = await app.request(
+        "http://site-studio.test/api/projects/files-project/snapshots/snapshot-a/restore",
+        { method: "POST", headers: csrf.headers },
+        createEnv(bucket),
+      );
+
+      expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Snapshot not found" });
+      expect(executeSpy).toHaveBeenCalledOnce();
+    } finally {
+      executeSpy.mockRestore();
+    }
+  });
+
   // SS-18: PROTECTED_FILE_NAMES were guarded on delete/rename but not on write,
   // so a caller could overwrite their own .metadata.json (flip published/slug).
   it("SS-18: rejects a write to .metadata.json via POST /file", async () => {
@@ -571,8 +636,8 @@ describe("route regressions", () => {
     putMock.mockImplementation(async (key: string, data: MockDataInput, options?: R2PutOptions) => {
       // SAFETY: Reservation writes at this key are JSON strings in this fixture.
       const record =
-        key === reservationKey && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)
-          ? (JSON.parse(data) as { projectId?: string })
+        key === reservationKey
+          ? reservationRecordSchema.parse(JSON.parse(z.string().parse(data)))
           : null;
       if (
         !paused &&
@@ -625,11 +690,11 @@ describe("route regressions", () => {
     });
     expect(
       putMock.mock.calls.some(([key, data]) => {
-        if (key !== `projects/${userId}/former-owner/.metadata.json` || data instanceof ArrayBuffer || data instanceof Uint8Array) {
+        if (key !== `projects/${userId}/former-owner/.metadata.json`) {
           return false;
         }
         // SAFETY: This reservation fixture writes JSON strings at this key.
-        const written = JSON.parse(data) as { slug?: string };
+        const written = formerMetadataSchema.parse(JSON.parse(z.string().parse(data)));
         return written.slug === "shared";
       })
     ).toBe(false);
@@ -1165,13 +1230,14 @@ describe("served-bytes security headers (§3¾)", () => {
     expect(await storage.readThumbnail(userId, "thumbihdr")).toBeNull();
   });
 
-  it("SS-21: accepts a real PNG body on the thumbnail route", async () => {
+  it("SS-21: accepts a real PNG body on the thumbnail route and preserves its bytes", async () => {
     await storage.createProjectIfAbsent(userId, "thumbok", "Thumb OK");
+    const bytes = pngBytes();
     const form = new FormData();
     // SAFETY: The PNG fixture's backing buffer is an ArrayBuffer.
     form.append(
       "image",
-      new File([new Blob([pngBytes().buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
+      new File([new Blob([bytes.buffer as ArrayBuffer])], "thumb.png", { type: "image/png" })
     );
 
     const response = await app.request(
@@ -1181,7 +1247,7 @@ describe("served-bytes security headers (§3¾)", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await storage.readThumbnail(userId, "thumbok")).not.toBeNull();
+    expect(Array.from(await storage.readThumbnail(userId, "thumbok") ?? [])).toEqual(Array.from(bytes));
   });
 
   it("rejects a thumbnail whose IHDR dimensions exceed the render ceiling", async () => {
@@ -1566,7 +1632,7 @@ describe("image upload hardening", () => {
     expect(body.error).toContain("not a valid PNG");
   });
 
-  it("rejects an oversized image with 400", async () => {
+  it("rejects an oversized image with 413", async () => {
     // 10MB cap + 1 byte, filled with the PNG signature so only size can fail.
     const big = pngBytes(10 * 1024 * 1024 + 1);
     const response = await app.request(
@@ -1575,7 +1641,7 @@ describe("image upload hardening", () => {
       createEnv(bucket)
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(413);
     // SAFETY: The rejected upload response contains the documented error field.
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain("too large");
@@ -1693,9 +1759,7 @@ describe("image upload hardening", () => {
     expect(await storage.fileExists(userId, "imgproj", "huge.png")).toBe(false);
   });
 
-  it("SS-29: a valid upload within the cap still succeeds under the ceiling", async () => {
-    // A real multipart upload (Content-Length auto-set by the runtime) that is
-    // comfortably under the ceiling passes the guard and stores normally.
+  it("stores the exact bytes of a valid multipart upload", async () => {
     const response = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
       uploadRequest("ok.png", pngBytes()),
@@ -1706,42 +1770,47 @@ describe("image upload hardening", () => {
     // SAFETY: Successful upload responses contain the documented path field.
     const body = (await response.json()) as { path: string };
     expect(body.path).toBe("ok.png");
-    expect(await storage.fileExists(userId, "imgproj", "ok.png")).toBe(true);
+    expect(await storage.readFileBuffer(userId, "imgproj", "ok.png")).toEqual(pngBytes());
   });
 
-  it("SS-29: missing Content-Length uses the bounded streaming parser", async () => {
-    // Build a real multipart body but strip Content-Length. The request remains
-    // valid, but the server reads it through the same absolute body ceiling.
-    const req = uploadRequest("nolen.png", pngBytes());
-    // SAFETY: RequestInit.headers is a HeadersInit at this constructed boundary.
-    const headers = new Headers(req.headers as HeadersInit);
-    headers.delete("content-length");
-    req.headers = headers;
-
+  it("rejects malformed multipart framing without writing a file", async () => {
+    const before = await storage.listFiles(userId, "imgproj");
     const response = await app.request(
       "http://site-studio.test/api/projects/imgproj/upload",
-      req,
+      {
+        method: "POST",
+        headers: { ...csrf.headers, "content-type": "multipart/form-data; boundary=broken" },
+        body: "not multipart framing"
+      },
+      createEnv(bucket)
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid multipart form data" });
+    expect(await storage.listFiles(userId, "imgproj")).toEqual(before);
+  });
+
+  it("suffixes beyond 50 occupied names without clobbering their bytes", async () => {
+    const original = new Uint8Array([1, 2, 3]);
+    await storage.uploadToProject(userId, "imgproj", "photo.png", original);
+    for (let counter = 1; counter <= 51; counter += 1) {
+      await storage.uploadToProject(userId, "imgproj", `photo_${counter}.png`, new Uint8Array([counter]));
+    }
+
+    const replacement = pngBytes();
+    replacement[replacement.length - 1] = 0x42;
+    const response = await app.request(
+      "http://site-studio.test/api/projects/imgproj/upload",
+      uploadRequest("photo.png", replacement),
       createEnv(bucket)
     );
 
     expect(response.status).toBe(200);
     // SAFETY: Successful upload responses contain the documented path field.
     const body = (await response.json()) as { path: string };
-    expect(body.path).toBe("nolen.png");
-  });
-
-  it("fails closed when upload storage/rate policy is not configured", async () => {
-    const environment = createEnv(bucket);
-    delete environment.SITE_STUDIO_MAX_PROJECT_BYTES;
-
-    const response = await app.request(
-      "http://site-studio.test/api/projects/imgproj/upload",
-      uploadRequest("policy.png", pngBytes()),
-      environment
-    );
-
-    expect(response.status).toBe(503);
-    expect(await storage.fileExists(userId, "imgproj", "policy.png")).toBe(false);
+    expect(body.path).toBe("photo_52.png");
+    expect(Array.from(await storage.readFileBuffer(userId, "imgproj", "photo.png"))).toEqual(Array.from(original));
+    expect(Array.from(await storage.readFileBuffer(userId, "imgproj", "photo_52.png"))).toEqual(Array.from(replacement));
   });
 });
 

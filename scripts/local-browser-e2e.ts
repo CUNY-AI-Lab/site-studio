@@ -5,7 +5,7 @@ import { createServer, type AddressInfo } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chromium, expect, type BrowserContext, type FrameLocator, type Page } from "@playwright/test";
+import { chromium, expect, type BrowserContext, type FrameLocator, type Locator, type Page } from "@playwright/test";
 import { unzipSync } from "../packages/app/node_modules/fflate";
 import { z } from "zod";
 
@@ -13,10 +13,9 @@ import { z } from "zod";
  * Value-focused Site Studio browser acceptance against a local app process.
  *
  * The browser talks HTTP to a real Bun process running the production Hono app
- * and its CSRF/CAS mutation service. Storage is a deterministic in-memory
- * R2/KV binding because Wrangler's local R2 emulator does not implement the
- * conditional first-write operation that Site Studio requires. No model call
- * or provider credential is used.
+ * and its CSRF/CAS mutation service. Storage and model responses use
+ * deterministic test bindings; native Worker/R2 and provider behavior require
+ * separate checks. No model call or provider credential is used.
  */
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +25,12 @@ const IDENTITY_SCRIPT = resolve(APP_DIR, "scripts/local-browser-identity.ts");
 const WORKER_SCRIPT = resolve(APP_DIR, "scripts/local-browser-worker.ts");
 const CHILD_FIXTURE = resolve(ROOT, "scripts/fixtures/browser-child.js");
 const MODULE_FIXTURE = resolve(ROOT, "scripts/fixtures/browser-preview-script.js");
+const IMAGE_FIXTURE_NAME = "browser-image.png";
+const IMAGE_FIXTURE_PATH = `images/${IMAGE_FIXTURE_NAME}`;
+const IMAGE_FIXTURE_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mNk+M/wHwAF/gL+P1e3XwAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 type BrowserSocketFrame = {
   type: string;
@@ -262,6 +267,19 @@ async function waitForPreview(page: Page, text: string): Promise<void> {
   }
 }
 
+async function waitForLoadedImage(image: Locator): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        await image.evaluate((element) => {
+          if (!(element instanceof HTMLImageElement)) throw new Error("expected an image element");
+          return { naturalWidth: element.naturalWidth, naturalHeight: element.naturalHeight };
+        }),
+      { timeout: 15_000 },
+    )
+    .toEqual({ naturalWidth: 1, naturalHeight: 1 });
+}
+
 async function waitForPreviewBackground(page: Page, expected: string): Promise<void> {
   await expect
     .poll(
@@ -272,6 +290,12 @@ async function waitForPreviewBackground(page: Page, expected: string): Promise<v
       { timeout: 15_000 },
     )
     .toBe(expected);
+}
+
+async function waitForPreviewImage(page: Page, alt: string): Promise<void> {
+  const image = previewFrame(page).getByRole("img", { name: alt, exact: true });
+  await expect(image).toHaveCount(1, { timeout: 15_000 });
+  await waitForLoadedImage(image);
 }
 
 async function openProjectMenu(page: Page, projectName: string): Promise<void> {
@@ -413,6 +437,26 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
       }),
     ).toBeVisible();
 
+    // Upload a real image through the product's Image Manager. The local
+    // Worker still uses the checked-in upload policy, so this crosses the same
+    // authenticated multipart and image-byte validation boundary as production.
+    await page.getByRole("button", { name: "Images", exact: true }).click();
+    const imageDialog = page.getByRole("dialog");
+    await expect(imageDialog.getByRole("heading", { name: "Images", exact: true })).toBeVisible();
+    await imageDialog.locator('input[type="file"]').setInputFiles({
+      name: IMAGE_FIXTURE_NAME,
+      mimeType: "image/png",
+      buffer: IMAGE_FIXTURE_BYTES,
+    });
+    const imageButton = imageDialog.getByRole("button", {
+      name: `Insert this image: ${IMAGE_FIXTURE_PATH}`,
+      exact: true,
+    });
+    await expect(imageButton).toBeVisible();
+    await imageButton.click();
+    await expect(imageDialog.getByRole("heading", { name: "Add this image to your site", exact: true })).toBeVisible();
+    await imageDialog.getByRole("button", { name: "Close", exact: true }).last().click();
+
     // Exercise the parent-owned refresh queue across real file mutations. The
     // mutation requests overlap with their follow-up tree reads; the visible
     // tree must settle on the final state without losing the current project.
@@ -436,11 +480,12 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
       `<!doctype html>
 <html lang="en">
   <head><meta charset="utf-8"><title>Browser value</title><link rel="stylesheet" href="styles.css"></head>
-  <body><main><h1>Version A</h1><p id="module-status">module waiting</p></main><script type="module" src="browser-preview-script.js"></script></body>
+  <body><main><h1>Version A</h1><img src="images/browser-image.png" alt="Browser fixture image"><p id="module-status">module waiting</p></main><script type="module" src="browser-preview-script.js"></script></body>
 </html>`,
     );
     await waitForPreview(page, "Version A");
     await waitForPreview(page, "nested module loaded");
+    await waitForPreviewImage(page, "Browser fixture image");
 
     await page.getByRole("button", { name: "styles.css", exact: true }).click();
     await waitForEditorText(page, "background");
@@ -483,6 +528,7 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     await history.getByRole("button", { name: "Restore" }).first().click();
     await waitForPreview(page, "Version A");
     await waitForPreview(page, "nested module loaded");
+    await waitForPreviewImage(page, "Browser fixture image");
     await expect(history).toBeVisible();
     await history.getByRole("button", { name: "Close", exact: true }).last().click();
 
@@ -532,12 +578,75 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
       throw new Error("ZIP nested module entry is not authored");
     if (!archiveFiles["browser-child.js"]?.includes("nested module loaded"))
       throw new Error("ZIP nested module content is not authored");
+    const archivedImage = archive[IMAGE_FIXTURE_PATH];
+    if (!archivedImage || !Buffer.from(archivedImage).equals(IMAGE_FIXTURE_BYTES))
+      throw new Error("ZIP image entry does not preserve the uploaded bytes");
 
     // Reloading the actual app must recover persisted preview state.
     await page.reload({ waitUntil: "domcontentloaded" });
     await waitForPreview(page, "Version A");
     await waitForPreview(page, "nested module loaded");
+    await waitForPreviewImage(page, "Browser fixture image");
     await expect(completionText()).toBeVisible();
+
+    // The image must remain a binary asset after reload and the user-facing
+    // file-tree download must return the exact uploaded bytes.
+    await page.getByRole("button", { name: "Show code editor" }).click();
+    await expect(page.getByRole("button", { name: `Download ${IMAGE_FIXTURE_NAME}`, exact: true })).toBeVisible();
+    const imageDownloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: `Download ${IMAGE_FIXTURE_NAME}`, exact: true }).click();
+    const downloadedImage = await imageDownloadPromise;
+    const downloadedImagePath = await downloadedImage.path();
+    if (downloadedImagePath === null || !(await readFile(downloadedImagePath)).equals(IMAGE_FIXTURE_BYTES)) {
+      throw new Error("image download did not return the uploaded bytes");
+    }
+    await closeCodeEditor(page);
+
+    // Publish through the visible handle-claim flow, verify the public page
+    // serves the authored image, then make it private and prove the same URL
+    // now returns a real 404 from the local Worker.
+    await page.getByRole("button", { name: `Publish ${projectName}`, exact: true }).click();
+    const handleDialog = page.getByRole("dialog");
+    await expect(handleDialog.getByRole("heading", { name: "Choose your public address", exact: true })).toBeVisible();
+    const publicHandle = `browser-${Date.now()}`;
+    await handleDialog.getByLabel("Address").fill(publicHandle);
+    await expect(handleDialog.getByText("Available", { exact: true })).toBeVisible();
+    await handleDialog.getByRole("button", { name: "Save and publish", exact: true }).click();
+    const publishedButton = page.getByRole("button", { name: `View published site for ${projectName}`, exact: true });
+    await expect(publishedButton).toBeVisible();
+    const accessibilityHeading = page.getByRole("heading", { name: /^Published, with \d+ accessibility notes?$/ });
+    if (await accessibilityHeading.count() > 0) {
+      await expect(accessibilityHeading).toBeVisible();
+      await page.getByRole("button", { name: "Got it", exact: true }).click();
+    }
+    const publishedPage = await Promise.all([
+      page.waitForEvent("popup"),
+      publishedButton.click(),
+    ]).then(([popup]) => popup);
+    await publishedPage.waitForLoadState("domcontentloaded");
+    await expect(publishedPage.getByRole("heading", { name: "Version A", exact: true })).toBeVisible();
+    const publishedImage = publishedPage.getByRole("img", { name: "Browser fixture image", exact: true });
+    await expect(publishedImage).toHaveCount(1, { timeout: 15_000 });
+    await waitForLoadedImage(publishedImage);
+    const publishedUrl = publishedPage.url();
+    await publishedPage.close();
+
+    await openProjectMenu(page, projectName);
+    const makePrivate = page.getByRole("menuitem", { name: "Make site private", exact: true });
+    await expect(makePrivate).toBeVisible();
+    page.once("dialog", async (confirmDialog) => {
+      await confirmDialog.accept();
+    });
+    await makePrivate.click();
+    await expect(page.getByRole("button", { name: `Publish ${projectName}`, exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).not.toBeVisible();
+    const privatePage = await context.newPage();
+    const privateResponse = await privatePage.goto(publishedUrl, { waitUntil: "domcontentloaded" });
+    if (!privateResponse || privateResponse.status() !== 404) {
+      throw new Error(`unpublished URL returned ${privateResponse?.status() ?? "no response"} instead of 404`);
+    }
+    await privatePage.close();
 
     // Leave no project or storage state behind.
     await openProjectMenu(page, projectName);
@@ -584,7 +693,7 @@ async function main(): Promise<void> {
     await waitForWorker(baseUrl, worker.child);
     await runBrowserPath(baseUrl, identity.token);
     console.log(
-      "local browser acceptance passed: dashboard/create/chat-tool/stop-recovery/multiple-tools/persisted-commit/edit/upload/rename/delete/preview/CSS+nested-module/version-restore/download/ZIP/reload",
+      "local browser acceptance passed: dashboard/create/chat-tool/stop-recovery/multiple-tools/persisted-commit/edit/upload/image-preview/image-download/rename/delete/preview/nested-module/version-restore/download/ZIP/reload/publish/unpublish",
     );
     passed = true;
   } finally {

@@ -1,33 +1,33 @@
 import { describe, it, expect } from "vitest";
-import { jsonError, jsonHeaders, binaryBody } from "./http";
+import { jsonError, jsonHeaders, binaryBody, readFormData } from "./http";
 
 describe("jsonError", () => {
-  it("throws HTTPException with default status 400", () => {
-    expect(() => jsonError("Bad request")).toThrow();
-    try {
-      jsonError("Bad request");
-    } catch (error: any) {
-      expect(error.status).toBe(400);
-      expect(error.message).toBe("Bad request");
-    }
+  it.each([undefined, 404] as const)("preserves the status and message for %s", (status) => {
+    expect(() => jsonError("Request failed", status)).toThrowError(
+      expect.objectContaining({ status: status ?? 400, message: "Request failed" })
+    );
+  });
+});
+
+describe("readFormData", () => {
+  it("preserves the uploaded file name and bytes", async () => {
+    const bytes = new Uint8Array([0, 17, 128, 255]);
+    const body = new FormData();
+    body.append("file", new File([bytes], "example.png"));
+    const parsed = await readFormData(new Request("https://site-studio.test/upload", { method: "POST", body }));
+    const file = parsed.get("file");
+    if (!(file instanceof File)) throw new Error("Uploaded file is missing");
+    expect(file.name).toBe("example.png");
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
   });
 
-  it("throws HTTPException with custom status", () => {
-    try {
-      jsonError("Not found", 404);
-    } catch (error: any) {
-      expect(error.status).toBe(404);
-      expect(error.message).toBe("Not found");
-    }
-  });
-
-  it("return type is never (prevents code continuation)", () => {
-    // This is a compile-time check - if jsonError doesn't return `never`,
-    // TypeScript would error on unreachable code after it
-    const fn = (): string => {
-      jsonError("fail");
-    };
-    expect(() => fn()).toThrow();
+  it("returns a client error for malformed form framing", async () => {
+    const request = new Request("https://site-studio.test/upload", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=missing" },
+      body: "invalid framing",
+    });
+    await expect(readFormData(request)).rejects.toMatchObject({ status: 400, message: "Invalid multipart form data" });
   });
 });
 
@@ -50,11 +50,10 @@ describe("jsonHeaders", () => {
 });
 
 describe("binaryBody", () => {
-  it("returns a Blob from Uint8Array", () => {
+  it("preserves binary response bytes", async () => {
     const data = new Uint8Array([1, 2, 3]);
     const blob = binaryBody(data);
-    expect(blob).toBeInstanceOf(Blob);
-    expect(blob.size).toBe(3);
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data);
   });
 
   it("returns empty Blob for empty input", () => {

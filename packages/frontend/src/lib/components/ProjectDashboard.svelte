@@ -22,6 +22,7 @@
 	let error = $state<string | null>(null);
 	let errorRecovery = $state<'request-access' | 'retry' | null>(null);
 	let publishingProjectId = $state<string | null>(null);
+	let loadVersion = 0;
 
 	let showNewProjectDialog = $state(false);
 	let showRenameDialog = $state(false);
@@ -38,12 +39,29 @@
 
 	onMount(() => {
 		dashboardMounted = true;
+		const initialLoadVersion = loadVersion + 1;
 		void loadProjects().then(() => {
 			// Show onboarding tour for first-time users with no projects
-			if (dashboardMounted && !loading && projects.length === 0 && !hasCompletedOnboarding()) {
+			if (
+				dashboardMounted &&
+				initialLoadVersion === loadVersion &&
+				!loading &&
+				!error &&
+				projects.length === 0 &&
+				!hasCompletedOnboarding()
+			) {
 				dashboardTourTimer = setTimeout(() => {
 					dashboardTourTimer = null;
-					if (!dashboardMounted) return;
+					if (
+						!dashboardMounted ||
+						initialLoadVersion !== loadVersion ||
+						loading ||
+						error ||
+						projects.length > 0 ||
+						hasCompletedOnboarding()
+					) {
+						return;
+					}
 					dashboardTour?.destroy();
 					dashboardTour = createDashboardTour();
 					dashboardTour.drive();
@@ -83,12 +101,16 @@
 	});
 
 	async function loadProjects() {
+		const version = ++loadVersion;
 		try {
 			loading = true;
 			error = null;
 			errorRecovery = null;
-			projects = await fetchProjects();
+			const loadedProjects = await fetchProjects();
+			if (version !== loadVersion) return;
+			projects = loadedProjects;
 		} catch (e) {
+			if (version !== loadVersion) return;
 			const caught = e instanceof Error ? e : undefined;
 			error = isApiError(caught)
 				? getErrorMessage(caught)
@@ -99,7 +121,7 @@
 			}
 			console.error('Error loading projects:', e);
 		} finally {
-			loading = false;
+			if (version === loadVersion) loading = false;
 		}
 	}
 

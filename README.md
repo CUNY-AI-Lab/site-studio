@@ -34,7 +34,7 @@ snapshots, not publish artifacts, provide content recovery.
 
 ## Identity and model access
 
-Every product request requires `X-CAIL-Identity-JWT`, verified as RS256 against
+Private product routes require `X-CAIL-Identity-JWT`, verified as RS256 against
 the configured JWKS with the exact issuer and scalar audience
 `cail:site-studio`. The signed CAIL subject is preserved byte-for-byte as the
 owner key. Email, display names, cookies, and caller-supplied identity headers
@@ -58,6 +58,14 @@ hashes it before provider egress. Site Studio has no provider keys and does not
 impose an output-token or model-step cap. Billed model POSTs use `maxRetries: 0`
 because an uncertain automatic retry can duplicate a paid execution.
 
+The agent can read a supplied public page with `read_url` and inspect a
+project-owned image with `inspect_image`. Page reading returns text and links;
+it does not provide general web search, sign-in access, or page JavaScript
+execution. Image inspection uses the configured `CAIL_IMAGE_CLASSIFIER`
+vision model through the same human Gateway quota and project session. The
+primary coding model receives that observation, not an unsupported image input.
+Uploaded PDF text is available through `extract_document_text`.
+
 ## One-time first-login import
 
 Legacy data has one narrow import path. On a user's first successful verified
@@ -69,7 +77,12 @@ The import re-homes projects, files, snapshots, uploads, agent chat history,
 published metadata, and any handle. A per-anonymous-owner Durable Object claim
 prevents two subjects from absorbing the same namespace. Conditional writes,
 stable imported-project stamps, and the owner mutation coordinator make retries
-converge without duplicates. Only after the copy and source retirement finish
+converge without duplicates. The subject's mutation coordinator reserves the
+selected cookie before resolving its R2 session and contacting the
+anonymous-owner coordinator; a later
+request with another cookie or no cookie resumes that source rather than
+replacing or closing it. A completed subject marker bypasses that queue.
+Only after the copy and source retirement finish
 does the app write the empty subject-keyed completion object
 `imports/:subject` and delete the legacy cookie. If the first login has no
 resolvable legacy source, the same empty record closes the import without
@@ -84,6 +97,9 @@ sole authentication source; there is no subject session cookie or subject
 session KV record. After completion, the new subject store is authoritative:
 there is no dual-read, fallback, sync, migration window, bulk job, forwarding
 pointer, or legacy public route.
+
+Import and project rename transfer chat history through the SDK's
+`persistMessages` API. They do not start a new model turn.
 
 This mechanism can import only a namespace whose legacy R2 session record is
 still resolvable. Historical anonymous namespaces without that mapping cannot
@@ -125,7 +141,12 @@ commit the download; do not replace that with same-stack revocation.
 
 The chat component and the maintained WebSocket transport jointly own a model
 turn. Stop cancels the full server turn, suppresses its late frames and queued
-continuations, and leaves a later request independent. An unexpected disconnect
+continuations, and leaves a later request independent. Tools pass cancellation
+to their active fetch/model request and check it before further storage effects.
+An atomic mutation already dispatched to the owner coordinator may finish;
+Stop is not a storage rollback. Switching projects retires the old client chat
+instance so its delayed completion cannot change the new project's transcript.
+An unexpected disconnect
 reconnects with bounded backoff while the project remains active, refreshes the
 CSRF token once per reconnect cycle, and resumes only a request still
 owned by the same authenticated subject. A post-persistence commit or an
@@ -169,15 +190,21 @@ the production Hono app, and uses the declared TypeScript Playwright runner to
 create a project, exercise a real WebSocket chat/tool turn through a local
 `SITE_BUILDER_AGENT` service-binding boundary, stop a held turn, recover with a
 new turn, edit, upload, preview, version, restore, download, export, reload,
-and delete. The browser asserts the authored HTML, CSS, and nested JavaScript
-module actually execute and opens the exported ZIP to inspect every authored
-entry.
-The process uses deterministic in-memory R2/KV bindings so the product's
-conditional CSRF/CAS paths remain active; Wrangler's local R2 emulator does not
-implement the required conditional first-write operation. The local agent
+and delete. It uploads an actual PNG through the media dialog, checks decoded
+image dimensions and exact download/archive bytes, then publishes and
+unpublishes the project through the UI and checks the public response. The
+browser asserts that authored HTML and nested JavaScript modules execute and
+opens the exported ZIP to inspect the authored entries.
+The process reads the checked-in Worker variables rather than supplying its
+own upload limits. It uses deterministic in-memory R2/KV bindings so the product's
+conditional CSRF/CAS paths remain active. These are test bindings, not native
+R2 or Durable Objects; current Wrangler does support R2 conditional first-write
+semantics, which can be checked separately in a native Worker. The local agent
 implements the maintained chat wire protocol and persists messages before
 emitting `site_studio_chat_committed`; it is not a native Durable Object and
-does not call a model/provider. Native Cloudflare binding semantics, model
+does not call a model/provider. Its verified test subject has a completed-import
+marker; the browser journey does not exercise anonymous account import or
+durable action accounting. Native Cloudflare binding semantics, model
 behavior, and provider quality remain separate checks. The test cleans up its
 project before exiting.
 The acceptance closes the code-editor overlay before opening Version history
@@ -213,16 +240,31 @@ process; do not put them in files or command arguments. They must remain valid
 through the cleanup requests; a cleanup failure prints the random proof-project
 name so the same identity can remove it after obtaining fresh tokens.
 
-`packages/app/.dev.vars` is gitignored. Required deployment configuration is
-declared in `packages/app/wrangler.jsonc`, including:
+`packages/app/.dev.vars` is gitignored. Deployment bindings and defaults are
+declared in `packages/app/wrangler.jsonc`. Runtime configuration includes:
 
 - `CAIL_IDENTITY_JWKS` (secret) and the canonical `CAIL_IDENTITY_ISSUER`
 - `CAIL_API_BASE`, `CAIL_MODEL`, `CAIL_IMAGE_MODEL`, and
   `CAIL_IMAGE_CLASSIFIER`
 - `PUBLISHED_BASE_URL`
 - `CSRF_COOKIE_PATH=/site-studio`
-- explicit upload byte/rate policy values
 - R2, KV, Worker Loader, and Durable Object bindings
+
+Uploads use the same authenticated project API from chat, the file tree, and
+Images. Accepted raster images are PNG, JPEG, GIF, and WebP, up to 10 MiB;
+other supported files are limited to 32 MiB. Project thumbnails are PNGs up to
+2 MiB and 4096 pixels per dimension. These are application size policies, not
+Cloudflare's object-size limits. Request-body bounds include multipart framing.
+File contents stream through the existing mutation coordinator to R2, rather
+than being serialized into an RPC message alongside its metadata.
+An upload never replaces an existing file: a name collision adds a numeric
+suffix, with a conditional R2 write protecting the selected name.
+
+Site Studio does not enforce an account/project storage quota or an upload-rate
+ledger. The former upload-only policy did not cover other storage writes and
+required values absent from production configuration. Model quotas remain
+owned by the Gateway and are separate from storing files. Uploading a file
+does not itself invoke a model; image inspection and chat do.
 
 The production frontend build uses `PUBLIC_BASE_PATH=/site-studio`, and the
 configured public base is `https://tools.ailab.gc.cuny.edu/site-studio`.

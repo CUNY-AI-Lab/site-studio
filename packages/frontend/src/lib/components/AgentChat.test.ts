@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { flushSync, tick } from 'svelte';
 import { render, screen, waitFor } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import type { UIMessageChunk } from 'ai';
 import AgentChat from './AgentChat.svelte';
 import {
@@ -9,6 +10,7 @@ import {
 } from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
 import type { JsonValue } from '$lib/contracts';
+import { toasts } from '$lib/toast.svelte';
 
 interface AgentChatTestProps {
 	projectId?: string;
@@ -37,6 +39,19 @@ function requestUrl(input: RequestInfo | URL): string {
 	if (input instanceof Request) return input.url;
 	if (input instanceof URL) return input.toString();
 	return input;
+}
+
+function uploadResponseForTest(path: string, filename: string, size: number): Response {
+	return new Response(
+		JSON.stringify({
+			success: true,
+			filename,
+			path,
+			size,
+			message: `Uploaded ${filename}`
+		}),
+		{ status: 200, headers: { 'Content-Type': 'application/json' } }
+	);
 }
 
 /**
@@ -140,6 +155,7 @@ describe('AgentChat', () => {
 	});
 
 	afterEach(() => {
+		toasts.splice(0);
 		invalidateCsrfToken();
 		document.cookie = 'cail_csrf_sitestudio=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
 		vi.unstubAllGlobals();
@@ -1394,6 +1410,289 @@ describe('AgentChat', () => {
 			)
 		).toBe(false);
 		expect(screen.queryByText('change the old project')).not.toBeInTheDocument();
+	});
+
+	it('keeps the draft and attachment when an upload fails without adding a chat turn', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/projects/proj1/upload')) {
+				return new Response(
+					JSON.stringify({ error: 'file_too_large', message: 'This file is too large.' }),
+					{ status: 413, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+		const user = userEvent.setup({ delay: null });
+		renderExposed();
+
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'keep this draft');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['attachment'], 'draft.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+		await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toBe(true));
+		await waitFor(() => expect(messageInput).toHaveValue('keep this draft'));
+		expect(screen.getByText('draft.txt')).toBeInTheDocument();
+		expect(screen.queryByText(/File uploaded:/)).not.toBeInTheDocument();
+		expect(toasts).toContainEqual(
+			expect.objectContaining({
+				kind: 'error',
+				message: "Couldn't upload file. This file is too large."
+			})
+		);
+		expect(
+			FakeWebSocket.instances.some((ws) =>
+				ws.sent.some((raw) => JSON.parse(raw).type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST)
+			)
+		).toBe(false);
+	});
+
+	it('keeps the draft and attachment when request preparation is declined', async () => {
+		const onBeforeSend = vi.fn().mockResolvedValue(false);
+		const user = userEvent.setup({ delay: null });
+		renderExposed({ onBeforeSend });
+
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'prepare this later');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['attachment'], 'later.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+		await waitFor(() => expect(onBeforeSend).toHaveBeenCalledOnce());
+		expect(messageInput).toHaveValue('prepare this later');
+		expect(screen.getByText('later.txt')).toBeInTheDocument();
+		expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toBe(false);
+		expect(screen.queryByText(/File uploaded:/)).not.toBeInTheDocument();
+		expect(toasts).toContainEqual(
+			expect.objectContaining({ kind: 'error', message: 'Could not prepare your message. Try again.' })
+		);
+	});
+
+	it('reuses a completed upload after a later connection failure', async () => {
+		let credentialAttempts = 0;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/projects/proj1/upload')) {
+				return new Response(
+					JSON.stringify({
+						success: true,
+						filename: 'retry.txt',
+						path: 'retry.txt',
+						size: 8,
+						message: 'Uploaded retry.txt'
+					}),
+					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			if (url.endsWith('/refresh-credential')) {
+				credentialAttempts += 1;
+				if (credentialAttempts === 1) {
+					return new Response(JSON.stringify({ error: 'temporary', message: 'Try the connection again.' }), {
+						status: 503,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+		const user = userEvent.setup({ delay: null });
+		renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const socket = FakeWebSocket.last();
+		socket.open();
+		await settle();
+
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'retry this upload');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['retry me'], 'retry.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+		await waitFor(() => expect(credentialAttempts).toBe(1));
+		await waitFor(() => expect(messageInput).toHaveValue('retry this upload'));
+		expect(screen.getByText('retry.txt')).toBeInTheDocument();
+		expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toHaveLength(1);
+
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+		await waitFor(() => expect(credentialAttempts).toBe(2));
+		await waitFor(() => expect(messageInput).toHaveValue(''));
+		expect(screen.queryByText('retry.txt')).not.toBeInTheDocument();
+		expect(fetchMock.mock.calls.filter(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toHaveLength(1);
+	});
+
+	it('recovers after stopping a turn that included an upload', async () => {
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/projects/proj1/upload')) {
+				return uploadResponseForTest('stop.txt', 'stop.txt', 8);
+			}
+			if (url.endsWith('/refresh-credential')) {
+				return new Response(null, { status: 204 });
+			}
+			return new Response('[]', { status: 200 });
+		});
+		const user = userEvent.setup({ delay: null });
+		renderExposed();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+		const socket = FakeWebSocket.last();
+		socket.open();
+		await settle();
+
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'stop after upload');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['stop me'], 'stop.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+
+		await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith('/projects/proj1/upload'))).toBe(true));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Stop request' })).toBeInTheDocument());
+		screen.getByRole('button', { name: 'Stop request' }).click();
+		await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop request' })).not.toBeInTheDocument());
+
+		await user.type(messageInput, 'recover after stop');
+		await user.upload(fileInput, new File(['new file'], 'new.txt', { type: 'text/plain' }));
+		expect(screen.getByText('new.txt')).toBeInTheDocument();
+	});
+
+	it('drops an upload completion when the project changes, even after returning to it', async () => {
+		let resolveUpload!: (response: Response) => void;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/projects/proj-a/upload')) {
+				return new Promise<Response>((resolve) => {
+					resolveUpload = resolve;
+				});
+			}
+			return new Response('[]', { status: 200 });
+		});
+		const user = userEvent.setup({ delay: null });
+		const result = renderExposed({ projectId: 'proj-a' });
+		const messageInput = screen.getByLabelText('Message to the assistant');
+		await user.type(messageInput, 'old project draft');
+		const fileInput = document.querySelector('input[type="file"]');
+		if (!(fileInput instanceof HTMLInputElement)) throw new Error('expected attachment input');
+		await user.upload(fileInput, new File(['old bytes'], 'old.txt', { type: 'text/plain' }));
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+		await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => requestUrl(input).endsWith('/projects/proj-a/upload'))).toBe(true));
+
+		await result.rerender({ projectId: 'proj-b', onUpdate: result.onUpdate });
+		await result.rerender({ projectId: 'proj-a', onUpdate: result.onUpdate });
+		resolveUpload(uploadResponseForTest('old.txt', 'old.txt', 9));
+		await settle();
+
+		expect(messageInput).toHaveValue('');
+		expect(screen.queryByText('old.txt')).not.toBeInTheDocument();
+		expect(
+			FakeWebSocket.instances.some((ws) =>
+				ws.sent.some((raw) => JSON.parse(raw).type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST)
+			)
+		).toBe(false);
+	});
+
+	it('stops an old turn before switching projects so its late finish cannot reset the new project', async () => {
+		let projectBHistoryRequested = false;
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			const url = requestUrl(input);
+			if (url.endsWith('/api/csrf')) {
+				document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+				return new Response(null, { status: 204 });
+			}
+			if (url.endsWith('/proj-b/get-messages')) {
+				projectBHistoryRequested = true;
+				return new Response(
+					JSON.stringify([
+						{ id: 'project-b-history', role: 'assistant', parts: [{ type: 'text', text: 'Project B history' }] }
+					]),
+					{ status: 200, headers: { 'Content-Type': 'application/json' } }
+				);
+			}
+			return new Response('[]', { status: 200 });
+		});
+
+		const result = renderExposed({ projectId: 'proj-a' });
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const projectASocket = FakeWebSocket.last();
+		projectASocket.open();
+		await settle();
+
+		await result.component.sendPrompt('project A turn');
+		await settle();
+		const projectARequest = projectASocket.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(projectARequest).toBeTruthy();
+		projectASocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectARequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'project-a-text' })
+		});
+		projectASocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectARequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'project-a-text', delta: 'Project A partial' })
+		});
+		await waitFor(() => expect(screen.getByText('Project A partial')).toBeInTheDocument());
+
+		await result.rerender({ projectId: 'proj-b', onUpdate: result.onUpdate });
+		await waitFor(() => expect(projectBHistoryRequested).toBe(true));
+		await waitFor(() => expect(screen.getByText('Project B history')).toBeInTheDocument());
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+		const projectBSocket = FakeWebSocket.last();
+		projectBSocket.open();
+		await settle();
+
+		await result.component.sendPrompt('project B turn');
+		await settle();
+		const projectBRequest = projectBSocket.sent
+			.map((raw) => JSON.parse(raw))
+			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+		expect(projectBRequest).toBeTruthy();
+
+		// The old transport stream still owns A's listener. A late close must not
+		// invoke Chat's finish callback against B's reset/new-turn state.
+		projectASocket.serverClose();
+		await settle();
+		await waitFor(() => expect(screen.getByTitle('Stop request')).toBeInTheDocument());
+
+		expect(screen.getByText('Project B history')).toBeInTheDocument();
+		expect(screen.getByText('project B turn')).toBeInTheDocument();
+		expect(screen.getByTitle('Stop request')).toBeInTheDocument();
+
+		projectBSocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectBRequest.id,
+			body: JSON.stringify({ type: 'text-start', id: 'project-b-text' })
+		});
+		projectBSocket.serverMessage({
+			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
+			id: projectBRequest.id,
+			body: JSON.stringify({ type: 'text-delta', id: 'project-b-text', delta: 'Project B answer' })
+		});
+		await waitFor(() => expect(screen.getByText('Project B answer')).toBeInTheDocument());
 	});
 
 	it('waits for the credential refresh before sending a new chat frame', async () => {

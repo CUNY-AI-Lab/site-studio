@@ -10,6 +10,35 @@ describe('CodeView downloads', () => {
 		toasts.splice(0, toasts.length);
 	});
 
+	it('keeps the editor unavailable while the selected file is loading', async () => {
+		const user = userEvent.setup({ delay: null });
+		const onEditorChange = vi.fn();
+		render(CodeView, {
+			props: {
+				projectId: 'project-a',
+				files: [],
+				currentFile: 'index.html',
+				fileContent: '<h1>stale content</h1>',
+				currentFileIsText: true,
+				currentFileContentType: 'text/html',
+				currentFileLoading: true,
+				onFileSelect: vi.fn(),
+				onEditorChange,
+				onDownloadFile: vi.fn(),
+				onRefreshFiles: vi.fn(),
+				isSaving: false
+			}
+		});
+
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'Editing is disabled until the saved contents are available.'
+		);
+		expect(screen.queryByText('stale content')).not.toBeInTheDocument();
+		expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+		await user.keyboard('user input');
+		expect(onEditorChange).not.toHaveBeenCalled();
+	});
+
 	it('contains a rejected download, shows the existing toast, and leaves retry available', async () => {
 		const user = userEvent.setup({ delay: null });
 		const onDownloadFile = vi

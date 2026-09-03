@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { join, normalize, relative, resolve } from "node:path";
+import { dirname, join, normalize, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createApp } from "../src/app";
 import type { AgentResolver } from "../src/routes/agents";
+import { importCompletionKey } from "../src/lib/anonymous-import";
+import { resolveRequestIdentity } from "../src/lib/cail-identity";
 import { OwnerMutationService, type MutationJournalStore, type OwnerMutation } from "../src/lib/owner-mutations";
 import type { Env, SiteBuilderAgentProps } from "../src/types";
 import { z } from "zod";
@@ -14,7 +17,7 @@ type StoredObject = {
   customMetadata: Record<string, string>;
 };
 
-function toUint8Array(value: string | ArrayBuffer | ArrayBufferView | Blob): Promise<Uint8Array> {
+function toUint8Array(value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream<Uint8Array>): Promise<Uint8Array> {
   // SAFETY: R2PutValue is accepted by the Fetch BodyInit boundary in Bun; the
   // resulting bytes are the exact upload payload needed by this fixture.
   return new Response(value as BodyInit).arrayBuffer().then((bytes) => new Uint8Array(bytes));
@@ -86,16 +89,16 @@ class MemoryR2Bucket {
 
   async put(
     key: string,
-    value: string | ArrayBuffer | ArrayBufferView | Blob,
+    value: string | ArrayBuffer | ArrayBufferView | Blob | ReadableStream<Uint8Array>,
     options?: R2PutOptions,
   ): Promise<R2Object | null> {
+    const bytes = await toUint8Array(value);
+    const etag = await objectEtag(bytes);
     const current = this.objects.get(key);
     const condition = options?.onlyIf;
     if (condition?.etagDoesNotMatch === "*" && current) return null;
     if (condition?.etagMatches !== undefined && (!current || current.etag !== condition.etagMatches)) return null;
 
-    const bytes = await toUint8Array(value);
-    const etag = await objectEtag(bytes);
     const stored: StoredObject = {
       bytes: bytes.slice(),
       etag,
@@ -212,6 +215,32 @@ type LocalAgentMessage = {
   role: "user" | "assistant";
   parts: LocalAgentPart[];
 };
+
+type LocalActionAdmission = {
+  actionId: string;
+  action: string;
+  route: string;
+  admittedAt: string;
+};
+
+type LocalActionTerminal = {
+  actionId: string;
+  outcome: string;
+  reason: string;
+  terminalAt: string;
+  durationMs: number;
+  errorType?: string;
+};
+
+const wranglerConfigSchema = z.object({
+  vars: z.record(z.string(), z.string()),
+});
+
+async function loadWranglerVars(): Promise<Record<string, string>> {
+  const configPath = resolve(dirname(fileURLToPath(import.meta.url)), "../wrangler.jsonc");
+  const config = wranglerConfigSchema.parse(Bun.JSONC.parse(await readFile(configPath, "utf8")));
+  return config.vars;
+}
 
 type LocalAgentPart = {
   type: string;
@@ -341,6 +370,10 @@ class LocalSiteBuilderAgent {
   }
 
   async setName(_name: string, _props?: SiteBuilderAgentProps): Promise<void> {}
+
+  async recordActionAdmission(_admission: LocalActionAdmission): Promise<void> {}
+
+  async recordActionTerminal(_terminal: LocalActionTerminal): Promise<void> {}
 
   async getMessages(): Promise<LocalAgentMessage[]> {
     return structuredClone(this.messages);
@@ -597,6 +630,12 @@ function makeMutationNamespace(bucket: R2Bucket): DurableObjectNamespace<never> 
   const rpc = {
     id,
     execute: (ownerId: string, operation: OwnerMutation) => service.execute(ownerId, operation),
+    // The authenticated browser journey seeds the completed R2 marker below.
+    // Legacy anonymous import is intentionally outside this local acceptance
+    // boundary; a missing marker must fail explicitly rather than emulate it.
+    migrateAnonymousForSubject: async () => {
+      throw new Error("local browser acceptance does not cover legacy anonymous import");
+    },
   };
   const namespace = {
     idFromName: (_name: string) => id,
@@ -702,6 +741,18 @@ if (!localBrowserGatewayJwt) throw new Error("CAIL_LOCAL_BROWSER_GATEWAY_JWT is 
 const bucket = new MemoryR2Bucket();
 const kv = new MemoryKV();
 const baseUrl = `http://127.0.0.1:${port}`;
+const wranglerVars = await loadWranglerVars();
+const localIdentity = await resolveRequestIdentity(
+  new Request(baseUrl, { headers: { "X-CAIL-Identity-JWT": localBrowserIdentityJwt } }),
+  {
+    CAIL_IDENTITY_JWKS: process.env.CAIL_IDENTITY_JWKS,
+    CAIL_IDENTITY_ISSUER: process.env.CAIL_IDENTITY_ISSUER,
+  },
+);
+if (localIdentity.status !== "verified") {
+  throw new Error("local browser identity could not be verified for import completion setup");
+}
+await bucket.put(importCompletionKey(localIdentity.identity.subject), "");
 const localSiteBuilderNamespace = new LocalSiteBuilderNamespace();
 const localAgentResolver: AgentResolver = async (_namespace, name, { props }) => {
   const agent = localSiteBuilderNamespace.get(localSiteBuilderNamespace.idFromName(name));
@@ -718,6 +769,7 @@ const app = createApp(localAgentResolver);
 // routes; only migration is intentionally unavailable, and this boundary does
 // not import Cloudflare-only Durable Object modules.
 const env = {
+  ...wranglerVars,
   APP_PUBLIC_DOMAIN: baseUrl,
   PUBLISHED_BASE_URL: `${baseUrl}/site-studio`,
   CAIL_LOG_ENV: "test",
@@ -725,10 +777,6 @@ const env = {
   CAIL_MODEL: "@cf/local-browser-test",
   CAIL_IDENTITY_JWKS: process.env.CAIL_IDENTITY_JWKS,
   CAIL_IDENTITY_ISSUER: process.env.CAIL_IDENTITY_ISSUER,
-  CSRF_COOKIE_PATH: "/site-studio",
-  SITE_STUDIO_MAX_PROJECT_BYTES: "10485760",
-  SITE_STUDIO_MAX_OWNER_BYTES: "52428800",
-  SITE_STUDIO_UPLOADS_PER_MINUTE: "20",
   SESSION_KV: kv.asBinding(),
   SITE_STUDIO_BUCKET: bucket.asBinding(),
   SITE_BUILDER_AGENT: localSiteBuilderNamespace,

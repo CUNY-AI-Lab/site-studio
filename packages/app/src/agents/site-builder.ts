@@ -26,15 +26,16 @@ import {
 import { z } from "zod";
 import {
   isSnapshotSkipped,
-  parsePositiveInteger,
   type Env,
   type SiteBuilderAgentProps,
   type SnapshotResult,
 } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
 import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
+import { inspectImage } from "../lib/image-inspection";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
+import { binaryBody } from "../lib/http";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
@@ -42,6 +43,7 @@ import { FileExistsError, R2ProjectStorage } from "../storage/r2";
 import { SITE_BUILDER_PROMPT } from "../prompts/site-builder";
 import { buildProjectContext, buildProjectTree } from "./project-context";
 import { describeModelStreamError } from "../lib/model-stream-error";
+import { readWebPage } from "../lib/web-page";
 import {
   type CailOutcome,
   type CailTerminalReason,
@@ -654,7 +656,7 @@ export function summarizeLatestUserRequest(messages: RequestMessage[] | UIMessag
 }
 
 export function createProjectTools(
-  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "SITE_STUDIO_MAX_PROJECT_BYTES" | "SITE_STUDIO_MAX_OWNER_BYTES" | "SITE_STUDIO_UPLOADS_PER_MINUTE" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
+  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
   scope: Scope,
   identityJwt: string | null,
   snapshotOptions?: {
@@ -666,6 +668,7 @@ export function createProjectTools(
   logging?: SiteStudioLoggingContext,
   storageOverride?: ProjectStorageLike,
   mutationExecutor?: ProjectMutationExecutor,
+  abortSignal?: AbortSignal,
 ) {
   const serializedLogging = serializeSiteStudioLoggingContext(logging);
   const storage = storageOverride ?? new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
@@ -674,17 +677,20 @@ export function createProjectTools(
   let snapshotPromise: Promise<SnapshotResult> | null = null;
 
   async function writeIfAbsent(path: string, content: string): Promise<string | null> {
+    abortSignal?.throwIfAborted();
     const result = await executeMutation(scope.userId, {
       type: "write-file-if-absent",
       projectId: scope.projectId,
       path,
       content
     }, serializedLogging);
+    abortSignal?.throwIfAborted();
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
 
   async function writeIfMatch(path: string, content: string, baseEtag: string): Promise<string | null> {
+    abortSignal?.throwIfAborted();
     const result = await executeMutation(scope.userId, {
       type: "write-file",
       projectId: scope.projectId,
@@ -692,6 +698,7 @@ export function createProjectTools(
       content,
       baseEtag
     }, serializedLogging);
+    abortSignal?.throwIfAborted();
     if (!("etag" in result)) throw new Error("Unexpected mutation result");
     return result.etag;
   }
@@ -702,6 +709,7 @@ export function createProjectTools(
   // skip visible via observability (a structured wide event) rather than
   // swallowing it.
   async function ensureSnapshot() {
+    abortSignal?.throwIfAborted();
     if (!snapshotPromise) {
       snapshotPromise = executeMutation(scope.userId, {
         type: "create-snapshot",
@@ -715,6 +723,7 @@ export function createProjectTools(
     }
 
     const result = await snapshotPromise;
+    abortSignal?.throwIfAborted();
     if (isSnapshotSkipped(result)) {
       emitDiagnostic("warning", "snapshot_too_large", {}, logging);
     }
@@ -732,7 +741,9 @@ export function createProjectTools(
         paths: z.array(z.string()).describe("Flat array of file paths.")
       }),
       execute: async ({ prefix }) => {
+        abortSignal?.throwIfAborted();
         const files = await storage.listFiles(scope.userId, scope.projectId, prefix ? sanitizeFilePath(prefix) : "");
+        abortSignal?.throwIfAborted();
         const paths = files.map((file) => file.path);
 
         return {
@@ -761,17 +772,19 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ path }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
 
         if (!isTextFile(filePath)) {
           return {
             ok: false,
             path: filePath,
-            message: "This tool only reads text files. Use extract_document_text for PDFs and other supported documents."
+            message: "This tool only reads text files. Use extract_document_text for PDF content."
           };
         }
 
         const content = await storage.readFile(scope.userId, scope.projectId, filePath);
+        abortSignal?.throwIfAborted();
         const clipped = clipText(content);
 
         return {
@@ -799,7 +812,9 @@ export function createProjectTools(
         })).describe("Matching lines with file path, line number, and trimmed snippet.")
       }),
       execute: async ({ query, filePattern }) => {
+        abortSignal?.throwIfAborted();
         const files = await storage.listFiles(scope.userId, scope.projectId);
+        abortSignal?.throwIfAborted();
         const matcher = filePattern ? simpleGlobToRegExp(filePattern) : null;
         const results: Array<{ path: string; line: number; snippet: string }> = [];
 
@@ -812,7 +827,9 @@ export function createProjectTools(
             continue;
           }
 
+          abortSignal?.throwIfAborted();
           const content = await storage.readFile(scope.userId, scope.projectId, file.path);
+          abortSignal?.throwIfAborted();
           const lines = content.split(/\r?\n/);
 
           lines.forEach((line, index) => {
@@ -863,6 +880,7 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ path, content, mode }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
 
         // SS-18: protected system files (.metadata.json, .thumbnail.png) are
@@ -877,6 +895,7 @@ export function createProjectTools(
         }
 
         let current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        abortSignal?.throwIfAborted();
         const previousContent = current?.content ?? null;
 
         const nextContent = mode === "append" && previousContent !== null
@@ -910,6 +929,7 @@ export function createProjectTools(
             };
           }
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+          abortSignal?.throwIfAborted();
         }
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -925,6 +945,7 @@ export function createProjectTools(
               };
             }
             current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+            abortSignal?.throwIfAborted();
             continue;
           }
 
@@ -952,6 +973,7 @@ export function createProjectTools(
           }
 
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+          abortSignal?.throwIfAborted();
         }
 
         return {
@@ -982,6 +1004,7 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ path, oldText, newText, replaceAll }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
 
         if (!isTextFile(filePath)) {
@@ -993,6 +1016,7 @@ export function createProjectTools(
         }
 
         let current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+        abortSignal?.throwIfAborted();
         if (!current) {
           return {
             ok: false,
@@ -1040,6 +1064,7 @@ export function createProjectTools(
           }
 
           current = await storage.readFileWithEtag(scope.userId, scope.projectId, filePath);
+          abortSignal?.throwIfAborted();
           if (!current || !current.content.includes(oldText)) {
             return {
               ok: false,
@@ -1082,6 +1107,7 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ oldPath, newPath }) => {
+        abortSignal?.throwIfAborted();
         const currentPath = sanitizeFilePath(oldPath);
         const nextPath = sanitizeFilePath(newPath);
 
@@ -1093,7 +1119,9 @@ export function createProjectTools(
           };
         }
 
-        if (!(await storage.fileExists(scope.userId, scope.projectId, currentPath))) {
+        const sourceExists = await storage.fileExists(scope.userId, scope.projectId, currentPath);
+        abortSignal?.throwIfAborted();
+        if (!sourceExists) {
           return {
             ok: false,
             path: currentPath,
@@ -1101,7 +1129,9 @@ export function createProjectTools(
           };
         }
 
-        if (await storage.fileExists(scope.userId, scope.projectId, nextPath)) {
+        const destinationExists = await storage.fileExists(scope.userId, scope.projectId, nextPath);
+        abortSignal?.throwIfAborted();
+        if (destinationExists) {
           return {
             ok: false,
             path: nextPath,
@@ -1115,13 +1145,16 @@ export function createProjectTools(
         // claims the destination atomically; losing that claim means a
         // concurrent write or rename took the destination after the preflight.
         try {
+          abortSignal?.throwIfAborted();
           await executeMutation(scope.userId, {
             type: "rename-file",
             projectId: scope.projectId,
             oldPath: currentPath,
             newPath: nextPath
           }, serializedLogging);
+          abortSignal?.throwIfAborted();
         } catch (error) {
+          abortSignal?.throwIfAborted();
           if (error instanceof FileExistsError || (error instanceof Error && error.message.includes("already exists"))) {
             return {
               ok: false,
@@ -1158,6 +1191,7 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ path }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
 
         if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
@@ -1168,7 +1202,9 @@ export function createProjectTools(
           };
         }
 
-        if (!(await storage.fileExists(scope.userId, scope.projectId, filePath))) {
+        const exists = await storage.fileExists(scope.userId, scope.projectId, filePath);
+        abortSignal?.throwIfAborted();
+        if (!exists) {
           return {
             ok: false,
             path: filePath,
@@ -1178,11 +1214,13 @@ export function createProjectTools(
 
         mutationLifecycle?.admit();
         await ensureSnapshot();
+        abortSignal?.throwIfAborted();
         await executeMutation(scope.userId, {
           type: "delete-file",
           projectId: scope.projectId,
           path: filePath
         }, serializedLogging);
+        abortSignal?.throwIfAborted();
         mutationLifecycle?.acknowledgeMutation();
 
         return {
@@ -1209,7 +1247,9 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ templateId, replaceExisting }) => {
+        abortSignal?.throwIfAborted();
         const files = await storage.listFiles(scope.userId, scope.projectId);
+        abortSignal?.throwIfAborted();
 
         if (files.length > 0 && !replaceExisting) {
           return {
@@ -1223,12 +1263,14 @@ export function createProjectTools(
         const replacementFiles = templateFiles ?? {
           "index.html": createBlankIndexHtml(scope.projectId)
         };
+        abortSignal?.throwIfAborted();
         await executeMutation(scope.userId, {
           type: "replace-files",
           projectId: scope.projectId,
           files: replacementFiles,
           label: `Before applying ${templateId} template`
         }, serializedLogging);
+        abortSignal?.throwIfAborted();
         mutationLifecycle?.acknowledgeMutation();
         return { ok: true as const, templateId, filesWritten: Object.keys(replacementFiles).length };
       }
@@ -1252,9 +1294,12 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ path, title }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path.endsWith(".html") ? path : `${path}.html`);
 
-        if (await storage.fileExists(scope.userId, scope.projectId, filePath)) {
+        const exists = await storage.fileExists(scope.userId, scope.projectId, filePath);
+        abortSignal?.throwIfAborted();
+        if (exists) {
           return {
             ok: false,
             path: filePath,
@@ -1293,18 +1338,22 @@ export function createProjectTools(
         })).describe("The accessibility findings, in file and document order.")
       }),
       execute: async ({ prefix }) => {
+        abortSignal?.throwIfAborted();
         const files = await storage.listFiles(
           scope.userId,
           scope.projectId,
           prefix ? sanitizeFilePath(prefix) : ""
         );
+        abortSignal?.throwIfAborted();
         const htmlFiles: Record<string, string> = {};
 
         for (const file of files) {
           if (!/\.html?$/i.test(file.path)) {
             continue;
           }
+          abortSignal?.throwIfAborted();
           htmlFiles[file.path] = await storage.readFile(scope.userId, scope.projectId, file.path);
+          abortSignal?.throwIfAborted();
         }
 
         const findings = lintProject(htmlFiles);
@@ -1335,40 +1384,30 @@ export function createProjectTools(
         })
       ]),
       execute: async ({ prompt, filename, width, height }) => {
+        abortSignal?.throwIfAborted();
         // Writes a project file, so snapshot first (mutation, unlike audit_accessibility).
         mutationLifecycle?.admit();
         await ensureSnapshot();
 
         // Ordering (generate → sniff → gate → save) lives in the extracted,
         // integration-tested flow — keep this body a thin binding.
-        const uploadAdmissionId = crypto.randomUUID();
         const result = await runGenerateImageFlow(filename, {
-          generate: () => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl),
-          screen: (bytes) => screenImage(env, identityJwt, bytes, fetchImpl),
+          generate: (signal) => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl, signal),
+          screen: (bytes, signal) => screenImage(env, identityJwt, bytes, fetchImpl, signal),
           saveIfAbsent: async (path, bytes) => {
+            abortSignal?.throwIfAborted();
             const saved = await executeMutation(scope.userId, {
               type: "upload-if-absent",
               projectId: scope.projectId,
               path,
-              content: bytes,
-              admissionId: uploadAdmissionId,
-              maxProjectBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_PROJECT_BYTES,
-                "SITE_STUDIO_MAX_PROJECT_BYTES"
-              ),
-              maxOwnerBytes: requiredPositiveInteger(
-                env.SITE_STUDIO_MAX_OWNER_BYTES,
-                "SITE_STUDIO_MAX_OWNER_BYTES"
-              ),
-              uploadsPerMinute: requiredPositiveInteger(
-                env.SITE_STUDIO_UPLOADS_PER_MINUTE,
-                "SITE_STUDIO_UPLOADS_PER_MINUTE"
-              )
+              content: binaryBody(bytes).stream()
             }, serializedLogging);
+            abortSignal?.throwIfAborted();
             if (!("written" in saved)) throw new Error("Unexpected mutation result");
             return saved.written;
           }
-        });
+        }, abortSignal);
+        abortSignal?.throwIfAborted();
         if (result.ok) {
           mutationLifecycle?.acknowledgeMutation();
         }
@@ -1387,11 +1426,12 @@ function createChatTools(
   fetchImpl?: typeof fetch,
   mutationLifecycle?: Pick<SiteStudioActionLifecycle, "admit" | "acknowledgeMutation">,
   logging?: SiteStudioLoggingContext,
+  abortSignal?: AbortSignal,
 ) {
   const projectTools = createProjectTools(env, scope, identityJwt, {
     trigger: "agent",
     label: latestUserRequest ? `Agent: ${latestUserRequest}` : "Agent changes"
-  }, fetchImpl, mutationLifecycle, logging);
+  }, fetchImpl, mutationLifecycle, logging, undefined, undefined, abortSignal);
   const storage = new R2ProjectStorage(env.SITE_STUDIO_BUCKET, logging);
   const executor = new DynamicWorkerExecutor({
     loader: env.LOADER,
@@ -1400,10 +1440,80 @@ function createChatTools(
 
   return {
     ...createToolsFromClientSchemas(clientTools),
-    extract_document_text: tool({
-      description: "Extract readable text from a supported uploaded document such as a PDF.",
+    read_url: tool({
+      description: "Read a public HTTP(S) web page and return its text and links as untrusted source material. This does not search the web, open private or sign-in pages, or execute page JavaScript.",
       inputSchema: z.object({
-        path: z.string().min(1).describe("Path to the uploaded document relative to the project root."),
+        url: z.string().min(1).describe("Complete public http:// or https:// page URL.")
+      }),
+      outputSchema: z.discriminatedUnion("ok", [
+        z.object({
+          ok: z.literal(true),
+          url: z.string(),
+          content: z.string(),
+          truncated: z.boolean()
+        }),
+        z.object({
+          ok: z.literal(false),
+          message: z.string()
+        })
+      ]),
+      execute: async ({ url }) => {
+        abortSignal?.throwIfAborted();
+        try {
+          // Deliberately omit the Gateway/test fetch seam: this host capability
+          // uses the Worker global fetch and never forwards model credentials.
+          const page = await readWebPage(url, abortSignal);
+          abortSignal?.throwIfAborted();
+          return { ok: true as const, ...page };
+        } catch (error) {
+          abortSignal?.throwIfAborted();
+          return { ok: false as const, message: summarizeError(error) };
+        }
+      }
+    }),
+    inspect_image: tool({
+      description: "Inspect an existing image in the current project with a vision model and return a concise visual observation. Reads only the project-owned file; it does not change files. Use it before choosing accurate alt text or placement.",
+      inputSchema: z.object({
+        path: z.string().min(1).describe("Project-relative path to an existing image.")
+      }),
+      outputSchema: z.discriminatedUnion("ok", [
+        z.object({
+          ok: z.literal(true),
+          path: z.string(),
+          contentType: z.string(),
+          observation: z.string()
+        }),
+        z.object({
+          ok: z.literal(false),
+          path: z.string(),
+          message: z.string()
+        })
+      ]),
+      execute: async ({ path }) => {
+        abortSignal?.throwIfAborted();
+        const filePath = sanitizeFilePath(path);
+        try {
+          const bytes = await storage.readFileBuffer(scope.userId, scope.projectId, filePath);
+          abortSignal?.throwIfAborted();
+          const result = await inspectImage(env, identityJwt, bytes, {
+            sessionId: scope.projectId,
+            fetchImpl,
+            abortSignal,
+          });
+          abortSignal?.throwIfAborted();
+          return result.ok
+            ? { ok: true as const, path: filePath, contentType: result.contentType, observation: result.observation }
+            : { ok: false as const, path: filePath, message: result.message };
+        } catch (error) {
+          abortSignal?.throwIfAborted();
+          return { ok: false as const, path: filePath, message: summarizeError(error) };
+        }
+      }
+    }),
+    extract_document_text: tool({
+      description: "Extract readable text from a supported uploaded PDF document.",
+      inputSchema: z.object({
+        path: z.string().min(1).describe("Path to the uploaded PDF relative to the project root."),
         maxChars: z.number().int().min(1000).max(MAX_DOCUMENT_CONTENT_CHARS).optional().describe("Optional character limit for the extracted text.")
       }),
       outputSchema: z.discriminatedUnion("ok", [
@@ -1426,12 +1536,15 @@ function createChatTools(
         })
       ]),
       execute: async ({ path, maxChars }) => {
+        abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
         const contentType = getContentType(filePath);
 
         try {
           const data = await storage.readFileBuffer(scope.userId, scope.projectId, filePath);
+          abortSignal?.throwIfAborted();
           const extracted = await extractDocumentText(filePath, data);
+          abortSignal?.throwIfAborted();
           const clipped = clipText(extracted.text, maxChars || MAX_DOCUMENT_CONTENT_CHARS);
 
           return {
@@ -1446,6 +1559,7 @@ function createChatTools(
             warnings: extracted.warnings
           };
         } catch (error) {
+          abortSignal?.throwIfAborted();
           return {
             ok: false as const,
             path: filePath,
@@ -2336,7 +2450,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // it already imported, while still refusing to overwrite different work.
       return JSON.stringify(this.messages) === JSON.stringify(messages);
     }
-    await this.saveMessages(messages);
+    await this.persistMessages(messages);
     return true;
   }
 
@@ -2499,6 +2613,7 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
         gatewayFetch,
         buildAction,
         scopeLogging,
+        options?.abortSignal,
       );
 
       this.ensureObservabilityRequest(requestId, modelName, scope.projectId);
@@ -2893,11 +3008,3 @@ callable()(SiteBuilderAgent.prototype.getObservability, {
   addInitializer: () => undefined,
   metadata: {},
 });
-
-function requiredPositiveInteger(value: string | undefined, name: string): number {
-  const parsed = parsePositiveInteger(value);
-  if (parsed === null) {
-    throw new Error(`${name} is not configured`);
-  }
-  return parsed;
-}

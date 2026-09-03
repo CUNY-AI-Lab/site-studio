@@ -305,6 +305,79 @@ describe("migrateAnonymousData", () => {
     }
   });
 
+  it("keeps project inventory when secondary artifact retirement fails", async () => {
+    seedAnonProject(bucket, "portfolio");
+    const snapshotZip = `snapshots/${ANON}/portfolio/snap1.zip`;
+    const snapshotRecord = `snapshots/${ANON}/portfolio/snap1.json`;
+    const upload = `uploads/${ANON}/paper.pdf`;
+    bucket.store.set(snapshotZip, { data: "zipbytes" });
+    bucket.store.set(snapshotRecord, {
+      data: JSON.stringify({
+        id: "snap1",
+        createdAt: "2026-01-02T00:00:00.000Z",
+        projectId: "portfolio",
+        trigger: "manual",
+        fileCount: 2,
+      }),
+    });
+    bucket.store.set(upload, { data: "pdfbytes" });
+
+    const originalDelete = bucket.delete.bind(bucket);
+    let failSnapshotDelete = true;
+    // SAFETY: This replacement preserves the R2 delete signature while
+    // injecting one deterministic secondary-artifact retirement failure.
+    bucket.delete = vi.fn(async (key: string) => {
+      if (key === snapshotZip && failSnapshotDelete) {
+        failSnapshotDelete = false;
+        throw new Error("injected snapshot delete failure");
+      }
+      return originalDelete(key);
+    });
+
+    await expect(run()).rejects.toThrow("injected snapshot delete failure");
+
+    // The project inventory remains the durable source of truth for retry;
+    // no completion record can close this still-pending migration.
+    expect(bucket.store.has(`projects/${ANON}/portfolio/.metadata.json`)).toBe(true);
+    expect(bucket.store.has(`projects/${ANON}/portfolio/index.html`)).toBe(true);
+    expect(bucket.store.has(snapshotZip)).toBe(true);
+    expect(bucket.store.has(upload)).toBe(true);
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "pending",
+    });
+    expect(kv.store.get(migrationPendingKey(SUBJECT))).toBe(ANON);
+
+    const subjectDataBeforeRetry = new Map(
+      [...bucket.store.entries()]
+        .filter(([key]) =>
+          key.startsWith(`projects/${SUBJECT}/`) ||
+          key.startsWith(`snapshots/${SUBJECT}/`) ||
+          key.startsWith(`uploads/${SUBJECT}/`),
+        )
+        .map(([key, value]) => [key, value.data]),
+    );
+    const retry = await run();
+    expect(retry.status).toBe("migrated");
+    for (const [key, data] of subjectDataBeforeRetry) {
+      expect(bucket.store.get(key)?.data).toBe(data);
+    }
+    expect(
+      [...bucket.store.keys()].some((key) => key.startsWith(`projects/${ANON}/`)),
+    ).toBe(false);
+    expect(
+      [...bucket.store.keys()].some((key) => key.startsWith(`snapshots/${ANON}/`)),
+    ).toBe(false);
+    expect(
+      [...bucket.store.keys()].some((key) => key.startsWith(`uploads/${ANON}/`)),
+    ).toBe(false);
+    expect(JSON.parse(kv.store.get(migrationClaimKey(ANON))!)).toMatchObject({
+      subject: SUBJECT,
+      status: "complete",
+    });
+    expect(kv.store.has(migrationPendingKey(SUBJECT))).toBe(false);
+  });
+
   it("merges without overwriting: colliding project ids are suffixed, subject data untouched", async () => {
     // Subject already owns "site" with its own content.
     bucket.store.set(`projects/${SUBJECT}/site/.metadata.json`, {

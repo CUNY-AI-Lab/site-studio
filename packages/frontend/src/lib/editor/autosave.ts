@@ -94,6 +94,30 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 			// it confirms the exact snapshot that was retained for retry.
 			queuedSave = null;
 		}
+
+		// A timed-out operation remains the sole owner of its write until it
+		// settles. Once it does, a newer queued snapshot may proceed. Do not
+		// retry the timed-out snapshot itself: its result is still uncertain, and
+		// starting it again could create a concurrent write. A regular failed
+		// operation keeps the existing explicit-retry behavior.
+		const timedOut = operation.detached || operation.controller.signal.aborted;
+		if (timedOut && !disposed && queuedSave !== null && !sameSnapshot(queuedSave, operation.snapshot)) {
+			const drainNewerSave = () => {
+				if (!disposed && activePersist === null && queuedSave !== null && !sameSnapshot(queuedSave, operation.snapshot)) {
+					void drain();
+				}
+			};
+			const currentDrain = drainPromise;
+			if (currentDrain) {
+				// The operation can settle before the current drain has observed its
+				// timeout. Wait for that drain to finish before starting the newer
+				// write, otherwise drain() just returns the current promise and the
+				// queued snapshot can remain stranded.
+				void currentDrain.then(drainNewerSave, drainNewerSave);
+			} else {
+				drainNewerSave();
+			}
+		}
 	}
 
 	function startPersist(snapshot: SaveSnapshot): ActivePersist {

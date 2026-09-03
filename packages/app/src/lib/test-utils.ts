@@ -2,6 +2,12 @@ import { vi } from "vitest";
 import { CSRF_HEADER_NAME, getOrMintCsrfToken } from "./csrf";
 import { OwnerMutationService, type MutationJournalStore, type OwnerMutationResult } from "./owner-mutations";
 import type { MigrationResult } from "./migration";
+import {
+  runSubjectImport,
+  type SubjectImportOutcome,
+} from "./anonymous-import";
+import { SerializedOperationQueue } from "../agents/mutation-coordinator";
+import type { SiteStudioLoggingContextData } from "./logging";
 import type { OwnerMutation } from "./owner-mutations";
 
 /**
@@ -145,6 +151,7 @@ export type TestMutationCoordinator = {
   get: () => {
     execute: (ownerId: string, operation: OwnerMutation) => Promise<OwnerMutationResult>;
     migrateAnonymous: (anonUserId: string, subject: string, anonSessionId?: string) => Promise<MigrationResult>;
+    migrateAnonymousForSubject: (subject: string, cookieValue?: string, logging?: SiteStudioLoggingContextData) => Promise<SubjectImportOutcome>;
     fetch: (request: Request) => Promise<Response>;
     readonly id: DurableObjectId;
     [Rpc.__DURABLE_OBJECT_BRAND]: never;
@@ -152,6 +159,7 @@ export type TestMutationCoordinator = {
   getByName: (name: string) => {
     execute: (ownerId: string, operation: OwnerMutation) => Promise<OwnerMutationResult>;
     migrateAnonymous: (anonUserId: string, subject: string, anonSessionId?: string) => Promise<MigrationResult>;
+    migrateAnonymousForSubject: (subject: string, cookieValue?: string, logging?: SiteStudioLoggingContextData) => Promise<SubjectImportOutcome>;
     fetch: (request: Request) => Promise<Response>;
     readonly id: DurableObjectId;
     [Rpc.__DURABLE_OBJECT_BRAND]: never;
@@ -169,6 +177,9 @@ export function createTestNamespace<T extends Rpc.DurableObjectBranded | undefin
 
 export function createMockMutationCoordinator(bucket: R2Bucket): TestMutationCoordinator {
   const journals = new Map<string, unknown>();
+  const importKv = createMockKV();
+  const importStates = new Map<string, Map<string, unknown>>();
+  const importQueues = new Map<string, SerializedOperationQueue>();
   const store: MutationJournalStore = {
     async get<T>(key: string) {
       // SAFETY: OwnerMutationService writes and reads each journal key through
@@ -179,6 +190,28 @@ export function createMockMutationCoordinator(bucket: R2Bucket): TestMutationCoo
     async delete(key: string) { return journals.delete(key); }
   };
   const service = new OwnerMutationService(bucket, store);
+  const importStorageFor = (subject: string): MutationJournalStore => {
+    let state = importStates.get(subject);
+    if (!state) {
+      state = new Map<string, unknown>();
+      importStates.set(subject, state);
+    }
+    // SAFETY: State is the subject's isolated journal map; runSubjectImport
+    // writes only its PendingImportState value under the known key.
+    return {
+      get: async <T>(key: string) => state?.get(key) as T | undefined,
+      put: async <T>(key: string, value: T) => { state?.set(key, value); },
+      delete: async (key: string) => state?.delete(key) ?? false,
+    };
+  };
+  const importQueueFor = (subject: string): SerializedOperationQueue => {
+    let queue = importQueues.get(subject);
+    if (!queue) {
+      queue = new SerializedOperationQueue();
+      importQueues.set(subject, queue);
+    }
+    return queue;
+  };
   const idFor = (name: string): DurableObjectId => {
     // SAFETY: The fixture's object id carries the name/equals behavior used by
     // the route RPC boundary; Cloudflare supplies the opaque implementation.
@@ -192,7 +225,24 @@ export function createMockMutationCoordinator(bucket: R2Bucket): TestMutationCoo
     id: idFor("rpc"),
     execute: (ownerId: string, operation: OwnerMutation) => service.execute(ownerId, operation),
     // SAFETY: The fallback migration RPC returns the documented result shape.
-    migrateAnonymous: async () => ({ status: "nothing-to-migrate", projects: {} }) as MigrationResult,
+    migrateAnonymous: async (
+      _anonUserId: string,
+      _migrationSubject: string,
+      _anonSessionId?: string,
+    ) => ({ status: "nothing-to-migrate", projects: {} }) as MigrationResult,
+    migrateAnonymousForSubject: (
+      subject: string,
+      cookieValue?: string,
+      _logging?: SiteStudioLoggingContextData,
+    ) => importQueueFor(subject).run(() => runSubjectImport({
+      env: { SITE_STUDIO_BUCKET: bucket, SESSION_KV: importKv },
+      storage: importStorageFor(subject),
+      subject,
+      cookieValue,
+      claimAnonymous: async () => ({ granted: true }),
+      migrateAnonymous: async (anonUserId, migrationSubject, anonSessionId) =>
+        rpc.migrateAnonymous(anonUserId, migrationSubject, anonSessionId),
+    })),
     fetch: async (_request: Request) => new Response(null, { status: 404 }),
     // SAFETY: Cloudflare's RPC brand is nominal type metadata; this in-memory
     // stub implements the corresponding RPC surface above.

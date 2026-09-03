@@ -1,19 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import ImageManagerDialog from './ImageManagerDialog.svelte';
 import {
 	fetchProjectImages,
-	uploadProjectImage,
+	uploadProjectFile,
+	type ProjectUploadResult,
 	type ProjectImagesResult
 } from '$lib/api/projects';
+import { toast, toasts } from '$lib/toast.svelte';
 
 const mockFetch = vi.fn<typeof fetchProjectImages>();
-const mockUpload = vi.fn<typeof uploadProjectImage>();
+const mockUpload = vi.fn<typeof uploadProjectFile>();
 
 interface DialogOverrides {
 	fetchProjectImages?: typeof fetchProjectImages;
-	uploadProjectImage?: typeof uploadProjectImage;
+	uploadProjectFile?: typeof uploadProjectFile;
 }
 
 declare global {
@@ -30,6 +32,16 @@ const imagesResult: ProjectImagesResult = {
 	]
 };
 
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: Error) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
 function open(overrides: DialogOverrides = {}) {
 	const onOpenChange = vi.fn();
 	const onAskAssistant = vi.fn();
@@ -40,11 +52,11 @@ function open(overrides: DialogOverrides = {}) {
 			onOpenChange,
 			onAskAssistant,
 			fetchProjectImages: mockFetch,
-			uploadProjectImage: mockUpload,
+			uploadProjectFile: mockUpload,
 			...overrides
 		}
 	});
-	return { onOpenChange, onAskAssistant, unmount: view.unmount };
+	return { onOpenChange, onAskAssistant, rerender: view.rerender, unmount: view.unmount };
 }
 
 function labeledInput(label: RegExp): HTMLInputElement {
@@ -88,6 +100,11 @@ describe('ImageManagerDialog', () => {
 		mockFetch.mockResolvedValue(imagesResult);
 	});
 
+	afterEach(() => {
+		toasts.splice(0);
+		vi.restoreAllMocks();
+	});
+
 	it('fully tears down an immediately unmounted dialog', async () => {
 		vi.useFakeTimers();
 		try {
@@ -114,6 +131,127 @@ describe('ImageManagerDialog', () => {
 		await waitForImages();
 		expect(screen.getByText('images/two.jpg')).toBeInTheDocument();
 		expect(mockFetch).toHaveBeenCalledWith('proj1');
+	});
+
+	it('ignores an inventory response from a previous project', async () => {
+		const projectA = deferred<ProjectImagesResult>();
+		const projectB = deferred<ProjectImagesResult>();
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockReturnValueOnce(projectA.promise)
+			.mockReturnValueOnce(projectB.promise);
+		const view = open({ fetchProjectImages: fetchImages });
+
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(1, 'proj1'));
+		await view.rerender({ projectId: 'proj2' });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj2'));
+
+		projectB.resolve({
+			images: [{ path: 'images/project-b.png', size: 1 }],
+			placeholders: []
+		});
+		await waitFor(() => expect(screen.getByText('images/project-b.png')).toBeInTheDocument());
+
+		projectA.resolve({
+			images: [{ path: 'images/project-a.png', size: 1 }],
+			placeholders: []
+		});
+		await Promise.resolve();
+
+		expect(screen.queryByText('images/project-a.png')).not.toBeInTheDocument();
+		expect(screen.getByText('images/project-b.png')).toBeInTheDocument();
+	});
+
+	it('ignores an inventory response after closing and reopening', async () => {
+		const firstOpen = deferred<ProjectImagesResult>();
+		const secondOpen = deferred<ProjectImagesResult>();
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockReturnValueOnce(firstOpen.promise)
+			.mockReturnValueOnce(secondOpen.promise);
+		const view = open({ fetchProjectImages: fetchImages });
+
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(1, 'proj1'));
+		await view.rerender({ open: false });
+		await view.rerender({ open: true });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj1'));
+
+		secondOpen.resolve({
+			images: [{ path: 'images/current.png', size: 1 }],
+			placeholders: []
+		});
+		await waitFor(() => expect(screen.getByText('images/current.png')).toBeInTheDocument());
+
+		firstOpen.resolve({
+			images: [{ path: 'images/stale.png', size: 1 }],
+			placeholders: []
+		});
+		await Promise.resolve();
+
+		expect(screen.queryByText('images/stale.png')).not.toBeInTheDocument();
+		expect(screen.getByText('images/current.png')).toBeInTheDocument();
+	});
+
+	it('discards previous-project placement actions when the next inventory fails, then recovers', async () => {
+		const user = userEvent.setup({ delay: null });
+		const nextInventory = deferred<ProjectImagesResult>();
+		const fetchImages = vi.fn<typeof fetchProjectImages>()
+			.mockResolvedValueOnce(imagesResult)
+			.mockReturnValueOnce(nextInventory.promise)
+			.mockResolvedValueOnce({ images: [{ path: 'images/current.png', size: 1 }], placeholders: [] });
+		const view = open({ fetchProjectImages: fetchImages });
+		await waitForImages();
+		await user.click(screen.getByRole('button', { name: /^replace$/i }));
+		await user.type(screen.getByLabelText(/describe this image/i), 'Old project image');
+
+		await view.rerender({ projectId: 'proj2' });
+		await waitFor(() => expect(fetchImages).toHaveBeenNthCalledWith(2, 'proj2'));
+		expect(screen.queryByRole('button', { name: /^replace$/i })).not.toBeInTheDocument();
+		nextInventory.reject(new Error('inventory unavailable'));
+		await screen.findByRole('alert');
+		expect(screen.queryByRole('button', { name: /insert this image/i })).not.toBeInTheDocument();
+		expect(view.onAskAssistant).not.toHaveBeenCalled();
+
+		await view.rerender({ open: false });
+		await view.rerender({ open: true });
+		await user.click(await screen.findByRole('button', { name: 'Insert this image: images/current.png' }));
+		await user.type(screen.getByLabelText(/describe this image/i), 'Current project image');
+		await clickSubmit(user);
+		expect(view.onAskAssistant).toHaveBeenCalledExactlyOnceWith(
+			'Insert images/current.png into the site. Use alt text: "Current project image".'
+		);
+	});
+
+	it('reports a refresh failure separately after a successful upload', async () => {
+		const user = userEvent.setup({ delay: null });
+		const fetchImages = vi
+			.fn<typeof fetchProjectImages>()
+			.mockResolvedValueOnce(imagesResult)
+			.mockRejectedValueOnce(new Error('inventory unavailable'));
+		const uploadResult: ProjectUploadResult = {
+			success: true,
+			filename: 'new.png',
+			path: 'images/new.png',
+			size: 11,
+			message: 'Uploaded new.png'
+		};
+		const upload = vi.fn<typeof uploadProjectFile>().mockResolvedValue(uploadResult);
+		const errorToast = vi.spyOn(toast, 'error');
+		open({ fetchProjectImages: fetchImages, uploadProjectFile: upload });
+		await waitForImages();
+
+		const input = document.querySelector('input[type="file"]');
+		if (!(input instanceof HTMLInputElement)) throw new Error('expected image file input');
+		const file = new File(['image bytes'], 'new.png', { type: 'image/png' });
+		await user.upload(input, file);
+
+		await waitFor(() => expect(upload).toHaveBeenCalledWith('proj1', file, 'images'));
+		await waitFor(() =>
+			expect(errorToast).toHaveBeenCalledWith(
+				'Image uploaded, but the gallery could not refresh. Reopen Images to see it.'
+			)
+		);
+		expect(errorToast).not.toHaveBeenCalledWith(expect.stringContaining('Could not upload image.'));
 	});
 
 	describe('alt-text validation', () => {

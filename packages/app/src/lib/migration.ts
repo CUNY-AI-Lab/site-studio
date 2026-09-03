@@ -652,13 +652,17 @@ export async function migrateAnonymousData(options: {
   await migrateHandle({ bucket, anonUserId, subject, now });
 
   // ---- Delete originals ----
-  for (const key of await listKeys(bucket, projectPrefix(anonUserId))) {
-    await bucket.delete(key);
-  }
+  // Retire secondary artifacts first. If a snapshot/upload delete fails, the
+  // project inventory remains discoverable as the retry anchor instead of
+  // leaving an orphaned secondary namespace that a later completed marker can
+  // no longer recover.
   for (const key of await listKeys(bucket, snapshotUserPrefix(anonUserId))) {
     await bucket.delete(key);
   }
   for (const key of await listKeys(bucket, uploadsPrefix(anonUserId))) {
+    await bucket.delete(key);
+  }
+  for (const key of await listKeys(bucket, projectPrefix(anonUserId))) {
     await bucket.delete(key);
   }
 

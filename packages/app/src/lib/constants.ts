@@ -11,26 +11,9 @@ export const SESSION_COOKIE_NAME = "site-studio-session";
 export const CSRF_COOKIE_NAME = "cail_csrf_sitestudio";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 export const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
-/**
- * Image uploads are held to a tighter cap than generic files. Real photos for a
- * student site rarely need more than a few MB; 10MB leaves room for a large
- * hero image without inviting multi-hundred-MB uploads into R2.
- */
+/** Application upload limits; these are not R2's object-size limits. */
 export const IMAGE_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-/**
- * SS-29 pre-buffer guard: absolute ceiling on the raw multipart request body for
- * the upload route, checked against the Content-Length header BEFORE
- * `c.req.formData()` buffers the whole body into isolate memory. The per-file
- * storage caps (MAX_UPLOAD_BYTES / IMAGE_MAX_UPLOAD_BYTES) reject STORAGE but run
- * only after the body is already buffered — this ceiling rejects ALLOCATION.
- *
- * The margin covers multipart framing overhead (boundary lines, the
- * Content-Disposition/Content-Type part headers, and the optional `dir` field)
- * so a legitimate 32MB file is never false-rejected by the envelope around it.
- * 1MB is far more than any realistic multipart envelope for a single file plus a
- * short text field, while still bounding a pathological upload well below what
- * would spike the isolate.
- */
+/** Allow multipart framing while bounding the body before native form parsing. */
 export const MAX_UPLOAD_BODY_MARGIN_BYTES = 1 * 1024 * 1024;
 export const MAX_UPLOAD_BODY_BYTES = MAX_UPLOAD_BYTES + MAX_UPLOAD_BODY_MARGIN_BYTES;
 export const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
