@@ -2220,6 +2220,32 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
     this.detachChatRequestsForConnection(connection);
   }
 
+  private emitAgentErrorDiagnostic(
+    error: Error,
+    connection?: Connection<SiteStudioConnectionLoggingState>,
+  ): void {
+    try {
+      const parsedConnectionState = connection?.state
+        ? connectionStateSchema.safeParse(connection.state)
+        : null;
+      const connectionState = parsedConnectionState?.success
+        ? parsedConnectionState.data
+        : null;
+      const logging = createSiteStudioLoggingContext(
+        createSiteStudioBoundaryLogger(this.env),
+        connectionState
+          ? {
+              correlation: connectionState.correlation,
+              operationalSubject: connectionState.operationalSubject,
+            }
+          : undefined,
+      );
+      emitDiagnostic("error", errorCodeFrom(error), {}, logging);
+    } catch {
+      // A logging configuration or sink failure must not replace the agent error.
+    }
+  }
+
   override onError(
     connection: Connection<SiteStudioConnectionLoggingState>,
     _error: Error,
@@ -2231,7 +2257,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
   ): void {
     if (arguments.length > 1 && !(connectionOrError instanceof Error)) {
       this.detachChatRequestsForConnection(connectionOrError);
+      if (_error) this.emitAgentErrorDiagnostic(_error, connectionOrError);
+      return;
     }
+    if (connectionOrError instanceof Error) this.emitAgentErrorDiagnostic(connectionOrError);
   }
 
   private handleChatResumeFrame(

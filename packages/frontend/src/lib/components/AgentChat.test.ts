@@ -2268,7 +2268,8 @@ describe('AgentChat', () => {
 	// handleSocketClose would retry — so one error-first failure silently killed
 	// the whole reconnect loop. The rejection path must keep retrying with
 	// backoff.
-	it('keeps reconnecting when a reconnect attempt errors instead of closing', async () => {
+	it('keeps reconnecting when a reconnect attempt errors without logging socket details', async () => {
+		const socketError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
 		const first = FakeWebSocket.instances[0];
@@ -2288,8 +2289,12 @@ describe('AgentChat', () => {
 
 			// Attempt #1 fails with an error event only — no close ever reaches the
 			// component. The loop must schedule attempt #2, not die silently.
-			FakeWebSocket.last().serverError();
+			const failed = FakeWebSocket.last();
+			failed.url = 'wss://site-studio.example/agent?csrf=private-token';
+			failed.serverError();
 			flushSync();
+			expect(socketError).toHaveBeenCalledWith('site_studio.websocket_error');
+			expect(socketError.mock.calls).toEqual([['site_studio.websocket_error']]);
 			await vi.advanceTimersByTimeAsync(20000);
 			flushSync();
 			await vi.advanceTimersByTimeAsync(0);
@@ -2297,6 +2302,7 @@ describe('AgentChat', () => {
 			expect(FakeWebSocket.instances.length).toBe(3);
 		} finally {
 			vi.useRealTimers();
+			socketError.mockRestore();
 		}
 	});
 
