@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatResponseResult } from "@cloudflare/ai-chat";
+import {
+  CAIL_ANALYTICS_ENGINE_BLOBS,
+  type CailAnalyticsEngineDataPoint,
+} from "@cuny-ai-lab/cail-log";
 import { quotaExceededEnvelope } from "@cuny-ai-lab/cail-client/testing";
 import { z } from "zod";
 import type { OwnerMutation, OwnerMutationResult } from "../lib/owner-mutations";
@@ -22,6 +26,7 @@ import {
   createSiteStudioLogger,
   serializeSiteStudioLoggingContext,
   SITE_STUDIO_VERIFIED_OPERATIONAL_SUBJECT_HEADER,
+  SITE_STUDIO_EVENTS,
   type SiteStudioCorrelation,
   type SiteStudioConnectionLoggingState,
   type SiteStudioLoggingContextData,
@@ -475,6 +480,125 @@ describe("Site Builder connection logging concurrency", () => {
 
     expect(resetTurnState).toHaveBeenCalledOnce();
     expect(broadcast).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
+  });
+
+  it("records bounded diagnostics for DO errors with connection correlation", () => {
+    const points: CailAnalyticsEngineDataPoint[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const agent = createTestAgent();
+    const connection = chatConnection("connection-a", "subject-a");
+    const requestId = connection.state?.correlation.request_id;
+    Object.assign(agent, {
+      env: {
+        CAIL_LOG_ENV: "test",
+        CAIL_FLEET_EVENTS: {
+          writeDataPoint: (point: CailAnalyticsEngineDataPoint) => points.push(point),
+        },
+      },
+      getConnection: () => connection,
+      chatRequestConnections: new Map([[
+        "request-a",
+        {
+          connection,
+          connectionId: connection.id,
+          subject: "subject-a",
+        },
+      ]]),
+      detachedChatRequestConnections: new Map(),
+      chatToolRequestIds: new Map(),
+      chatRequestClaims: new Map(),
+    });
+
+    try {
+      const privateError = new Error("private provider body https://private.example/?csrf=secret");
+      privateError.name = "UpstreamFailure";
+      agent.onError(connection, privateError);
+
+      expect(points).toHaveLength(1);
+      expect(points[0]?.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.event_name - 1])
+        .toBe(SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR);
+      expect(points[0]?.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.error_type - 1])
+        .toBe("upstreamfailure");
+      expect(JSON.stringify(points[0])).not.toContain("private provider body");
+      expect(JSON.stringify(points[0])).not.toContain("csrf=secret");
+      expect(consoleError).toHaveBeenCalledWith(expect.objectContaining({
+        "event.name": SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR,
+        "cail.request.id": requestId,
+        "error.type": "upstreamfailure",
+        body: "Service event recorded.",
+      }));
+      expect(JSON.stringify(consoleError.mock.calls[0])).not.toContain("private provider body");
+      expect(JSON.stringify(consoleError.mock.calls[0])).not.toContain("csrf=secret");
+      expect(siteBuilderTestHooks(agent).chatRequestConnections.has("request-a")).toBe(false);
+
+      points.length = 0;
+      consoleError.mockClear();
+      agent.onError(new TypeError("private server body https://private.example/?csrf=secret"));
+      expect(points).toHaveLength(1);
+      expect(consoleError).toHaveBeenCalledWith(expect.objectContaining({
+        "event.name": SITE_STUDIO_EVENTS.DIAGNOSTIC_ERROR,
+        "error.type": "typeerror",
+        body: "Service event recorded.",
+      }));
+      expect(points[0]?.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.error_type - 1])
+        .toBe("typeerror");
+      expect(JSON.stringify(points[0])).not.toContain("private server body");
+      expect(JSON.stringify(consoleError.mock.calls[0])).not.toContain("private server body");
+      expect(JSON.stringify(consoleError.mock.calls[0])).not.toContain(requestId);
+
+      Object.assign(agent, { env: { CAIL_LOG_ENV: "invalid" } });
+      expect(() => agent.onError(new Error("private configuration failure"))).not.toThrow();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("keeps ordinary close and cancellation out of error diagnostics", async () => {
+    const points: CailAnalyticsEngineDataPoint[] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const agent = createTestAgent();
+    const connection = chatConnection("connection-a", "subject-a");
+    const resetTurnState = vi.fn();
+    const broadcast = vi.fn();
+    Object.defineProperty(agent, "resetTurnState", { value: resetTurnState });
+    Object.defineProperty(agent, "broadcast", { value: broadcast });
+    Object.assign(agent, {
+      env: {
+        CAIL_LOG_ENV: "test",
+        CAIL_FLEET_EVENTS: {
+          writeDataPoint: (point: CailAnalyticsEngineDataPoint) => points.push(point),
+        },
+      },
+      getConnection: () => connection,
+      getConnections: () => [connection],
+      chatRequestConnections: new Map([[
+        "request-a",
+        {
+          connection,
+          connectionId: connection.id,
+          subject: "subject-a",
+        },
+      ]]),
+      detachedChatRequestConnections: new Map(),
+      chatToolRequestIds: new Map(),
+      chatRequestClaims: new Map([["request-a", true]]),
+      _activeRequestId: "request-a",
+    });
+
+    try {
+      agent.onClose(connection, 1006, "disconnect", false);
+      await agent.onMessage(
+        connection,
+        JSON.stringify({ type: SITE_STUDIO_CANCEL_TURN_TYPE }),
+      );
+
+      expect(points).toHaveLength(0);
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(resetTurnState).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith(JSON.stringify({ type: SITE_STUDIO_CHAT_CANCELLED_TYPE }));
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("replaces transcript broadcasts with invalidation and targets stream frames", () => {

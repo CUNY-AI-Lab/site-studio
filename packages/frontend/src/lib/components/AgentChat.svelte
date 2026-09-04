@@ -730,8 +730,8 @@
 		}
 	}
 
-	function handleSocketError(event: Event) {
-		console.error('WebSocket error:', event);
+	function handleSocketError(_event: Event) {
+		console.error('site_studio.websocket_error');
 		// The close handler will fire after error and handle reconnection
 	}
 
