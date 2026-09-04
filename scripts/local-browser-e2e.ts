@@ -332,6 +332,24 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
     });
     await installAuthRoute(page, baseUrl, token);
 
+    // Delay delivery of the real initial history until a new turn completes.
+    // This reproduces a slow history read without replacing the app response.
+    let releaseInitialHistory = () => {};
+    const initialHistoryRelease = new Promise<void>((resolvePromise) => {
+      releaseInitialHistory = resolvePromise;
+    });
+    let initialHistoryCaptured = false;
+    let initialHistoryDelivered = false;
+    await page.route("**/get-messages", async (route) => {
+      const response = await route.fetch({
+        headers: { ...route.request().headers(), "x-cail-identity-jwt": token },
+      });
+      initialHistoryCaptured = true;
+      await initialHistoryRelease;
+      await route.fulfill({ response });
+      initialHistoryDelivered = true;
+    }, { times: 1 });
+
     await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Site Studio" })).toBeVisible();
     await expect(page.getByText("No projects yet", { exact: true })).toBeVisible();
@@ -355,6 +373,7 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
       name: "Message to the assistant",
     });
     await expect(chatInput).toBeVisible();
+    await expect.poll(() => initialHistoryCaptured).toBe(true);
     const completionMessages = () =>
       page.getByText("The local tool completed successfully.", {
         exact: false,
@@ -372,6 +391,13 @@ async function runBrowserPath(baseUrl: string, token: string): Promise<void> {
       ) === true,
     );
     await expect.poll(completedTurn).toBe(true);
+    const initialHistoryResponse = page.waitForResponse((response) => response.url().endsWith("/get-messages"));
+    releaseInitialHistory();
+    await expect.poll(() => initialHistoryDelivered).toBe(true);
+    await initialHistoryResponse;
+    await chatInput.focus();
+    await expect(page.getByText("Run the local tool.", { exact: true })).toBeVisible();
+    await expect(completionText()).toBeVisible();
 
     // Stop a held turn from the visible control, then prove a later request is
     // independent. The held local agent waits for the cancel frame; there is

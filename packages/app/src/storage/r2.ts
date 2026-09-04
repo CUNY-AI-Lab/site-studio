@@ -1,4 +1,4 @@
-import { unzipSync, zipSync, strToU8 } from "fflate";
+import { unzipSync, zipSync, strToU8, Zip, ZipDeflate } from "fflate";
 import { z } from "zod";
 import type {
   ProjectMetadata,
@@ -8,6 +8,7 @@ import type {
   StorageFile
 } from "../types";
 import { MAX_SNAPSHOT_BYTES, PROTECTED_FILE_NAMES, SNAPSHOT_KEEP_COUNT } from "../lib/constants";
+import { isProtectedServedPath } from "../lib/protected-files";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import {
   emitDiagnostic,
@@ -570,6 +571,7 @@ export class R2ProjectStorage {
   }
 
   async writeFile(userId: string, projectId: string, filePath: string, content: string | Uint8Array | ArrayBuffer): Promise<string> {
+    if (isProtectedServedPath(sanitizeFilePath(filePath))) throw new Error("Protected files cannot be overwritten.");
     const key = fileKey(userId, projectId, filePath);
     const result = await this.bucket.put(key, content);
     if (result === null) {
@@ -585,6 +587,7 @@ export class R2ProjectStorage {
     content: string | Uint8Array | ArrayBuffer,
     expectedEtag: string
   ): Promise<string | null> {
+    if (isProtectedServedPath(sanitizeFilePath(filePath))) throw new Error("Protected files cannot be overwritten.");
     const result = await this.bucket.put(fileKey(userId, projectId, filePath), content, {
       onlyIf: { etagMatches: expectedEtag }
     });
@@ -597,6 +600,7 @@ export class R2ProjectStorage {
     filePath: string,
     content: string | Uint8Array | ArrayBuffer
   ): Promise<string | null> {
+    if (isProtectedServedPath(sanitizeFilePath(filePath))) throw new Error("Protected files cannot be overwritten.");
     const result = await this.bucket.put(fileKey(userId, projectId, filePath), content, {
       onlyIf: { etagDoesNotMatch: "*" }
     });
@@ -726,19 +730,74 @@ export class R2ProjectStorage {
     return key;
   }
 
-  async exportProjectZip(userId: string, projectId: string): Promise<Uint8Array> {
+  async exportProjectZip(userId: string, projectId: string): Promise<ReadableStream<Uint8Array>> {
     const files = await this.listFiles(userId, projectId);
-    const archive: Record<string, Uint8Array> = {};
+    const pending: Uint8Array[] = [];
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let entry: ZipDeflate | undefined;
+    let nextFile = 0;
+    let finished = false;
+    let cancelled = false;
+    const archive = new Zip((error, chunk, final) => {
+      if (error) throw error;
+      if (chunk.length) pending.push(chunk);
+      finished = final;
+    });
+    const bucket = this.bucket;
 
-    for (const file of files) {
-      archive[file.path] = await this.readFileBuffer(userId, projectId, file.path);
-    }
-
-    if (!archive["index.html"] && !archive["README.txt"]) {
-      archive["README.txt"] = strToU8("This project does not currently include index.html.");
-    }
-
-    return zipSync(archive, { level: 6 });
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          // Drain each synchronous encoder push before reading more R2 bytes.
+          // Only the current body and ZIP directory metadata remain resident.
+          while (!pending.length && !finished && !cancelled) {
+            if (reader && entry) {
+              const result = await reader.read();
+              if (cancelled) return;
+              entry.push(result.value ?? new Uint8Array(), result.done);
+              if (result.done) {
+                reader.releaseLock();
+                reader = undefined;
+                entry = undefined;
+              }
+            } else if (nextFile < files.length) {
+              const file = files[nextFile++];
+              const object = await bucket.get(fileKey(userId, projectId, file.path));
+              if (cancelled) {
+                await object?.body.cancel();
+                return;
+              }
+              if (!object) throw new FileNotFoundError(file.path);
+              reader = object.body.getReader();
+              entry = new ZipDeflate(file.path, { level: 6 });
+              archive.add(entry);
+            } else {
+              if (!files.some((file) => file.path === "index.html" || file.path === "README.txt")) {
+                const readme = new ZipDeflate("README.txt", { level: 6 });
+                archive.add(readme);
+                readme.push(strToU8("This project does not currently include index.html."), true);
+              }
+              archive.end();
+            }
+          }
+          if (cancelled) return;
+          const chunk = pending.shift();
+          if (chunk) controller.enqueue(chunk);
+          if (finished && !pending.length) controller.close();
+        } catch (error) {
+          archive.terminate();
+          pending.length = 0;
+          controller.error(error);
+          await reader?.cancel(error);
+        }
+      },
+      async cancel(reason) {
+        cancelled = true;
+        archive.terminate();
+        pending.length = 0;
+        await reader?.cancel(reason);
+      },
+    }, { highWaterMark: 0 });
   }
 
   async listSnapshots(userId: string, projectId: string): Promise<ProjectSnapshot[]> {
@@ -764,20 +823,9 @@ export class R2ProjectStorage {
     // The tradeoff (no restore point for oversized turns) is deliberate — the
     // alternative is a pathological isolate spike that can stall the agent.
     //
-    // Simplification wave 2026-07-06 (researched, NOT changed): making the zip
-    // non-blocking was investigated and REJECTED as unavoidably
-    // semantics-changing. (1) fflate's async/streaming API needs Web Workers /
-    // worker_threads, which Cloudflare Workers/DO isolates do not have — the
-    // maintainer confirms the async path "won't work on Cloudflare Workers"
-    // (github.com/101arrowz/fflate discussion #177), so there is no in-isolate
-    // non-blocking compressor. (2) Deferring the zip via a Queue or a DO alarm
-    // WOULD offload it, but the snapshot must capture PRE-mutation state and is
-    // awaited before the mutation writes (ensureSnapshot, site-builder.ts); a
-    // deferred snapshot races the mutation and would capture the wrong state.
-    // (3) The manual + restore routes (routes/projects.ts) return the created
-    // ProjectSnapshot synchronously in their HTTP response, so backgrounding it
-    // also breaks that contract. Every option changes an observable
-    // timing/ordering guarantee, so the size-cap skip below stays the mitigation.
+    // Export uses synchronous streaming compression, which also works inside
+    // Worker isolates. Snapshots still use this bounded, awaited archive path
+    // to capture the pre-mutation state before the caller changes any files.
     const listed = await this.listFiles(userId, projectId);
     const totalBytes = listed.reduce((sum, file) => sum + file.size, 0);
     if (totalBytes > MAX_SNAPSHOT_BYTES) {

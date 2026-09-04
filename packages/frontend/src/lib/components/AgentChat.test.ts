@@ -701,6 +701,85 @@ describe('AgentChat', () => {
 		expect(screen.queryByText('other tab answer')).not.toBeInTheDocument();
 	});
 
+	it.each(['success', 'failure', 'network failure'])('ignores an ordinary history %s after a new turn starts', async (outcome) => {
+		const user = userEvent.setup({ delay: null });
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		let release!: (response: Response) => void;
+		let reject!: (error: Error) => void;
+		const heldHistory = new Promise<Response>((resolve, fail) => {
+			release = resolve;
+			reject = fail;
+		});
+		fetchMock.mockReturnValueOnce(heldHistory);
+		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED });
+		await settle();
+		await user.type(screen.getByRole('textbox', { name: 'Message to the assistant' }), 'new ordinary turn');
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+		await waitFor(() => expect(screen.getByText('new ordinary turn')).toBeInTheDocument());
+		if (outcome === 'network failure') reject(new Error('old network failure'));
+		else release(new Response('[]', { status: outcome === 'success' ? 200 : 500 }));
+		await settle();
+		expect(screen.getByText('new ordinary turn')).toBeInTheDocument();
+		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
+	});
+
+	it('keeps the visible prompt when initial socket history arrives during connection preparation', async () => {
+		const user = userEvent.setup({ delay: null });
+		let release!: (response: Response) => void;
+		const initialHistory = new Promise<Response>((resolve) => { release = resolve; });
+		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+			if (requestUrl(input).endsWith('/get-messages')) return initialHistory;
+			document.cookie = 'cail_csrf_sitestudio=test-csrf-token';
+			return new Response(null, { status: 204 });
+		});
+		mount();
+		await user.type(screen.getByRole('textbox', { name: 'Message to the assistant' }), 'send before history loads');
+		await user.click(screen.getByRole('button', { name: 'Send message' }));
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		ws.serverMessage({ type: AgentMessageType.CF_AGENT_CHAT_MESSAGES, messages: [] });
+		await settle();
+		expect(screen.getByText('send before history loads')).toBeInTheDocument();
+		await waitFor(() => {
+			const request = ws.sent.map((raw) => JSON.parse(raw)).find((frame) => frame.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
+			expect(request).toBeDefined();
+			expect(JSON.parse(request.init.body).messages.at(-1).parts).toEqual([{ type: 'text', text: 'send before history loads' }]);
+		});
+		release(new Response('[]'));
+		await settle();
+		expect(screen.getByText('send before history loads')).toBeInTheDocument();
+	});
+
+	it.each(['read', 'broadcast'])('keeps newer history from a %s when an older read completes', async (source) => {
+		mount();
+		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+		const ws = FakeWebSocket.last();
+		ws.open();
+		await settle();
+		let release!: (response: Response) => void;
+		fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { release = resolve; }));
+		ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED });
+		await settle();
+		const messages: UIChatMessage[] = [
+			{ id: 'new-history', role: 'assistant', parts: [{ type: 'text', text: 'newer history' }] }
+		];
+		if (source === 'read') {
+			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(messages)));
+			ws.serverMessage({ type: AgentMessageType.SITE_STUDIO_CHAT_INVALIDATED });
+		} else {
+			ws.serverMessage({ type: AgentMessageType.CF_AGENT_CHAT_MESSAGES, messages });
+		}
+		await waitFor(() => expect(screen.getByText('newer history')).toBeInTheDocument());
+		release(new Response('[]'));
+		await settle();
+		expect(screen.getByText('newer history')).toBeInTheDocument();
+	});
+
 	it('does not let a delayed completed-turn history read erase a newer request', async () => {
 		let historyGets = 0;
 		let oldHistoryRequested = false;
