@@ -134,6 +134,7 @@
 	let currentRequestId = $state<string | null>(null);
 	let currentRequestUserMessageId = $state<string | null>(null);
 	let requestGeneration = $state(0);
+	let historyReadSequence = 0;
 	let expectingContinuation = $state(false);
 	let cancelledContinuationPending = $state(false);
 	// Keep explicit cancellation identity across reconnects. The maintained
@@ -222,6 +223,8 @@
 	}
 
 	function setChatMessages(messages: UIChatMessage[]) {
+		// Accepted socket history and commits supersede reads already in flight.
+		historyReadSequence += 1;
 		chat.messages = JSON.parse(JSON.stringify(messages));
 		syncChatMessages();
 	}
@@ -899,13 +902,19 @@
 		if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
 			return;
 		}
+		const generation = requestGeneration;
+		const readSequence = ++historyReadSequence;
+		const isCurrentRead = () =>
+			isCurrentProjectContext(targetProjectId, targetEpoch) &&
+			generation === requestGeneration &&
+			readSequence === historyReadSequence;
 		if (!reconciliation) historyLoadFailed = false;
 		try {
 			const response = await apiResponseFetch(resolvePath(`/api/agents/site-builder/${targetProjectId}/get-messages`), {
 				credentials: 'include'
 			});
 
-			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			if (!isCurrentRead()) {
 				return;
 			}
 
@@ -923,7 +932,7 @@
 			}
 
 			const data = parseUIChatMessages(await response.text());
-			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			if (!isCurrentRead()) {
 				return;
 			}
 			if (
@@ -955,7 +964,7 @@
 			}
 			scrollToBottom();
 		} catch (error) {
-			if (!isCurrentProjectContext(targetProjectId, targetEpoch)) {
+			if (!isCurrentRead()) {
 				return;
 			}
 			if (reconciliation) {
@@ -1202,7 +1211,7 @@
 				);
 				if (
 					(pendingHistoryReconciliations.length > 0 && pendingTurnStillMissing) ||
-					(isLoading && incomingHistory.length < uiMessages.length)
+					((isLoading || isPreparingRequest) && incomingHistory.length < uiMessages.length)
 				) {
 					break;
 				}

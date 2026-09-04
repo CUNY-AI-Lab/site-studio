@@ -10,7 +10,7 @@ import {
   SnapshotNotFoundError,
 } from "../storage/r2";
 import { createBlankIndexHtml, getTemplateFiles, isValidTemplate } from "../lib/templates";
-import { binaryBody, jsonError } from "../lib/http";
+import { jsonError } from "../lib/http";
 import { sanitizeProjectId } from "../lib/path";
 import type { RequireProjectVariables } from "../lib/require-project";
 import {
@@ -211,11 +211,10 @@ export function createProjectRouter() {
     const projectId = c.get("projectId");
 
     const archive = await storage.exportProjectZip(user.id, projectId);
-    return new Response(binaryBody(archive), {
+    return new Response(archive, {
       headers: {
         "Content-Type": "application/zip",
-        "Content-Disposition": `attachment; filename="${projectId}.zip"`,
-        "Content-Length": String(archive.byteLength)
+        "Content-Disposition": `attachment; filename="${projectId}.zip"`
       }
     });
   });

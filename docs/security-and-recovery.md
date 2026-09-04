@@ -160,6 +160,16 @@ token before origin-wide browser storage and clear only after the exact content
 is acknowledged. This protects against another later owner reading a leftover
 draft, not against XSS.
 
+Generic file writes, including owner-coordinated CAS writes and model edits,
+reject protected system filenames. A current metadata ETag does not authorize
+rewriting metadata through a file tool; dedicated metadata operations own those
+changes.
+
+Project downloads compress R2 body streams as the response is consumed. They
+retain the current input chunk and ZIP directory information rather than all
+project bytes. Cancelling the response cancels the active R2 reader and stops
+opening further files. Snapshot creation remains separately size-bounded.
+
 The version-history dialog owns create and restore as single-flight operations.
 It takes ownership before awaiting an editor-save flush, blocks another history
 mutation until the first settles, and ignores snapshot-list responses that no

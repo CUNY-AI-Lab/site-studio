@@ -7,6 +7,7 @@ import { OwnerMutationService, type MutationJournalStore } from "../lib/owner-mu
 import { createSiteStudioBoundaryContext } from "../lib/logging";
 import { createTestR2Object } from "../lib/test-utils";
 import { unzipSync } from "fflate";
+import { createProjectTools } from "../agents/site-builder";
 
 type R2TestData = string | ArrayBuffer | Uint8Array;
 type DiagnosticEvent = { [key: string]: string | number | boolean | null | undefined };
@@ -81,6 +82,12 @@ function createMockBucket() {
         customMetadata: entry.customMetadata || {},
         text: async () => data instanceof ArrayBuffer ? new TextDecoder().decode(data) : data,
         arrayBuffer: async () => data instanceof ArrayBuffer ? data : new TextEncoder().encode(data).buffer,
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(data instanceof ArrayBuffer ? new Uint8Array(data) : new TextEncoder().encode(data));
+            controller.close();
+          },
+        }),
       };
     }),
     put: vi.fn(async (key: string, data: string | ArrayBuffer | Uint8Array, options?: R2PutOptions) => {
@@ -266,6 +273,17 @@ describe("R2ProjectStorage", () => {
   });
 
   describe("readFile / writeFile", () => {
+    it("rejects system-file writes even with the current metadata ETag", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Protected");
+      const original = await storage.readFileWithEtag(userId, projectId, ".metadata.json");
+      if (!original) throw new Error("Missing fixture metadata");
+      for (const path of [".metadata.json", "folder/.metadata.json", ".thumbnail.png"]) {
+        await expect(storage.writeFile(userId, projectId, path, "changed")).rejects.toThrow("Protected files");
+        await expect(storage.writeFileIfMatch(userId, projectId, path, "changed", original.etag)).rejects.toThrow("Protected files");
+        await expect(storage.writeFileIfAbsent(userId, projectId, path, "changed")).rejects.toThrow("Protected files");
+      }
+      expect(await storage.readFileWithEtag(userId, projectId, ".metadata.json")).toEqual(original);
+    });
     it("writes and reads a text file", async () => {
       await storage.createProjectIfAbsent(userId, projectId, "Test");
       await storage.writeFile(userId, projectId, "index.html", "<h1>Hello</h1>");
@@ -886,8 +904,10 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "styles.css", "body {}");
 
       const zip = await storage.exportProjectZip(userId, projectId);
-      expect(zip).toBeInstanceOf(Uint8Array);
-      expect(zip.length).toBeGreaterThan(0);
+      const entries = unzipSync(new Uint8Array(await new Response(zip).arrayBuffer()));
+      expect(Object.keys(entries).sort()).toEqual(["index.html", "styles.css"]);
+      expect(new TextDecoder().decode(entries["index.html"])).toBe("<h1>Hello</h1>");
+      expect(new TextDecoder().decode(entries["styles.css"])).toBe("body {}");
     });
 
     it("adds README for projects without index.html", async () => {
@@ -896,7 +916,65 @@ describe("R2ProjectStorage", () => {
       await storage.writeFile(userId, projectId, "README.txt", "authored readme");
 
       const zip = await storage.exportProjectZip(userId, projectId);
-      expect(new TextDecoder().decode(unzipSync(zip)["README.txt"])).toBe("authored readme");
+      const entries = unzipSync(new Uint8Array(await new Response(zip).arrayBuffer()));
+      expect(new TextDecoder().decode(entries["README.txt"])).toBe("authored readme");
+    });
+
+    it("adds a README to an empty project", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
+      const zip = await storage.exportProjectZip(userId, projectId);
+      const entries = unzipSync(new Uint8Array(await new Response(zip).arrayBuffer()));
+      expect(new TextDecoder().decode(entries["README.txt"])).toBe("This project does not currently include index.html.");
+    });
+
+    it("reads on demand and cancels the active R2 body without opening the next file", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "a.bin", "first");
+      await storage.writeFile(userId, projectId, "b.bin", "second");
+      const originalGet = bucket.get;
+      const read = vi.fn();
+      const cancel = vi.fn();
+      bucket.get = vi.fn(async (key: string) => {
+        const object = await originalGet(key);
+        if (!object || !key.endsWith("/a.bin")) return object;
+        return Object.assign(object, {
+          body: new ReadableStream<Uint8Array>({
+            pull(controller) {
+              read();
+              controller.enqueue(crypto.getRandomValues(new Uint8Array(65536)));
+            },
+            cancel,
+          }, { highWaterMark: 0 }),
+          arrayBuffer: async () => { throw new Error("Export must stream bodies"); },
+        });
+      });
+      const zip = await storage.exportProjectZip(userId, projectId);
+      expect(read).not.toHaveBeenCalled();
+      const output = zip.getReader();
+      await output.read();
+      const readsAfterDemand = read.mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(read).toHaveBeenCalledTimes(readsAfterDemand);
+      await output.cancel("download abandoned");
+      expect(cancel).toHaveBeenCalledWith("download abandoned");
+      expect(bucket.get).not.toHaveBeenCalledWith(`projects/${userId}/${projectId}/b.bin`);
+    });
+
+    it("fails the output stream when an R2 body fails", async () => {
+      await storage.createProjectIfAbsent(userId, projectId, "Test");
+      await storage.writeFile(userId, projectId, "index.html", "first");
+      const originalGet = bucket.get;
+      bucket.get = vi.fn(async (key: string) => {
+        const object = await originalGet(key);
+        if (!object || !key.endsWith("/index.html")) return object;
+        return Object.assign(object, {
+          body: new ReadableStream<Uint8Array>({
+            pull(controller) { controller.error(new Error("R2 read failed")); },
+          }),
+        });
+      });
+      const zip = await storage.exportProjectZip(userId, projectId);
+      await expect(new Response(zip).arrayBuffer()).rejects.toThrow("R2 read failed");
     });
   });
 
@@ -1406,6 +1484,31 @@ describe("OwnerMutationService recovery journal", () => {
     };
     return store;
   }
+
+  it("model read/edit and owner CAS cannot rewrite metadata while authored edits persist", async () => {
+    const bucket = createMockBucket();
+    const storage = new R2ProjectStorage(bucket);
+    const service = new OwnerMutationService(bucket, journalStore());
+    await storage.createProjectIfAbsent("user-a", "site", "Protected");
+    await storage.writeFile("user-a", "site", "index.html", "before");
+    const tools = createProjectTools(
+      { SITE_STUDIO_BUCKET: bucket }, { userId: "user-a", projectId: "site" }, null,
+      undefined, undefined, undefined, undefined, storage,
+      (ownerId, operation) => service.execute(ownerId, operation),
+    );
+    const options = { toolCallId: "metadata-regression", messages: [] };
+    const original = await storage.readFileWithEtag("user-a", "site", ".metadata.json");
+    if (!original || !tools.read_file.execute || !tools.edit_file.execute) throw new Error("Missing fixture");
+    expect(await tools.read_file.execute({ path: ".metadata.json" }, options)).toMatchObject({ ok: true, content: original.content });
+    expect(await tools.edit_file.execute({ path: ".metadata.json", oldText: "Protected", newText: "changed", replaceAll: false }, options)).toMatchObject({ ok: false });
+    await expect(service.execute("user-a", {
+      type: "write-file", projectId: "site", path: ".metadata.json", baseEtag: original.etag,
+      content: original.content.replace('"published":false', '"published":true'),
+    })).rejects.toThrow("Protected files");
+    expect(await storage.readFileWithEtag("user-a", "site", ".metadata.json")).toEqual(original);
+    expect(await tools.edit_file.execute({ path: "index.html", oldText: "before", newText: "after", replaceAll: false }, options)).toMatchObject({ ok: true });
+    expect(await storage.readFile("user-a", "site", "index.html")).toBe("after");
+  });
 
   it("compensates a partially scaffolded project when a template write fails", async () => {
     const bucket = createMockBucket();

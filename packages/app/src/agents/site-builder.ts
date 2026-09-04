@@ -1007,6 +1007,10 @@ export function createProjectTools(
         abortSignal?.throwIfAborted();
         const filePath = sanitizeFilePath(path);
 
+        if (PROTECTED_FILE_NAMES.has(filePath.split("/").pop() || "")) {
+          return { ok: false, path: filePath, message: "Protected files cannot be overwritten." };
+        }
+
         if (!isTextFile(filePath)) {
           return {
             ok: false,
