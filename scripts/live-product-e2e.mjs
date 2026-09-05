@@ -530,7 +530,7 @@ try {
 		proofProject: projectId,
 		publicHealthStatus: publicHealthResponse.status,
 		appOnlyProjectsStatus: projectsBeforeResponse.status,
-		appOnlyQuotaStatus: appOnlyQuota.status,
+		appOnlyRefreshStatus: appOnlyRefresh.status,
 		assistantPersisted: hasPersistedCodemodeResult(persistedMessages),
 		tools: chat.tools,
 		toolResults: chat.toolResults,
