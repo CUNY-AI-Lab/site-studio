@@ -12,7 +12,6 @@ import { createPreviewRouter } from "./routes/preview";
 import { createProjectRouter } from "./routes/projects";
 import { createPublishRouter } from "./routes/publish";
 import { createTemplateRouter } from "./routes/templates";
-import { createQuotaRouter } from "./routes/quota";
 import { previewTokenAuth } from "./lib/preview-token";
 import { requireProject, type RequireProjectVariables } from "./lib/require-project";
 import { requestLogging, type LoggingVariables } from "./lib/logging";
@@ -99,7 +98,6 @@ app.use("/preview/*", cors({
   app.use("/api/projects/*", authMiddleware);
   app.use("/api/handle", authMiddleware);
   app.use("/api/handle/*", authMiddleware);
-  app.use("/api/quota", authMiddleware);
   app.use("/api/agents/site-builder/*", authMiddleware);
   app.use("/api/agents/site-builder/:projectId", authMiddleware);
   app.use("/preview/*", previewTokenAuth);
@@ -136,7 +134,6 @@ app.use("/preview/*", cors({
 
   app.route("/", createHealthRouter());
   app.route("/", createTemplateRouter());
-  app.route("/", createQuotaRouter());
   app.route("/", createAgentRouter(agentResolver));
   app.route("/", createProjectRouter());
   app.route("/", createFileRouter());

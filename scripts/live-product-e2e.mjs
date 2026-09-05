@@ -423,10 +423,6 @@ try {
 	if (!handleResult.success) {
 		throw new Error('the admitted identity must already own a Site Studio handle');
 	}
-	const appOnlyQuota = await request('api/quota');
-	if (appOnlyQuota.status !== 401) {
-		throw new Error(`app-only Gateway-dependent request returned ${appOnlyQuota.status}, expected 401`);
-	}
 	const csrf = await request('api/csrf');
 	if (!csrf.ok || !csrfToken) throw new Error('Site Studio did not establish CSRF state');
 
@@ -437,6 +433,12 @@ try {
 		body: JSON.stringify({ name: projectName, template: 'blank' })
 	});
 	if (project.id !== projectId) throw new Error('project creation returned an unexpected deterministic id');
+	const appOnlyRefresh = await request(`api/agents/site-builder/${projectId}/refresh-credential`, {
+		method: 'POST'
+	});
+	if (appOnlyRefresh.status !== 401) {
+		throw new Error(`app-only credential refresh returned ${appOnlyRefresh.status}, expected 401`);
+	}
 	const initialMessages = await getMessages();
 	if (initialMessages.length !== 0) throw new Error('proof project started with stale agent history');
 

@@ -418,12 +418,6 @@ describe('AgentChat', () => {
 		expect(screen.queryByText(/chat history could not be loaded/i)).not.toBeInTheDocument();
 	});
 
-	it('does not probe the optional quota endpoint', async () => {
-		mount();
-		await waitFor(() => expect(screen.getByText('Your site')).toBeInTheDocument());
-		expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/quota'))).toBe(false);
-	});
-
 	it('a network failure loading history also surfaces the error state (SS-49)', async () => {
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
 			const url = requestUrl(input);

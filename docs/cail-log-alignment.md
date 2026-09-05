@@ -107,10 +107,7 @@ minutes. Build/publish admissions get a 15-minute terminal grace period.
 
 Request p95 latency warns above five seconds for the app. Action p95 warns above ten minutes for build and 30 seconds for
 publish; critical latency is twice the warning threshold. Site Studio has no
-spend SLO or threshold ledger. Its authenticated quota endpoint returns the
-verified user's current Cloudflare Gateway estimate and accounting window to the
-authenticated caller as a display-only value; Site Studio does not create a
-local spend ledger or infer a budget from model prices.
+spend SLO or threshold ledger. Model accounting remains owned by the Gateway.
 
 Contract version 4 retains the fleet projection without changing that privacy
 posture. At each trusted Worker boundary, the logger uses
@@ -229,10 +226,7 @@ hostnames/ingress, notification recipients, institution-approved retention,
 the approved monthly product budget, secrets, and deployment authorization also
 remain external.
 
-Site Studio surfaces terminal `quota_exceeded` failures. Its authenticated
-`GET /api/quota` route uses `@cuny-ai-lab/cail-client` with the canonical
-`CAIL_API_BASE`, which requests the Gateway's `GET /v1/quota` estimate and
-returns the typed Cloudflare-managed result to authenticated callers. The
+Site Studio surfaces terminal `quota_exceeded` failures. The
 gateway ignores caller-supplied `X-CAIL-Metadata`, so local
 purpose/project/course labels must not be described as authoritative cost
 attribution.
