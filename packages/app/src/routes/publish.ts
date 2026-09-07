@@ -3,11 +3,11 @@ import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import type { Env } from "../types";
 import {
-  getServedContentType,
   MAX_THUMBNAIL_BODY_BYTES,
   MAX_THUMBNAIL_BYTES,
   MAX_THUMBNAIL_DIMENSION
 } from "../lib/constants";
+import { getServedContentType } from "../lib/content-types";
 import { binaryBody, jsonError, readFormData } from "../lib/http";
 import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { renderNotFoundPage } from "../lib/not-found-page";
@@ -27,7 +27,7 @@ import {
   rewriteRootRelativeHtmlUrls,
   rewriteRootRelativeJavaScriptUrls
 } from "../lib/path";
-import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
+import { OBSERVABILITY_CONTRACT } from "../lib/observability/contract";
 import {
   SiteStudioActionLifecycle,
   createSiteStudioBoundaryContext,
@@ -454,15 +454,6 @@ export function createPublishRouter() {
   return app;
 }
 
-async function resolvePublishedSite(
-  storage: R2ProjectStorage,
-  ownerId: string,
-  slug: string
-): Promise<{ ownerId: string; resolved: { projectId: string } } | null> {
-  const resolved = await storage.findPublishedProjectBySlug(ownerId, slug);
-  return resolved ? { ownerId, resolved } : null;
-}
-
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
 async function serveByHandle(c: AppContext, rawPath: string) {
   const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
@@ -479,8 +470,8 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return publishedNotFound(c, rawPath);
   }
 
-  const site = await resolvePublishedSite(storage, ownerId, slug);
-  if (!site) {
+  const resolved = await storage.findPublishedProjectBySlug(ownerId, slug);
+  if (!resolved) {
     return publishedNotFound(c, rawPath);
   }
 
@@ -489,7 +480,7 @@ async function serveByHandle(c: AppContext, rawPath: string) {
     return c.redirect(`${getPublishedPathPrefix(c)}${url.pathname}/${url.search}`, 301);
   }
 
-  return servePublishedFile(c, storage, site.ownerId, site.resolved.projectId, rawPath, siteRootPath);
+  return servePublishedFile(c, storage, ownerId, resolved.projectId, rawPath, siteRootPath);
 }
 
 /** Read and return a file within an already-resolved published project. */

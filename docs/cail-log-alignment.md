@@ -1,8 +1,7 @@
 # CAIL logging alignment
 
 This source alignment uses the exact published `@cuny-ai-lab/cail-log`
-`0.6.0`; the committed Bun lockfile resolves that one version for the app and
-shared observability workspace package.
+`0.6.0`; the committed Bun lockfile resolves that one version for the app.
 
 ## Identity and ownership
 
@@ -79,7 +78,7 @@ matching limit, and returns `Cache-Control: no-store`. They do not probe R2, KV,
 Durable Objects, or the model gateway. Cloudflare's native request/error/CPU/
 wall-time signals remain the canonical platform-health layer.
 
-The shared source contract in `packages/observability-core/src/contract.ts`
+The app-owned source contract in `packages/app/src/lib/observability/contract.ts`
 defines the app service, action route templates, dashboard measures/groupings, and
 an offline lifecycle-pair auditor. The auditor detects missing or duplicate
 request/action events, route drift, and invalid terminal duration in a closed

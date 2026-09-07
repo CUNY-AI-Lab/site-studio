@@ -15,7 +15,7 @@ import { createTemplateRouter } from "./routes/templates";
 import { previewTokenAuth } from "./lib/preview-token";
 import { requireProject, type RequireProjectVariables } from "./lib/require-project";
 import { requestLogging, type LoggingVariables } from "./lib/logging";
-import { getServedContentType } from "./lib/constants";
+import { getServedContentType } from "./lib/content-types";
 
 /**
  * App assembly is injectable only at the SiteBuilderAgent resolver seam so the

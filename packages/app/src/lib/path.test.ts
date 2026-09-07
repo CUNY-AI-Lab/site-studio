@@ -15,7 +15,7 @@ import {
   buildFileTree,
   collectPreviewResourcePaths
 } from "./path";
-import { getServedContentType } from "./constants";
+import { getServedContentType } from "./content-types";
 import type { StorageFile } from "../types";
 
 describe("sanitizeProjectId", () => {

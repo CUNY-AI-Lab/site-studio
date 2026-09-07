@@ -172,6 +172,11 @@ bun run dev
 - Frontend: <http://localhost:5173>
 - Worker: <http://localhost:8792>
 
+The authored templates live in `packages/app/templates/`. App build, dev,
+check, test, and predeploy commands regenerate the ignored
+`packages/app/src/lib/template-content.ts` bundle before it is consumed. Edit
+the authored templates, not the generated bundle.
+
 Useful checks:
 
 ```bash

@@ -9,7 +9,7 @@ import {
   collectPreviewResourcePaths,
   decodeServedPath
 } from "../lib/path";
-import { getServedContentType } from "../lib/constants";
+import { getServedContentType } from "../lib/content-types";
 import { binaryBody } from "../lib/http";
 import { renderNotFoundPage } from "../lib/not-found-page";
 import { servedContentHeaders, servedNotFoundHeaders } from "../lib/serving-headers";

@@ -19,6 +19,9 @@ build/
 # Checked-in browser preview fixtures are authored test inputs, not generated JS.
 !scripts/fixtures/*.js
 
+# Generated template source
+packages/app/src/lib/template-content.ts
+
 # Logs
 *.log
 npm-debug.log*

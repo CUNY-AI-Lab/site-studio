@@ -5,9 +5,9 @@ import {
 	ApiError,
 	apiResponseFetch,
 	getErrorMessage,
-	handleApiError,
 	UserFacingError
 } from './errors';
+import { handleApiErrorResponse } from './error-handler';
 
 const AUTHENTICATION_REQUIRED = {
 	error: {
@@ -42,13 +42,13 @@ let assignMock: ReturnType<typeof vi.fn>;
 
 async function thrownApiError(response: Response): Promise<ApiError> {
 	try {
-		await handleApiError(response);
+		await handleApiErrorResponse(response);
 	} catch (error) {
 		expect(error).toBeInstanceOf(ApiError);
-		// SAFETY: handleApiError throws ApiError for a parsed canonical envelope.
+		// SAFETY: handleApiErrorResponse throws ApiError for a parsed canonical envelope.
 		return error as ApiError;
 	}
-	throw new Error('Expected handleApiError to throw');
+	throw new Error('Expected handleApiErrorResponse to throw');
 }
 
 describe('getErrorMessage', () => {

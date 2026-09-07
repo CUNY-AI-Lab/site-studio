@@ -59,8 +59,8 @@ import {
   type ActionAttemptAdminRead,
   type ActionAttemptTerminal,
   type DurableActionAttempt,
-} from "../../../observability-core/src/action-attempt";
-import { OBSERVABILITY_CONTRACT } from "../../../observability-core/src/contract";
+} from "../lib/observability/action-attempt";
+import { OBSERVABILITY_CONTRACT } from "../lib/observability/contract";
 import {
   SiteStudioActionLifecycle,
   createSiteStudioConnectionLoggingState,
