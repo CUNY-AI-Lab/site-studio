@@ -6,7 +6,7 @@ import {
   createCloudflareHealthCheckSpec,
   CAIL_LOG_ENVIRONMENTS,
   parseCailLogEnvironment,
-} from "../../observability-core/src/contract";
+} from "./lib/observability/contract";
 import { createHealthRouter } from "./routes/health";
 import type { Env } from "./types";
 

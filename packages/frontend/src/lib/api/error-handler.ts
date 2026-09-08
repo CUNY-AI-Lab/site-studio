@@ -80,13 +80,6 @@ export class ApiError extends Error {
 		return this.message;
 	}
 
-	getValidationMessages(): string {
-		if (!this.details || this.details.length === 0) {
-			return this.message;
-		}
-		return this.details.map((detail) => `${detail.path}: ${detail.message}`).join('; ');
-	}
-
 	getRecoveryAction(): 'sign-in' | 'request-access' | 'retry' | 'none' {
 		if (this.code && SIGN_IN_CODES.has(this.code)) return 'sign-in';
 		if (this.code === 'admission_required') return 'request-access';

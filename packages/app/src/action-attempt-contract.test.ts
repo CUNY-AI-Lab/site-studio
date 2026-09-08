@@ -7,7 +7,7 @@ import {
   summarizeDurableActionReliability,
   type ActionAttemptAdminRead,
   type DurableActionAttempt,
-} from "../../observability-core/src/action-attempt";
+} from "./lib/observability/action-attempt";
 
 const HOUR = 3_600_000;
 const end = Date.parse("2026-07-13T12:00:00.000Z");

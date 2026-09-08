@@ -29,7 +29,8 @@ async function main() {
     const dir = join(TEMPLATES_DIR, templateId);
     const files = (await readdir(dir, { withFileTypes: true }))
       .filter((f) => f.isFile())
-      .map((f) => f.name);
+      .map((f) => f.name)
+      .sort();
 
     const fileEntries: string[] = [];
 

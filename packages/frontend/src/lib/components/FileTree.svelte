@@ -13,7 +13,8 @@
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
 	import { resolvePath } from '$lib/utils/paths';
 	import { csrfFetch } from '$lib/api/csrf';
-	import { apiResponseFetch, getErrorMessage, handleApiError } from '$lib/api/errors';
+	import { apiResponseFetch, getErrorMessage } from '$lib/api/errors';
+	import { handleApiErrorResponse } from '$lib/api/error-handler';
 	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile } from '$lib/api/projects';
 	import { toast } from '$lib/toast.svelte';
 	import { downloadBlob } from '$lib/browser/download';
@@ -104,7 +105,7 @@
 			});
 
 			if (!response.ok) {
-				await handleApiError(response);
+				await handleApiErrorResponse(response);
 			}
 
 			// Refresh file list
@@ -134,7 +135,7 @@
 			});
 
 			if (!response.ok) {
-				await handleApiError(response);
+				await handleApiErrorResponse(response);
 			}
 
 			// Refresh file list
