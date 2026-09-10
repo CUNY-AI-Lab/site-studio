@@ -54,12 +54,13 @@ site-studio/
 ### Agent Layer
 
 - `SiteBuilderAgent` extends `AIChatAgent`
-- Model execution via the CAIL model proxy (Cloudflare Workers AI models only)
+- Model execution via the CAIL model proxy using canonical, prefix-free model IDs
 - Project-scoped instance identity: `userId:projectId`
 - `codemode` wraps project operations so the model can write JavaScript that orchestrates multi-step work in a Dynamic Worker sandbox
 - `ask_user_question` remains available for structured clarification
-- The active default model is the Workers AI catalog id
-  `@cf/zai-org/glm-5.2`; any `CAIL_MODEL` override must remain a `@cf/...` id
+- The active default model is the canonical Gateway ID
+  `deepseek-v4-flash-0731`; any `CAIL_MODEL` override must remain a canonical,
+  prefix-free ID
 
 ## Frontend Transport
 

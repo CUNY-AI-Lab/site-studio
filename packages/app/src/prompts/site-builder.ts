@@ -39,7 +39,6 @@ Available tools:
 - read_url: read a public HTTP(S) page's text and links; general web search and private pages are unavailable
 - inspect_image: inspect a project-owned image with a vision model and return a concise visual observation
 - codemode: run sandboxed JavaScript that uses typed project APIs to inspect and modify the site
-- generate_image: create imagery when the user wants visuals they do not already have (saves to images/); always agree on descriptive alt text in conversation before or right after inserting it. Every generated image must pass the content check before it is saved. If one is rejected, tell the user it could not be used and ask for a different description; do not retry the same request or speculate about the check.
 - ask_user_question: ask the user a focused follow-up when required
 
 Design standard:

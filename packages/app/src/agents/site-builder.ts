@@ -31,11 +31,9 @@ import {
   type SnapshotResult,
 } from "../types";
 import { createCailModel, resolveModelId } from "../lib/model";
-import { generateImage, runGenerateImageFlow, screenImage } from "../lib/image-generation";
 import { inspectImage } from "../lib/image-inspection";
 import { PROTECTED_FILE_NAMES } from "../lib/constants";
 import { extractDocumentText } from "../lib/document";
-import { binaryBody } from "../lib/http";
 import { getContentType, isTextContentType, sanitizeFilePath } from "../lib/path";
 import { lintProject } from "../lib/a11y-lint";
 import { createBlankIndexHtml, getTemplateFiles, TEMPLATE_IDS } from "../lib/templates";
@@ -656,7 +654,7 @@ export function summarizeLatestUserRequest(messages: RequestMessage[] | UIMessag
 }
 
 export function createProjectTools(
-  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
+  env: Pick<Env, "SITE_STUDIO_BUCKET" | "MUTATION_COORDINATOR" | "CAIL_API_BASE" | "CAIL_MODEL" | "CAIL_IMAGE_CLASSIFIER">,
   scope: Scope,
   identityJwt: string | null,
   snapshotOptions?: {
@@ -1366,56 +1364,6 @@ export function createProjectTools(
           count: findings.length,
           findings
         };
-      }
-    }),
-    generate_image: tool({
-      description: "Generate an image with AI and save it into the project's images/ folder. Use when the user wants visuals they do not already have. Every generated image passes a required content-safety check before it is saved; rejected images are not written. Agree on descriptive alt text with the user before or right after inserting the image.",
-      inputSchema: z.object({
-        prompt: z.string().min(1).describe("What to depict. Style guidance (medium, mood, composition) is welcome."),
-        filename: z.string().optional().describe("Optional basename for the saved file; sanitized and given an extension matching the image format. Saved under images/."),
-        width: z.number().int().optional().describe("Optional width in pixels (default 1024; clamped to a multiple of 64 in [256, 1920])."),
-        height: z.number().int().optional().describe("Optional height in pixels (default 1024; clamped to a multiple of 64 in [256, 1920]).")
-      }),
-      outputSchema: z.discriminatedUnion("ok", [
-        z.object({
-          ok: z.literal(true),
-          path: z.string().describe("Project-relative path of the saved image under images/."),
-          message: z.string().describe("Short confirmation for the assistant to relay.")
-        }),
-        z.object({
-          ok: z.literal(false),
-          message: z.string().describe("Why the image could not be generated or saved.")
-        })
-      ]),
-      execute: async ({ prompt, filename, width, height }) => {
-        abortSignal?.throwIfAborted();
-        // Writes a project file, so snapshot first (mutation, unlike audit_accessibility).
-        mutationLifecycle?.admit();
-        await ensureSnapshot();
-
-        // Ordering (generate → sniff → gate → save) lives in the extracted,
-        // integration-tested flow — keep this body a thin binding.
-        const result = await runGenerateImageFlow(filename, {
-          generate: (signal) => generateImage(env, identityJwt, { prompt, width, height }, fetchImpl, signal),
-          screen: (bytes, signal) => screenImage(env, identityJwt, bytes, fetchImpl, signal),
-          saveIfAbsent: async (path, bytes) => {
-            abortSignal?.throwIfAborted();
-            const saved = await executeMutation(scope.userId, {
-              type: "upload-if-absent",
-              projectId: scope.projectId,
-              path,
-              content: binaryBody(bytes).stream()
-            }, serializedLogging);
-            abortSignal?.throwIfAborted();
-            if (!("written" in saved)) throw new Error("Unexpected mutation result");
-            return saved.written;
-          }
-        }, abortSignal);
-        abortSignal?.throwIfAborted();
-        if (result.ok) {
-          mutationLifecycle?.acknowledgeMutation();
-        }
-        return result;
       }
     }),
   };
@@ -2621,10 +2569,10 @@ export class SiteBuilderAgent extends AIChatAgent<Env> {
       // quota_exceeded, upstream_auth_error, …) surface to the client via the
       // stream unmodified.
       const modelName = resolveModelId(this.env);
-      // Correlation propagation: every outbound gateway call (chat completions
-      // via the AI SDK, image generation/moderation from the tools) carries
-      // this request's traceparent + X-CAIL-Request-Id so spend and upstream
-      // errors are followable end to end (browser → worker → DO → gateway).
+      // Correlation propagation: every outbound Gateway chat completion and
+      // image-inspection call carries this request's traceparent +
+      // X-CAIL-Request-Id so spend and upstream errors are followable end to
+      // end (browser → worker → DO → Gateway).
       const gatewayFetch = withCorrelationFetch(correlation);
       const model = createCailModel(this.env, identityJwt, gatewayFetch, {
         sessionId: scope.projectId,

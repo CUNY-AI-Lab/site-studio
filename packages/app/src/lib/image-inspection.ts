@@ -1,16 +1,30 @@
 import { generateText } from "ai";
 import { extractCailError } from "@cuny-ai-lab/cail-client";
 import {
-  resolveImageClassifierId,
-  type CailImageEnv,
-} from "./image-generation";
-import {
   assertCailJwtFresh,
   createCailModel,
+  resolveCanonicalModelId,
+  type CailModelEnv,
 } from "./model";
 import { IMAGE_MAX_UPLOAD_BYTES } from "./constants";
 import { sniffImageType, type ImageType } from "./image-validation";
 import { describeModelStreamError } from "./model-stream-error";
+
+/** Canonical Gateway model used to inspect project-owned images. */
+export const DEFAULT_CAIL_IMAGE_CLASSIFIER = "kimi-k2.6";
+
+export interface CailImageEnv extends CailModelEnv {
+  CAIL_IMAGE_CLASSIFIER?: string;
+}
+
+/** Resolve the image-inspection model through the canonical Gateway namespace. */
+export function resolveImageClassifierId(env: CailImageEnv): string {
+  return resolveCanonicalModelId(
+    env.CAIL_IMAGE_CLASSIFIER,
+    DEFAULT_CAIL_IMAGE_CLASSIFIER,
+    "CAIL_IMAGE_CLASSIFIER",
+  );
+}
 
 export const IMAGE_INSPECTION_INSTRUCTION =
   "You are inspecting an image for an academic website. Describe only what is visibly present, "

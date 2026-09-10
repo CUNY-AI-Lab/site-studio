@@ -6,17 +6,12 @@ import { z } from "zod";
 export const CAIL_APP_SLUG = "site-studio";
 
 /**
- * Default model id. CAIL policy (decided 2026-07-04):
- * Cloudflare models only — every model reference is a Workers AI catalog id
- * (`@cf/...`); no OpenAI/Anthropic/OpenRouter ids. Overridable via `CAIL_MODEL`,
- * but the configured value must also be a Workers AI id.
- *
- * GLM-5.2 is Workers AI's flagship agentic-coding model (262k context,
- * function calling, cached-input pricing) — chosen because the codemode loop
- * is code generation against typed project APIs. `@cf/openai/gpt-oss-120b`
- * is the cheaper general-reasoning alternative if spend becomes a concern.
+ * Default canonical CAIL model id. Gateway model IDs are prefix-free: the
+ * complete model variant remains in the ID while provider/vendor namespaces
+ * stay inside Gateway routing. DeepSeek V4 Flash 0731 is the default because
+ * it is the current Site Studio coding model.
  */
-export const DEFAULT_CAIL_MODEL = "@cf/zai-org/glm-5.2";
+export const DEFAULT_CAIL_MODEL = "deepseek-v4-flash-0731";
 
 export interface CailModelEnv {
   CAIL_API_BASE?: string;
@@ -30,17 +25,27 @@ export interface CailModelOptions {
   sessionId?: string;
 }
 
-const WORKERS_AI_MODEL_ID_RE = /^@cf\/[a-z0-9][a-z0-9._/-]*$/i;
+/**
+ * Canonical Gateway IDs are trimmed, prefix-free model variants. In
+ * particular, `/` rejects provider-native IDs (`@cf/...`, `openai/...`, and
+ * similar) as well as `auto/<group>` aliases. The Gateway remains the
+ * authority for whether a syntactically valid ID is currently available.
+ */
+const CANONICAL_MODEL_ID_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 const jwtPayloadSchema = z.object({ exp: z.number().optional() });
 
-export function resolveWorkersAiModelId(
+export function resolveCanonicalModelId(
   configured: string | undefined,
   fallback: string,
   variableName: string
 ): string {
   const value = configured ?? fallback;
-  if (value.trim() !== value || !WORKERS_AI_MODEL_ID_RE.test(value)) {
-    throw new Error(`${variableName} must be a Cloudflare Workers AI model id beginning with @cf/`);
+  if (
+    value.trim() !== value
+    || value.toLowerCase() === "auto"
+    || !CANONICAL_MODEL_ID_RE.test(value)
+  ) {
+    throw new Error(`${variableName} must be a canonical prefix-free CAIL model id`);
   }
   return value;
 }
@@ -163,7 +168,7 @@ export function createCailAuthorityFetch(
  * Resolve the configured model id.
  */
 export function resolveModelId(env: CailModelEnv): string {
-  return resolveWorkersAiModelId(env.CAIL_MODEL, DEFAULT_CAIL_MODEL, "CAIL_MODEL");
+  return resolveCanonicalModelId(env.CAIL_MODEL, DEFAULT_CAIL_MODEL, "CAIL_MODEL");
 }
 
 /**

@@ -518,7 +518,7 @@ describe("service-local diagnostics and helpers", () => {
       captured.push(new Request(input, init));
       return new Response("{}");
     }) as typeof fetch);
-    await gatewayFetch("https://gateway.example/v1/run", { method: "POST" });
+    await gatewayFetch("https://gateway.example/v1/chat/completions", { method: "POST" });
     expect(captured[0]?.headers.get("traceparent")).toBe(
       `00-${correlation.trace_id}-${correlation.span_id}-00`
     );

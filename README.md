@@ -49,8 +49,10 @@ Model traffic goes directly from the app Worker to the CAIL Gateway through
 `@cuny-ai-lab/cail-client` and `@ai-sdk/openai-compatible` at
 the canonical `https://tools.ailab.gc.cuny.edu/v1` API. The checked-in
 `CAIL_API_BASE` is the canonical origin; the shared client owns the `/v1`
-model and quota paths. The active default is the Workers AI catalog model
-`@cf/zai-org/glm-5.2`; any configured override must also be a `@cf/...` model.
+model and quota paths. The active default is the canonical Gateway model
+`deepseek-v4-flash-0731`; any configured override must also be a canonical,
+prefix-free model ID. The Gateway owns provider selection and availability;
+provider-native and `auto/` aliases are rejected.
 The app forwards only the separately verified,
 subject-bound gateway identity and stamps `X-CAIL-App: site-studio`. Site Studio
 uses the project id as the Gateway session identifier; Gateway namespaces and
@@ -249,8 +251,7 @@ name so the same identity can remove it after obtaining fresh tokens.
 declared in `packages/app/wrangler.jsonc`. Runtime configuration includes:
 
 - `CAIL_IDENTITY_JWKS` (secret) and the canonical `CAIL_IDENTITY_ISSUER`
-- `CAIL_API_BASE`, `CAIL_MODEL`, `CAIL_IMAGE_MODEL`, and
-  `CAIL_IMAGE_CLASSIFIER`
+- `CAIL_API_BASE`, `CAIL_MODEL`, and `CAIL_IMAGE_CLASSIFIER`
 - `PUBLISHED_BASE_URL`
 - `CSRF_COOKIE_PATH=/site-studio`
 - R2, KV, Worker Loader, and Durable Object bindings

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { cailErrorEnvelope, cailErrorResponse } from "@cuny-ai-lab/cail-client/testing";
-import { DEFAULT_CAIL_IMAGE_CLASSIFIER } from "./image-generation";
 import {
+  DEFAULT_CAIL_IMAGE_CLASSIFIER,
   inspectImage,
+  resolveImageClassifierId,
   type ImageInspectionOptions,
 } from "./image-inspection";
 
@@ -53,6 +54,19 @@ function options(fetchImpl: typeof fetch, abortSignal?: AbortSignal): ImageInspe
 }
 
 describe("inspectImage", () => {
+  it("uses the canonical kimi vision model by default", () => {
+    expect(DEFAULT_CAIL_IMAGE_CLASSIFIER).toBe("kimi-k2.6");
+    expect(resolveImageClassifierId({})).toBe("kimi-k2.6");
+  });
+
+  it.each(["@cf/moonshotai/kimi-k2.6", "openai/kimi-k2.6", "auto/kimi-k2.6"])(
+    "rejects provider-native and auto aliases for the classifier: %s",
+    (modelId) => {
+      expect(() => resolveImageClassifierId({ CAIL_IMAGE_CLASSIFIER: modelId }))
+        .toThrow("canonical prefix-free CAIL model id");
+    },
+  );
+
   it("sends actual image bytes through the configured vision model and returns text", async () => {
     const capture = captureFetch(() => json({
       id: "chatcmpl-inspect",

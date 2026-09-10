@@ -58,26 +58,16 @@
     "PUBLISHED_BASE_URL": "https://tools.ailab.gc.cuny.edu/site-studio",
     // ---- CAIL model gateway (see cail-gateway docs/gateway-contract.md) ----
     // CAIL_API_BASE: the canonical CAIL Gateway origin. The shared client owns
-    // its /v1 model and quota paths. Chat calls hit
-    // {CAIL_API_BASE}/v1/chat/completions; image generation hits the native
-    // {CAIL_API_BASE}/v1/run.
+    // its /v1 model and quota paths. Chat and image-inspection calls hit
+    // {CAIL_API_BASE}/v1/chat/completions.
     "CAIL_API_BASE": "https://tools.ailab.gc.cuny.edu",
-    // CAIL_MODEL: Workers AI catalog id. CAIL model admission policy
-    // (cail-gateway docs/model-admission-contract.md): Cloudflare models only —
-    // any override must also be a `@cf/...` id. Default is the
-    // agentic-coding flagship; `@cf/openai/gpt-oss-120b` is the cheaper fallback.
-    "CAIL_MODEL": "@cf/zai-org/glm-5.2",
-    // CAIL_IMAGE_MODEL: text-to-image Workers AI catalog id (native /v1/run
-    // endpoint). CAIL policy: any override must also be `@cf/...`.
-    // Default is the FLUX.2 [klein] text-to-image default;
-    // `@cf/black-forest-labs/flux-1-schnell` is the cheaper budget alternative.
-    "CAIL_IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
-    // CAIL_IMAGE_CLASSIFIER: vision model backing the REQUIRED image moderation
-    // gate — Workers AI has no dedicated NSFW classifier, so we vision-screen
-    // every generated image before saving it. Must be a vision-capable model
-    // from the gateway's curated catalog;
-    // `@cf/meta/llama-4-scout-17b-16e-instruct` is the other vision model.
-    "CAIL_IMAGE_CLASSIFIER": "@cf/moonshotai/kimi-k2.6",
+    // CAIL_MODEL: canonical, prefix-free Gateway model id. The Gateway owns
+    // provider selection and availability. DeepSeek V4 Flash 0731 is the
+    // default Site Studio coding model.
+    "CAIL_MODEL": "deepseek-v4-flash-0731",
+    // CAIL_IMAGE_CLASSIFIER: canonical, prefix-free vision model used by
+    // inspect_image for project-owned uploads.
+    "CAIL_IMAGE_CLASSIFIER": "kimi-k2.6",
     "CAIL_IDENTITY_ISSUER": "https://tools.ailab.gc.cuny.edu/cail-sso",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted published content, so runtime

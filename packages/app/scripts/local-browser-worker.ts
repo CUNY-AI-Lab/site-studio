@@ -774,7 +774,7 @@ const env = {
   PUBLISHED_BASE_URL: `${baseUrl}/site-studio`,
   CAIL_LOG_ENV: "test",
   CAIL_API_BASE: `${baseUrl}/gateway-disabled-for-browser-test`,
-  CAIL_MODEL: "@cf/local-browser-test",
+  CAIL_MODEL: "local-browser-test",
   CAIL_IDENTITY_JWKS: process.env.CAIL_IDENTITY_JWKS,
   CAIL_IDENTITY_ISSUER: process.env.CAIL_IDENTITY_ISSUER,
   SESSION_KV: kv.asBinding(),

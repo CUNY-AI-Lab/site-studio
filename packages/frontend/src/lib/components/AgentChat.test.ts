@@ -1039,44 +1039,6 @@ describe('AgentChat', () => {
 		await waitFor(() => expect(screen.queryByTitle('Stop request')).not.toBeInTheDocument());
 	});
 
-	it('refreshes the editor after a generated image is saved', async () => {
-		const { component, onUpdate } = renderExposed();
-		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
-		const ws = FakeWebSocket.last();
-		ws.open();
-		await settle();
-
-		await component.sendPrompt('Add a hero image');
-		await settle();
-		const request = ws.sent
-			.map((raw) => JSON.parse(raw))
-			.find((message) => message.type === AgentMessageType.CF_AGENT_USE_CHAT_REQUEST);
-		expect(request).toBeTruthy();
-
-		ws.serverMessage({
-			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: request.id,
-			body: JSON.stringify({
-				type: 'tool-input-available',
-				toolCallId: 'image-call',
-				toolName: 'generate_image',
-				input: { prompt: 'A hero image' }
-			})
-		});
-		ws.serverMessage({
-			type: AgentMessageType.CF_AGENT_USE_CHAT_RESPONSE,
-			id: request.id,
-			body: JSON.stringify({
-				type: 'tool-output-available',
-				toolCallId: 'image-call',
-				output: { ok: true, path: 'images/hero.png' }
-			})
-		});
-		await settle();
-
-		await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
-	});
-
 	it('ignores a stale SSE body and continues with the JSON UI stream contract', async () => {
 		const { component } = mount();
 		await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));

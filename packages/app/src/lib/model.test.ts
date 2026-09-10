@@ -43,20 +43,23 @@ describe("CAIL_APP_SLUG", () => {
 
 describe("resolveModelId", () => {
   it("uses CAIL_MODEL when set", () => {
-    expect(resolveModelId({ CAIL_MODEL: "@cf/some/model" })).toBe("@cf/some/model");
+    expect(resolveModelId({ CAIL_MODEL: "some-model" })).toBe("some-model");
   });
 
-  it("rejects a non-Cloudflare model override", () => {
-    expect(() => resolveModelId({ CAIL_MODEL: "some/model" }))
-      .toThrow("CAIL_MODEL must be a Cloudflare Workers AI model id");
-  });
+  it.each(["@cf/some/model", "openrouter/some-model", "auto/some-model", "auto", "AUTO"])(
+    "rejects provider-native and auto aliases: %s",
+    (modelId) => {
+      expect(() => resolveModelId({ CAIL_MODEL: modelId }))
+        .toThrow("CAIL_MODEL must be a canonical prefix-free CAIL model id");
+    },
+  );
 
   it("falls back to the default model", () => {
     expect(resolveModelId({})).toBe(DEFAULT_CAIL_MODEL);
   });
 
-  it("defaults to a Workers AI catalog id (CAIL policy: Cloudflare models only)", () => {
-    expect(DEFAULT_CAIL_MODEL).toMatch(/^@cf\//);
+  it("defaults to the canonical DeepSeek V4 Flash model", () => {
+    expect(DEFAULT_CAIL_MODEL).toBe("deepseek-v4-flash-0731");
   });
 });
 
@@ -75,7 +78,7 @@ describe("createCailModel", () => {
 
   it("builds a language model bound to the gateway chat endpoint", () => {
     const model = createCailModel(
-      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
+      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "gpt-oss-120b" },
       "jwt-token"
     );
     // createOpenAICompatible returns a model object (not the bare string branch
@@ -84,7 +87,7 @@ describe("createCailModel", () => {
     // SAFETY: createCailModel returns the OpenAI-compatible model object for a
     // configured gateway; this test asserts its documented metadata fields.
     const meta = model as { modelId: string; provider: string };
-    expect(meta.modelId).toBe("@cf/openai/gpt-oss-120b");
+    expect(meta.modelId).toBe("gpt-oss-120b");
     expect(meta.provider).toContain("cail");
   });
 });
@@ -205,7 +208,7 @@ describe("createCailModel wire contract", () => {
         id: "chatcmpl-test",
         object: "chat.completion",
         created: 0,
-        model: "@cf/openai/gpt-oss-120b",
+        model: "gpt-oss-120b",
         choices: [
           {
             index: 0,
@@ -257,7 +260,7 @@ describe("createCailModel wire contract", () => {
             id: "chatcmpl-tool-call",
             object: "chat.completion.chunk",
             created: 0,
-            model: "@cf/openai/gpt-oss-120b",
+            model: "gpt-oss-120b",
             choices: [{
               index: 0,
               delta: {
@@ -277,7 +280,7 @@ describe("createCailModel wire contract", () => {
             id: "chatcmpl-tool-result",
             object: "chat.completion.chunk",
             created: 0,
-            model: "@cf/openai/gpt-oss-120b",
+            model: "gpt-oss-120b",
             choices: [{
               index: 0,
               delta: { content: "The status is ready." },
@@ -290,7 +293,7 @@ describe("createCailModel wire contract", () => {
       });
     });
     const model = createCailModel(
-      { CAIL_API_BASE: "https://cail.example", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
+      { CAIL_API_BASE: "https://cail.example", CAIL_MODEL: "gpt-oss-120b" },
       "jwt",
       upstream,
     );
@@ -323,7 +326,7 @@ describe("createCailModel wire contract", () => {
   it("sends one verified bearer and X-CAIL-App to /v1/chat/completions", async () => {
     const { fetch: stub, captured } = makeCaptureFetch();
     const model = createCailModel(
-      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "@cf/openai/gpt-oss-120b" },
+      { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "gpt-oss-120b" },
       "jwt-token",
       stub
     );

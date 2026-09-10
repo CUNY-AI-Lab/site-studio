@@ -164,7 +164,6 @@
 		'delete_file',
 		'scaffold_template',
 		'add_page',
-		'generate_image'
 	]);
 
 	type SiteChatMessage = SDKUIMessage<Record<string, JsonValue>>;

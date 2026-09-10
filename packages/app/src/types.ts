@@ -27,17 +27,10 @@ export interface Env {
   // configuration, not proof of the live deployment; verify operations state
   // against the Gateway runtime contract.
   CAIL_API_BASE?: string;
-  // Workers AI model id for the gateway's OpenAI-compatible path (`@cf/...`
-  // only under current CAIL policy).
+  // Canonical prefix-free model id for the Gateway's OpenAI-compatible path.
   CAIL_MODEL?: string;
-  // Text-to-image model id (Workers AI native path). CAIL policy: `@cf/...`
-  // only. Default @cf/black-forest-labs/flux-2-klein-4b; budget alternative
-  // @cf/black-forest-labs/flux-1-schnell.
-  CAIL_IMAGE_MODEL?: string;
-  // Vision model used as the REQUIRED image moderation gate (no dedicated NSFW
-  // classifier exists in Workers AI). Must be a vision-capable curated-catalog
-  // id. Default @cf/moonshotai/kimi-k2.6; the catalog's other vision model is
-  // @cf/meta/llama-4-scout-17b-16e-instruct.
+  // Canonical prefix-free vision model used to inspect project-owned images.
+  // Default kimi-k2.6.
   CAIL_IMAGE_CLASSIFIER?: string;
   // Static public JWKS used to verify RS256 X-CAIL-Identity-JWT tokens for the
   // cail:site-studio audience. Stored as a JSON Wrangler secret.

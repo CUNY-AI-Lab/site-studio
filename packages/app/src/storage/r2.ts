@@ -1211,8 +1211,8 @@ export class R2ProjectStorage {
    * `null` result means "someone else already owns this key".
    *
    * This is the compare-and-set primitive the read-check-write collision paths
-   * (uploads, generated images, handle claims, slug reservations) rely on to be
-   * race-free: the check and the write are the same atomic operation.
+   * (uploads, handle claims, slug reservations) rely on to be race-free: the
+   * check and the write are the same atomic operation.
    *
    * Returns `true` when this call wrote the object, `false` when the key was
    * already taken.
