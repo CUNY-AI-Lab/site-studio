@@ -20,8 +20,7 @@
     "e2e:local": "bun run build && bun scripts/local-browser-e2e.ts",
     "e2e:live": "node scripts/live-product-e2e.mjs",
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build",
-    "workers:build": "node scripts/workers-builds-build.mjs",
-    "workers:dispatch-release": "node scripts/workers-builds-dispatch-release.mjs"
+    "workers:build": "node scripts/workers-builds-build.mjs"
   },
   "license": "MIT",
   "devDependencies": {

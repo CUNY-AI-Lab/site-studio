@@ -7,7 +7,6 @@ build/
 .svelte-kit/
 .wrangler/
 .wrangler-dry-run/
-.workers-builds/
 
 # Environment files
 .env
