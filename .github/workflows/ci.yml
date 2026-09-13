@@ -4,6 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact main commit that passed Workers Builds
+        required: true
+        type: string
+      workers_build_uuid:
+        description: Cloudflare Workers Build UUID
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -11,6 +21,7 @@ permissions:
 
 jobs:
   app:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     name: App checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -34,6 +45,7 @@ jobs:
         run: bun run --cwd packages/app check
 
   frontend:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     name: Frontend checks and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -59,6 +71,7 @@ jobs:
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
 
   browser:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
     name: Local browser acceptance (integration, not E2E)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -84,7 +97,7 @@ jobs:
         run: bun scripts/local-browser-e2e.ts
 
   verify:
-    if: ${{ always() }}
+    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
     needs: [app, frontend, browser]
     runs-on: ubuntu-latest
     steps:
@@ -103,7 +116,11 @@ jobs:
           fi
 
   deploy:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{ always() && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.result == 'success') ||
+        github.event_name == 'workflow_dispatch'
+      ) }}
     needs: verify
     runs-on: ubuntu-latest
     environment: production
@@ -115,11 +132,35 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Resolve current main release
+        id: release
+        env:
+          DISPATCH_SHA: ${{ inputs.release_sha }}
+          DISPATCH_WORKERS_BUILD_UUID: ${{ inputs.workers_build_uuid }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$DISPATCH_WORKERS_BUILD_UUID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+            release_sha="$DISPATCH_SHA"
+          else
+            [[ "$GITHUB_EVENT_NAME" == push ]]
+            [[ "$GITHUB_REF" == refs/heads/main ]]
+            [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+            release_sha="$GITHUB_SHA"
+          fi
+          current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          [[ "$current_sha" == "$release_sha" ]]
+          printf 'sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
+          printf 'RELEASE_SHA=%s\n' "$release_sha" >> "$GITHUB_ENV"
+
       - name: Check out main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
           persist-credentials: false
+          ref: ${{ steps.release.outputs.sha }}
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -137,8 +178,9 @@ jobs:
       - name: Confirm main has not advanced
         run: |
           set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
           current_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          [[ "$current_sha" == "$GITHUB_SHA" ]]
+          [[ "$current_sha" == "$RELEASE_SHA" ]]
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -146,12 +188,10 @@ jobs:
         working-directory: packages/app
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == refs/heads/main ]]
-          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           bunx wrangler deploy \
             --strict \
-            --tag "$GITHUB_SHA" \
-            --message "main $GITHUB_SHA"
+            --tag "$RELEASE_SHA" \
+            --message "main $RELEASE_SHA"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
@@ -170,7 +210,7 @@ jobs:
           ' <<<"$deployment")"
           [[ "$version_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
           version="$(bunx wrangler versions view "$version_id" --name site-studio-app --json 2>/dev/null)"
-          jq -e --arg tag "$GITHUB_SHA" --arg message "main $GITHUB_SHA" '
+          jq -e --arg tag "$RELEASE_SHA" --arg message "main $RELEASE_SHA" '
             .annotations["workers/tag"] == $tag
             and .annotations["workers/message"] == $message
           ' <<<"$version" >/dev/null
@@ -184,7 +224,7 @@ jobs:
             ] | length) == 1
           ' <<<"$version" >/dev/null
           deployment="$(bunx wrangler deployments status --name site-studio-app --json 2>/dev/null)"
-          deployment_id="$(jq -er --arg id "$version_id" --arg message "main $GITHUB_SHA" '
+          deployment_id="$(jq -er --arg id "$version_id" --arg message "main $RELEASE_SHA" '
             .
             | select(.annotations["workers/message"] == $message)
             | select((.versions | length) == 1)

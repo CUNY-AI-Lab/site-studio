@@ -281,6 +281,12 @@ Merges to `main` release after the repository checks and a live health check.
 Site Studio has no separate checked-in staging Worker; local checks are not a
 production preview.
 
+The source-controlled build and deploy entrypoints for the planned Cloudflare
+Workers Builds migration, including the exact dashboard settings and the current
+release-order limitation, are documented in
+[docs/workers-builds.md](docs/workers-builds.md). GitHub Actions remains the
+authoritative production runner until that cutover is completed explicitly.
+
 See [docs/security-and-recovery.md](docs/security-and-recovery.md) for the
 remaining trust and recovery boundaries.
 
