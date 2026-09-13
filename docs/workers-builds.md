@@ -29,6 +29,7 @@ Set these production-trigger build variables and secrets:
 
 | Name | Value | Kind |
 | --- | --- | --- |
+| `NODE_VERSION` | `24.18.0` | variable |
 | `BUN_VERSION` | `1.3.14` | variable |
 | `SKIP_DEPENDENCY_INSTALL` | `1` | variable |
 | `NODE_AUTH_TOKEN` | GitHub personal access token (classic) with `read:packages` | secret |
@@ -36,11 +37,14 @@ Set these production-trigger build variables and secrets:
 
 `SKIP_DEPENDENCY_INSTALL=1` is deliberate. The repository entrypoint owns the
 locked `bun install --frozen-lockfile`, and fails before installing when the
-GitHub Packages token or exact Bun version is absent. `bunfig.toml` sends that
-token only to the `@cuny-ai-lab` scope at `npm.pkg.github.com`. GitHub requires a
-classic token even for public npm packages; the token's user must be able to read
-the three CAIL packages in the lockfile. Do not add the token to source, a command,
-or a plain build variable.
+GitHub Packages token or exact Node and Bun versions are absent. Keep
+`NODE_VERSION=24.18.0` aligned with the checked-in `.node-version` and `.nvmrc`.
+This prevents the command's move from `/packages/app/` to the repository root
+from selecting the old Node 20 runtime for jsdom and undici subprocesses.
+`bunfig.toml` sends the package token only to the `@cuny-ai-lab` scope at
+`npm.pkg.github.com`. GitHub requires a classic token even for public npm
+packages; the token's user must be able to read the three CAIL packages in the
+lockfile. Do not add the token to source, a command, or a plain build variable.
 
 `GITHUB_RELEASE_TOKEN` creates a workflow dispatch for `.github/workflows/ci.yml`.
 GitHub requires Actions: write for that endpoint. Limit the token to this
@@ -59,12 +63,14 @@ production writer.
 
 The build entrypoint verifies the Cloudflare-supplied branch and commit metadata,
 runs the frozen install, high-severity audit, repository lint, app tests and type
-checks, frontend checks, Chromium installation, local browser acceptance, the
-production frontend/template build, and a Wrangler dry-run. The local browser
-gate uses deterministic local bindings; it is integration acceptance, not native
-R2, Durable Object, or provider coverage. A first Workers Build must demonstrate
-that Playwright's Linux dependency installer is supported by the current build
-image. Do not waive the browser gate if the image changes.
+checks, frontend checks, Chromium download, local browser acceptance, the
+production frontend/template build, and a Wrangler dry-run. The Workers path
+does not use Playwright's `--with-deps` option because that invokes privileged OS
+package installation, which the Cloudflare build user cannot perform. GitHub CI
+keeps its `--with-deps` installation. The browser launch and full local journey
+remain the acceptance check for the libraries already present in Cloudflare's
+Ubuntu build image. The gate uses deterministic local bindings; it is integration
+acceptance, not native R2, Durable Object, or provider coverage.
 
 After every gate passes, the build writes an ephemeral marker containing its SHA
 and Cloudflare build UUID. The deploy entrypoint rejects any branch other than
