@@ -69,7 +69,7 @@ does not use Playwright's `--with-deps` option because that invokes privileged O
 package installation, which the Cloudflare build user cannot perform. GitHub CI
 keeps its `--with-deps` installation. On Cloudflare's Ubuntu Noble image, the
 entrypoint uses writable apt state and cache directories with the current build
-user as `APT::Sandbox::User`. It downloads and extracts the nine missing runtime
+user as `APT::Sandbox::User`. It downloads and extracts the ten missing runtime
 packages into a unique temporary directory, prepends their
 `usr/lib/x86_64-linux-gnu` directory to `LD_LIBRARY_PATH` only for browser
 acceptance, and removes the temporary tree whether the browser passes or fails.
