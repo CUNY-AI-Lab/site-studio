@@ -287,8 +287,9 @@ production preview.
 The source-controlled build entrypoint and GitHub release receiver for the planned
 Cloudflare Workers Builds migration, including the exact dashboard settings and
 the current release-order limitation, are documented in
-[docs/workers-builds.md](docs/workers-builds.md). GitHub Actions remains the
-authoritative production runner until that cutover is completed explicitly.
+[docs/workers-builds.md](docs/workers-builds.md). After the documented repository
+variable enables the cutover, Workers Builds owns the main gate while GitHub
+Actions retains pull-request checks and the serialized production release.
 
 See [docs/security-and-recovery.md](docs/security-and-recovery.md) for the
 remaining trust and recovery boundaries.
