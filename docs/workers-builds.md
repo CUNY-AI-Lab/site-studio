@@ -1,10 +1,8 @@
 # Cloudflare Workers Builds production setup
 
 This repository contains the build entrypoint and GitHub release receiver for
-making Cloudflare Workers Builds the primary Site Studio release runner.
-Connecting the repository or changing the production trigger is an operator
-action. Keep the push-triggered GitHub release path enabled until a Workers Build
-has completed this whole path and the cutover has been reviewed.
+making Cloudflare Workers Builds the primary Site Studio release gate. Connecting
+the repository or changing the production trigger is an operator action.
 
 Configure the existing `site-studio-app` Worker with these settings:
 
@@ -101,10 +99,19 @@ The Cloudflare build completes before GitHub receives the `check_run` event, so
 Cloudflare cannot report the later GitHub release result. GitHub is the
 authoritative release status.
 
-The current push-triggered GitHub checks and deploy remain enabled during
-preparation. Once a real Workers Build and check-run receiver have succeeded,
-remove only the push-to-main deploy path in a separate reviewed change. Keep the
-pull-request checks and the `check_run` receiver.
+Cloudflare build `de958ae6-f643-4489-90f5-c43ef0f35bd6` and GitHub Actions run
+`34765801594` proved the complete path on exact main commit
+`5d5d63d4fa25939887e010ad213ec7f5ca5b6825`, including the serialized deployment,
+version and binding readback, secret-name check, and production readiness probes.
+After this source change is merged, set the GitHub repository variable
+`CLOUDFLARE_WORKERS_BUILDS_PRIMARY` to `true` to complete the cutover. GitHub
+compares expression strings without regard to case, so case variants of `true`
+have the same effect. That value skips the app, frontend, browser, aggregate
+verification, and deploy jobs for push-to-main events without starting another
+runner. Pull requests continue to run every check, and a qualifying Cloudflare
+`check_run` continues to run the serialized deploy job. Leaving the variable
+unset or setting it to `false` retains the push-to-main checks and deployment as
+the rollback path.
 
 Non-production builds stay disabled because Site Studio's checked-in bindings
 name production R2, KV, and Durable Object state, there is no staging topology,

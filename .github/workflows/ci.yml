@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   app:
-    if: ${{ github.event_name != 'check_run' }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: App checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -37,7 +39,9 @@ jobs:
         run: bun run --cwd packages/app check
 
   frontend:
-    if: ${{ github.event_name != 'check_run' }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: Frontend checks and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -63,7 +67,9 @@ jobs:
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
 
   browser:
-    if: ${{ github.event_name != 'check_run' }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: Local browser acceptance (integration, not E2E)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -89,7 +95,9 @@ jobs:
         run: bun scripts/local-browser-e2e.ts
 
   verify:
-    if: ${{ always() && github.event_name != 'check_run' }}
+    if: >-
+      ${{ always() && (github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true')) }}
     needs: [app, frontend, browser]
     runs-on: ubuntu-latest
     steps:
@@ -110,7 +118,10 @@ jobs:
   deploy:
     if: >-
       ${{ always() && (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.result == 'success') ||
+        (github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true' &&
+          needs.verify.result == 'success') ||
         (github.event_name == 'check_run' &&
           github.event.action == 'completed' &&
           github.event.check_run.status == 'completed' &&
