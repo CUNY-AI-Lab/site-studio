@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,8 +9,6 @@ const EXPECTED_BUN_VERSION = "1.3.14";
 const EXPECTED_NODE_VERSION = "v24.18.0";
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const GATE_DIRECTORY = resolve(ROOT, ".workers-builds");
-const GATE_PATH = resolve(GATE_DIRECTORY, "passed.json");
 const BROWSER_LIBRARY_PACKAGES = [
   "libatk1.0-0t64",
   "libatk-bridge2.0-0t64",
@@ -150,10 +148,9 @@ function verifyWorkersBuildEnvironment() {
   if (runText("node", ["--version"]) !== EXPECTED_NODE_VERSION) {
     throw new Error(`Workers Builds must use Node ${EXPECTED_NODE_VERSION.slice(1)}`);
   }
-  return { buildSha, buildUuid };
 }
 
-const { buildSha, buildUuid } = verifyWorkersBuildEnvironment();
+verifyWorkersBuildEnvironment();
 run("bun", ["install", "--frozen-lockfile"]);
 await runQualityLanes();
 
@@ -181,6 +178,4 @@ run(resolve(ROOT, "packages/app/node_modules/.bin/wrangler"), [
   ".wrangler-dry-run/app",
 ]);
 
-mkdirSync(GATE_DIRECTORY, { recursive: true });
-writeFileSync(GATE_PATH, `${JSON.stringify({ buildSha, buildUuid })}\n`, { mode: 0o600 });
 console.log("Workers Builds source, browser, and bundle validation passed");

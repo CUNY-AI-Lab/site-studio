@@ -4,16 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      release_sha:
-        description: Exact main commit that passed Workers Builds
-        required: true
-        type: string
-      workers_build_uuid:
-        description: Cloudflare Workers Build UUID
-        required: true
-        type: string
+  check_run:
+    types: [completed]
 
 permissions:
   contents: read
@@ -21,7 +13,7 @@ permissions:
 
 jobs:
   app:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'check_run' }}
     name: App checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -45,7 +37,7 @@ jobs:
         run: bun run --cwd packages/app check
 
   frontend:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'check_run' }}
     name: Frontend checks and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -71,7 +63,7 @@ jobs:
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
 
   browser:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'check_run' }}
     name: Local browser acceptance (integration, not E2E)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -97,7 +89,7 @@ jobs:
         run: bun scripts/local-browser-e2e.ts
 
   verify:
-    if: ${{ always() && github.event_name != 'workflow_dispatch' }}
+    if: ${{ always() && github.event_name != 'check_run' }}
     needs: [app, frontend, browser]
     runs-on: ubuntu-latest
     steps:
@@ -119,7 +111,13 @@ jobs:
     if: >-
       ${{ always() && (
         (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.result == 'success') ||
-        github.event_name == 'workflow_dispatch'
+        (github.event_name == 'check_run' &&
+          github.event.action == 'completed' &&
+          github.event.check_run.status == 'completed' &&
+          github.event.check_run.conclusion == 'success' &&
+          github.event.check_run.name == 'Workers Builds: site-studio-app' &&
+          github.event.check_run.app.id == 85455 &&
+          github.event.check_run.app.slug == 'cloudflare-workers-and-pages')
       ) }}
     needs: verify
     runs-on: ubuntu-latest
@@ -129,21 +127,56 @@ jobs:
       group: site-studio-production
       cancel-in-progress: false
     permissions:
+      checks: read
       contents: read
       packages: read
     steps:
       - name: Resolve current main release
         id: release
         env:
-          DISPATCH_SHA: ${{ inputs.release_sha }}
-          DISPATCH_WORKERS_BUILD_UUID: ${{ inputs.workers_build_uuid }}
+          CHECK_RUN_ACTION: ${{ github.event.action }}
+          CHECK_RUN_APP_ID: ${{ github.event.check_run.app.id }}
+          CHECK_RUN_APP_SLUG: ${{ github.event.check_run.app.slug }}
+          CHECK_RUN_CONCLUSION: ${{ github.event.check_run.conclusion }}
+          CHECK_RUN_EXTERNAL_ID: ${{ github.event.check_run.external_id }}
+          CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}
+          CHECK_RUN_ID: ${{ github.event.check_run.id }}
+          CHECK_RUN_NAME: ${{ github.event.check_run.name }}
+          CHECK_RUN_STATUS: ${{ github.event.check_run.status }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            [[ "$DISPATCH_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$DISPATCH_WORKERS_BUILD_UUID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
-            release_sha="$DISPATCH_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == check_run ]]; then
+            [[ "$CHECK_RUN_ACTION" == completed ]]
+            [[ "$CHECK_RUN_APP_ID" == 85455 ]]
+            [[ "$CHECK_RUN_APP_SLUG" == cloudflare-workers-and-pages ]]
+            [[ "$CHECK_RUN_NAME" == "Workers Builds: site-studio-app" ]]
+            [[ "$CHECK_RUN_STATUS" == completed ]]
+            [[ "$CHECK_RUN_CONCLUSION" == success ]]
+            [[ "$CHECK_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+            [[ "$CHECK_RUN_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$CHECK_RUN_EXTERNAL_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+
+            check_run="$(gh api "repos/${GITHUB_REPOSITORY}/check-runs/${CHECK_RUN_ID}")"
+            jq -e \
+              --arg conclusion "$CHECK_RUN_CONCLUSION" \
+              --arg external_id "$CHECK_RUN_EXTERNAL_ID" \
+              --arg head_sha "$CHECK_RUN_HEAD_SHA" \
+              --arg name "$CHECK_RUN_NAME" \
+              --arg slug "$CHECK_RUN_APP_SLUG" \
+              --arg status "$CHECK_RUN_STATUS" \
+              --argjson app_id "$CHECK_RUN_APP_ID" \
+              --argjson check_run_id "$CHECK_RUN_ID" '
+                .id == $check_run_id
+                and .name == $name
+                and .status == $status
+                and .conclusion == $conclusion
+                and .head_sha == $head_sha
+                and .external_id == $external_id
+                and .app.id == $app_id
+                and .app.slug == $slug
+              ' <<<"$check_run" >/dev/null
+            release_sha="$CHECK_RUN_HEAD_SHA"
           else
             [[ "$GITHUB_EVENT_NAME" == push ]]
             [[ "$GITHUB_REF" == refs/heads/main ]]
