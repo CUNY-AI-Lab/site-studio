@@ -67,10 +67,16 @@ checks, frontend checks, Chromium download, local browser acceptance, the
 production frontend/template build, and a Wrangler dry-run. The Workers path
 does not use Playwright's `--with-deps` option because that invokes privileged OS
 package installation, which the Cloudflare build user cannot perform. GitHub CI
-keeps its `--with-deps` installation. The browser launch and full local journey
-remain the acceptance check for the libraries already present in Cloudflare's
-Ubuntu build image. The gate uses deterministic local bindings; it is integration
-acceptance, not native R2, Durable Object, or provider coverage.
+keeps its `--with-deps` installation. On Cloudflare's Ubuntu Noble image, the
+entrypoint uses writable apt state and cache directories with the current build
+user as `APT::Sandbox::User`. It downloads and extracts the nine missing runtime
+packages into a unique temporary directory, prepends their
+`usr/lib/x86_64-linux-gnu` directory to `LD_LIBRARY_PATH` only for browser
+acceptance, and removes the temporary tree whether the browser passes or fails.
+No root access or system package mutation is required. The browser launch and
+full local journey remain the acceptance check. The gate uses deterministic
+local bindings; it is integration acceptance, not native R2, Durable Object, or
+provider coverage.
 
 After every gate passes, the build writes an ephemeral marker containing its SHA
 and Cloudflare build UUID. The deploy entrypoint rejects any branch other than
