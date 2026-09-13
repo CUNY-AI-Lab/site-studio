@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_BUN_VERSION = "1.3.14";
+const EXPECTED_NODE_VERSION = "v24.18.0";
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GATE_DIRECTORY = resolve(ROOT, ".workers-builds");
@@ -46,13 +47,12 @@ function runLane(label, command, args) {
 }
 
 async function runQualityLanes() {
-  const chromiumInstallScript = process.platform === "linux" ? "e2e:install:ci" : "e2e:install";
   const lanes = [
     runLane("dependency audit", "bun", ["audit", "--audit-level=high"]),
     runLane("repository lint", "bun", ["run", "lint"]),
     runLane("app checks", "bun", ["run", "--cwd", "packages/app", "check"]),
     runLane("frontend checks", "bun", ["run", "--cwd", "packages/frontend", "check"]),
-    runLane("Chromium install", "bun", ["run", chromiumInstallScript]),
+    runLane("Chromium install", "bun", ["run", "e2e:install"]),
   ];
   const results = await Promise.allSettled(lanes);
   const failures = results.filter((result) => result.status === "rejected");
@@ -77,6 +77,9 @@ function verifyWorkersBuildEnvironment() {
   requiredEnvironment("NODE_AUTH_TOKEN");
   if (runText("bun", ["--version"]) !== EXPECTED_BUN_VERSION) {
     throw new Error(`Workers Builds must use Bun ${EXPECTED_BUN_VERSION}`);
+  }
+  if (runText("node", ["--version"]) !== EXPECTED_NODE_VERSION) {
+    throw new Error(`Workers Builds must use Node ${EXPECTED_NODE_VERSION.slice(1)}`);
   }
   return { buildSha, buildUuid };
 }
