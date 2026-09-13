@@ -12,35 +12,10 @@ permissions:
   packages: read
 
 jobs:
-  release_mode:
-    if: ${{ github.event_name == 'push' }}
-    name: Resolve release mode
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions: {}
-    outputs:
-      workers_primary: ${{ steps.mode.outputs.workers_primary }}
-    steps:
-      - name: Resolve exact cutover value
-        id: mode
-        env:
-          CLOUDFLARE_WORKERS_BUILDS_PRIMARY: ${{ vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY }}
-        run: |
-          set -euo pipefail
-          if [[ "$CLOUDFLARE_WORKERS_BUILDS_PRIMARY" == true ]]; then
-            workers_primary=true
-          else
-            workers_primary=false
-          fi
-          printf 'workers_primary=%s\n' "$workers_primary" >> "$GITHUB_OUTPUT"
-
   app:
-    needs: release_mode
     if: >-
-      ${{ always() && (github.event_name == 'pull_request' ||
-        (github.event_name == 'push' &&
-          needs.release_mode.result == 'success' &&
-          needs.release_mode.outputs.workers_primary == 'false')) }}
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: App checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -64,12 +39,9 @@ jobs:
         run: bun run --cwd packages/app check
 
   frontend:
-    needs: release_mode
     if: >-
-      ${{ always() && (github.event_name == 'pull_request' ||
-        (github.event_name == 'push' &&
-          needs.release_mode.result == 'success' &&
-          needs.release_mode.outputs.workers_primary == 'false')) }}
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: Frontend checks and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -95,12 +67,9 @@ jobs:
         run: packages/app/node_modules/.bin/wrangler deploy --dry-run --config packages/app/wrangler.jsonc --outdir .wrangler-dry-run/app
 
   browser:
-    needs: release_mode
     if: >-
-      ${{ always() && (github.event_name == 'pull_request' ||
-        (github.event_name == 'push' &&
-          needs.release_mode.result == 'success' &&
-          needs.release_mode.outputs.workers_primary == 'false')) }}
+      ${{ github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true') }}
     name: Local browser acceptance (integration, not E2E)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -128,10 +97,8 @@ jobs:
   verify:
     if: >-
       ${{ always() && (github.event_name == 'pull_request' ||
-        (github.event_name == 'push' &&
-          needs.release_mode.result == 'success' &&
-          needs.release_mode.outputs.workers_primary == 'false')) }}
-    needs: [release_mode, app, frontend, browser]
+        (github.event_name == 'push' && vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true')) }}
+    needs: [app, frontend, browser]
     runs-on: ubuntu-latest
     steps:
       - name: Require every CI lane
@@ -153,8 +120,7 @@ jobs:
       ${{ always() && (
         (github.event_name == 'push' &&
           github.ref == 'refs/heads/main' &&
-          needs.release_mode.result == 'success' &&
-          needs.release_mode.outputs.workers_primary == 'false' &&
+          vars.CLOUDFLARE_WORKERS_BUILDS_PRIMARY != 'true' &&
           needs.verify.result == 'success') ||
         (github.event_name == 'check_run' &&
           github.event.action == 'completed' &&
@@ -164,7 +130,7 @@ jobs:
           github.event.check_run.app.id == 85455 &&
           github.event.check_run.app.slug == 'cloudflare-workers-and-pages')
       ) }}
-    needs: [release_mode, verify]
+    needs: verify
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 30

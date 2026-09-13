@@ -104,14 +104,14 @@ Cloudflare build `de958ae6-f643-4489-90f5-c43ef0f35bd6` and GitHub Actions run
 `5d5d63d4fa25939887e010ad213ec7f5ca5b6825`, including the serialized deployment,
 version and binding readback, secret-name check, and production readiness probes.
 After this source change is merged, set the GitHub repository variable
-`CLOUDFLARE_WORKERS_BUILDS_PRIMARY` to exactly `true` to complete the cutover.
-GitHub expression comparisons ignore case, so a small push-only job resolves the
-variable with a case-sensitive shell comparison. Exact lowercase `true` skips the
-app, frontend, browser, aggregate verification, and deploy jobs for push-to-main
-events. Pull requests continue to run every check, and a qualifying Cloudflare
+`CLOUDFLARE_WORKERS_BUILDS_PRIMARY` to `true` to complete the cutover. GitHub
+compares expression strings without regard to case, so case variants of `true`
+have the same effect. That value skips the app, frontend, browser, aggregate
+verification, and deploy jobs for push-to-main events without starting another
+runner. Pull requests continue to run every check, and a qualifying Cloudflare
 `check_run` continues to run the serialized deploy job. Leaving the variable
-unset or assigning any other value retains the push-to-main checks and deployment
-as the rollback path.
+unset or setting it to `false` retains the push-to-main checks and deployment as
+the rollback path.
 
 Non-production builds stay disabled because Site Studio's checked-in bindings
 name production R2, KV, and Durable Object state, there is no staging topology,
