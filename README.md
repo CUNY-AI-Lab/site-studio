@@ -192,7 +192,8 @@ bun run --cwd packages/app deploy --dry-run
 `@playwright/test` dependency. GitHub Actions CI runs the same install with Linux
 system dependencies through `bun run e2e:install:ci` before the browser gate.
 Workers Builds downloads Chromium without privileged system package installation;
-its browser journey verifies the libraries already present in Cloudflare's image.
+it downloads the missing Noble browser libraries into a temporary, non-root apt
+tree and exposes them only to the browser journey.
 
 `bun run e2e:local` builds the frontend, starts a real local Bun process with
 the production Hono app, and uses the declared TypeScript Playwright runner to

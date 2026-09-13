@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,28 @@ const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const GATE_DIRECTORY = resolve(ROOT, ".workers-builds");
 const GATE_PATH = resolve(GATE_DIRECTORY, "passed.json");
+const BROWSER_LIBRARY_PACKAGES = [
+  "libatk1.0-0t64",
+  "libatk-bridge2.0-0t64",
+  "libxcomposite1",
+  "libxdamage1",
+  "libxfixes3",
+  "libxrandr2",
+  "libxkbcommon0",
+  "libasound2t64",
+  "libatspi2.0-0t64",
+];
+const BROWSER_LIBRARY_SONAMES = [
+  "libatk-1.0.so.0",
+  "libatk-bridge-2.0.so.0",
+  "libXcomposite.so.1",
+  "libXdamage.so.1",
+  "libXfixes.so.3",
+  "libXrandr.so.2",
+  "libxkbcommon.so.0",
+  "libasound.so.2",
+  "libatspi.so.0",
+];
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
@@ -17,10 +40,56 @@ function requiredEnvironment(name) {
   return value;
 }
 
-function run(command, args, cwd = ROOT) {
-  const result = spawnSync(command, args, { cwd, stdio: "inherit" });
+function run(command, args, cwd = ROOT, env = process.env) {
+  const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} exited with status ${result.status}`);
+}
+
+function prepareLinuxBrowserLibraries() {
+  if (process.platform !== "linux") return null;
+
+  const temporaryRoot = mkdtempSync(resolve(tmpdir(), "site-studio-browser-libs-"));
+  const aptLists = resolve(temporaryRoot, "apt/lists");
+  const aptCache = resolve(temporaryRoot, "apt/cache");
+  const aptArchives = resolve(aptCache, "archives");
+  const downloads = resolve(temporaryRoot, "downloads");
+  const extracted = resolve(temporaryRoot, "root");
+
+  try {
+    for (const path of [resolve(aptLists, "partial"), resolve(aptArchives, "partial"), downloads, extracted]) {
+      mkdirSync(path, { recursive: true });
+    }
+    const aptOptions = [
+      "-o",
+      `Dir::State::lists=${aptLists}`,
+      "-o",
+      `Dir::Cache=${aptCache}`,
+      "-o",
+      `Dir::Cache::archives=${aptArchives}`,
+      "-o",
+      `APT::Sandbox::User=${runText("id", ["-un"])}`,
+    ];
+    run("apt-get", [...aptOptions, "update"]);
+    run("apt-get", [...aptOptions, "download", ...BROWSER_LIBRARY_PACKAGES], downloads);
+
+    const packages = readdirSync(downloads)
+      .filter((file) => file.endsWith(".deb"))
+      .sort();
+    if (packages.length !== BROWSER_LIBRARY_PACKAGES.length) {
+      throw new Error(`Expected ${BROWSER_LIBRARY_PACKAGES.length} browser library packages, found ${packages.length}`);
+    }
+    for (const file of packages) run("dpkg-deb", ["--extract", resolve(downloads, file), extracted]);
+
+    const libraryPath = resolve(extracted, "usr/lib/x86_64-linux-gnu");
+    for (const soname of BROWSER_LIBRARY_SONAMES) {
+      if (!existsSync(resolve(libraryPath, soname))) throw new Error(`Browser library package did not provide ${soname}`);
+    }
+    return { libraryPath, temporaryRoot };
+  } catch (error) {
+    rmSync(temporaryRoot, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 function runText(command, args) {
@@ -89,7 +158,18 @@ run("bun", ["install", "--frozen-lockfile"]);
 await runQualityLanes();
 
 run("bun", ["run", "--cwd", "packages/frontend", "build"]);
-run("bun", ["scripts/local-browser-e2e.ts"]);
+const browserLibraries = prepareLinuxBrowserLibraries();
+try {
+  const browserEnvironment = browserLibraries
+    ? {
+        ...process.env,
+        LD_LIBRARY_PATH: [browserLibraries.libraryPath, process.env.LD_LIBRARY_PATH].filter(Boolean).join(":"),
+      }
+    : process.env;
+  run("bun", ["scripts/local-browser-e2e.ts"], ROOT, browserEnvironment);
+} finally {
+  if (browserLibraries) rmSync(browserLibraries.temporaryRoot, { force: true, recursive: true });
+}
 
 run("bun", ["run", "--cwd", "packages/app", "predeploy"]);
 run(resolve(ROOT, "packages/app/node_modules/.bin/wrangler"), [
