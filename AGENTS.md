@@ -1,5 +1,9 @@
 # Site Studio - Codex Guide
 
+## Recommended CAIL fleet practice
+
+For the colleague-facing engineering and agent-review defaults, see the [CAIL Fleet Engineering and Review Practice](https://github.com/CUNY-AI-Lab/cail-knowledge-base/pull/27). This is recommended unless this repository's own contract or CI makes a rule mandatory. Use Luna workers for bounded independent tasks and Astra for an independent review of substantial or load-bearing changes; keep one primary owner responsible for the combined result and real-path verification.
+
 ## Auto-Invoke Skills
 
 When working on this project, always invoke these skills:
