@@ -166,6 +166,22 @@ async function copyIfAbsent(
   const object = await bucket.get(fromKey);
   if (!object) return; // source vanished (concurrent run finished it) — fine
   const sourceBytes = await object.arrayBuffer();
+
+  // A retry or the defensive second sweep usually finds the destination
+  // already present. Compare that object before attempting a conditional PUT:
+  // the R2 transport sends the entire request body before it handles a failed
+  // precondition, so needlessly re-uploading a large existing object can fail
+  // before the binding returns the documented null result.
+  const existing = await bucket.get(toKey);
+  if (existing) {
+    if (!bytesEqual(sourceBytes, await existing.arrayBuffer())) {
+      throw new Error(
+        "Anonymous-data migration stopped because the destination changed concurrently.",
+      );
+    }
+    return;
+  }
+
   const wrote = await bucket.put(toKey, sourceBytes, {
     httpMetadata: object.httpMetadata,
     onlyIf: { etagDoesNotMatch: "*" },
@@ -180,6 +196,30 @@ async function copyIfAbsent(
     throw new Error(
       "Anonymous-data migration stopped because the destination changed concurrently.",
     );
+  }
+}
+
+const migrationFailureType = {
+  inventory: "migration_inventory_failed",
+  firstCopy: "migration_first_copy_failed",
+  secondCopy: "migration_second_copy_failed",
+  handle: "migration_handle_failed",
+  sourceRetirement: "migration_source_retirement_failed",
+  completion: "migration_completion_failed",
+} as const;
+
+async function runMigrationStage<T>(
+  stage: keyof typeof migrationFailureType,
+  logging: SiteStudioLoggingContext | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    // Static stage categories only: never project an exception message, key,
+    // owner, subject, or project identifier into operational logs.
+    emitDiagnostic("error", migrationFailureType[stage], {}, logging);
+    throw error;
   }
 }
 
@@ -611,64 +651,84 @@ export async function migrateAnonymousData(options: {
   };
 
   // ---- Inventory ----
-  const anonProjectIds = await listProjectIds(bucket, anonUserId);
-  const uploadKeys = await listKeys(bucket, uploadsPrefix(anonUserId));
+  const { anonProjectIds, uploadKeys } = await runMigrationStage(
+    "inventory",
+    logging,
+    async () => ({
+      anonProjectIds: await listProjectIds(bucket, anonUserId),
+      uploadKeys: await listKeys(bucket, uploadsPrefix(anonUserId)),
+    }),
+  );
 
   if (anonProjectIds.length === 0 && uploadKeys.length === 0) {
     // There are no project chats to port, so the planned handle can be
     // committed before retiring the completed anonymous session as well.
-    await migrateHandle({ bucket, anonUserId, subject, now });
-    return finish("nothing-to-migrate", {});
+    await runMigrationStage("handle", logging, () =>
+      migrateHandle({ bucket, anonUserId, subject, now })
+    );
+    return runMigrationStage("completion", logging, () =>
+      finish("nothing-to-migrate", {})
+    );
   }
 
   // ---- First copy sweep ----
-  const firstSweep = await copyAnonymousNamespace({
-    bucket,
-    anonUserId,
-    subject,
-    porter,
-    knownProjects: {},
-    knownSlugs: {},
-    logging,
-  });
+  const firstSweep = await runMigrationStage("firstCopy", logging, () =>
+    copyAnonymousNamespace({
+      bucket,
+      anonUserId,
+      subject,
+      porter,
+      knownProjects: {},
+      knownSlugs: {},
+      logging,
+    })
+  );
 
   // ---- Second copy sweep, immediately before delete ----
   // The owner-scoped MutationCoordinator prevents adopted anonymous writes
   // during this run. Re-list anyway so an older deployment or out-of-band
   // bucket writer cannot be deleted merely because it appeared after the first
   // inventory. Conditional copy-or-equal keeps this sweep idempotent.
-  const { projectMap } = await copyAnonymousNamespace({
-    bucket,
-    anonUserId,
-    subject,
-    porter,
-    knownProjects: firstSweep.projectMap,
-    knownSlugs: firstSweep.slugMap,
-    logging,
-  });
+  const { projectMap } = await runMigrationStage("secondCopy", logging, () =>
+    copyAnonymousNamespace({
+      bucket,
+      anonUserId,
+      subject,
+      porter,
+      knownProjects: firstSweep.projectMap,
+      knownSlugs: firstSweep.slugMap,
+      logging,
+    })
+  );
 
   // All project chat ports have now completed. Re-home the handle only after
   // that last success and before deleting
   // the anonymous source. A handle failure therefore also leaves the source
   // and pending claim available for a later retry.
-  await migrateHandle({ bucket, anonUserId, subject, now });
+  await runMigrationStage("handle", logging, () =>
+    migrateHandle({ bucket, anonUserId, subject, now })
+  );
 
   // ---- Delete originals ----
   // Retire secondary artifacts first. If a snapshot/upload delete fails, the
   // project inventory remains discoverable as the retry anchor instead of
   // leaving an orphaned secondary namespace that a later completed marker can
   // no longer recover.
-  for (const key of await listKeys(bucket, snapshotUserPrefix(anonUserId))) {
-    await bucket.delete(key);
-  }
-  for (const key of await listKeys(bucket, uploadsPrefix(anonUserId))) {
-    await bucket.delete(key);
-  }
-  for (const key of await listKeys(bucket, projectPrefix(anonUserId))) {
-    await bucket.delete(key);
-  }
+  await runMigrationStage("sourceRetirement", logging, async () => {
+    for (const key of await listKeys(bucket, snapshotUserPrefix(anonUserId))) {
+      await bucket.delete(key);
+    }
+    for (const key of await listKeys(bucket, uploadsPrefix(anonUserId))) {
+      await bucket.delete(key);
+    }
+    for (const key of await listKeys(bucket, projectPrefix(anonUserId))) {
+      await bucket.delete(key);
+    }
+  });
 
-  return finish("migrated", projectMap);
+  return runMigrationStage("completion", logging, () =>
+    finish("migrated", projectMap)
+  );
 }
 
 /**

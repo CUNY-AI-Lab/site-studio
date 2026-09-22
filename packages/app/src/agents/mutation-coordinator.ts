@@ -16,6 +16,7 @@ import {
 import { createAgentHistoryPorter, createProjectHistoryLifecycle } from "../lib/agent-porter";
 import {
   createSiteStudioBoundaryContext,
+  emitDiagnostic,
   type SiteStudioLoggingContextData,
 } from "../lib/logging";
 import {
@@ -103,13 +104,40 @@ export class MutationCoordinator extends DurableObject<Env> {
     subject: string,
   ): Promise<MigrationResult> {
     return this.mutations.run(async () => {
-      await new OwnerMutationService(
-        this.env.SITE_STUDIO_BUCKET,
-        this.ctx.storage,
-        undefined,
-        createProjectHistoryLifecycle(this.env),
-      ).recover(anonUserId);
-      const { manifest } = await loadRecoveryManifest(this.env.SITE_STUDIO_BUCKET, recoveryId);
+      const logging = this.env.CAIL_LOG_ENV
+        ? createSiteStudioBoundaryContext(this.env)
+        : undefined;
+      try {
+        await new OwnerMutationService(
+          this.env.SITE_STUDIO_BUCKET,
+          this.ctx.storage,
+          undefined,
+          createProjectHistoryLifecycle(this.env),
+        ).recover(anonUserId);
+      } catch (error) {
+        emitDiagnostic(
+          "error",
+          "legacy_recovery_source_journal_failed",
+          {},
+          logging,
+        );
+        throw error;
+      }
+      let manifest: Awaited<ReturnType<typeof loadRecoveryManifest>>["manifest"];
+      try {
+        ({ manifest } = await loadRecoveryManifest(
+          this.env.SITE_STUDIO_BUCKET,
+          recoveryId,
+        ));
+      } catch (error) {
+        emitDiagnostic(
+          "error",
+          "legacy_recovery_manifest_load_failed",
+          {},
+          logging,
+        );
+        throw error;
+      }
       if (manifest.source.owner !== anonUserId) throw new LegacyRecoveryError("conflict");
       // The first source-queue entry must revalidate immediately before copy.
       // A later entry with a migration claim is a resume: source deletion may
@@ -119,14 +147,25 @@ export class MutationCoordinator extends DurableObject<Env> {
         migrationClaimKey(anonUserId),
         "json",
       );
-      await validateStagedRecovery(this.env.SITE_STUDIO_BUCKET, manifest, {
-        allowMissing: Boolean(migrationClaim),
-      });
+      try {
+        await validateStagedRecovery(this.env.SITE_STUDIO_BUCKET, manifest, {
+          allowMissing: Boolean(migrationClaim),
+        });
+      } catch (error) {
+        emitDiagnostic(
+          "error",
+          "legacy_recovery_source_validation_failed",
+          {},
+          logging,
+        );
+        throw error;
+      }
       return migrateAnonymousData({
         bucket: this.env.SITE_STUDIO_BUCKET,
         kv: this.env.SESSION_KV,
         anonUserId,
         subject,
+        logging,
       });
     });
   }
