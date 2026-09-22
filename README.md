@@ -19,7 +19,8 @@ KV, and chat/mutation state in Durable Objects. `SiteBuilderAgent` extends
 Cloudflare's `AIChatAgent`; `@cloudflare/codemode` runs project operations in a
 sandboxed Dynamic Worker. Preview and published content are served by the app
 itself. There is no publisher service, release manifest, copied publish tree,
-deployment matrix, or compatibility routing layer.
+deployment matrix, or general compatibility routing layer. The only legacy
+route is the receipt-bound operator recovery redirect described below.
 
 Publishing sets live project metadata to `published: true` and reserves the
 project's durable `slug`. The single public shape is `/u/:handle/:slug/*`, where
@@ -96,17 +97,35 @@ public links are derived from the configured `PUBLISHED_BASE_URL`.
 An error returns a private retryable 503 and does not write completion or
 clear the legacy cookie. A later login retries. Verified identity remains the
 sole authentication source; there is no subject session cookie or subject
-session KV record. After completion, the new subject store is authoritative:
-there is no dual-read, fallback, sync, migration window, bulk job, forwarding
-pointer, or legacy public route.
+session KV record. After completion, the new subject store is authoritative.
+The first-login path creates no dual-read, fallback, sync, migration window,
+bulk job, forwarding pointer, or legacy public route; the separate operator
+exception below is the only receipt-bound `/sites` redirect.
 
 Import and project rename transfer chat history through the SDK's
 `persistMessages` API. They do not start a new model turn.
 
 This mechanism can import only a namespace whose legacy R2 session record is
 still resolvable. Historical anonymous namespaces without that mapping cannot
-be assigned safely; operators must not infer ownership from email, content, or
-an arbitrary lookup table.
+be assigned through the browser flow. A separate private operator exception can
+restore a hash-pinned backup after Admission uniquely matches an existing
+canonical subject. The fixed manifest names every source object and the private
+Site Studio receiver validates the complete disposable source before reusing
+the same claim-once migration and owner mutation queues. It does not mint a
+session, change `imports/:subject`, recover undeclared snapshots/uploads/chat,
+or infer ownership from email or project content.
+
+Operator recovery records a separate durable receipt before reporting success.
+Retries with the same recovery id, target, and idempotency key resume or return
+that receipt after the staged source has been retired. A published project may
+receive one explicit compatibility alias at `/sites/:legacyOwner/:legacySlug/*`.
+That alias resolves only while the recovery receipt is complete, the destination
+still carries the matching import stamps, and the project remains published. It
+redirects without caching to the current primary handle, or to a forward-only
+recovery handle derived from the already-public legacy owner. The recovery
+handle does not occupy the subject's user-chosen primary handle slot. Private
+projects receive no alias. Remove
+the alias when the verified surviving old link no longer needs compatibility.
 
 ## Routes
 
@@ -118,6 +137,7 @@ an arbitrary lookup table.
 - `POST /api/projects/:projectId/unpublish`
 - `ALL /api/agents/site-builder/:projectId`
 - `GET /u/:handle/:slug/*`
+- `GET /sites/:legacyOwner/:legacySlug/*` only for an explicit completed recovery alias
 
 Publishing returns `409 handle_required` until the owner claims a handle.
 Slashless public roots redirect to the trailing-slash form so relative assets

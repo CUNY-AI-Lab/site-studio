@@ -97,14 +97,16 @@ site-studio/
 
 ## Compatibility Position
 
-This is a greenfield product with one narrow data-preservation exception.
+This is a greenfield product with two narrow data-preservation exceptions.
 Canonical published URLs are `/u/:handle/:slug/*`; the user's separate handle
 mapping and project slug are the durable public identity while
 `PUBLISHED_BASE_URL` is the deployment mount.
 API links derive that current base at read time, so moving the mount does not
-rewrite or republish projects. There is no `/sites` route, forwarding pointer,
-migration window, dual-read, or compatibility API. Any DNS or redirect work
-for an old mount belongs to deployment configuration, not project storage.
+rewrite or republish projects. There is no general `/sites` namespace,
+forwarding pointer, migration window, dual-read, or compatibility API. The
+only `/sites` behavior is the receipt-bound operator recovery alias described
+below. Any DNS or redirect work for an old mount belongs to deployment
+configuration, not project storage.
 
 On a user's first verified CAIL login only, an old `site-studio-session` cookie
 may resolve an unexpired R2 legacy session. Its server-stored anonymous owner is
@@ -114,6 +116,17 @@ and must write its minimal subject completion record only after success. A
 failure returns a private retryable error without replacing the old cookie.
 After success, only the subject store is authoritative. Never infer a mapping
 from email, content, or a caller-provided identifier.
+
+An operator may also restore a hash-pinned backup through the private
+`SiteStudioRecoveryAdmin` service entrypoint after Admission uniquely matches
+an existing canonical subject. The manifest selects the disposable anonymous
+source namespace; the caller cannot select files, a public handle, or a
+destination other than that matched subject. Recovery uses the ordinary owner
+queues and migration stamps, leaves first-login markers unchanged, and records
+its own durable receipt. A completed receipt may preserve only an explicitly
+listed formerly public `/sites/:legacyOwner/:slug/*` address. Remove that alias
+when the verified surviving old link no longer needs compatibility; it is not
+a general legacy namespace or dual-read path.
 
 Do not infer R2 multi-object atomicity from a successful operation. Adopted
 project/file writes use the owner-scoped mutation coordinator and recovery
@@ -154,7 +167,8 @@ must not be presented as evidence of either.
 - Prefer editing the Worker app, not inventing parallel backend code
 - Keep preview, publishing, and public serving in that same Worker
 - Keep the app static-file oriented; runtime build tools are out of scope
-- Do not add compatibility layers beyond the first-login import above
+- Do not add compatibility layers beyond the first-login import and the
+  receipt-bound operator recovery redirect described above
 - Preserve the exact two-leg CAIL identity and direct CAIL Gateway model path
 - Do not impose arbitrary model token, step, timeout, or message caps
 - Call tests E2E only when they cross real process and resource boundaries

@@ -19,8 +19,9 @@ import {
   type LoggingVariables,
 } from "../lib/logging";
 import { executeOwnerMutation } from "../lib/owner-mutations";
-import { getUserHandle } from "../lib/handles";
+import { getUserHandle, resolveHandleOwner } from "../lib/handles";
 import { getPublishedBaseUrl, publishedProjectUrl } from "../lib/published-url";
+import { findCompletedRecoveryAliasForTarget } from "../lib/legacy-recovery";
 
 const createProjectSchema = z.object({
   name: z.string().min(1).max(100),
@@ -35,15 +36,31 @@ const createSnapshotSchema = z.object({
   label: z.string().min(1).max(160).optional()
 });
 
-function toProjectSummary(
+async function toProjectSummary(
   id: string,
   metadata: ProjectMetadata | null,
   publishedBaseUrl: string,
   handle: string | null,
+  bucket: R2Bucket,
+  subject: string,
 ) {
-  const publishedUrl = metadata?.published && metadata.slug && handle
+  let publishedUrl = metadata?.published && metadata.slug && handle
     ? publishedProjectUrl(publishedBaseUrl, handle, metadata.slug)
     : undefined;
+  if (!publishedUrl && metadata?.published && metadata.slug && metadata.importedFrom) {
+    const alias = await findCompletedRecoveryAliasForTarget(
+      bucket,
+      metadata.importedFrom,
+      subject,
+      id,
+    );
+    if (
+      alias?.recoveryHandle &&
+      await resolveHandleOwner(bucket, alias.recoveryHandle) === subject
+    ) {
+      publishedUrl = publishedProjectUrl(publishedBaseUrl, alias.recoveryHandle, metadata.slug);
+    }
+  }
   return {
     id,
     name: metadata?.name || id,
@@ -80,6 +97,8 @@ export function createProjectRouter() {
         await storage.getProjectMetadata(user.id, projectId),
         publishedBaseUrl,
         handle,
+        c.env.SITE_STUDIO_BUCKET,
+        user.id,
       ))
     );
 
@@ -183,11 +202,13 @@ export function createProjectRouter() {
       }
       throw error;
     }
-    return c.json(toProjectSummary(
+    return c.json(await toProjectSummary(
       nextId,
       updated,
       getPublishedBaseUrl(c.req.url, c.env.PUBLISHED_BASE_URL),
       await getUserHandle(c.env.SITE_STUDIO_BUCKET, user.id),
+      c.env.SITE_STUDIO_BUCKET,
+      user.id,
     ));
   });
 

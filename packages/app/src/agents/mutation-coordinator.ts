@@ -1,7 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../types";
 import { OwnerMutationService, type OwnerMutation, type OwnerMutationResult } from "../lib/owner-mutations";
-import { migrateAnonymousData, type MigrationResult } from "../lib/migration";
+import {
+  findImportedProjectMap,
+  migrateAnonymousData,
+  migrationClaimKey,
+  type MigrationClaim,
+  type MigrationResult,
+} from "../lib/migration";
 import {
   runSubjectImport,
   SessionStoreUnavailableError,
@@ -12,6 +18,17 @@ import {
   createSiteStudioBoundaryContext,
   type SiteStudioLoggingContextData,
 } from "../lib/logging";
+import {
+  LegacyRecoveryError,
+  claimRecoveryHandle,
+  loadRecoveryManifest,
+  markRecoveryComplete,
+  readRecoveryAuthorization,
+  validateStagedRecovery,
+  verifyRecoveredDestination,
+  writeRecoveryAliases,
+} from "../lib/legacy-recovery";
+import { getUserHandle } from "../lib/handles";
 
 export class SerializedOperationQueue {
   private tail: Promise<void> = Promise.resolve();
@@ -76,6 +93,109 @@ export class MutationCoordinator extends DurableObject<Env> {
         porter: createAgentHistoryPorter(this.env),
         logging: logging ? createSiteStudioBoundaryContext(this.env, logging) : undefined,
       });
+    });
+  }
+
+  /** Consume an operator-staged file-only source without probing agent chat. */
+  async migrateStagedLegacyProjects(
+    recoveryId: string,
+    anonUserId: string,
+    subject: string,
+  ): Promise<MigrationResult> {
+    return this.mutations.run(async () => {
+      await new OwnerMutationService(
+        this.env.SITE_STUDIO_BUCKET,
+        this.ctx.storage,
+        undefined,
+        createProjectHistoryLifecycle(this.env),
+      ).recover(anonUserId);
+      const { manifest } = await loadRecoveryManifest(this.env.SITE_STUDIO_BUCKET, recoveryId);
+      if (manifest.source.owner !== anonUserId) throw new LegacyRecoveryError("conflict");
+      // The first source-queue entry must revalidate immediately before copy.
+      // A later entry with a migration claim is a resume: source deletion may
+      // already be partial or complete, so destination stamps become the retry
+      // evidence instead of requiring disposable staged bytes to reappear.
+      const migrationClaim = await this.env.SESSION_KV.get<MigrationClaim>(
+        migrationClaimKey(anonUserId),
+        "json",
+      );
+      await validateStagedRecovery(this.env.SITE_STUDIO_BUCKET, manifest, {
+        allowMissing: Boolean(migrationClaim),
+      });
+      return migrateAnonymousData({
+        bucket: this.env.SITE_STUDIO_BUCKET,
+        kv: this.env.SESSION_KV,
+        anonUserId,
+        subject,
+      });
+    });
+  }
+
+  /**
+   * Run a verified operator recovery through both ordinary owner queues. This
+   * entry is called only on `owner:${subject}` by the private recovery
+   * entrypoint; the disposable source copy is then consumed on its own queue.
+   * It deliberately does not touch the subject's first-login import marker.
+   */
+  async restoreLegacyProjects(
+    recoveryId: string,
+    anonUserId: string,
+    subject: string,
+  ): Promise<MigrationResult> {
+    return this.mutations.run(async () => {
+      await new OwnerMutationService(
+        this.env.SITE_STUDIO_BUCKET,
+        this.ctx.storage,
+        undefined,
+        createProjectHistoryLifecycle(this.env),
+      ).recover(subject);
+      const namespace = this.env.MUTATION_COORDINATOR;
+      if (!namespace) throw new Error("MUTATION_COORDINATOR is not configured");
+      const result = await namespace
+        .get(namespace.idFromName(`owner:${anonUserId}`))
+        .migrateStagedLegacyProjects(recoveryId, anonUserId, subject);
+      const { manifest } = await loadRecoveryManifest(this.env.SITE_STUDIO_BUCKET, recoveryId);
+      const importedProjectMap = await findImportedProjectMap(
+        this.env.SITE_STUDIO_BUCKET,
+        subject,
+        anonUserId,
+      );
+      const projectMap = { ...importedProjectMap, ...result.projects };
+      await verifyRecoveredDestination({
+        bucket: this.env.SITE_STUDIO_BUCKET,
+        manifest,
+        targetSubject: subject,
+        projectMap,
+      });
+      const recovery = await readRecoveryAuthorization(this.env.SITE_STUDIO_BUCKET, recoveryId);
+      if (!recovery) throw new LegacyRecoveryError("unavailable");
+      let recoveryHandle = recovery.value.recoveryHandle;
+      if (
+        manifest.projects.some((project) => project.published) &&
+        !await getUserHandle(this.env.SITE_STUDIO_BUCKET, subject) &&
+        !recoveryHandle
+      ) {
+        recoveryHandle = await claimRecoveryHandle(
+          this.env.SITE_STUDIO_BUCKET,
+          anonUserId,
+          subject,
+          recovery.value.startedAt,
+        );
+      }
+      await writeRecoveryAliases({
+        bucket: this.env.SITE_STUDIO_BUCKET,
+        manifest,
+        targetSubject: subject,
+        projectMap,
+        recoveryHandle,
+      });
+      await markRecoveryComplete(
+        this.env.SITE_STUDIO_BUCKET,
+        recovery,
+        projectMap,
+        recoveryHandle,
+      );
+      return { ...result, projects: projectMap };
     });
   }
 

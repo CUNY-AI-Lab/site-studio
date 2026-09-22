@@ -72,6 +72,7 @@ export interface MigrationClaim {
   status: "pending" | "complete";
   startedAt: string;
   completedAt?: string;
+  projects?: Record<string, string>;
 }
 
 /**
@@ -575,7 +576,7 @@ export async function migrateAnonymousData(options: {
     // Safe to swallow: clearing the resume marker is best-effort cleanup. A
     // leftover marker only triggers a harmless no-op resume on the next login.
     await kv.delete(migrationPendingKey(subject)).catch(() => undefined);
-    return { status: "already-complete", projects: {} };
+    return { status: "already-complete", projects: existingClaim.projects ?? {} };
   }
 
   const claim: MigrationClaim = existingClaim ?? {
@@ -601,6 +602,7 @@ export async function migrateAnonymousData(options: {
         ...claim,
         status: "complete",
         completedAt: now(),
+        projects,
       } satisfies MigrationClaim),
     );
     // Safe to swallow: best-effort resume-marker cleanup (see above).
@@ -667,4 +669,30 @@ export async function migrateAnonymousData(options: {
   }
 
   return finish("migrated", projectMap);
+}
+
+/**
+ * Recover the stable project map after an uncertain migration response. The
+ * destination metadata stamps are written before source retirement and are
+ * the authoritative retry evidence for this exact anonymous owner.
+ */
+export async function findImportedProjectMap(
+  bucket: R2Bucket,
+  subject: string,
+  anonUserId: string,
+): Promise<Record<string, string>> {
+  const projects: Record<string, string> = {};
+  for (const projectId of await listProjectIds(bucket, subject)) {
+    const metadata = await getMetadata(bucket, subject, projectId);
+    if (
+      metadata?.importedFrom === anonUserId &&
+      metadata.importedOriginalId
+    ) {
+      if (projects[metadata.importedOriginalId] !== undefined) {
+        throw new Error("Anonymous-data migration found ambiguous destination stamps.");
+      }
+      projects[metadata.importedOriginalId] = projectId;
+    }
+  }
+  return projects;
 }

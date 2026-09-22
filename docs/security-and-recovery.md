@@ -41,10 +41,12 @@ and sends them through the existing Gateway vision-model path.
 
 ## One-time legacy import
 
-The only compatibility behavior is a lazy import during a user's first
-verified login. The presented old cookie must resolve to an unexpired R2 legacy
-session record whose server-stored user id has the anonymous `user_…` shape.
-Caller input and email cannot name an import source.
+The ordinary browser compatibility behavior is a lazy import during a user's
+first verified login. The presented old cookie must resolve to an unexpired R2
+legacy session record whose server-stored user id has the anonymous `user_…`
+shape. Caller input and email cannot name an import source. The only other
+compatibility behavior is the private, receipt-bound operator recovery and
+public redirect exception described below.
 
 A `MigrationCoordinator` keyed by the anonymous owner grants that namespace to
 at most one subject. Before claiming it, the subject's mutation coordinator
@@ -74,9 +76,10 @@ exists. A failure returns a
 private 503, leaves completion absent, and preserves a source cookie or pending
 resume marker for the next login. Successful import retires the legacy session
 and clears its cookie; the subject store then becomes the sole read and write
-authority. Verified identity is the sole authentication source. There is no
-time window, dual-read, forwarding pointer, compatibility API, background job,
-or legacy `/sites` route.
+authority. Verified identity is the sole authentication source. The first-login
+path creates no time window, dual-read, forwarding pointer, compatibility API,
+background job, or legacy `/sites` route. The separate operator exception below
+is the only receipt-bound `/sites` redirect.
 
 R2 cannot reveal which verified subject owns an anonymous namespace when its
 legacy session mapping is gone. Such data must remain untouched unless an
@@ -192,3 +195,35 @@ Published responses revalidate mutable paths with ETag and Last-Modified.
 Unpublish removes visibility but cannot revoke bytes already downloaded.
 Project snapshots are the product's content rollback. R2 backup/versioning,
 disaster recovery, and deployment rollback are operator responsibilities.
+
+### Verified legacy backup recovery
+
+The private `SiteStudioRecoveryAdmin` Worker entrypoint is the sole exception
+for an anonymous namespace whose old session mapping no longer exists. It has
+no HTTP route. Admission lists only bounded canonical subjects already present
+under `imports/`, uniquely matches the administrator-selected active member,
+and calls the receiver with a fixed recovery id, that exact subject, and an
+idempotency key. Site Studio itself owns the recovery manifest and source.
+
+Before the first copy, the receiver validates the manifest hash, every declared
+object path, size, and SHA-256, each project's publication metadata, and the
+absence of undeclared source objects, snapshots, uploads, or handle mappings.
+It atomically claims the anonymous owner for one subject. The target owner queue
+then contains migration, destination verification, alias creation, and receipt
+completion as one serialized operation; the source owner queue contains source
+validation and consumption. The original backup remains read-only outside this
+bucket, while the staged anonymous namespace is disposable after verification.
+The normal `imports/:subject` first-login marker is neither removed nor written.
+
+A completed recovery can create aliases only for manifest projects marked
+published. `/sites/:legacyOwner/:legacySlug/*` checks the completed receipt,
+the exact target project and import stamps, and current published state on every
+request. It returns an uncached temporary redirect, preserving the safe path
+suffix and query, to the current primary handle when one exists. Otherwise it
+uses a forward-only recovery handle derived from the public legacy owner. That
+mapping never writes `userhandles/:subject`, so the user can still choose their
+primary handle normally. Unpublishing or deleting the target immediately makes
+the legacy alias return 404.
+This compatibility path can be removed when the verified surviving legacy link
+no longer has a caller; it never reads the old bucket or resolves arbitrary
+legacy owners.
