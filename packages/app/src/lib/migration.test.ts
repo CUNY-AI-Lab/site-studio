@@ -289,6 +289,48 @@ describe("migrateAnonymousData", () => {
     expect(kv.store.has(migrationPendingKey(SUBJECT))).toBe(false);
   });
 
+  it("validates an already copied file without attempting another upload", async () => {
+    const content = "<h1>large preserved source</h1>";
+    seedAnonProject(bucket, "portfolio", {}, content);
+    // SAFETY: seedAnonProject serializes this value from metadataFor's ProjectMetadata fixture.
+    const sourceMetadata = JSON.parse(
+      bucket.store.get(`projects/${ANON}/portfolio/.metadata.json`)!.data,
+    ) as ProjectMetadata;
+    bucket.store.set(`projects/${SUBJECT}/portfolio/.metadata.json`, {
+      data: JSON.stringify({
+        ...sourceMetadata,
+        importedFrom: ANON,
+        importedOriginalId: "portfolio",
+      }),
+    });
+    const destination = `projects/${SUBJECT}/portfolio/index.html`;
+    bucket.store.set(destination, { data: content });
+    kv.store.set(
+      migrationClaimKey(ANON),
+      JSON.stringify({
+        subject: SUBJECT,
+        status: "pending",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      } satisfies MigrationClaim),
+    );
+
+    const originalPut = bucket.put;
+    const destinationPuts: string[] = [];
+    bucket.put = vi.fn(
+      async (key: string, data: string, options?: R2PutOptions) => {
+        if (key === destination) destinationPuts.push(key);
+        return originalPut(key, data, options);
+      },
+    );
+
+    await expect(run()).resolves.toMatchObject({
+      status: "migrated",
+      projects: { portfolio: "portfolio" },
+    });
+    expect(destinationPuts).toEqual([]);
+    expect(textOf(bucket.store.get(destination))).toBe(content);
+  });
+
   it("is idempotent: a second run is a no-op that changes nothing", async () => {
     seedAnonProject(bucket, "portfolio");
     await run();
