@@ -47,6 +47,10 @@ import {
   normalizePublishedBaseUrl,
   publishedProjectUrl,
 } from "../lib/published-url";
+import {
+  findCurrentImportedProjectId,
+  resolveCompletedRecoveryAlias,
+} from "../lib/legacy-recovery";
 
 const MAX_PUBLISH_A11Y_FINDINGS = 50;
 
@@ -451,7 +455,75 @@ export function createPublishRouter() {
     return serveByHandle(c, filePath);
   });
 
+  // Narrow recovery compatibility: an explicit completed receipt may retain
+  // one old published address. No arbitrary legacy owner namespace is served.
+  app.get("/sites/:legacyOwner/:legacySlug", async (c) => {
+    return serveRecoveredAlias(c, "index.html");
+  });
+
+  app.get("/sites/:legacyOwner/:legacySlug/*", async (c) => {
+    const base = `/sites/${c.req.param("legacyOwner")}/${c.req.param("legacySlug")}/`;
+    const url = new URL(c.req.url);
+    const rawPath = url.pathname.slice(base.length);
+    const filePath = decodeServedPath(rawPath);
+    if (filePath === null) return publishedNotFound(c, rawPath);
+    return serveRecoveredAlias(c, filePath);
+  });
+
   return app;
+}
+
+async function serveRecoveredAlias(c: AppContext, rawPath: string) {
+  const sourceOwner = c.req.param("legacyOwner");
+  const sourceSlug = c.req.param("legacySlug");
+  if (!sourceOwner || !sourceSlug) return publishedNotFound(c, rawPath);
+  const alias = await resolveCompletedRecoveryAlias(c.env.SITE_STUDIO_BUCKET, sourceOwner, sourceSlug);
+  if (!alias) return publishedNotFound(c, rawPath);
+
+  const storage = new R2ProjectStorage(c.env.SITE_STUDIO_BUCKET, getLoggingContext(c));
+  const currentProjectId = await findCurrentImportedProjectId(c.env.SITE_STUDIO_BUCKET, alias);
+  if (!currentProjectId) return publishedNotFound(c, rawPath);
+  const metadata = await storage.getProjectMetadata(alias.targetSubject, currentProjectId);
+  if (
+    !metadata?.published || !metadata.slug ||
+    metadata.importedFrom !== alias.sourceOwner ||
+    metadata.importedOriginalId !== alias.sourceProjectId
+  ) {
+    return publishedNotFound(c, rawPath);
+  }
+
+  const url = new URL(c.req.url);
+  const legacyRoot = `/sites/${sourceOwner}/${sourceSlug}`;
+  if (url.pathname === legacyRoot) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: `${getPublishedPathPrefix(c)}${legacyRoot}/${url.search}`,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+      },
+    });
+  }
+
+  const primaryHandle = await getUserHandle(c.env.SITE_STUDIO_BUCKET, alias.targetSubject);
+  const recoveryHandle = alias.recoveryHandle &&
+    await resolveHandleOwner(c.env.SITE_STUDIO_BUCKET, alias.recoveryHandle) === alias.targetSubject
+    ? alias.recoveryHandle
+    : null;
+  const handle = primaryHandle ?? recoveryHandle;
+  if (!handle) {
+    return publishedNotFound(c, rawPath);
+  }
+  const suffix = rawPath === "index.html" ? "" : rawPath;
+  const target = `${getPublishedPathPrefix(c)}/u/${handle}/${metadata.slug}/${suffix}${url.search}`;
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: target,
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+    },
+  });
 }
 
 /** Serve a file for a canonical /u/{handle}/{slug}/ request. */
