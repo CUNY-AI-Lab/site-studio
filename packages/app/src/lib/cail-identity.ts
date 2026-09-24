@@ -36,7 +36,7 @@ export interface IdentityVerificationEnv {
 }
 
 export type RequestIdentityResolution =
-  | { status: "verified"; identity: CailIdentity; token: string }
+  | { status: "verified"; identity: CailIdentity }
   | { status: "absent" }
   | { status: "invalid" };
 
@@ -83,8 +83,8 @@ async function loadVerifier(
 }
 
 /**
- * Verify the canonical request identity. The raw token is returned with the
- * verified identity so downstream model calls forward the exact value.
+ * Verify the canonical request identity. Only the verified identity is
+ * returned; model calls forward the separately verified gateway leg.
  */
 export async function resolveRequestIdentity(
   request: Request,
@@ -99,7 +99,7 @@ export async function resolveRequestIdentity(
 
   const identity = await verifyIdentityJwt(token, config);
   return identity
-    ? { status: "verified", identity, token }
+    ? { status: "verified", identity }
     : { status: "invalid" };
 }
 
