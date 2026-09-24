@@ -139,7 +139,6 @@ describe("resolveRequestIdentity token verification", () => {
 
     expect(result).toEqual({
       status: "verified",
-      token,
       identity: {
         subject: TEST_SUBJECTS.alice,
         email: "someone@gc.cuny.edu",
@@ -248,17 +247,6 @@ describe("resolveRequestIdentity token verification", () => {
 });
 
 describe("resolveRequestIdentity", () => {
-  it("returns the verified identity and exact canonical token", async () => {
-    const token = await mintJwt();
-    const result = await resolveRequestIdentity(requestWithToken(token), currentEnv);
-
-    expect(result).toMatchObject({
-      status: "verified",
-      token,
-      identity: { subject: TEST_SUBJECTS.alice },
-    });
-  });
-
   it("accepts every unambiguous key in a rotating JWKS", async () => {
     const oldIssuer = await createTestIdentityIssuer({ kid: "old", issuer: CAIL_CANONICAL_ISSUER });
     const newIssuer = await createTestIdentityIssuer({ kid: "new", issuer: CAIL_CANONICAL_ISSUER });

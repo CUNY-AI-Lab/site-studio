@@ -37,15 +37,14 @@ record before an admitted build or publish mutation proceeds. A terminal can
 only update an existing admission, and the existing authenticated
 `/api/projects/{id}/observability` read returns the versioned authoritative
 records. Build and publish remain separate action/route pairs. Exact success and
-terminal coverage are calculated from these records rather than either log sink.
-This owner-scoped application read is not the external `kale-admin` fleet-data
-surface described below.
+terminal coverage come from these records rather than either log sink.
 
 After an R2 publish commits, the route retries an identical terminal RPC once
 because the first rejection may have an ambiguous outcome. If both attempts
 remain unavailable, it returns the committed publish result instead of a false
-failure and emits `publish_terminal_record_failed`; the lifecycle auditor then
-surfaces the missing terminal. Product state remains authoritative.
+failure and emits `publish_terminal_record_failed`. The durable record then keeps
+an admission without a terminal, which the observability read shows. Product
+state remains authoritative.
 
 Routes are fixed templates such as `/api/projects/{id}/publish`,
 `/api/agents/site-builder/{project_id}`, and `/u/{handle}/{slug}/{path}`. Events do
@@ -73,43 +72,23 @@ release generation. Agent messages use the installed `@cloudflare/ai-chat`
 assistant message is persisted, so the implementation completes an admitted build
 there without overriding the framework's persistence method.
 
-`/api/health` is the versioned liveness response. It contains a static monitor marker, is smaller than Cloudflare's 10 KB body
-matching limit, and returns `Cache-Control: no-store`. They do not probe R2, KV,
-Durable Objects, or the model gateway. Cloudflare's native request/error/CPU/
-wall-time signals remain the canonical platform-health layer.
+`/api/health` is the versioned liveness response. It contains a static monitor
+marker, is smaller than Cloudflare's 10 KB body matching limit, and returns
+`Cache-Control: no-store`. It reports the deployed Cloudflare version ID and Git
+SHA tag when the version-metadata binding supplies canonical values, and `null`
+otherwise; the deploy job's release probe waits for the expected version ID. It
+does not probe R2, KV, Durable Objects, or the model gateway. Cloudflare's
+native request, error, CPU, and wall-time signals remain the canonical
+platform-health layer.
 
-The app-owned source contract in `packages/app/src/lib/observability/contract.ts`
-defines the app service, action route templates, dashboard measures/groupings, and
-an offline lifecycle-pair auditor. The auditor detects missing or duplicate
-request/action events, route drift, and invalid terminal duration in a closed
-export window. It evaluates the diagnostic projection, never product state.
+`packages/app/src/lib/observability/contract.ts` holds the runtime values the
+app reads: the service name and version, the health path and marker, and the
+build and publish action route templates and methods. It defines no monitor,
+alert threshold, service-level objective, or saved dashboard query; those remain
+operator configuration outside this repository. Site Studio has no spend
+threshold ledger. Model accounting remains owned by the Gateway.
 
-Contract version 2 defines the initial operating posture: full-sampled
-bounded custom events, invocation logs off, no v1 external exporter, default-
-deny `kale-admin` access, a one-minute `ENAM` synthetic profile, rolling 24-hour
-SLOs and latency/reliability thresholds. Its action SLI sub-contract versions
-admission-window assignment, a
-15-minute terminal grace period, exact terminal matching, durable-success
-semantics, and separate build/publish denominators.
-
-The initial profile uses one 60-second `ENAM` synthetic check for the Worker, a
-five-second timeout, two retries, and two consecutive intervals for a state
-transition. Reliability uses a rolling 24-hour window evaluated every 15
-minutes. Build/publish admissions get a 15-minute terminal grace period.
-
-| Signal | Warning / target | Critical | Minimum sample |
-| --- | ---: | ---: | ---: |
-| Synthetic availability | below 99.5% | below 99.0% | 100 probes |
-| Non-health request reliability | below 99.5% | below 98.0% | 100 requests |
-| Build/publish success | below 95.0% | below 80.0% | 10 actions |
-| Build/publish terminal coverage | below 99.5% | below 98.0% | 10 actions |
-
-Request p95 latency warns above five seconds for the app. Action p95 warns above ten minutes for build and 30 seconds for
-publish; critical latency is twice the warning threshold. Site Studio has no
-spend SLO or threshold ledger. Model accounting remains owned by the Gateway.
-
-Contract version 4 retains the fleet projection without changing that privacy
-posture. At each trusted Worker boundary, the logger uses
+At each trusted Worker boundary, the logger uses
 `fanoutSinks(workersStructuredSink, createAnalyticsEngineSink(...))`. The
 library owns the ordered Analytics Engine columns and the
 `environment:product_id` sampling index. Site Studio adds only an invocation-
@@ -136,13 +115,9 @@ Site Studio observability contract.
   `site-studio` low-cardinality and leaves model accounting at that boundary.
 - [Cloudflare Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
   (updated June 9, 2026) recommends structured JSON but documents that default
-  invocation logs include request metadata and the request URL. Both Wrangler
-  sources explicitly retain structured custom logs at full sampling and set
+  invocation logs include request metadata and the request URL. The Wrangler
+  config retains structured custom logs at full sampling and sets
   `observability.logs.invocation_logs=false`.
-- [Cloudflare Query Builder](https://developers.cloudflare.com/workers/observability/query-builder/)
-  (updated April 23, 2026) supports counts, grouping, and duration percentiles
-  over structured fields. The source contract records those dashboard-ready
-  measures without creating or mutating a live saved query.
 - [Workers Analytics Engine write guidance](https://developers.cloudflare.com/workers/examples/analytics-engine/)
   (updated April 2026) documents non-blocking binding writes and the single
   index used as the sampling key. The source adapter uses the pinned
@@ -166,20 +141,8 @@ Site Studio observability contract.
 - [Cloudflare Load Balancing monitors](https://developers.cloudflare.com/load-balancing/monitors/create-monitor/)
   (updated April 16, 2026) evaluate expected status and a relatively static body
   substring within the first 10 KB and document interval, timeout, retry, and
-  consecutive-state controls. That drove the fixed liveness markers and the
-  conservative one-minute monitor profile.
-- [Cloudflare Health Check regions](https://developers.cloudflare.com/health-checks/concepts/health-checks-regions/)
-  (updated April 16, 2026) documents three data centers per selected region and
-  majority health. The initial CUNY-centered check uses `ENAM`; adding every
-  region would add traffic without improving the initial source seam.
-- [Cloudflare Health Check notifications](https://developers.cloudflare.com/health-checks/how-to/health-checks-notifications/)
-  (updated April 16, 2026) supports state-change notification after regional
-  majority. The source recipe notifies for failure and recovery while leaving
-  actual recipients external.
-- [Cloudflare HTTP traffic alerts](https://developers.cloudflare.com/notifications/reference/traffic-alerts/)
-  (updated April 24, 2026) recommends multi-window burn-rate alerting and warns
-  about high sensitivity on low traffic. That drove explicit sample floors and
-  two consecutive evaluations alongside the fast native health transition.
+  consecutive-state controls. That drove the fixed liveness marker and the
+  small static health body.
 - [Cloudflare cache configuration](https://developers.cloudflare.com/workers/cache/configuration/)
   (updated July 6, 2026) documents heuristic caching for a 200 without an
   explicit directive. Health responses therefore use `Cache-Control: no-store`.
