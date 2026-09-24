@@ -69,10 +69,6 @@ function formatPdfPages(pages: string[]): FormattedPdfPages {
   return { text, warnings };
 }
 
-export function supportsDocumentExtraction(filePath: string): boolean {
-  return getContentType(filePath) === "application/pdf";
-}
-
 export async function extractDocumentText(
   filePath: string,
   data: Uint8Array,

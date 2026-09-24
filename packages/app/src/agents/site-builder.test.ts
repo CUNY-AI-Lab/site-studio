@@ -187,8 +187,11 @@ describe("project context", () => {
     expect(context).toContain("assets/poster.png");
     expect(context).toContain("inspect_image");
     expect(context).toContain("read_url");
-    expect(context).not.toContain("Uploaded documents in the project: assets/legacy.docx");
-    expect(context).not.toContain("supported documents");
+    // Only PDFs are extractable; an unsupported upload must not be offered to
+    // extract_document_text.
+    const extractionGuidance = context.split("\n").find((line) => line.includes("extract_document_text"));
+    expect(extractionGuidance).toContain("assets/cv.pdf");
+    expect(extractionGuidance).not.toContain("legacy.docx");
   });
 });
 

@@ -352,10 +352,6 @@ export function terminalForStatus(status: number): CailTerminalFields {
   return { outcome: "ok", reason: "completed" };
 }
 
-export function outcomeForStatus(status: number): CailTerminalFields["outcome"] {
-  return terminalForStatus(status).outcome;
-}
-
 /** Stable machine type derived only from the exception class, never its message. */
 export function errorCodeFrom(cause: unknown): string {
   const name = cause instanceof Error && cause.name ? cause.name : "error";

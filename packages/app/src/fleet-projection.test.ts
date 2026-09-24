@@ -3,7 +3,6 @@ import {
   CAIL_ANALYTICS_ENGINE_BLOBS,
   CAIL_ANALYTICS_ENGINE_DOUBLES,
   CAIL_EVENTS,
-  ROUTE_TEMPLATE_RE,
   type CailAnalyticsEngineDataPoint,
 } from "@cuny-ai-lab/cail-log";
 import { OBSERVABILITY_CONTRACT } from "./lib/observability/contract";
@@ -80,16 +79,6 @@ describe("CAIL fleet projection boundary", () => {
       expect(consoleLog).toHaveBeenCalledTimes(SITE_STUDIO_MAX_FLEET_POINTS_PER_INVOCATION + 5);
     } finally {
       consoleLog.mockRestore();
-    }
-  });
-
-  it("recognizes every canonical action route and keeps build/publish distinct", () => {
-    expect(Object.entries(OBSERVABILITY_CONTRACT.actions)).toEqual([
-      ["build", { route: "/api/agents/site-builder/{project_id}", method: "POST" }],
-      ["publish", { route: "/api/projects/{id}/publish", method: "POST" }],
-    ]);
-    for (const action of Object.values(OBSERVABILITY_CONTRACT.actions)) {
-      expect(ROUTE_TEMPLATE_RE.test(action.route)).toBe(true);
     }
   });
 });

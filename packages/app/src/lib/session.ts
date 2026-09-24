@@ -24,10 +24,9 @@ export type SessionVariables = {
   sessionId: string;
   user: User;
   /**
-   * Raw, already-verified selected identity JWT from the current request.
-   * Downstream handlers forward this exact token to the CAIL model proxy.
+   * Verified keyring gateway leg (cail:gateway audience, same subject as the
+   * app leg). This is the only identity token forwarded to the CAIL Gateway.
    */
-  cailIdentityJwt?: string;
   cailGatewayJwt?: string;
 };
 
@@ -148,8 +147,7 @@ export const authMiddleware = createMiddleware<{
 
   if (identityResolution.status === "verified") {
     // Verified CAIL identity: own everything by the subject.
-    const { identity, token } = identityResolution;
-    c.set("cailIdentityJwt", token);
+    const { identity } = identityResolution;
 
     // Keyring gateway leg (identity-keyring-v1): verified against the
     // gateway audience and bound to this request's subject before it may be
@@ -197,11 +195,6 @@ export const authMiddleware = createMiddleware<{
 
   return cailAuthRequiredResponse();
 });
-
-/** The verified CAIL identity JWT for this request, if any (already verified). */
-export function getCailIdentityJwt(c: { get: (key: "cailIdentityJwt") => string | undefined }): string | null {
-  return c.get("cailIdentityJwt") ?? null;
-}
 
 /** The verified keyring gateway leg for this request, if delivered. */
 export function getCailGatewayJwt(c: { get: (key: "cailGatewayJwt") => string | undefined }): string | null {

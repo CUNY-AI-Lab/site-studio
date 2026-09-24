@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { extractDocumentText, supportsDocumentExtraction, type DocumentExtractor } from "./document";
+import { extractDocumentText, type DocumentExtractor } from "./document";
 
 describe("document extraction", () => {
   const mockedExtractText = vi.fn<DocumentExtractor["extractText"]>();
@@ -10,11 +10,6 @@ describe("document extraction", () => {
   beforeEach(() => {
     mockedExtractText.mockReset();
     mockedGetMeta.mockReset();
-  });
-
-  it("marks PDFs as supported for extraction", () => {
-    expect(supportsDocumentExtraction("paper.pdf")).toBe(true);
-    expect(supportsDocumentExtraction("notes.md")).toBe(false);
   });
 
   it("extracts text and metadata from PDFs", async () => {
