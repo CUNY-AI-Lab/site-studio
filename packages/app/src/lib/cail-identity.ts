@@ -104,19 +104,6 @@ export async function resolveRequestIdentity(
 }
 
 /**
- * Verify the selected CAIL identity carried on a request, if any. Returns the
- * identity or `null`; callers that must distinguish invalid credentials from absence
- * use `resolveRequestIdentity`. Never throws.
- */
-export async function getRequestIdentity(
-  request: Request,
-  env: IdentityVerificationEnv
-): Promise<CailIdentity | null> {
-  const resolution = await resolveRequestIdentity(request, env);
-  return resolution.status === "verified" ? resolution.identity : null;
-}
-
-/**
  * The CAIL `authentication_required` envelope (docs/security-and-recovery.md,
  * identity and ownership), returned verbatim so the frontend treats worker-issued
  * and gate-issued 401s alike and redirects to the protected Doorway Site Studio

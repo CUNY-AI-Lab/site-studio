@@ -16,14 +16,6 @@ export async function readFormData(request: Request): Promise<FormData> {
   }
 }
 
-export function jsonHeaders(extra?: HeadersInit): Headers {
-  const headers = new Headers(extra);
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json; charset=utf-8");
-  }
-  return headers;
-}
-
 export function binaryBody(data: Uint8Array): Blob {
   return new Blob([new Uint8Array(data)]);
 }

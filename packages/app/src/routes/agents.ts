@@ -17,7 +17,7 @@ import {
 } from "../lib/logging";
 import { outboundCorrelationHeaders } from "@cuny-ai-lab/cail-log";
 
-type AgentRouterVariables = LoggingVariables & { user: { id: string }; cailIdentityJwt?: string };
+type AgentRouterVariables = LoggingVariables & { user: { id: string } };
 
 type AgentRouterStub = {
   fetch(request: Request): Promise<Response>;

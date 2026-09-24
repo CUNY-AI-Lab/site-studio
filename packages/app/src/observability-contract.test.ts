@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ROUTE_TEMPLATE_RE } from "@cuny-ai-lab/cail-log";
 import {
   OBSERVABILITY_CONTRACT,
   OBSERVABILITY_CONTRACT_VERSION,
@@ -36,6 +37,9 @@ describe("observability contract", () => {
         method: "POST",
       },
     });
+    for (const action of Object.values(OBSERVABILITY_CONTRACT.actions)) {
+      expect(ROUTE_TEMPLATE_RE.test(action.route)).toBe(true);
+    }
     expect(OBSERVABILITY_CONTRACT.telemetryQuality.actionPair.joinKey).toBe("cail.action.id");
   });
 

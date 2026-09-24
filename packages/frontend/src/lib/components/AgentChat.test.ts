@@ -2316,6 +2316,7 @@ describe('AgentChat', () => {
 			// An unexpected close schedules reconnect attempt #1.
 			first.serverClose();
 			flushSync();
+			expect(FakeWebSocket.instances.length).toBe(1);
 			await vi.advanceTimersByTimeAsync(1000);
 			flushSync();
 			await vi.advanceTimersByTimeAsync(0);
@@ -2647,32 +2648,6 @@ describe('AgentChat', () => {
 			body: JSON.stringify({ type: 'text-delta', id: 'fresh-text', delta: 'fresh response' })
 		});
 		await waitFor(() => expect(screen.getByText('fresh response')).toBeInTheDocument());
-	});
-
-	it('schedules a reconnect with backoff after an unexpected socket close', async () => {
-		// Let the initial connection happen under real timers (it awaits the
-		// history fetch, a real promise), then switch to fake timers to drive the
-		// reconnect backoff deterministically.
-		mount();
-		await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-		const ws = FakeWebSocket.instances[0];
-		ws.open();
-		await settle();
-
-		vi.useFakeTimers();
-		try {
-			// Unexpected close schedules a reconnect; no new socket yet.
-			ws.serverClose();
-			flushSync();
-			expect(FakeWebSocket.instances.length).toBe(1);
-
-			// First backoff is 1000ms.
-			await vi.advanceTimersByTimeAsync(1000);
-			flushSync();
-			expect(FakeWebSocket.instances.length).toBe(2);
-		} finally {
-			vi.useRealTimers();
-		}
 	});
 });
 

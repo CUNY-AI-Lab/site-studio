@@ -9,7 +9,6 @@ import {
 } from "@cuny-ai-lab/cail-identity/testing";
 import {
   cailAuthRequiredResponse,
-  getRequestIdentity,
   resolveRequestIdentity,
 } from "./cail-identity";
 
@@ -131,57 +130,64 @@ beforeAll(async () => {
   };
 });
 
-describe("getRequestIdentity", () => {
-  it("accepts a valid canonical identity token", async () => {
-    const identity = await getRequestIdentity(requestWithToken(await mintJwt()), currentEnv);
+const INVALID = { status: "invalid" } as const;
 
-    expect(identity).toEqual({
-      subject: TEST_SUBJECTS.alice,
-      email: "someone@gc.cuny.edu",
-      name: "Some One",
-      entitlements: ["site-studio"],
+describe("resolveRequestIdentity token verification", () => {
+  it("accepts a valid canonical identity token", async () => {
+    const token = await mintJwt();
+    const result = await resolveRequestIdentity(requestWithToken(token), currentEnv);
+
+    expect(result).toEqual({
+      status: "verified",
+      token,
+      identity: {
+        subject: TEST_SUBJECTS.alice,
+        email: "someone@gc.cuny.edu",
+        name: "Some One",
+        entitlements: ["site-studio"],
+      },
     });
   });
 
   it("rejects a token signed by a key outside the configured JWKS", async () => {
     const otherIssuer = await createTestIdentityIssuer({ kid: "other" });
     const token = await otherIssuer.mintIdentityJwt({ audience: AUDIENCE });
-    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
   });
 
   it("rejects an algorithm other than RS256", async () => {
     // Sanity: the same local key verifies when the header is untampered.
-    expect(await getRequestIdentity(requestWithToken(await signLocalJwt(localKey)), localEnv))
-      .not.toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(await signLocalJwt(localKey)), localEnv))
+      .toMatchObject({ status: "verified" });
     const token = await signLocalJwt(localKey, {}, {
       alg: "none",
       typ: "JWT",
       kid: localKey.jwk.kid,
     });
-    expect(await getRequestIdentity(requestWithToken(token), localEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), localEnv)).toEqual(INVALID);
   });
 
   it("rejects an expired token", async () => {
     // exp = (now - 3720) + 3600 = 120 seconds in the past.
     const token = await mintJwt({ now: Math.floor(Date.now() / 1000) - 3720 });
-    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
   });
 
   it("rejects the wrong audience", async () => {
     const token = await mintJwt({ audience: "cail:another-service" });
-    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
   });
 
   it("rejects array-valued audiences, including a one-element array", async () => {
     const token = await mintJwt({ audience: [AUDIENCE] });
-    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
   });
 
   it("preserves the verified canonical subject byte-for-byte as the durable owner key", async () => {
     const subject = canonicalTestSubject("durable-owner");
     const token = await mintJwt({ subject });
-    await expect(getRequestIdentity(requestWithToken(token), currentEnv))
-      .resolves.toMatchObject({ subject });
+    await expect(resolveRequestIdentity(requestWithToken(token), currentEnv))
+      .resolves.toMatchObject({ status: "verified", identity: { subject } });
   });
 
   it("rejects non-canonical subjects (v4 accepts only cail-<32 lowercase hex>)", async () => {
@@ -192,7 +198,7 @@ describe("getRequestIdentity", () => {
       "someone@gc.cuny.edu",
     ]) {
       const token = await mintJwt({ subject });
-      expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+      expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
     }
   });
 
@@ -200,8 +206,8 @@ describe("getRequestIdentity", () => {
     const untrusted = await mintJwt({ issuer: "https://evil.example/not-cail" });
     const lookAlike = await mintJwt({ issuer: "https://evil.example/cail-sso" });
 
-    expect(await getRequestIdentity(requestWithToken(untrusted), currentEnv)).toBeNull();
-    expect(await getRequestIdentity(requestWithToken(lookAlike), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(untrusted), currentEnv)).toEqual(INVALID);
+    expect(await resolveRequestIdentity(requestWithToken(lookAlike), currentEnv)).toEqual(INVALID);
   });
 
   it("rejects a self-consistent attacker issuer, JWKS, and token configuration", async () => {
@@ -212,10 +218,10 @@ describe("getRequestIdentity", () => {
       issuer: attackerIssuer,
     });
 
-    await expect(getRequestIdentity(requestWithToken(token), {
+    await expect(resolveRequestIdentity(requestWithToken(token), {
       CAIL_IDENTITY_JWKS: attacker.jwksJson,
       CAIL_IDENTITY_ISSUER: attackerIssuer,
-    })).resolves.toBeNull();
+    })).resolves.toEqual(INVALID);
   });
 
   it("fails closed when the configured issuer is not CAIL's canonical issuer", async () => {
@@ -225,19 +231,19 @@ describe("getRequestIdentity", () => {
       { ...currentEnv, CAIL_IDENTITY_ISSUER: undefined },
       { ...currentEnv, CAIL_IDENTITY_ISSUER: "https://evil.example/cail-sso" },
     ]) {
-      await expect(getRequestIdentity(requestWithToken(productionToken), env))
-        .resolves.toBeNull();
+      await expect(resolveRequestIdentity(requestWithToken(productionToken), env))
+        .resolves.toEqual(INVALID);
     }
   });
 
   it("rejects an empty subject", async () => {
     const token = await mintJwt({ subject: "" });
-    expect(await getRequestIdentity(requestWithToken(token), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken(token), currentEnv)).toEqual(INVALID);
   });
 
   it("rejects malformed tokens", async () => {
-    expect(await getRequestIdentity(requestWithToken("not-a-jwt"), currentEnv)).toBeNull();
-    expect(await getRequestIdentity(requestWithToken("a.b"), currentEnv)).toBeNull();
+    expect(await resolveRequestIdentity(requestWithToken("not-a-jwt"), currentEnv)).toEqual(INVALID);
+    expect(await resolveRequestIdentity(requestWithToken("a.b"), currentEnv)).toEqual(INVALID);
   });
 });
 

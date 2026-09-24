@@ -8,7 +8,7 @@ import {
   type TestIdentityIssuer,
 } from "@cuny-ai-lab/cail-identity/testing";
 import type { Env } from "../types";
-import { authMiddleware, getCailIdentityJwt } from "./session";
+import { authMiddleware, getCailGatewayJwt } from "./session";
 import { migrateAnonymousData } from "./migration";
 import type { MigrationResult } from "./migration";
 import {
@@ -37,6 +37,15 @@ beforeAll(async () => {
 function mintIdentityJwt(sub: string): Promise<string> {
   return identityIssuer.mintIdentityJwt({
     audience: "cail:site-studio",
+    subject: sub,
+    email: "u@gc.cuny.edu",
+    expiresInSeconds: 300
+  });
+}
+
+function mintGatewayJwt(sub: string): Promise<string> {
+  return identityIssuer.mintIdentityJwt({
+    audience: "cail:gateway",
     subject: sub,
     email: "u@gc.cuny.edu",
     expiresInSeconds: 300
@@ -373,27 +382,51 @@ describe("authMiddleware", () => {
     expect(response.status).toBe(401);
   });
 
-  it("stores the verified canonical token for downstream calls", async () => {
+  it("stores a verified same-subject gateway leg for forwarding", async () => {
     const app = new Hono<{
       Bindings: Env;
-      Variables: { user: { id: string; createdAt: string }; cailIdentityJwt?: string };
+      Variables: { user: { id: string; createdAt: string }; cailGatewayJwt?: string };
     }>();
     app.use("*", authMiddleware);
-    app.get("/api/test", (c) => c.json({ user: c.get("user"), forwardedToken: getCailIdentityJwt(c) }));
+    app.get("/api/test", (c) => c.json({ user: c.get("user"), gatewayToken: getCailGatewayJwt(c) }));
 
     const subject = TEST_SUBJECTS.bob;
-    const token = await mintIdentityJwt(subject);
+    const gatewayToken = await mintGatewayJwt(subject);
     const response = await app.request(
       "http://site-studio.test/api/test",
-      { headers: { "X-CAIL-Identity-JWT": token } },
+      {
+        headers: {
+          "X-CAIL-Identity-JWT": await mintIdentityJwt(subject),
+          "X-CAIL-Gateway-Identity-JWT": gatewayToken,
+        },
+      },
       createEnv({ CAIL_IDENTITY_JWKS: identityJwks })
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       user: { id: subject },
-      forwardedToken: token
+      gatewayToken
     });
+  });
+
+  it("rejects a gateway leg minted for a different subject", async () => {
+    const app = new Hono<{ Bindings: Env; Variables: { user: { id: string; createdAt: string } } }>();
+    app.use("*", authMiddleware);
+    app.get("/api/test", (c) => c.json({ user: c.get("user") }));
+
+    const response = await app.request(
+      "http://site-studio.test/api/test",
+      {
+        headers: {
+          "X-CAIL-Identity-JWT": await mintIdentityJwt(TEST_SUBJECTS.bob),
+          "X-CAIL-Gateway-Identity-JWT": await mintGatewayJwt(TEST_SUBJECTS.alice),
+        },
+      },
+      createEnv({ CAIL_IDENTITY_JWKS: identityJwks })
+    );
+
+    expect(response.status).toBe(401);
   });
 
   it("ignores a bare X-CAIL-Subject header and requires verified identity", async () => {

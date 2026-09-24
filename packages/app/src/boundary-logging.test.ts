@@ -23,7 +23,6 @@ import {
   emitDiagnostic,
   errorCodeFrom,
   mintCorrelation,
-  outcomeForStatus,
   principalForOperationalSubject,
   terminalForStatus,
   withCorrelationFetch,
@@ -477,7 +476,7 @@ describe("service-local diagnostics and helpers", () => {
   });
 
   it("maps terminal outcomes and principals without treating legacy ids as subjects", () => {
-    expect(outcomeForStatus(200)).toBe("ok");
+    expect(terminalForStatus(200).outcome).toBe("ok");
     expect(terminalForStatus(401)).toEqual({ outcome: "denied", reason: "denied" });
     expect(terminalForStatus(429)).toEqual({ outcome: "denied", reason: "rate_limited" });
     expect(terminalForStatus(503)).toEqual({ outcome: "error", reason: "application_failure" });
