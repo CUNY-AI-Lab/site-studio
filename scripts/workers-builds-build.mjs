@@ -143,7 +143,6 @@ function verifyWorkersBuildEnvironment() {
   if (runText("git", ["rev-parse", "HEAD"]) !== buildSha) {
     throw new Error("WORKERS_CI_COMMIT_SHA does not match the checked-out commit");
   }
-  requiredEnvironment("NODE_AUTH_TOKEN");
   if (runText("bun", ["--version"]) !== EXPECTED_BUN_VERSION) {
     throw new Error(`Workers Builds must use Bun ${EXPECTED_BUN_VERSION}`);
   }

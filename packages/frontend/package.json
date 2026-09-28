@@ -34,7 +34,7 @@
     "@codemirror/lang-html": "6.4.11",
     "@codemirror/lang-javascript": "6.2.5",
     "@codemirror/view": "6.43.6",
-    "@cuny-ai-lab/cail-identity": "5.2.5",
+    "@cuny-ai-lab/cail-identity": "5.2.6",
     "agents": "0.21.0",
     "ai": "6.0.264",
     "clsx": "2.1.1",

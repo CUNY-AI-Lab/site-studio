@@ -25,25 +25,23 @@ installs and runs the complete workspace with the root lockfile. The deploy
 command is deliberately a no-op: GitHub observes Cloudflare's completed check run
 and remains the only production writer.
 
-Set these production-trigger build variables and secrets:
+Set these production-trigger build variables:
 
 | Name | Value | Kind |
 | --- | --- | --- |
 | `NODE_VERSION` | `24.18.0` | variable |
 | `BUN_VERSION` | `1.3.14` | variable |
 | `SKIP_DEPENDENCY_INSTALL` | `1` | variable |
-| `NODE_AUTH_TOKEN` | GitHub personal access token (classic) with `read:packages` | secret |
 
 `SKIP_DEPENDENCY_INSTALL=1` is deliberate. The repository entrypoint owns the
 locked `bun install --frozen-lockfile`, and fails before installing when the
-GitHub Packages token or exact Node and Bun versions are absent. Keep
+exact Node and Bun versions are absent. Keep
 `NODE_VERSION=24.18.0` aligned with the checked-in `.node-version` and `.nvmrc`.
 This prevents the command's move from `/packages/app/` to the repository root
 from selecting the old Node 20 runtime for jsdom and undici subprocesses.
-`bunfig.toml` sends the package token only to the `@cuny-ai-lab` scope at
-`npm.pkg.github.com`. GitHub requires a classic token even for public npm
-packages; the token's user must be able to read the three CAIL packages in the
-lockfile. Do not add the token to source, a command, or a plain build variable.
+The shared `@cuny-ai-lab` packages install from public npm with no token;
+`bunfig.toml` pins that scope to `registry.npmjs.org`. Remove any
+`NODE_AUTH_TOKEN` secret left on the production trigger.
 
 Select a Workers Builds API token for the existing `site-studio-app` project as
 required by the Cloudflare connection flow. The no-op deploy command does not use

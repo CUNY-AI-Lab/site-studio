@@ -201,7 +201,7 @@ describe("CAIL_LOG_ENV boundary", () => {
   it.each(["production", "staging"] as const)("joins diagnostic events to exact %s environment", (environment) => {
     const events: CailLogEvent[] = [];
     const logger = createSiteStudioLogger({
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
       env: environment,
     });
     emitDiagnostic("info", "environment_probe", {}, logger);
@@ -240,7 +240,7 @@ describe("CAIL_LOG_ENV boundary", () => {
 describe("canonical build/publish action mappings", () => {
   function createLifecycle(events: CailLogEvent[], clockValues = [100, 145]) {
     const logger = createSiteStudioLogger({
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
       env: "test",
       clock: () => clockValues.shift() ?? 145,
     });
@@ -384,7 +384,7 @@ describe("service-local diagnostics and helpers", () => {
     };
     const logging = createSiteStudioLoggingContext(
       createSiteStudioLogger({
-        sink: (event) => events.push(event),
+        sink: (event) => { events.push(event); },
         env: "staging",
         release: "9.9.0",
       }),
@@ -443,7 +443,7 @@ describe("service-local diagnostics and helpers", () => {
     );
 
     const events: CailLogEvent[] = [];
-    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    const logger = createSiteStudioLogger({ sink: (event) => { events.push(event); }, env: "test" });
     emitDiagnostic("info", "interleaved_connection_a", {}, createSiteStudioLoggingContext(logger, stateA));
     emitDiagnostic("info", "interleaved_connection_b", {}, createSiteStudioLoggingContext(logger, stateB));
 
@@ -461,7 +461,7 @@ describe("service-local diagnostics and helpers", () => {
 
   it("covers every fixed-severity diagnostic mapping without a free-text body", () => {
     const events: CailLogEvent[] = [];
-    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    const logger = createSiteStudioLogger({ sink: (event) => { events.push(event); }, env: "test" });
     emitDiagnostic("info", "account_import_completed", {}, logger);
     emitDiagnostic("warning", "snapshot_too_large", { req_bytes: 1_024 }, logger);
     emitDiagnostic("error", "session_store_unavailable", { status: 503 }, logger);
@@ -499,7 +499,7 @@ describe("service-local diagnostics and helpers", () => {
 
   it("preserves same-instance event provenance at every configured sink", () => {
     const events: CailLogEvent[] = [];
-    const logger = createSiteStudioLogger({ sink: (event) => events.push(event), env: "test" });
+    const logger = createSiteStudioLogger({ sink: (event) => { events.push(event); }, env: "test" });
     emitDiagnostic("info", "provenance_probe", {}, logger);
 
     expect(() => toWorkersLogEvent(events[0]!)).not.toThrow();
