@@ -1,2 +1,4 @@
 [install.scopes]
-"@cuny-ai-lab" = { url = "https://npm.pkg.github.com", token = "$NODE_AUTH_TOKEN" }
+# The shared CAIL packages are public on npm; this pins the scope there so a
+# personal mapping to GitHub Packages cannot redirect installs.
+"@cuny-ai-lab" = "https://registry.npmjs.org"
