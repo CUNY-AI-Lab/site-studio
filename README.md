@@ -51,7 +51,7 @@ Model traffic goes directly from the app Worker to the CAIL Gateway through
 the canonical `https://tools.ailab.gc.cuny.edu/v1` API. The checked-in
 `CAIL_API_BASE` is the canonical origin; the shared client owns the `/v1`
 model and quota paths. The active default is the canonical Gateway model
-`deepseek-v4-flash-0731`; any configured override must also be a canonical,
+`deepseek-v4.1-flash-1017`; any configured override must also be a canonical,
 prefix-free model ID. The Gateway owns provider selection and availability;
 provider-native and `auto/` aliases are rejected.
 The app forwards only the separately verified,

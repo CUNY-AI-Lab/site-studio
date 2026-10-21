@@ -8,10 +8,10 @@ export const CAIL_APP_SLUG = "site-studio";
 /**
  * Default canonical CAIL model id. Gateway model IDs are prefix-free: the
  * complete model variant remains in the ID while provider/vendor namespaces
- * stay inside Gateway routing. DeepSeek V4 Flash 0731 is the default because
+ * stay inside Gateway routing. DeepSeek V4.1 Flash 1017 is the default because
  * it is the current Site Studio coding model.
  */
-export const DEFAULT_CAIL_MODEL = "deepseek-v4-flash-0731";
+export const DEFAULT_CAIL_MODEL = "deepseek-v4.1-flash-1017";
 
 export interface CailModelEnv {
   CAIL_API_BASE?: string;

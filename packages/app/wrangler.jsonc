@@ -62,9 +62,9 @@
     // {CAIL_API_BASE}/v1/chat/completions.
     "CAIL_API_BASE": "https://tools.ailab.gc.cuny.edu",
     // CAIL_MODEL: canonical, prefix-free Gateway model id. The Gateway owns
-    // provider selection and availability. DeepSeek V4 Flash 0731 is the
+    // provider selection and availability. DeepSeek V4.1 Flash 1017 is the
     // default Site Studio coding model.
-    "CAIL_MODEL": "deepseek-v4-flash-0731",
+    "CAIL_MODEL": "deepseek-v4.1-flash-1017",
     // CAIL_IMAGE_CLASSIFIER: canonical, prefix-free vision model used by
     // inspect_image for project-owned uploads.
     "CAIL_IMAGE_CLASSIFIER": "kimi-k2.6",

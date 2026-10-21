@@ -16,6 +16,8 @@ import {
 const VALID_REQUEST_ID = "019f8bdc-342a-76e1-ba71-005d69808f86";
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
+const capturedRequestBodySchema = z.object({ model: z.string() }).passthrough();
+type CapturedRequestBody = z.infer<typeof capturedRequestBodySchema>;
 
 function asFetch(stub: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): typeof fetch {
   // SAFETY: Test adapters implement the Fetch API call signature used by the
@@ -58,8 +60,8 @@ describe("resolveModelId", () => {
     expect(resolveModelId({})).toBe(DEFAULT_CAIL_MODEL);
   });
 
-  it("defaults to the canonical DeepSeek V4 Flash model", () => {
-    expect(DEFAULT_CAIL_MODEL).toBe("deepseek-v4-flash-0731");
+  it("defaults to the canonical DeepSeek V4.1 Flash model", () => {
+    expect(DEFAULT_CAIL_MODEL).toBe("deepseek-v4.1-flash-1017");
   });
 });
 
@@ -227,25 +229,43 @@ describe("createCailModel wire contract", () => {
    */
   type CaptureFetch = {
     fetch: typeof fetch;
-    captured: () => { url: string; headers: Headers };
+    captured: () => { url: string; headers: Headers; body: CapturedRequestBody };
   };
 
   function makeCaptureFetch(): CaptureFetch {
-    let seen: { url: string; headers: Headers } | undefined;
+    let seen: { url: string; headers: Headers; body: CapturedRequestBody } | undefined;
     const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const parsedBody = capturedRequestBodySchema.safeParse(JSON.parse(String(init?.body)));
+      if (!parsedBody.success) throw new Error(parsedBody.error.message);
       // cail-client calls fetchImpl(url, init) with init.headers as a plain
       // record; wrap it in Headers for robust case-insensitive lookup.
       seen = {
         url: String(input),
         headers: new Headers(init?.headers),
+        body: parsedBody.data,
       };
       return chatCompletionResponse();
     });
     return {
       fetch: stub,
-      captured: () => seen ?? { url: "", headers: new Headers() },
+      captured: () => seen ?? { url: "", headers: new Headers(), body: { model: "" } },
     };
   }
+
+  it("submits the default model to the chat-completions endpoint", async () => {
+    const { fetch: stub, captured } = makeCaptureFetch();
+    const model = createCailModel(
+      { CAIL_API_BASE: "https://cail.example" },
+      "jwt-token",
+      stub,
+    );
+
+    await generateText({ model, prompt: "Build a site.", maxRetries: 0 });
+
+    const { url, body } = captured();
+    expect(url).toBe("https://cail.example/v1/chat/completions");
+    expect(body.model).toBe("deepseek-v4.1-flash-1017");
+  });
 
   it("continues after a streamed tool call until the model returns text", async () => {
     let calls = 0;
@@ -323,7 +343,7 @@ describe("createCailModel wire contract", () => {
     expect(JSON.stringify(requestBodies[1])).toContain("call_lookup");
   });
 
-  it("sends one verified bearer and X-CAIL-App to /v1/chat/completions", async () => {
+  it("preserves an explicit model choice and sends trusted headers", async () => {
     const { fetch: stub, captured } = makeCaptureFetch();
     const model = createCailModel(
       { CAIL_API_BASE: "https://cail.example/proxy", CAIL_MODEL: "gpt-oss-120b" },
@@ -333,9 +353,10 @@ describe("createCailModel wire contract", () => {
 
     await generateText({ model, prompt: "hi" });
 
-    const { url, headers } = captured();
+    const { url, headers, body } = captured();
     // (a) the new gateway contract: the OpenAI-compatible chat endpoint
     expect(url).toBe("https://cail.example/proxy/v1/chat/completions");
+    expect(body.model).toBe("gpt-oss-120b");
     expect(headers.get("authorization")).toBe("Bearer jwt-token");
     expect(headers.get("x-cail-identity-jwt")).toBeNull();
     expect(headers.get("x-cail-app")).toBe("site-studio");
