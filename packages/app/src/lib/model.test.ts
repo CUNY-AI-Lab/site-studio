@@ -16,6 +16,8 @@ import {
 const VALID_REQUEST_ID = "019f8bdc-342a-76e1-ba71-005d69808f86";
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
+const capturedRequestBodySchema = z.object({ model: z.string() }).passthrough();
+type CapturedRequestBody = z.infer<typeof capturedRequestBodySchema>;
 
 function asFetch(stub: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>): typeof fetch {
   // SAFETY: Test adapters implement the Fetch API call signature used by the
@@ -227,25 +229,26 @@ describe("createCailModel wire contract", () => {
    */
   type CaptureFetch = {
     fetch: typeof fetch;
-    captured: () => { url: string; headers: Headers; body: JsonObject };
+    captured: () => { url: string; headers: Headers; body: CapturedRequestBody };
   };
 
   function makeCaptureFetch(): CaptureFetch {
-    let seen: { url: string; headers: Headers; body: JsonObject } | undefined;
+    let seen: { url: string; headers: Headers; body: CapturedRequestBody } | undefined;
     const stub = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const parsedBody = capturedRequestBodySchema.safeParse(JSON.parse(String(init?.body)));
+      if (!parsedBody.success) throw new Error(parsedBody.error.message);
       // cail-client calls fetchImpl(url, init) with init.headers as a plain
       // record; wrap it in Headers for robust case-insensitive lookup.
       seen = {
         url: String(input),
         headers: new Headers(init?.headers),
-        // SAFETY: The model provider sends a JSON object at this test seam.
-        body: JSON.parse(String(init?.body)) as JsonObject,
+        body: parsedBody.data,
       };
       return chatCompletionResponse();
     });
     return {
       fetch: stub,
-      captured: () => seen ?? { url: "", headers: new Headers(), body: {} },
+      captured: () => seen ?? { url: "", headers: new Headers(), body: { model: "" } },
     };
   }
 
