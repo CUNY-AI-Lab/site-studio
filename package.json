@@ -33,14 +33,25 @@
   },
   "overrides": {
     "@hono/node-server": "2.0.12",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "cookie": "0.7.2",
-    "fast-uri": "3.1.7",
-    "sharp": "0.35.4",
-    "vite": "8.1.4",
+    "devalue": "5.9.3",
+    "fast-uri": "3.1.8",
+    "hono": "4.13.13",
+    "ip-address": "10.7.4",
+    "proxy-addr": "2.0.8",
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2",
+    "vite": "8.1.6",
     "qs": "6.16.0",
     "browserslist": "4.28.8"
   },
   "patchedDependencies": {
     "@cloudflare/ai-chat@0.9.3": "patches/@cloudflare%2Fai-chat@0.9.3.patch"
+  },
+  "dependencies": {
+    "undici": "6.28.1"
   }
 }

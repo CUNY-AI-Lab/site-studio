@@ -9,6 +9,7 @@ import {
 	type UIChatMessage
 } from '$lib/agents/chat';
 import { invalidateCsrfToken } from '$lib/api/csrf';
+import * as contracts from '$lib/contracts';
 import type { JsonValue } from '$lib/contracts';
 import { toasts } from '$lib/toast.svelte';
 
@@ -27,12 +28,6 @@ interface FakeSocketMessage {
 	body?: string;
 	done?: boolean;
 	error?: boolean;
-}
-
-declare global {
-	interface Location {
-		[symbol: symbol]: { assign: (url: string) => void } | undefined;
-	}
 }
 
 function requestUrl(input: RequestInfo | URL): string {
@@ -336,13 +331,13 @@ describe('AgentChat', () => {
 	});
 
 	it('routes authentication_required history responses through the login redirect path', async () => {
-		const locationImplSymbol = Object.getOwnPropertySymbols(window.location).find(
-			(symbol) => symbol.description === 'impl'
-		);
-		if (!locationImplSymbol) throw new Error('JSDOM location implementation symbol is unavailable');
-		const locationImpl = window.location[locationImplSymbol];
-		if (!locationImpl) throw new Error('JSDOM location implementation is unavailable');
-		const assignSpy = vi.spyOn(locationImpl, 'assign').mockImplementation(() => {});
+		const assignSpy = vi.fn();
+		const browser: Window = Object.create(window);
+		Object.defineProperties(browser, {
+			document: { value: document },
+			location: { value: { assign: assignSpy } }
+		});
+		vi.spyOn(contracts, 'browserWindow').mockReturnValue(browser);
 		fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
 			const url = requestUrl(input);
 			if (url.endsWith('/api/csrf')) {

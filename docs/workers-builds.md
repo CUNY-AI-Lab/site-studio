@@ -29,14 +29,14 @@ Set these production-trigger build variables:
 
 | Name | Value | Kind |
 | --- | --- | --- |
-| `NODE_VERSION` | `24.18.0` | variable |
+| `NODE_VERSION` | `24.22.1` | variable |
 | `BUN_VERSION` | `1.3.14` | variable |
 | `SKIP_DEPENDENCY_INSTALL` | `1` | variable |
 
 `SKIP_DEPENDENCY_INSTALL=1` is deliberate. The repository entrypoint owns the
 locked `bun install --frozen-lockfile`, and fails before installing when the
 exact Node and Bun versions are absent. Keep
-`NODE_VERSION=24.18.0` aligned with the checked-in `.node-version` and `.nvmrc`.
+`NODE_VERSION=24.22.1` aligned with the checked-in `.node-version` and `.nvmrc`.
 This prevents the command's move from `/packages/app/` to the repository root
 from selecting the old Node 20 runtime for jsdom and undici subprocesses.
 The shared `@cuny-ai-lab` packages install from public npm with no token;
