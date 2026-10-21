@@ -111,6 +111,32 @@ runner. Pull requests continue to run every check, and a qualifying Cloudflare
 unset or setting it to `false` retains the push-to-main checks and deployment as
 the rollback path.
 
+## GitHub fallback for a Workers Builds platform failure
+
+GitHub Actions installs Node `24.22.1` with a commit-pinned official
+`actions/setup-node` release in every job that installs, builds, tests, or
+deploys the application. Each job checks the exact Node and Bun versions before
+installing dependencies. This keeps the fallback on the patched runtime even
+when the GitHub runner image ships an older Node version.
+
+Cloudflare build `77db09e8-99d6-4d90-81d3-8cffbad8937b` detected Node `24.22.1`
+and Bun `1.3.14` on October 21, 2026, then failed in platform tool installation
+within one second, before the repository build command ran. Use the existing
+GitHub push path while that platform failure persists:
+
+1. Set `CLOUDFLARE_WORKERS_BUILDS_PRIMARY` to `false` before merging a meaningful
+   recovery change to `main`.
+2. Merge the reviewed change. Its new push event runs the app, frontend, and
+   browser lanes, followed by aggregate verification and the serialized deploy.
+3. Require those lanes and the deploy job to succeed for the exact `main` SHA.
+   The deploy job retains the version, binding, secret-name, and public readiness
+   readbacks described above.
+
+Do not rely on rerunning an older workflow after changing the variable, and do
+not create an empty commit solely to start a release. Leave the variable set to
+`false` until Workers Builds can again complete the repository gate on current
+`main`.
+
 Non-production builds stay disabled because Site Studio's checked-in bindings
 name production R2, KV, and Durable Object state, there is no staging topology,
 and Cloudflare does not generate preview URLs for Workers that implement Durable
