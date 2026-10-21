@@ -63,7 +63,7 @@ site-studio/
 - `codemode` wraps project operations so the model can write JavaScript that orchestrates multi-step work in a Dynamic Worker sandbox
 - `ask_user_question` remains available for structured clarification
 - The active default model is the canonical Gateway ID
-  `deepseek-v4-flash-0731`; any `CAIL_MODEL` override must remain a canonical,
+  `deepseek-v4.1-flash-1017`; any `CAIL_MODEL` override must remain a canonical,
   prefix-free ID
 
 ## Frontend Transport
