@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_BUN_VERSION = "1.3.14";
-const EXPECTED_NODE_VERSION = "v24.18.0";
+const EXPECTED_NODE_VERSION = "v24.22.1";
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const BROWSER_LIBRARY_PACKAGES = [
