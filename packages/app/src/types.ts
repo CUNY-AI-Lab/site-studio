@@ -25,7 +25,7 @@ export interface Env {
   // Canonical prefix-free model id for the Gateway's OpenAI-compatible path.
   CAIL_MODEL?: string;
   // Canonical prefix-free vision model used to inspect project-owned images.
-  // Default kimi-k2.6.
+  // Default deepseek-v4.1-flash-1017.
   CAIL_IMAGE_CLASSIFIER?: string;
   // Static public JWKS used to verify RS256 X-CAIL-Identity-JWT tokens for the
   // cail:site-studio audience. Stored as a JSON Wrangler secret.
