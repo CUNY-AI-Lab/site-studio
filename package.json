@@ -22,7 +22,7 @@
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build",
     "workers:build": "node scripts/workers-builds-build.mjs"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
     "@oxlint/plugins": "1.79.0",
