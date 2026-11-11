@@ -11,7 +11,7 @@ import { sniffImageType, type ImageType } from "./image-validation";
 import { describeModelStreamError } from "./model-stream-error";
 
 /** Canonical Gateway model used to inspect project-owned images. */
-export const DEFAULT_CAIL_IMAGE_CLASSIFIER = "kimi-k2.6";
+export const DEFAULT_CAIL_IMAGE_CLASSIFIER = "deepseek-v4.1-flash-1017";
 
 export interface CailImageEnv extends CailModelEnv {
   CAIL_IMAGE_CLASSIFIER?: string;

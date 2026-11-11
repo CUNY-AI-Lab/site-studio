@@ -67,7 +67,7 @@
     "CAIL_MODEL": "deepseek-v4.1-flash-1017",
     // CAIL_IMAGE_CLASSIFIER: canonical, prefix-free vision model used by
     // inspect_image for project-owned uploads.
-    "CAIL_IMAGE_CLASSIFIER": "kimi-k2.6",
+    "CAIL_IMAGE_CLASSIFIER": "deepseek-v4.1-flash-1017",
     "CAIL_IDENTITY_ISSUER": "https://tools.ailab.gc.cuny.edu/cail-sso",
     // Script-readable anti-CSRF delivery cookie scope. This deployment shares
     // its origin with sibling tools and untrusted published content, so runtime
