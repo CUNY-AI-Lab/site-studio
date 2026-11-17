@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { resolvePath } from '$lib/utils/paths';
-	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { resolvePath } from '#lib/utils/paths.ts';
+	import { Skeleton } from '#lib/components/ui/skeleton/index.ts';
 	import { RefreshCw } from 'lucide-svelte';
 	import { z } from 'zod';
 

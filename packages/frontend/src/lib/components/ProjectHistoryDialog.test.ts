@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import ProjectHistoryDialog from './ProjectHistoryDialog.svelte';
-import type { ProjectSnapshot } from '$lib/api/projects';
-import { invalidateCsrfToken } from '$lib/api/csrf';
+import type { ProjectSnapshot } from '#lib/api/projects.ts';
+import { invalidateCsrfToken } from '#lib/api/csrf.ts';
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;

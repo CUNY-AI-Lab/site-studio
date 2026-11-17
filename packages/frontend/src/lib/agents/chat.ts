@@ -1,4 +1,4 @@
-import { jsonValueSchema, type JsonValue } from '$lib/contracts';
+import { jsonValueSchema, type JsonValue } from '#lib/contracts.ts';
 import { z } from 'zod';
 
 export const AgentMessageType = {

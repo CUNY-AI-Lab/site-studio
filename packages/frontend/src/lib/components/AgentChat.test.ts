@@ -7,11 +7,11 @@ import AgentChat from './AgentChat.svelte';
 import {
 	AgentMessageType,
 	type UIChatMessage
-} from '$lib/agents/chat';
-import { invalidateCsrfToken } from '$lib/api/csrf';
-import * as contracts from '$lib/contracts';
-import type { JsonValue } from '$lib/contracts';
-import { toasts } from '$lib/toast.svelte';
+} from '#lib/agents/chat.ts';
+import { invalidateCsrfToken } from '#lib/api/csrf.ts';
+import * as contracts from '#lib/contracts.ts';
+import type { JsonValue } from '#lib/contracts.ts';
+import { toasts } from '#lib/toast.svelte.ts';
 
 interface AgentChatTestProps {
 	projectId?: string;

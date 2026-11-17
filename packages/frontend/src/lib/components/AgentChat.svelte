@@ -4,19 +4,19 @@
 	import { Chat } from '@ai-sdk/svelte';
 	import { WebSocketChatTransport, type AgentConnection } from 'agents/chat/transport';
 	import type { UIMessage as SDKUIMessage } from 'ai';
-	import { resolvePath } from '$lib/utils/paths';
-	import { resolveWebSocketPath } from '$lib/utils/ws';
-	import { apiResponseFetch, getErrorMessage, isApiError, UserFacingError } from '$lib/api/errors';
-	import { getCsrfToken, refreshCsrfToken } from '$lib/api/csrf';
-	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile, type ProjectUploadResult } from '$lib/api/projects';
-	import { toast } from '$lib/toast.svelte';
+	import { resolvePath } from '#lib/utils/paths.ts';
+	import { resolveWebSocketPath } from '#lib/utils/ws.ts';
+	import { apiResponseFetch, getErrorMessage, isApiError, UserFacingError } from '#lib/api/errors.ts';
+	import { getCsrfToken, refreshCsrfToken } from '#lib/api/csrf.ts';
+	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile, type ProjectUploadResult } from '#lib/api/projects.ts';
+	import { toast } from '#lib/toast.svelte.ts';
 	import {
 		decodeToolInput,
 		jsonValueSchema,
 		type JsonRecord,
 		type JsonValue,
 		type ToolInputRecord
-	} from '$lib/contracts';
+	} from '#lib/contracts.ts';
 	import { z } from 'zod';
 	import AskUserQuestionCard from './AskUserQuestionCard.svelte';
 	import ToolExecutionCard from './ToolExecutionCard.svelte';
@@ -32,7 +32,7 @@
 		type AgentSocketMessage,
 		type UIChatMessage,
 		type UIMessagePart
-	} from '$lib/agents/chat';
+	} from '#lib/agents/chat.ts';
 
 	interface ContentBlock {
 		type: 'text' | 'tools';

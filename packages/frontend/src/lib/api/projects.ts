@@ -1,9 +1,9 @@
-import { resolvePath } from '$lib/utils/paths';
+import { resolvePath } from '#lib/utils/paths.ts';
 import { apiFetch } from './errors';
 import { handleApiErrorResponse } from './error-handler';
 import { csrfFetch } from './csrf';
 import { z } from 'zod';
-import { downloadBlob } from '$lib/browser/download';
+import { downloadBlob } from '#lib/browser/download.ts';
 
 const API_BASE = resolvePath('/api');
 

@@ -7,8 +7,8 @@ import {
 	uploadProjectFile,
 	type ProjectUploadResult,
 	type ProjectImagesResult
-} from '$lib/api/projects';
-import { toast, toasts } from '$lib/toast.svelte';
+} from '#lib/api/projects.ts';
+import { toast, toasts } from '#lib/toast.svelte.ts';
 
 const mockFetch = vi.fn<typeof fetchProjectImages>();
 const mockUpload = vi.fn<typeof uploadProjectFile>();

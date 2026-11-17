@@ -1,6 +1,6 @@
 import { driver } from 'driver.js';
 import type { DriveStep, Config } from 'driver.js';
-import { browserStorage } from '$lib/contracts';
+import { browserStorage } from '#lib/contracts.ts';
 
 const ONBOARDING_KEY = 'site-studio-onboarding-completed';
 

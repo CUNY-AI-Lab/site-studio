@@ -11,7 +11,7 @@
 	import json from 'highlight.js/lib/languages/json';
 	import bash from 'highlight.js/lib/languages/bash';
 	import plaintext from 'highlight.js/lib/languages/plaintext';
-	import { browserWindow } from '$lib/contracts';
+	import { browserWindow } from '#lib/contracts.ts';
 
 	// One-time configuration of the module-global `marked` singleton. This lives in
 	// a `<script module>` block so it runs exactly ONCE per module load rather than

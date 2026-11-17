@@ -3,7 +3,7 @@ import { flushSync } from 'svelte';
 import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import Toaster from './Toaster.svelte';
-import { toast, toasts, dismiss } from '$lib/toast.svelte';
+import { toast, toasts, dismiss } from '#lib/toast.svelte.ts';
 
 // The toast store is a module-level $state array shared across tests. Clear it
 // between tests so each starts from an empty toaster.

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight, FileEdit, FolderPlus, Trash2, FolderOpen, Loader2, CheckCircle2, AlertCircle, MessageSquare, Blocks, Play } from 'lucide-svelte';
 	import DiffDisplay from './DiffDisplay.svelte';
-	import { type ToolInputRecord } from '$lib/contracts';
+	import { type ToolInputRecord } from '#lib/contracts.ts';
 	import { z } from 'zod';
 
 	type ToolIcon = typeof Blocks;

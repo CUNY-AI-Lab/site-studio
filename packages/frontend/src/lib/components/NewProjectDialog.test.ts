@@ -8,7 +8,7 @@ import {
 	fetchTemplateCategories,
 	type Project,
 	type TemplateCategory
-} from '$lib/api/projects';
+} from '#lib/api/projects.ts';
 const mockCreateProject = vi.fn<typeof createProject>();
 const mockFetchProjects = vi.fn<typeof fetchProjects>();
 const mockFetchTemplateCategories = vi.fn<typeof fetchTemplateCategories>();

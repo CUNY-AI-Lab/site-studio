@@ -1,8 +1,8 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
 	import { AlertCircle, AlertTriangle, Sparkles } from 'lucide-svelte';
-	import type { A11yFinding } from '$lib/api/projects';
+	import type { A11yFinding } from '#lib/api/projects.ts';
 
 	let {
 		open = false,

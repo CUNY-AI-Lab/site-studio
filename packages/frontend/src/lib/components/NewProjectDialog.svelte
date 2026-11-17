@@ -1,18 +1,17 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
 	import {
 		createProject as createProjectRequest,
 		fetchProjects as fetchProjectsRequest,
 		fetchTemplateCategories as fetchTemplateCategoriesRequest,
 		type TemplateCategory,
 		type TemplateMetadata
-	} from '$lib/api/projects';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
+	} from '#lib/api/projects.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
+	import Input from '#lib/components/ui/input/input.svelte';
+	import Label from '#lib/components/ui/label/label.svelte';
 	import {
 		Award,
 		BarChart3,
@@ -38,8 +37,9 @@
 		UserCircle,
 		Users
 	} from 'lucide-svelte';
-	import { toast } from '$lib/toast.svelte';
-	import { isApiError } from '$lib/api/errors';
+	import { toast } from '#lib/toast.svelte.ts';
+	import { isApiError } from '#lib/api/errors.ts';
+	import { editorPath, resolvePath } from '#lib/utils/paths.ts';
 
 	interface Props {
 		open: boolean;
@@ -174,7 +174,7 @@
 			const project = await createProject(name, selectedTemplate.id);
 
 			// Navigate to the editor
-			goto(`${base}/editor/${project.id}`);
+			goto(editorPath(project.id));
 
 			// Close dialog and notify success
 			onOpenChange(false);
@@ -257,7 +257,7 @@
 										onclick={() => selectTemplate(template)}
 									>
 										<div class="template-preview">
-											<img src={`${base}/template-previews/${template.id}.png`} alt={`${template.title} preview`} />
+											<img src={resolvePath(`template-previews/${template.id}.png`)} alt={`${template.title} preview`} />
 											<div class="template-overlay">
 												<div class="template-icon">
 													<TemplateIcon size={20} />
@@ -280,7 +280,7 @@
 				<div class="selected-header">
 					<div class="selected-preview">
 						<img
-							src={`${base}/template-previews/${selectedTemplate.id}.png`}
+							src={resolvePath(`template-previews/${selectedTemplate.id}.png`)}
 							alt={`${selectedTemplate.title} preview`}
 						/>
 					</div>
