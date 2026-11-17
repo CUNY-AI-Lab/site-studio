@@ -22,14 +22,14 @@
     "check": "bun run lint && bun run --cwd packages/app check && bun run --cwd packages/frontend check && bun run --cwd packages/frontend build",
     "workers:build": "node scripts/workers-builds-build.mjs"
   },
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",
     "@oxlint/plugins": "1.79.0",
     "@playwright/test": "1.62.1",
     "oxlint": "1.79.0",
     "ws": "8.21.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "overrides": {
     "@hono/node-server": "2.0.12",
@@ -45,13 +45,15 @@
     "sharp": "0.35.5",
     "source-map-js": "1.2.2",
     "vite": "8.1.6",
-    "qs": "6.16.0",
-    "browserslist": "4.28.8"
+    "qs": "6.16.1",
+    "browserslist": "4.28.8",
+    "body-parser": "2.4.0",
+    "zod": "4.6.6"
   },
   "patchedDependencies": {
     "@cloudflare/ai-chat@0.9.3": "patches/@cloudflare%2Fai-chat@0.9.3.patch"
   },
   "dependencies": {
-    "undici": "6.28.1"
+    "undici": "6.29.1"
   }
 }
