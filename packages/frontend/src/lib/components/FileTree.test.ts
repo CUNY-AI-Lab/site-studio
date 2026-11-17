@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import FileTree from './FileTree.svelte';
-import { invalidateCsrfToken } from '$lib/api/csrf';
-import { toasts } from '$lib/toast.svelte';
+import { invalidateCsrfToken } from '#lib/api/csrf.ts';
+import { toasts } from '#lib/toast.svelte.ts';
 
 type FetchFunction = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 let fetchMock: Mock<FetchFunction>;

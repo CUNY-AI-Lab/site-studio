@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import HandleClaimDialog from './HandleClaimDialog.svelte';
-import { checkHandle, claimHandle } from '$lib/api/handles';
+import { checkHandle, claimHandle } from '#lib/api/handles.ts';
 
 const mockCheck = vi.fn<typeof checkHandle>();
 const mockClaim = vi.fn<typeof claimHandle>();

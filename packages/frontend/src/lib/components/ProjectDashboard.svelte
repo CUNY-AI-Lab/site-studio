@@ -1,21 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import { resolvePath } from '$lib/utils/paths';
-	import { fetchProjects, publishProject, unpublishProject, type Project } from '$lib/api/projects';
-	import { getErrorMessage, isApiError } from '$lib/api/errors';
-	import Button from '$lib/components/ui/button/button.svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { editorPath, resolvePath } from '#lib/utils/paths.ts';
+	import { fetchProjects, publishProject, unpublishProject, type Project } from '#lib/api/projects.ts';
+	import { getErrorMessage, isApiError } from '#lib/api/errors.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
 	import { MoreVertical, Plus, FolderOpen, Globe, GlobeLock, ExternalLink } from 'lucide-svelte';
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
 	import HandleClaimDialog from './HandleClaimDialog.svelte';
-	import { hasCompletedOnboarding, createDashboardTour } from '$lib/utils/onboarding';
-	import { toast } from '$lib/toast.svelte';
+	import { hasCompletedOnboarding, createDashboardTour } from '#lib/utils/onboarding.ts';
+	import { toast } from '#lib/toast.svelte.ts';
 	import type { Driver } from 'driver.js';
 	import 'driver.js/dist/driver.css';
-	import '$lib/styles/onboarding-tour.css';
+	import '#lib/styles/onboarding-tour.css';
 
 	let projects = $state<Project[]>([]);
 	let loading = $state(true);
@@ -126,7 +125,7 @@
 	}
 
 	function openProject(projectId: string) {
-		goto(`${base}/editor/${projectId}`);
+		goto(editorPath(projectId));
 	}
 
 	function handleNewProject() {

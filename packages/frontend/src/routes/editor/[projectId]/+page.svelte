@@ -1,40 +1,39 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import { resolvePath } from '$lib/utils/paths';
-	import { createAutosave, type SaveSnapshot } from '$lib/editor/autosave';
-	import { canQueueFileSave, type FileOpenStatus } from '$lib/editor/file-open-state';
-	import { buildKeepaliveSave } from '$lib/editor/keepalive-save';
-	import { clearDraft, loadDraft, rebaseDraft, saveDraft, type StoredDraft } from '$lib/editor/draft-store';
-	import Preview from '$lib/components/Preview.svelte';
-	import AgentChat from '$lib/components/AgentChat.svelte';
-	import CodeView from '$lib/components/CodeView.svelte';
-	import * as Resizable from '$lib/components/ui/resizable';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import Button from '$lib/components/ui/button/button.svelte';
+	import { dashboardPath, editorPath, resolvePath } from '#lib/utils/paths.ts';
+	import { createAutosave, type SaveSnapshot } from '#lib/editor/autosave.ts';
+	import { canQueueFileSave, type FileOpenStatus } from '#lib/editor/file-open-state.ts';
+	import { buildKeepaliveSave } from '#lib/editor/keepalive-save.ts';
+	import { clearDraft, loadDraft, rebaseDraft, saveDraft, type StoredDraft } from '#lib/editor/draft-store.ts';
+	import Preview from '#lib/components/Preview.svelte';
+	import AgentChat from '#lib/components/AgentChat.svelte';
+	import CodeView from '#lib/components/CodeView.svelte';
+	import * as Resizable from '#lib/components/ui/resizable/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
     import { ChevronDown, LayoutDashboard, Code2, PanelLeftClose, PanelRightClose, MoreVertical, Globe, GlobeLock, ExternalLink, Download, Check, Loader2, RotateCcw, Image as ImageIcon } from 'lucide-svelte';
-	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '$lib/api/projects';
-	import { downloadBlob } from '$lib/browser/download';
-	import { csrfFetch, getCsrfToken, getCsrfTokenFromCookie } from '$lib/api/csrf';
-	import { apiFetch, apiResponseFetch } from '$lib/api/errors';
-	import ProjectDialogs from '$lib/components/ProjectDialogs.svelte';
-	import ProjectHistoryDialog from '$lib/components/ProjectHistoryDialog.svelte';
-	import AccessibilityNotesDialog from '$lib/components/AccessibilityNotesDialog.svelte';
-	import ImageManagerDialog from '$lib/components/ImageManagerDialog.svelte';
-	import HandleClaimDialog from '$lib/components/HandleClaimDialog.svelte';
-	import { toast } from '$lib/toast.svelte';
+	import { downloadFile as downloadProjectFile, fetchProjects, publishProject, unpublishProject, type A11yFinding, type Project, type ProjectFile } from '#lib/api/projects.ts';
+	import { downloadBlob } from '#lib/browser/download.ts';
+	import { csrfFetch, getCsrfToken, getCsrfTokenFromCookie } from '#lib/api/csrf.ts';
+	import { apiFetch, apiResponseFetch } from '#lib/api/errors.ts';
+	import ProjectDialogs from '#lib/components/ProjectDialogs.svelte';
+	import ProjectHistoryDialog from '#lib/components/ProjectHistoryDialog.svelte';
+	import AccessibilityNotesDialog from '#lib/components/AccessibilityNotesDialog.svelte';
+	import ImageManagerDialog from '#lib/components/ImageManagerDialog.svelte';
+	import HandleClaimDialog from '#lib/components/HandleClaimDialog.svelte';
+	import { toast } from '#lib/toast.svelte.ts';
 	import {
 		createFileTreeRefreshCoordinator,
 		type FileTreeRefreshRequest,
 		type FileTreeRefreshSource
-	} from '$lib/file-tree-refresh';
+	} from '#lib/file-tree-refresh.ts';
 	import { Pane } from 'paneforge';
 	import { z } from 'zod';
 	import type { Driver } from 'driver.js';
 
-	type OnboardingModule = typeof import('$lib/utils/onboarding');
+	type OnboardingModule = typeof import('#lib/utils/onboarding.ts');
 
 	interface LoadedFileResponse {
 		content: string;
@@ -97,7 +96,7 @@
 	let editorPageMounted = false;
 
 	// Get projectId from URL params
-	let projectId = $derived($page.params.projectId ?? '');
+	let projectId = $derived(page.params.projectId ?? '');
 	let currentFile = $state('');
 	let currentFileEtag = $state<string | null>(null);
 	let fileContent = $state('');
@@ -152,9 +151,9 @@
 	async function loadOnboardingModule(): Promise<OnboardingModule> {
 		if (!onboardingModulePromise) {
 			onboardingModulePromise = Promise.all([
-				import('$lib/utils/onboarding'),
+				import('#lib/utils/onboarding.ts'),
 				import('driver.js/dist/driver.css'),
-				import('$lib/styles/onboarding-tour.css')
+				import('#lib/styles/onboarding-tour.css')
 			]).then(([module]) => module);
 		}
 
@@ -431,7 +430,7 @@
 
 	function getCurrentSaveSnapshot(): SaveSnapshot | null {
 		// SS-47: only snapshot when the buffer provably holds the current file's
-		// loaded text (see $lib/editor/file-open-state.ts).
+		// loaded text (see #lib/editor/file-open-state.ts).
 		if (!projectId || !currentFile || !canQueueFileSave(currentFileOpenStatus, currentFileIsText, currentFileEtag)) {
 			return null;
 		}
@@ -594,7 +593,7 @@
 		const didFlushPendingSave = await flushPendingSave();
 		if (!didFlushPendingSave) return;
 
-		await goto(`${base}/editor/${targetProjectId}`);
+		await goto(editorPath(targetProjectId));
 	}
 
 	async function handleProjectChange(targetProjectId: string, fallbackProjectId: string | null) {
@@ -602,7 +601,7 @@
 		const didFlushPendingSave = await flushPendingSave();
 		if (!didFlushPendingSave) {
 			if (fallbackProjectId && fallbackProjectId !== targetProjectId) {
-				await goto(`${base}/editor/${fallbackProjectId}`, { replaceState: true });
+				await goto(editorPath(fallbackProjectId), { replaceState: true });
 			}
 			return;
 		}
@@ -680,7 +679,7 @@
 		stableProjectId = renamedProject.id;
 
 		if (renamedProject.id !== projectId) {
-			await goto(`${base}/editor/${renamedProject.id}`, { replaceState: true });
+			await goto(editorPath(renamedProject.id), { replaceState: true });
 		}
 	}
 
@@ -714,11 +713,11 @@
 		stableProjectId = null;
 
 		if (remainingProjects.length > 0) {
-			await goto(`${base}/editor/${remainingProjects[0].id}`, { replaceState: true });
+			await goto(editorPath(remainingProjects[0].id), { replaceState: true });
 			return;
 		}
 
-		await goto(base || '/', { replaceState: true });
+		await goto(dashboardPath(), { replaceState: true });
 	}
 
 	async function handlePublishProject() {
@@ -933,7 +932,7 @@
 			<div class="missing-project-card">
 				<h1 id="missing-project-title">This project is no longer here</h1>
 				<p>It may have been deleted or its address may have changed.</p>
-				<Button href={base || '/'}>Back to your projects</Button>
+				<Button href={dashboardPath()}>Back to your projects</Button>
 			</div>
 		</main>
 	{:else}
@@ -973,8 +972,8 @@
 			<aside class="chat-sidebar">
 				<div class="chat-header">
 					<div class="header-top">
-						<a href={base || '/'} class="logo">Site Studio</a>
-					<Button variant="ghost" size="sm" href={base || '/'} aria-label="Back to dashboard">
+						<a href={dashboardPath()} class="logo">Site Studio</a>
+					<Button variant="ghost" size="sm" href={dashboardPath()} aria-label="Back to dashboard">
                         <LayoutDashboard size={18} />
                     </Button>
                 </div>

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
-import type { Project, TemplateCategory } from '$lib/api/projects';
-import { invalidateCsrfToken } from '$lib/api/csrf';
+import type { Project, TemplateCategory } from '#lib/api/projects.ts';
+import { invalidateCsrfToken } from '#lib/api/csrf.ts';
 import ProjectDashboard from './ProjectDashboard.svelte';
 
 function deferred<T>() {

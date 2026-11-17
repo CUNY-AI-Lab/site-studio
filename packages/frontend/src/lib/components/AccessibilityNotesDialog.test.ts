@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import AccessibilityNotesDialog from './AccessibilityNotesDialog.svelte';
-import type { A11yFinding } from '$lib/api/projects';
+import type { A11yFinding } from '#lib/api/projects.ts';
 
 function finding(overrides: Partial<A11yFinding> = {}): A11yFinding {
 	return {

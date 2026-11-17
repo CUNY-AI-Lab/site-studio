@@ -4,12 +4,12 @@
 		fetchProjectSnapshots,
 		restoreProjectSnapshot,
 		type ProjectSnapshot
-	} from '$lib/api/projects';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import { getErrorMessage } from '$lib/api/errors';
+	} from '#lib/api/projects.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
+	import Input from '#lib/components/ui/input/input.svelte';
+	import Label from '#lib/components/ui/label/label.svelte';
+	import { getErrorMessage } from '#lib/api/errors.ts';
 	import { History, Loader2, RotateCcw, Save } from 'lucide-svelte';
 
 	interface Props {

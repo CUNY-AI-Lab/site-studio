@@ -1,7 +1,7 @@
 /** Shared frontend API error handling for Doorway and the direct Worker. */
 
 import { csrfFetch } from './csrf';
-import { type JsonValue } from '$lib/contracts';
+import { type JsonValue } from '#lib/contracts.ts';
 import {
 	ApiError,
 	handleApiErrorResponse,

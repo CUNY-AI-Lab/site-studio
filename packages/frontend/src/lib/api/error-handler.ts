@@ -4,7 +4,7 @@ import {
 	parseCailAuthErrorJson,
 	type CailAuthError
 } from '@cuny-ai-lab/cail-identity';
-import { browserWindow } from '$lib/contracts';
+import { browserWindow } from '#lib/contracts.ts';
 import { z } from 'zod';
 
 export interface ValidationDetail {

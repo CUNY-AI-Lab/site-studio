@@ -1,5 +1,5 @@
-import { resolvePath } from '$lib/utils/paths';
-import { browserWindow } from '$lib/contracts';
+import { resolvePath } from '#lib/utils/paths.ts';
+import { browserWindow } from '#lib/contracts.ts';
 
 export function resolveWebSocketPath(
 	path: string,
