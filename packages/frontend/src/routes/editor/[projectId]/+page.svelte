@@ -23,6 +23,7 @@
 	import AccessibilityNotesDialog from '#lib/components/AccessibilityNotesDialog.svelte';
 	import ImageManagerDialog from '#lib/components/ImageManagerDialog.svelte';
 	import HandleClaimDialog from '#lib/components/HandleClaimDialog.svelte';
+	import ReportProblemLink from '#lib/components/ReportProblemLink.svelte';
 	import { toast } from '#lib/toast.svelte.ts';
 	import {
 		createFileTreeRefreshCoordinator,
@@ -973,10 +974,13 @@
 				<div class="chat-header">
 					<div class="header-top">
 						<a href={dashboardPath()} class="logo">Site Studio</a>
-					<Button variant="ghost" size="sm" href={dashboardPath()} aria-label="Back to dashboard">
-                        <LayoutDashboard size={18} />
-                    </Button>
-                </div>
+						<div class="header-actions">
+							<ReportProblemLink iconOnly />
+							<Button variant="ghost" size="sm" href={dashboardPath()} aria-label="Back to dashboard">
+								<LayoutDashboard size={18} />
+							</Button>
+						</div>
+					</div>
 					<div class="project-selectors">
 						<DropdownMenu.Root>
 							<DropdownMenu.Trigger>
@@ -1285,6 +1289,12 @@
 
 	.header-top .logo {
 		margin-bottom: 0;
+	}
+
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
 	}
 
 	.project-selectors {

@@ -10,6 +10,7 @@
 	import NewProjectDialog from './NewProjectDialog.svelte';
 	import ProjectDialogs from './ProjectDialogs.svelte';
 	import HandleClaimDialog from './HandleClaimDialog.svelte';
+	import ReportProblemLink from './ReportProblemLink.svelte';
 	import { hasCompletedOnboarding, createDashboardTour } from '#lib/utils/onboarding.ts';
 	import { toast } from '#lib/toast.svelte.ts';
 	import type { Driver } from 'driver.js';
@@ -235,10 +236,13 @@
 		<div>
 			<h1 class="dashboard-title">Site Studio</h1>
 		</div>
-		<Button onclick={handleNewProject} data-tour="new-project">
-			<Plus size={18} />
-			New Project
-		</Button>
+		<div class="dashboard-actions">
+			<ReportProblemLink />
+			<Button onclick={handleNewProject} data-tour="new-project">
+				<Plus size={18} />
+				New Project
+			</Button>
+		</div>
 	</div>
 
 	{#if loading}
@@ -369,6 +373,12 @@
 		max-width: 1400px;
 		margin-left: auto;
 		margin-right: auto;
+	}
+
+	.dashboard-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
 	}
 
 	.dashboard-title {

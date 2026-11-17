@@ -145,3 +145,25 @@ describe('ProjectDashboard project-list race', () => {
 		localStorage.removeItem('site-studio-onboarding-completed');
 	});
 });
+
+describe('ProjectDashboard support link', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('opens the CAIL support form in a new tab so a user can report a problem', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => new Response(JSON.stringify({ projects: [oldProject] }), { status: 200 }))
+		);
+		const view = render(ProjectDashboard);
+
+		const link = screen.getByRole('link', { name: 'Report a problem' });
+		expect(link).toHaveAttribute(
+			'href',
+			'https://tools.ailab.gc.cuny.edu/help/projects/support/issues/new?topic=other'
+		);
+		expect(link).toHaveAttribute('target', '_blank');
+		expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+		await screen.findByRole('button', { name: 'Open Old project' });
+		view.unmount();
+	});
+});
