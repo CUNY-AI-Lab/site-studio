@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import CodeView from './CodeView.svelte';
 import Toaster from './Toaster.svelte';
-import { toasts } from '$lib/toast.svelte';
+import { toasts } from '#lib/toast.svelte.ts';
 
 describe('CodeView downloads', () => {
 	beforeEach(() => {

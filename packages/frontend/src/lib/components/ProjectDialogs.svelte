@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { renameProject, deleteProject, type Project } from '$lib/api/projects';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
-	import Input from '$lib/components/ui/input/input.svelte';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import { toast } from '$lib/toast.svelte';
-	import { getErrorMessage } from '$lib/api/errors';
+	import { renameProject, deleteProject, type Project } from '#lib/api/projects.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
+	import Input from '#lib/components/ui/input/input.svelte';
+	import Label from '#lib/components/ui/label/label.svelte';
+	import { toast } from '#lib/toast.svelte.ts';
+	import { getErrorMessage } from '#lib/api/errors.ts';
 
 	interface Props {
 		showRenameDialog: boolean;

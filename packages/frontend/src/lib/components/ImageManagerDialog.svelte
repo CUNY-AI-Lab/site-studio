@@ -1,17 +1,17 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
 	import { Loader2, Upload, Sparkles, X } from 'lucide-svelte';
-	import { resolvePath } from '$lib/utils/paths';
-	import { toast } from '$lib/toast.svelte';
+	import { resolvePath } from '#lib/utils/paths.ts';
+	import { toast } from '#lib/toast.svelte.ts';
 	import {
 		fetchProjectImages as fetchProjectImagesRequest,
 		PROJECT_IMAGE_UPLOAD_ACCEPT,
 		uploadProjectFile as uploadProjectFileRequest,
 		type PlaceholderFinding,
 		type ProjectImage
-	} from '$lib/api/projects';
-	import { getErrorMessage } from '$lib/api/errors';
+	} from '#lib/api/projects.ts';
+	import { getErrorMessage } from '#lib/api/errors.ts';
 
 	let {
 		open = false,

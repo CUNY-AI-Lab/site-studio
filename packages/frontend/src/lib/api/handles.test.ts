@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import type { JsonValue } from '$lib/contracts';
+import type { JsonValue } from '#lib/contracts.ts';
 import type { HandleTransport } from './handles';
 
 import { claimHandle } from './handles';

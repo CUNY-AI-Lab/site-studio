@@ -11,13 +11,13 @@
 
 <script lang="ts">
 	import { Folder, File, Download, Upload, Trash2, Edit3 } from 'lucide-svelte';
-	import { resolvePath } from '$lib/utils/paths';
-	import { csrfFetch } from '$lib/api/csrf';
-	import { apiResponseFetch, getErrorMessage } from '$lib/api/errors';
-	import { handleApiErrorResponse } from '$lib/api/error-handler';
-	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile } from '$lib/api/projects';
-	import { toast } from '$lib/toast.svelte';
-	import { downloadBlob } from '$lib/browser/download';
+	import { resolvePath } from '#lib/utils/paths.ts';
+	import { csrfFetch } from '#lib/api/csrf.ts';
+	import { apiResponseFetch, getErrorMessage } from '#lib/api/errors.ts';
+	import { handleApiErrorResponse } from '#lib/api/error-handler.ts';
+	import { PROJECT_UPLOAD_ACCEPT, uploadProjectFile } from '#lib/api/projects.ts';
+	import { toast } from '#lib/toast.svelte.ts';
+	import { downloadBlob } from '#lib/browser/download.ts';
 
 	let {
 		files = [],

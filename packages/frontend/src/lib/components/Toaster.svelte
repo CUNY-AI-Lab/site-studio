@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { CheckCircle2, AlertCircle, Info, X } from 'lucide-svelte';
-	import { toasts, dismiss, type ToastKind } from '$lib/toast.svelte';
+	import { toasts, dismiss, type ToastKind } from '#lib/toast.svelte.ts';
 
 	const icons = {
 		success: CheckCircle2,

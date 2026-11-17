@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { ProjectFile } from '$lib/api/projects';
+	import type { ProjectFile } from '#lib/api/projects.ts';
 	import FileTree from './FileTree.svelte';
 	import Editor from './Editor.svelte';
-	import * as Resizable from '$lib/components/ui/resizable';
+	import * as Resizable from '#lib/components/ui/resizable/index.ts';
 	import { RefreshCw } from 'lucide-svelte';
-	import { toast } from '$lib/toast.svelte';
+	import { toast } from '#lib/toast.svelte.ts';
 
 	let {
 		projectId,

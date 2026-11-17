@@ -18,7 +18,7 @@ export default defineConfig({
 	],
 	resolve: {
 		alias: {
-			$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
+			'#lib': fileURLToPath(new URL('./src/lib', import.meta.url)),
 			'$app/paths': fileURLToPath(new URL('./src/test-stubs/app-paths.ts', import.meta.url)),
 			'$app/navigation': fileURLToPath(new URL('./src/test-stubs/app-navigation.ts', import.meta.url))
 		},

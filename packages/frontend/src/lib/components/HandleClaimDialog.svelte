@@ -1,14 +1,14 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
-	import Button from '$lib/components/ui/button/button.svelte';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import Button from '#lib/components/ui/button/button.svelte';
 	import { AtSign, Check, Loader2, X } from 'lucide-svelte';
 	import {
 		checkHandle as checkHandleRequest,
 		claimHandle as claimHandleRequest,
 		type HandleCheckResult
-	} from '$lib/api/handles';
-	import { resolvePath } from '$lib/utils/paths';
-	import { browserWindow } from '$lib/contracts';
+	} from '#lib/api/handles.ts';
+	import { resolvePath } from '#lib/utils/paths.ts';
+	import { browserWindow } from '#lib/contracts.ts';
 
 	let {
 		open = false,
