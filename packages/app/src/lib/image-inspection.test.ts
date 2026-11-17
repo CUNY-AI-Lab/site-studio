@@ -54,12 +54,12 @@ function options(fetchImpl: typeof fetch, abortSignal?: AbortSignal): ImageInspe
 }
 
 describe("inspectImage", () => {
-  it("uses the canonical kimi vision model by default", () => {
-    expect(DEFAULT_CAIL_IMAGE_CLASSIFIER).toBe("kimi-k2.6");
-    expect(resolveImageClassifierId({})).toBe("kimi-k2.6");
+  it("uses the canonical DeepSeek V4.1 Flash vision model by default", () => {
+    expect(DEFAULT_CAIL_IMAGE_CLASSIFIER).toBe("deepseek-v4.1-flash-1017");
+    expect(resolveImageClassifierId({})).toBe("deepseek-v4.1-flash-1017");
   });
 
-  it.each(["@cf/moonshotai/kimi-k2.6", "openai/kimi-k2.6", "auto/kimi-k2.6"])(
+  it.each(["@cf/deepseek-ai/deepseek-v4.1-flash-1017", "openai/deepseek-v4.1-flash-1017", "auto/deepseek-v4.1-flash-1017"])(
     "rejects provider-native and auto aliases for the classifier: %s",
     (modelId) => {
       expect(() => resolveImageClassifierId({ CAIL_IMAGE_CLASSIFIER: modelId }))
