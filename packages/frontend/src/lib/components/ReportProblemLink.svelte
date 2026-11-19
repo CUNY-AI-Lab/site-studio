@@ -2,7 +2,7 @@
 	import Button from '#lib/components/ui/button/button.svelte';
 	import { LifeBuoy } from 'lucide-svelte';
 
-	const REPORT_PROBLEM_URL = 'https://tools.ailab.gc.cuny.edu/help/projects/support/issues/new?topic=other';
+	const REPORT_PROBLEM_URL = 'https://tools.ailab.gc.cuny.edu/help/projects/support/issues/new?topic=site-studio';
 
 	let { iconOnly = false }: { iconOnly?: boolean } = $props();
 </script>
