@@ -229,7 +229,32 @@ function createActualCoordinatorAdmin(bucket: ReturnType<typeof createBucket>) {
   };
   // SAFETY: The WorkerEntrypoint shim has no constructor; assigning env creates the test instance.
   const admin = Object.assign(Object.create(SiteStudioRecoveryAdmin.prototype), { env }) as SiteStudioRecoveryAdmin;
-  return { admin, env };
+  return { admin, env, coordinators };
+}
+
+function seedPublishedSite(
+  bucket: ReturnType<typeof createBucket>,
+  options: { handle: string; projectId: string; slug: string; publishedAt: string },
+) {
+  bucket.putDirect(`handles/${options.handle}.json`, JSON.stringify({ ownerId: SUBJECT, claimedAt: "2026-01-01T00:00:00.000Z" }));
+  const metadata: ProjectMetadata = {
+    id: options.projectId,
+    name: options.projectId,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    published: true,
+    publishedAt: options.publishedAt,
+    slug: options.slug,
+  };
+  bucket.putDirect(`projects/${SUBJECT}/${options.projectId}/.metadata.json`, JSON.stringify(metadata));
+  bucket.putDirect(`projects/${SUBJECT}/${options.projectId}/index.html`, `<h1>${options.projectId}</h1>`);
+}
+
+function storedMetadata(bucket: ReturnType<typeof createBucket>, projectId: string): ProjectMetadata {
+  const entry = bucket.store.get(`projects/${SUBJECT}/${projectId}/.metadata.json`);
+  if (!entry) throw new Error(`missing metadata for ${projectId}`);
+  // SAFETY: The fixture and the owner mutation both write ProjectMetadata JSON at this key.
+  return JSON.parse(new TextDecoder().decode(entry.bytes)) as ProjectMetadata;
 }
 
 describe("SiteStudioRecoveryAdmin", () => {
@@ -355,5 +380,86 @@ describe("SiteStudioRecoveryAdmin", () => {
       (key) => key.startsWith(`projects/${SUBJECT}/`) && key.endsWith("/.metadata.json"),
     );
     expect(importedMetadata).toHaveLength(7);
+  });
+});
+
+describe("SiteStudioRecoveryAdmin.unpublishPublishedSite", () => {
+  let bucket: ReturnType<typeof createBucket>;
+
+  beforeEach(() => { bucket = createBucket(); });
+
+  function publicSite(env: Env, path: string) {
+    const app = new Hono<{ Bindings: Env }>();
+    app.route("/", createPublishRouter());
+    return app.request(`http://local${path}`, { headers: { accept: "text/html" } }, env);
+  }
+
+  it("takes the public address down through the owner's mutation queue", async () => {
+    seedPublishedSite(bucket, { handle: "teacher", projectId: "lesson", slug: "lesson", publishedAt: "2026-02-01T00:00:00.000Z" });
+    const { admin, env, coordinators } = createActualCoordinatorAdmin(bucket);
+    const execute = vi.spyOn(MutationCoordinator.prototype, "execute");
+    expect((await publicSite(env, "/u/teacher/lesson/")).status).toBe(200);
+
+    await expect(admin.unpublishPublishedSite({ handle: "teacher", slug: "lesson" })).resolves.toEqual({
+      ok: true,
+      state: "unpublished",
+      ownerId: SUBJECT,
+      projectIds: ["lesson"],
+    });
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.slice(0, 2)).toEqual([
+      SUBJECT,
+      { type: "unpublish-project", projectId: "lesson", unpublishedAt: expect.any(String) },
+    ]);
+    expect(execute.mock.contexts[0]).toBe(coordinators.get(`owner:${SUBJECT}`));
+    expect(storedMetadata(bucket, "lesson")).toMatchObject({ published: false, slug: "lesson", unpublishedAt: expect.any(String) });
+    expect((await publicSite(env, "/u/teacher/lesson/")).status).toBe(404);
+    expect((await publicSite(env, "/u/teacher/lesson/index.html")).status).toBe(404);
+
+    execute.mockClear();
+    await expect(admin.unpublishPublishedSite({ handle: "teacher", slug: "lesson" })).resolves.toEqual({
+      ok: true,
+      state: "already_unpublished",
+      ownerId: SUBJECT,
+      projectIds: ["lesson"],
+    });
+    expect(execute).not.toHaveBeenCalled();
+    execute.mockRestore();
+  });
+
+  it("leaves no other project serving at the address", async () => {
+    seedPublishedSite(bucket, { handle: "teacher", projectId: "lesson", slug: "lesson", publishedAt: "2026-02-01T00:00:00.000Z" });
+    seedPublishedSite(bucket, { handle: "teacher", projectId: "lesson-copy", slug: "lesson", publishedAt: "2026-01-15T00:00:00.000Z" });
+    seedPublishedSite(bucket, { handle: "teacher", projectId: "notes", slug: "notes", publishedAt: "2026-02-01T00:00:00.000Z" });
+    const { admin, env } = createActualCoordinatorAdmin(bucket);
+
+    await expect(admin.unpublishPublishedSite({ handle: "teacher", slug: "lesson" })).resolves.toEqual({
+      ok: true,
+      state: "unpublished",
+      ownerId: SUBJECT,
+      projectIds: ["lesson", "lesson-copy"],
+    });
+    expect((await publicSite(env, "/u/teacher/lesson/")).status).toBe(404);
+    expect((await publicSite(env, "/u/teacher/notes/")).status).toBe(200);
+  });
+
+  it("returns not_found or invalid without running an owner mutation", async () => {
+    seedPublishedSite(bucket, { handle: "teacher", projectId: "lesson", slug: "lesson", publishedAt: "2026-02-01T00:00:00.000Z" });
+    const { admin, env } = createActualCoordinatorAdmin(bucket);
+    const execute = vi.spyOn(MutationCoordinator.prototype, "execute");
+
+    await expect(admin.unpublishPublishedSite({ handle: "nobody", slug: "lesson" })).resolves.toEqual({ ok: false, code: "not_found" });
+    await expect(admin.unpublishPublishedSite({ handle: "teacher", slug: "missing" })).resolves.toEqual({ ok: false, code: "not_found" });
+    for (const input of [
+      { handle: "Teacher", slug: "lesson" },
+      { handle: "teacher", slug: "../lesson" },
+      { handle: "teacher", slug: "lesson", ownerId: SUBJECT },
+    ]) {
+      await expect(admin.unpublishPublishedSite(input)).resolves.toEqual({ ok: false, code: "invalid" });
+    }
+    expect(execute).not.toHaveBeenCalled();
+    execute.mockRestore();
+    expect((await publicSite(env, "/u/teacher/lesson/")).status).toBe(200);
   });
 });

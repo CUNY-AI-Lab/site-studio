@@ -10,6 +10,7 @@ import { SiteStudioRecoveryAdmin } from "./recovery-admin";
 export default worker;
 export { SiteBuilderAgent, MigrationCoordinator, MutationCoordinator, SiteStudioRecoveryAdmin };
 export type {
+  OperatorUnpublishResult,
   RecoveryCandidateResult,
   RecoveryRestoreResult,
   SiteStudioRecoveryAdminContract,

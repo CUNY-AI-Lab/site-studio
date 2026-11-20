@@ -72,6 +72,17 @@ export const legacyRecoveryManifestSchema = z.object({
 
 export type LegacyRecoveryManifest = z.infer<typeof legacyRecoveryManifestSchema>;
 
+/** The `/u/:handle/:slug/` address segments, in the forms the product writes. */
+export const publishedSiteHandleSchema = z.string().min(3).max(32)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/)
+  .refine((value) => !value.includes("--"), "Consecutive hyphens");
+export const publishedSiteSlugSchema = z.string().min(1).max(200)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+export const operatorUnpublishInputSchema = z.object({
+  handle: publishedSiteHandleSchema,
+  slug: publishedSiteSlugSchema,
+}).strict();
+
 export type RecoveryAdminFailureCode = "invalid" | "conflict" | "unavailable";
 export type RecoveryCandidateResult =
   | { ok: true; subjects: string[]; nextCursor: string | null }
@@ -89,6 +100,15 @@ export type RecoveryRestoreResult =
       restoredUrl: string | null;
     }
   | { ok: false; code: RecoveryAdminFailureCode };
+export type OperatorUnpublishResult =
+  | {
+      ok: true;
+      state: "unpublished" | "already_unpublished";
+      /** The handle's owner: a CAIL subject or a not-yet-imported anonymous owner. */
+      ownerId: string;
+      projectIds: string[];
+    }
+  | { ok: false; code: "invalid" | "not_found" | "unavailable" };
 
 export interface SiteStudioRecoveryAdminContract {
   listLegacyRecoveryCandidates(input: { cursor?: string }): Promise<RecoveryCandidateResult>;
@@ -97,6 +117,7 @@ export interface SiteStudioRecoveryAdminContract {
     targetSubject: string;
     idempotencyKey: string;
   }): Promise<RecoveryRestoreResult>;
+  unpublishPublishedSite(input: { handle: string; slug: string }): Promise<OperatorUnpublishResult>;
 }
 
 export type SiteStudioLegacyRecovery = SiteStudioRecoveryAdminContract;

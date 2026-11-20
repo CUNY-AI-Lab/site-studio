@@ -196,6 +196,15 @@ Unpublish removes visibility but cannot revoke bytes already downloaded.
 Project snapshots are the product's content rollback. R2 backup/versioning,
 disaster recovery, and deployment rollback are operator responsibilities.
 
+Operators can take a public address down with `unpublishPublishedSite` on the
+private `SiteStudioRecoveryAdmin` entrypoint, which the CAIL admin tools reach
+through Admission. It takes only the handle and slug, resolves the handle
+mapping to its owner, and unpublishes every project published at that slug
+through the owner's mutation queue, the same operation the owner's unpublish
+route runs. It reports success only after a fresh read finds nothing published
+there. Project files and the handle stay as they were, and the owner can
+publish again.
+
 ### Verified legacy backup recovery
 
 The private `SiteStudioRecoveryAdmin` Worker entrypoint is the sole exception
