@@ -24,7 +24,7 @@
         "@ai-sdk/provider": "3.0.14",
         "@cloudflare/ai-chat": "0.9.3",
         "@cloudflare/codemode": "0.5.1",
-        "@cuny-ai-lab/cail-client": "6.2.2",
+        "@cuny-ai-lab/cail-client": "6.3.1",
         "@cuny-ai-lab/cail-identity": "5.2.6",
         "@cuny-ai-lab/cail-log": "0.6.4",
         "@modelcontextprotocol/client": "2.3.1",
@@ -262,7 +262,7 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.2", "", {}, "sha512-OoKoR0f76dCY666JlcbhmVTs2drYj1GUXZTYTcbUgJjh9Nv41aFfZ21bPQTERm5+L5cBDo466NltB2lplS5GBw=="],
 
-    "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@6.2.2", "", { "dependencies": { "zod": "4.4.3" } }, "sha512-4aBjULb7Bd7O8kBT7lrM5OGC7sTHkTp9Lc/5mMpK9f+QRSCkEK+eUCJjl/+ZPRdXoOk+XpyUdLZB8OtUvE5+xQ=="],
+    "@cuny-ai-lab/cail-client": ["@cuny-ai-lab/cail-client@6.3.1", "", { "dependencies": { "zod": "4.6.6" } }, "sha512-EqTYBpJpZKbgUhvo534gObnX08X7XAH0yUVBAhnWUCuZuo2FfViM4EgyAUVv8+Ob97ostXieqOILARdWGyYsog=="],
 
     "@cuny-ai-lab/cail-identity": ["@cuny-ai-lab/cail-identity@5.2.6", "", { "dependencies": { "jose": "6.2.3", "zod": "4.4.3" } }, "sha512-j4Klru5ivG6ZWoGQBvIIiI2v7EDwDPiDIOvzsOV73n7LrUj3deCXM4tzFTfhZntaYdonFh4lJ9xs933YwNRnNA=="],
 
